@@ -187,6 +187,10 @@ def code_generator_main(
     verbose = cli_params.get('verbose', False)
     force_overwrite = cli_params.get('force', False)
     quiet = cli_params.get('quiet', False)
+    # If the user passes --exclude-tests, prefer executing the original
+    # prompt file as authored by the user instead of the generated
+    # ut_<prompt>.prompt that includes unit tests.
+    exclude_tests_flag = cli_params.get('exclude_tests', False)
 
     generated_code_content: Optional[str] = None
     was_incremental_operation = False
@@ -373,86 +377,90 @@ def code_generator_main(
                 _ext = '.py'
             test_fname = f"test_{basename_for_ut}{_ext}"
 
-        # Compose ut prompt content
-        ut_prompt_text = (
-            f"{base_prompt_body}\n\n# Instruction: Also generate code to Pass all the unit tests covering all scenarios in {test_fname}\n"
-            f"Make sure that the generated code passes all the unit tests in {test_fname}."
-        )
-        # Append include directive if we created one earlier
-        if '_pdd_unit_include_line' in locals():
-            #ut_prompt_text = ut_prompt_text + _pdd_unit_include_line
-            ut_prompt_text = _pdd_unit_include_line + ut_prompt_text 
+        # Only create companion UT prompt and test files when tests are not
+        # excluded via the --exclude-tests flag. When excluded, we will use the
+        # original prompt file as authored by the user.
+        if not exclude_tests_flag:
+            # Compose ut prompt content
+            ut_prompt_text = (
+                f"{base_prompt_body}\n\n# Instruction: Also generate code to Pass all the unit tests covering all scenarios in {test_fname}\n"
+                f"Make sure that the generated code passes all the unit tests in {test_fname}."
+            )
+            # Append include directive if we created one earlier
+            if '_pdd_unit_include_line' in locals():
+                #ut_prompt_text = ut_prompt_text + _pdd_unit_include_line
+                ut_prompt_text = _pdd_unit_include_line + ut_prompt_text 
 
-        # Write the ut.prompt file next to the original prompt (best-effort)
-        try:
-            ##Uncomment below
-            #ut_prompt_path = pathlib.Path(prompt_file).with_name(f"{pathlib.Path(prompt_file).stem}_ut.prompt")
-            #ut_prompt_path = pathlib.Path(prompt_file).with_name(f"{pathlib.Path(prompt_file).stem}_ut.prompt")
-            ut_prompt_path = pathlib.Path(prompt_file).with_name(f"ut_{pathlib.Path(prompt_file).stem}.prompt")
-            ut_prompt_path.parent.mkdir(parents=True, exist_ok=True)
-            ut_prompt_path.write_text(ut_prompt_text, encoding="utf-8")
-            if verbose:
-                console.print(f"Unit Test Prompt is added to the prompt file")
-                console.print(f"Created companion UT prompt: [cyan]{ut_prompt_path}[/cyan]")
-        except Exception as e:
-            # Non-fatal; continue but surface verbose warning
-            if verbose:
-                console.print(f"[yellow]Warning: could not write companion UT prompt file: {e}[/yellow]")
+            # Write the ut.prompt file next to the original prompt (best-effort)
+            try:
+                ##Uncomment below
+                #ut_prompt_path = pathlib.Path(prompt_file).with_name(f"{pathlib.Path(prompt_file).stem}_ut.prompt")
+                #ut_prompt_path = pathlib.Path(prompt_file).with_name(f"{pathlib.Path(prompt_file).stem}_ut.prompt")
+                ut_prompt_path = pathlib.Path(prompt_file).with_name(f"ut_{pathlib.Path(prompt_file).stem}.prompt")
+                ut_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+                ut_prompt_path.write_text(ut_prompt_text, encoding="utf-8")
+                if verbose:
+                    console.print(f"Unit Test Prompt is added to the prompt file")
+                    console.print(f"Created companion UT prompt: [cyan]{ut_prompt_path}[/cyan]")
+            except Exception as e:
+                # Non-fatal; continue but surface verbose warning
+                if verbose:
+                    console.print(f"[yellow]Warning: could not write companion UT prompt file: {e}[/yellow]")
 
-        # Ensure a resolvable test file exists so the <include> can be expanded
-        try:
-            # Prefer the project's tests directory if available; otherwise create a local tests/ next to the prompt
-            tests_dir_candidate = None
-            if isinstance(resolved_config, dict):
-                tests_dir_candidate = resolved_config.get("tests_dir")
-            if tests_dir_candidate:
-                tests_dir = pathlib.Path(tests_dir_candidate)
-            else:
-                tests_dir = pathlib.Path(prompt_file).parent / "tests"
+            # Ensure a resolvable test file exists so the <include> can be expanded
+            try:
+                # Prefer the project's tests directory if available; otherwise create a local tests/ next to the prompt
+                tests_dir_candidate = None
+                if isinstance(resolved_config, dict):
+                    tests_dir_candidate = resolved_config.get("tests_dir")
+                if tests_dir_candidate:
+                    tests_dir = pathlib.Path(tests_dir_candidate)
+                else:
+                    tests_dir = pathlib.Path(prompt_file).parent / "tests"
 
-            tests_dir.mkdir(parents=True, exist_ok=True)
-            test_file_path = tests_dir / test_filename
+                tests_dir.mkdir(parents=True, exist_ok=True)
+                test_file_path = tests_dir / test_filename
 
-            if unit_tests_content:
-                # Write the provided unit tests to the file (overwrite intentionally)
-                try:
-                    test_file_path.write_text(unit_tests_content, encoding="utf-8")
-                    if verbose:
-                        console.print(f"Wrote unit tests to: [cyan]{test_file_path}[/cyan]")
-                except Exception as e:
-                    if verbose:
-                        console.print(f"[yellow]Warning: could not write unit test file {test_file_path}: {e}[/yellow]")
-            else:
-                # If no unit test content was provided, ensure a non-destructive placeholder exists
-                if not test_file_path.exists():
-                    placeholder = f"# Placeholder test file: {test_filename}\n# Add unit tests for the prompt's expected behavior here.\n"
+                if unit_tests_content:
+                    # Write the provided unit tests to the file (overwrite intentionally)
                     try:
-                        test_file_path.write_text(placeholder, encoding="utf-8")
+                        test_file_path.write_text(unit_tests_content, encoding="utf-8")
                         if verbose:
-                            console.print(f"Created placeholder test file: [cyan]{test_file_path}[/cyan]")
+                            console.print(f"Wrote unit tests to: [cyan]{test_file_path}[/cyan]")
                     except Exception as e:
                         if verbose:
-                            console.print(f"[yellow]Warning: could not create placeholder test file {test_file_path}: {e}[/yellow]")
-        except Exception as e:
-            if verbose:
-                console.print(f"[yellow]Warning: could not ensure test file for include: {e}[/yellow]")
-        # If generating Python, prefer the on-disk UT prompt content (if present)
-        # so the generator receives the test-focused instructions directly.
-        try:
-            if isinstance(language, str) and language.lower().strip().startswith("python"):
-                # Prefer on-disk UT prompt when available; fall back to the in-memory text
-                try:
-                    if ut_prompt_path.exists():
-                        prompt_content = ut_prompt_path.read_text(encoding="utf-8")
-                    else:
-                        prompt_content = ut_prompt_text
-                except Exception:
-                    prompt_content = ut_prompt_text
+                            console.print(f"[yellow]Warning: could not write unit test file {test_file_path}: {e}[/yellow]")
+                else:
+                    # If no unit test content was provided, ensure a non-destructive placeholder exists
+                    if not test_file_path.exists():
+                        placeholder = f"# Placeholder test file: {test_filename}\n# Add unit tests for the prompt's expected behavior here.\n"
+                        try:
+                            test_file_path.write_text(placeholder, encoding="utf-8")
+                            if verbose:
+                                console.print(f"Created placeholder test file: [cyan]{test_file_path}[/cyan]")
+                        except Exception as e:
+                            if verbose:
+                                console.print(f"[yellow]Warning: could not create placeholder test file {test_file_path}: {e}[/yellow]")
+            except Exception as e:
                 if verbose:
-                    console.print(f"[info]Using UT prompt content for Python generation: {ut_prompt_path}")
-        except Exception:
-            # Best-effort: do not fail generation if this substitution errors.
-            pass
+                    console.print(f"[yellow]Warning: could not ensure test file for include: {e}[/yellow]")
+            # If generating Python, prefer the on-disk UT prompt content (if present)
+            # so the generator receives the test-focused instructions directly.
+            try:
+                if isinstance(language, str) and language.lower().strip().startswith("python"):
+                    # Prefer on-disk UT prompt when available; fall back to the in-memory text
+                    try:
+                        if ut_prompt_path.exists():
+                            prompt_content = ut_prompt_path.read_text(encoding="utf-8")
+                        else:
+                            prompt_content = ut_prompt_text
+                    except Exception:
+                        prompt_content = ut_prompt_text
+                    if verbose:
+                        console.print(f"[info]Using UT prompt content for Python generation: {ut_prompt_path}")
+            except Exception:
+                # Best-effort: do not fail generation if this substitution errors.
+                pass
 
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
