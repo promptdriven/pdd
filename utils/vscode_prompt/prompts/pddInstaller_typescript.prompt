@@ -22,7 +22,8 @@ Detect if PDD CLI is installed through multiple detection strategies:
 1. Try standard PATH: `pdd --version`
 2. Try uv tool path: `~/.local/share/uv/tools/pdd-cli/bin/pdd --version`
 3. Try uv tool run: `uv tool run pdd-cli --version`
-4. Try common installation paths (base anaconda/miniconda environments):
+4. Try conda run: `conda run -n pdd pdd --version`
+5. Try common installation paths (base anaconda/miniconda environments):
    - `~/.local/bin/pdd`
    - `/opt/anaconda3/bin/pdd`
    - `/opt/miniconda3/bin/pdd`
