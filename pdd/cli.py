@@ -1169,12 +1169,6 @@ def update(
                 raise click.UsageError(
                     "Cannot use file-specific arguments or flags like --git or --output in repository-wide mode (when no files are provided)."
                 )
-        else: # Single-file mode
-            if not actual_modified_code_file:
-                raise click.UsageError(
-                    "MODIFIED_CODE_FILE is required for single-file update. "
-                    "For a repository-wide update, provide no file arguments."
-                )
 
         updated_prompt, total_cost, model_name = update_main(
             ctx=ctx,
