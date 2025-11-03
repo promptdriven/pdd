@@ -204,6 +204,7 @@ def update_main(
         table.add_column("Error", style="error")
 
         total_repo_cost = 0.0
+        models_used = set()
         for res in sorted(results, key=lambda x: x["prompt_file"]):
             table.add_row(
                 os.path.relpath(res["prompt_file"], repo_root),
@@ -213,11 +214,15 @@ def update_main(
                 res["error"],
             )
             total_repo_cost += res["cost"]
+            if res["model"]:
+                models_used.add(res["model"])
 
         console.print("\n[bold]Repository Update Summary[/bold]")
         console.print(table)
         console.print(f"\n[bold]Total Estimated Cost: ${total_repo_cost:.6f}[/bold]")
-        return "Repository update complete.", total_repo_cost, "repo_mode"
+        
+        final_model_str = ", ".join(sorted(models_used)) if models_used else "N/A"
+        return "Repository update complete.", total_repo_cost, final_model_str
 
     # --- Single file logic ---
     try:
