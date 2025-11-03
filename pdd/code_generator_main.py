@@ -305,7 +305,9 @@ def code_generator_main(
             test_filename = f"test_{basename}.py"
 
         # Create a semantic grouping tag name derived from the test filename
-        # Example: test_calculator.py -> tag 'test_calculator'
+        # and make the <include> reference a path that the preprocessor can
+        # resolve relative to the prompt file. Example: test_calculator.py ->
+        # tag 'test_calculator' and include 'tests/test_calculator.py'.
         try:
             raw_tag = pathlib.Path(test_filename).stem
             # Sanitize to XML-like tag name: allow letters, digits and underscore
@@ -313,9 +315,52 @@ def code_generator_main(
             # Ensure tag does not start with a digit
             if re.match(r"^[0-9]", tag_name):
                 tag_name = f"f_{tag_name}"
+
+            # Compute a plausible test file path so the <include> points to a
+            # file location the preprocessor can find. Prefer resolved_config
+            # tests_dir if provided, else a sibling 'tests/' directory.
+            try:
+                tests_dir_candidate = None
+                if isinstance(resolved_config, dict):
+                    tests_dir_candidate = resolved_config.get("tests_dir")
+                if tests_dir_candidate:
+                    test_file_path = pathlib.Path(tests_dir_candidate) / test_filename
+                else:
+                    test_file_path = pathlib.Path(prompt_file).parent / "tests" / test_filename
+                # Compute include target relative to the prompt file parent so
+                # preprocessing that resolves relative includes will work.
+                try:
+                    include_target_rel = os.path.relpath(str(test_file_path), start=str(pathlib.Path(prompt_file).parent))
+                except Exception:
+                    include_target_rel = str(test_file_path)
+
+                # Normalize to POSIX-style path for include tags
+                include_target_rel = pathlib.Path(include_target_rel).as_posix()
+
+                # Verify the relative path resolves from the prompt directory; if
+                # not, fall back to an absolute path so the preprocessor can
+                # locate the file regardless of working directory behavior.
+                try:
+                    candidate_resolved = (pathlib.Path(prompt_file).parent / include_target_rel).resolve()
+                    if candidate_resolved.exists():
+                        include_target = include_target_rel
+                    else:
+                        include_target = str(test_file_path.resolve())
+                except Exception:
+                    include_target = str(test_file_path)
+
+            except Exception:
+                include_target = test_filename
+
             _pdd_unit_include_line = (
-                f"\n\n<{tag_name}>\n  <include>{test_filename}</include>\n</{tag_name}>\n\n"
+                f"\n\n<{tag_name}>\n  <include>{include_target}</include>\n</{tag_name}>\n\n"
             )
+            # Verbose diagnostics to help users understand include resolution
+            try:
+                if verbose:
+                    console.print(Panel(f"Computed test file path: {test_file_path}\nInclude target: {include_target}\nExists on disk: {test_file_path.exists()}", title="[blue]UT Include Diagnostic[/blue]", expand=False))
+            except Exception:
+                pass
         except Exception:
             # Fallback: simple tests grouping
             _pdd_unit_include_line = f"\n\n<tests>\n  <include>{test_filename}</include>\n</tests>\n\n"
@@ -440,6 +485,10 @@ def code_generator_main(
                         test_file_path.write_text(unit_tests_content, encoding="utf-8")
                         if verbose:
                             console.print(f"Wrote unit tests to: [cyan]{test_file_path}[/cyan]")
+                            try:
+                                console.print(f"Verify exists: {test_file_path.exists()} (resolved: {test_file_path.resolve()})")
+                            except Exception:
+                                pass
                     except Exception as e:
                         if verbose:
                             console.print(f"[yellow]Warning: could not write unit test file {test_file_path}: {e}[/yellow]")
