@@ -83,10 +83,20 @@ def test_successful_update_prompt(valid_inputs, mock_llm_invoke, mock_load_promp
     assert result[1] == 0.003  # Sum of both costs
     assert result[2] == 'gpt-3.5-turbo'
 
-def test_empty_input_strings():
-    """Test handling of empty input strings"""
-    with pytest.raises(ValueError, match="For updating an existing prompt, input_prompt and input_code must be non-empty."):
-        update_prompt("", "code", "modified", 0.5, 0.5)
+def test_empty_input_strings(mock_llm_invoke, mock_load_prompt_template, mock_preprocess):
+    """
+    Test that an empty input_prompt is handled gracefully,
+    but an empty input_code in update mode raises an error.
+    """
+    # Scenario 1: Empty input_prompt should NOT raise an error.
+    try:
+        update_prompt(input_prompt="", input_code="code", modified_code="modified", strength=0.5, temperature=0.5)
+    except ValueError:
+        pytest.fail("update_prompt should NOT raise ValueError for an empty input_prompt.")
+
+    # Scenario 2: Empty input_code (when not in generation mode) SHOULD raise an error.
+    with pytest.raises(ValueError, match="For updating an existing prompt, input_code must be non-empty."):
+        update_prompt(input_prompt="a real prompt", input_code="", modified_code="modified", strength=0.5, temperature=0.5)
 
 def test_invalid_strength():
     """Test handling of invalid strength parameter"""
