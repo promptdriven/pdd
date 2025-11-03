@@ -11,6 +11,12 @@ description: Build a Python script that ingests an input CSV file with columns [
     - Only retain rows where 'amount' > 0 and 'category' is not empty
 - Output: Save cleaned data to `output.csv` with columns in the original order
 
+# Tests:
+- All transformations (amount, date, category) must be verified.
+- Verify filtering logic (amount > 0 and non-empty category).
+- Raise and handle errors for invalid CSV rows.
+- Example: test with dummy input row containing invalid date, negative amount, empty category.
+
 # Example Usage:
 python etl_pipeline.py input.csv output.csv
 
