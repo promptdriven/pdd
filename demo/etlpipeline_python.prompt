@@ -17,10 +17,23 @@ description: Build a Python script that ingests an input CSV file with columns [
 - Raise and handle errors for invalid CSV rows.
 - Example: test with dummy input row containing invalid date, negative amount, empty category.
 
+# All code and examples must assume the main module file is 'etlpipeline.py' (with no underscore).
+
 # Example Usage:
-# To run the script, use:
+Show both (A) command-line usage and (B) Python programmatic usage as full code examples.
+
+A) To run from the command line:
 python etlpipeline.py input.csv output.csv
 
+B) Programmatic Python example:
+import etlpipeline
+
+input_file = 'input.csv'
+output_file = 'ouput.csv'
+
+raw_data, headers = etlpipeline.extract_data(input_file)
+cleaned_data = etlpipeline.transform_and_filter_data(raw_data)
+etlpipeline.load_data(cleaned_data, output_file, headers)
 
 # Example Input:
 id,date,amount,category

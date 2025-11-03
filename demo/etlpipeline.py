@@ -1,4 +1,4 @@
-# etl_pipeline.py
+# etlpipeline.py
 
 import csv
 import sys
@@ -106,7 +106,7 @@ def main():
     """
     # Check for correct command-line arguments
     if len(sys.argv) != 3:
-        print("Usage: python etl_pipeline.py <input_csv_path> <output_csv_path>")
+        print("Usage: python etlpipeline.py <input_csv_path> <output_csv_path>")
         sys.exit(1)
 
     input_file = sys.argv[1]
@@ -130,7 +130,21 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    # This script can be run in two ways:
+
+    # A) As a command-line tool:
     # To run this script, create an 'input.csv' file with the example content,
     # then execute from your terminal:
-    # python etl_pipeline.py input.csv output.csv
+    # python etlpipeline.py input.csv output.csv
+
+    # B) Programmatically by importing it as a module:
+    # import etlpipeline
+    #
+    # input_file = 'input.csv'
+    # output_file = 'output.csv'
+    #
+    # raw_data, headers = etlpipeline.extract_data(input_file)
+    # cleaned_data = etlpipeline.transform_and_filter_data(raw_data)
+    # etlpipeline.load_data(cleaned_data, output_file, headers)
+
     main()
