@@ -82,34 +82,41 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False) -> List[Tupl
 
 def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo) -> Dict[str, Any]:
     """
-    Wrapper to update a single file pair, choosing the correct method based on Git status.
+    Wrapper to update a single file pair, choosing the correct method based on Git status and prompt content.
     """
     try:
-        with open(prompt_file, 'r') as f:
-            input_prompt = f.read()
+        # Read the prompt first to decide the strategy.
+        try:
+            with open(prompt_file, 'r') as f:
+                input_prompt = f.read()
+        except FileNotFoundError:
+            input_prompt = ""
 
         relative_code_path = os.path.relpath(code_file, repo.working_tree_dir)
         is_untracked = relative_code_path in repo.untracked_files
 
-        if is_untracked:
-            # This is a new, untracked file. Generate a prompt from scratch.
+        # GENERATION MODE: Trigger if the file is new OR if the prompt is empty.
+        if is_untracked or not input_prompt.strip():
             if not ctx.obj.get("quiet", False):
-                console.print(f"[info]New untracked file detected, generating new prompt for:[/info] [path]{relative_code_path}[/path]")
-            
+                if is_untracked:
+                    console.print(f"[info]New untracked file detected, generating new prompt for:[/info] [path]{relative_code_path}[/path]")
+                else:
+                    console.print(f"[info]Empty prompt detected, generating new prompt for:[/info] [path]{relative_code_path}[/path]")
+
             with open(code_file, 'r') as f:
                 modified_code = f.read()
 
             modified_prompt, total_cost, model_name = update_prompt(
                 input_prompt="no prompt exists yet, create a new one",
-                input_code="",  # No previous version
+                input_code="",  # No previous version for generation
                 modified_code=modified_code,
                 strength=ctx.obj.get("strength", 0.5),
                 temperature=ctx.obj.get("temperature", 0),
                 verbose=ctx.obj.get("verbose", False),
                 time=ctx.obj.get("time"),
             )
+        # UPDATE MODE: Only trigger if the file is tracked AND the prompt has content.
         else:
-            # This is an existing, tracked file. Use git_update to compare with HEAD.
             modified_prompt, total_cost, model_name = git_update(
                 input_prompt=input_prompt,
                 modified_code_file=code_file,
