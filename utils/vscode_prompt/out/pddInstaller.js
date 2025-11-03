@@ -34,8 +34,8 @@ class PddInstaller {
     }
     async isPddCliInstalled() {
         console.log('PDD: Checking if PDD CLI is installed...');
-        const home = process.env.HOME || '';
         const isWin = process.platform === 'win32';
+        const home = isWin ? (process.env.USERPROFILE || '') : (process.env.HOME || '');
         const tryCommand = async (cmd, label) => {
             try {
                 console.log(`PDD: Detecting via ${label || cmd}`);
@@ -83,76 +83,94 @@ class PddInstaller {
                 return;
             }
             console.log('PDD: User confirmed installation.');
-            let method = 'uv';
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: 'Installing PDD CLI',
-                cancellable: false,
-            }, async (progress) => {
-                const report = (pct, message) => {
-                    progress.report({ increment: pct, message });
-                    console.log(`PDD: ${message} (${pct}%)`);
-                };
-                report(0, 'Installing PDD CLI...');
-                // Check uv availability
-                let uvAvailable = await this.commandExists('uv --version');
-                if (!uvAvailable) {
-                    // install uv
-                    report(10, 'Installing uv package manager...');
-                    await this.installUv();
-                    report(15, 'uv installed! Now installing PDD CLI...');
-                    uvAvailable = true;
-                    method = 'uv-installed';
-                }
-                // Install pdd-cli via uv
-                try {
-                    report(25, 'Installing PDD CLI package...');
-                    await this.runWithShellLogging('uv tool install pdd-cli', 'uv tool install pdd-cli');
-                    if (method !== 'uv-installed')
-                        method = 'uv';
-                }
-                catch (eUv) {
-                    console.warn('PDD: uv install via PATH failed. Trying full path.', eUv);
-                    const uvFullPath = this.getUvFullPath();
-                    await this.runWithShellLogging(`"${uvFullPath}" tool install pdd-cli`, 'uv fullpath tool install pdd-cli');
-                    if (method !== 'uv-installed')
-                        method = 'uv';
-                }
-                report(100, 'PDD CLI installed successfully!');
-            });
-            // Success messaging and actions
-            if (method === 'uv') {
-                const btn = await vscode.window.showInformationMessage('PDD CLI has been installed successfully using uv! Run "pdd setup" in your terminal or use the "PDD: Run PDD Setup" command to configure API keys and install tab completion.', 'Open Terminal', 'Run Setup', 'View PDD Docs', 'View uv Docs');
-                await this.handleSuccessButtons(btn);
-            }
-            else if (method === 'uv-installed') {
-                const btn = await vscode.window.showInformationMessage('PDD CLI has been installed successfully! We also installed uv (the modern Python package manager) for future use. Run "pdd setup" in your terminal or use the "PDD: Run PDD Setup" command to configure API keys and install tab completion.', 'Open Terminal', 'Run Setup', 'View PDD Docs', 'View uv Docs');
-                await this.handleSuccessButtons(btn);
-            }
+            // Proceed with installation
+            await this.installPddCliWithChoice('uv');
         }
         catch (err) {
             console.error('PDD: Failed to install PDD CLI:', err);
             vscode.window.showErrorMessage(`Failed to install PDD CLI: ${err?.message || String(err)}. Please install manually: uv tool install pdd-cli`);
         }
     }
+    /**
+     * Internal method to install PDD CLI using uv.
+     * Used by checkAndPromptInstallation to avoid double prompts.
+     */
+    async installPddCliWithChoice(method) {
+        let installMethod = 'uv';
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Installing PDD CLI',
+            cancellable: false,
+        }, async (progress) => {
+            const report = (pct, message) => {
+                progress.report({ increment: pct, message });
+                console.log(`PDD: ${message} (${pct}%)`);
+            };
+            report(0, 'Installing PDD CLI...');
+            // Check uv availability
+            let uvAvailable = await this.commandExists('uv --version');
+            if (!uvAvailable) {
+                // install uv
+                report(10, 'Installing uv package manager...');
+                await this.installUv();
+                report(15, 'uv installed! Now installing PDD CLI...');
+                uvAvailable = true;
+                installMethod = 'uv-installed';
+            }
+            // Install pdd-cli via uv
+            try {
+                report(25, 'Installing PDD CLI package...');
+                await this.runWithShellLogging('uv tool install pdd-cli', 'uv tool install pdd-cli');
+                if (installMethod !== 'uv-installed')
+                    installMethod = 'uv';
+            }
+            catch (eUv) {
+                console.warn('PDD: uv install via PATH failed. Trying full path.', eUv);
+                const uvFullPath = this.getUvFullPath();
+                await this.runWithShellLogging(`"${uvFullPath}" tool install pdd-cli`, 'uv fullpath tool install pdd-cli');
+                if (installMethod !== 'uv-installed')
+                    installMethod = 'uv';
+            }
+            report(100, 'PDD CLI installed successfully!');
+        });
+        // Success messaging and actions
+        if (installMethod === 'uv') {
+            const btn = await vscode.window.showInformationMessage('PDD CLI has been installed successfully using uv! Run "pdd setup" in your terminal or use the "PDD: Run PDD Setup" command to configure API keys and install tab completion.', 'Open Terminal', 'Run Setup', 'View PDD Docs', 'View uv Docs');
+            await this.handleSuccessButtons(btn);
+        }
+        else if (installMethod === 'uv-installed') {
+            const btn = await vscode.window.showInformationMessage('PDD CLI has been installed successfully! We also installed uv (the modern Python package manager) for future use. Run "pdd setup" in your terminal or use the "PDD: Run PDD Setup" command to configure API keys and install tab completion.', 'Open Terminal', 'Run Setup', 'View PDD Docs', 'View uv Docs');
+            await this.handleSuccessButtons(btn);
+        }
+    }
     async runPddSetup() {
         try {
             console.log('PDD: Running PDD setup in integrated terminal.');
-            const term = vscode.window.createTerminal('PDD Setup');
-            term.show();
-            const reloadNote = ' && echo "Setup complete! Please reload your shell: source ~/.zshrc (or ~/.bashrc)"';
-            // Try known uv tool path then uv tool run, else pdd in PATH
-            const uvPddPath = this.expandPath(`${process.env.HOME || ''}/.local/share/uv/tools/pdd-cli/bin/pdd`);
-            const uvPathCheck = await this.commandExists(`"${uvPddPath}" --version`);
-            if (uvPathCheck) {
-                term.sendText(`"${uvPddPath}" setup${reloadNote}`);
-            }
-            else if (await this.commandExists('uv --version')) {
-                term.sendText(`uv tool run pdd-cli setup${reloadNote}`);
-            }
-            else {
-                term.sendText(`pdd setup${reloadNote}`);
-            }
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Running PDD Setup',
+                cancellable: false,
+            }, async (progress) => {
+                progress.report({ increment: 0, message: 'Opening terminal...' });
+                const term = vscode.window.createTerminal('PDD Setup');
+                term.show();
+                const reloadNote = ' && echo "Setup complete! Please reload your shell: source ~/.zshrc (or ~/.bashrc)"';
+                progress.report({ increment: 30, message: 'Detecting PDD CLI installation...' });
+                // Try known uv tool path then uv tool run, else pdd in PATH
+                const uvPddPath = this.expandPath(`${process.env.HOME || ''}/.local/share/uv/tools/pdd-cli/bin/pdd`);
+                const uvPathCheck = await this.commandExists(`"${uvPddPath}" --version`);
+                progress.report({ increment: 50, message: 'Launching setup command...' });
+                if (uvPathCheck) {
+                    term.sendText(`"${uvPddPath}" setup${reloadNote}`);
+                }
+                else if (await this.commandExists('uv --version')) {
+                    term.sendText(`uv tool run pdd-cli setup${reloadNote}`);
+                }
+                else {
+                    term.sendText(`pdd setup${reloadNote}`);
+                }
+                progress.report({ increment: 20, message: 'Setup running in terminal...' });
+            });
             vscode.window.showInformationMessage('PDD setup is running in the terminal. Follow the prompts to configure your API keys, then reload your shell for tab completion.');
         }
         catch (err) {
@@ -231,7 +249,7 @@ class PddInstaller {
                     const uvFullPath = this.getUvFullPath();
                     await this.runWithShellLogging(`"${uvFullPath}" tool install pdd-cli`, 'uv fullpath tool install pdd-cli');
                 }
-                report(10, 'Upgrade complete!');
+                report(100, 'Upgrade complete!');
             });
             const btn = await vscode.window.showInformationMessage('PDD CLI has been successfully upgraded to uv installation! You now have access to the latest features and faster updates.', 'View uv Docs', 'OK');
             if (btn === 'View uv Docs') {
@@ -255,9 +273,14 @@ class PddInstaller {
             const installed = await this.isPddCliInstalled();
             console.log(`PDD: PDD CLI installed: ${installed}`);
             if (!installed) {
-                const choice = await vscode.window.showInformationMessage('PDD CLI is not installed. Would you like to install it automatically?', 'Install PDD CLI', 'Not Now', "Don't Ask Again");
+                // Show single consolidated prompt
+                const choice = await vscode.window.showInformationMessage('PDD CLI is not installed. Would you like to install it?', {
+                    modal: false,
+                    detail: 'PDD CLI will be installed using uv (the modern Python package manager). If uv is not installed, it will be installed first.'
+                }, 'Install PDD CLI', 'Not Now', "Don't Ask Again");
                 if (choice === 'Install PDD CLI') {
-                    await this.installPddCli();
+                    // Call installPddCli with the user's choice already made
+                    await this.installPddCliWithChoice('uv');
                 }
                 else if (choice === "Don't Ask Again") {
                     await config.update('promptForInstallation', false, vscode.ConfigurationTarget.Global);
