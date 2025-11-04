@@ -7,7 +7,13 @@ import os
 from pathlib import Path
 import git
 from rich.console import Console
-from rich.progress import Progress
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 from rich.theme import Theme
 
@@ -195,13 +201,38 @@ def update_main(
         rprint(f"[info]Found {len(pairs)} total prompt/code pairs to process.[/info]")
 
         results = []
-        with Progress(console=console) as progress:
-            task = progress.add_task("[cyan]Updating prompts...", total=len(pairs))
+        total_repo_cost = 0.0
+
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}", justify="right"),
+            BarColumn(bar_width=None),
+            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            TextColumn("•"),
+            TextColumn("Total Cost: $[bold green]{task.fields[total_cost]:.6f}[/bold green]"),
+            console=console,
+            transient=True,
+        )
+
+        with progress:
+            task = progress.add_task(
+                "Updating prompts...", 
+                total=len(pairs),
+                total_cost=0.0
+            )
             
             for prompt_path, code_path in pairs:
+                relative_path = os.path.relpath(code_path, repo_root)
+                progress.update(task, description=f"Processing [path]{relative_path}[/path]")
+                
                 result = update_file_pair(prompt_path, code_path, ctx, repo_obj)
                 results.append(result)
-                progress.update(task, advance=1)
+                
+                total_repo_cost += result.get("cost", 0.0)
+                
+                progress.update(task, advance=1, total_cost=total_repo_cost)
 
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("Prompt File", style="dim", width=50)
@@ -210,7 +241,6 @@ def update_main(
         table.add_column("Model")
         table.add_column("Error", style="error")
 
-        total_repo_cost = 0.0
         models_used = set()
         for res in sorted(results, key=lambda x: x["prompt_file"]):
             table.add_row(
@@ -220,7 +250,6 @@ def update_main(
                 res["model"],
                 res["error"],
             )
-            total_repo_cost += res["cost"]
             if res["model"]:
                 models_used.add(res["model"])
 
