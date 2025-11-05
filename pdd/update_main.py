@@ -55,7 +55,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False) -> Tuple[
     
     return prompt_path_str, code_file_path
 
-def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False) -> List[Tuple[str, str]]:
+def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: Optional[str] = None) -> List[Tuple[str, str]]:
     """
     Scans the repo for code files, resolves their prompt pairs, and returns all pairs.
     """
@@ -63,6 +63,12 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False) -> List[Tupl
     ignored_dirs = {'.git', '.idea', '.vscode', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build'}
     
     console.print(f"[info]Scanning repository and resolving prompt/code pairs...[/info]")
+
+    allowed_extensions: Optional[set] = None
+    if extensions:
+        ext_list = [e.strip().lower() for e in extensions.split(',')]
+        allowed_extensions = {f'.{e}' if not e.startswith('.') else e for e in ext_list}
+        console.print(f"[info]Filtering for extensions: {', '.join(allowed_extensions)}[/info]")
 
     all_files = []
     for root, dirs, files in os.walk(repo_root, topdown=True):
@@ -79,6 +85,12 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False) -> List[Tupl
             not os.path.splitext(os.path.basename(f))[0].endswith('_example')
         )
     ]
+
+    if allowed_extensions:
+        code_files = [
+            f for f in code_files
+            if os.path.splitext(f)[1].lower() in allowed_extensions
+        ]
     
     for file_path in code_files:
         prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet)
@@ -168,6 +180,7 @@ def update_main(
     output: Optional[str],
     use_git: bool = False,
     repo: bool = False,
+    extensions: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -180,6 +193,7 @@ def update_main(
     :param output: Optional path to save the updated prompt.
     :param use_git: Use Git history to retrieve the original code if True.
     :param repo: If True, run in repository-wide mode.
+    :param extensions: Comma-separated string of file extensions to filter by in repo mode.
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
@@ -192,7 +206,7 @@ def update_main(
             rprint("[bold red]Error:[/bold red] Repository-wide mode requires the current directory to be within a Git repository.")
             sys.exit(1)
 
-        pairs = find_and_resolve_all_pairs(repo_root, quiet)
+        pairs = find_and_resolve_all_pairs(repo_root, quiet, extensions)
         
         if not pairs:
             rprint("[info]No scannable code files found in the repository.[/info]")

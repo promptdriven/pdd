@@ -1127,6 +1127,12 @@ def change(
     default=False,
     help="Use git history to find the original code file.",
 )
+@click.option(
+    "--extensions",
+    type=str,
+    default=None,
+    help="Comma-separated list of file extensions to update in repo mode (e.g., 'py,js,ts').",
+)
 @click.pass_context
 @track_cost
 def update(
@@ -1136,6 +1142,7 @@ def update(
     input_code_file: Optional[str],
     output: Optional[str],
     use_git: bool,
+    extensions: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Update prompts based on code changes.
@@ -1169,6 +1176,8 @@ def update(
                 raise click.UsageError(
                     "Cannot use file-specific arguments or flags like --git or --output in repository-wide mode (when no files are provided)."
                 )
+        elif extensions:
+            raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")
 
         updated_prompt, total_cost, model_name = update_main(
             ctx=ctx,
@@ -1178,6 +1187,7 @@ def update(
             output=output,
             use_git=use_git,
             repo=is_repo_mode,
+            extensions=extensions,
         )
         return updated_prompt, total_cost, model_name
     except (click.UsageError, Exception) as e:
