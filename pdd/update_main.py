@@ -262,84 +262,122 @@ def update_main(
 
     # --- Single file logic ---
     try:
-        # If the user doesn't specify a prompt file, derive it from the code file.
-        # Otherwise, use the one they provided.
-        if input_prompt_file is None:
-            # modified_code_file is guaranteed to be not None here by cli.py's validation
-            actual_input_prompt_file, _ = resolve_prompt_code_pair(modified_code_file, quiet)
+        # Case 1: Regeneration Mode.
+        # Triggered when ONLY the modified_code_file is provided.
+        # This creates a new prompt or overwrites an existing one from scratch.
+        is_regeneration_mode = (input_prompt_file is None and input_code_file is None)
+
+        if is_regeneration_mode:
+            if not quiet:
+                rprint("[bold yellow]Regeneration mode: Creating or overwriting prompt from code file.[/bold yellow]")
+            
+            # This will derive the path and create the file if it doesn't exist.
+            prompt_path, _ = resolve_prompt_code_pair(modified_code_file, quiet)
+
+            with open(modified_code_file, 'r') as f:
+                modified_code_content = f.read()
+
+            # Directly call update_prompt in generation mode.
+            modified_prompt, total_cost, model_name = update_prompt(
+                input_prompt="no prompt exists yet, create a new one",
+                input_code="",
+                modified_code=modified_code_content,
+                strength=ctx.obj.get("strength", 0.5),
+                temperature=ctx.obj.get("temperature", 0),
+                verbose=ctx.obj.get("verbose", False),
+                time=ctx.obj.get('time', DEFAULT_TIME)
+            )
+            
+            # Write the result to the derived/correct prompt path.
+            with open(prompt_path, "w") as f:
+                f.write(modified_prompt)
+            
+            if not quiet:
+                rprint("[bold green]Prompt generated successfully.[/bold green]")
+                rprint(f"[bold]Model used:[/bold] {model_name}")
+                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
+
+            return modified_prompt, total_cost, model_name
+
+        # Case 2: True Update Mode.
+        # Triggered when the user provides the prompt file, indicating a desire to update it.
         else:
             actual_input_prompt_file = input_prompt_file
 
-        # Prepare input_file_paths for construct_paths
-        input_file_paths = {
-            "input_prompt_file": actual_input_prompt_file,
-            "modified_code_file": modified_code_file
-        }
-        if input_code_file:
-            input_file_paths["input_code_file"] = input_code_file
-
-        # Determine output path
-        final_output_path = output or actual_input_prompt_file
-        command_options = {"output": final_output_path}
-            
-        _, input_strings, output_file_paths, _ = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False),
-            quiet=quiet,
-            command="update",
-            command_options=command_options,
-            context_override=ctx.obj.get('context')
-        )
-
-        input_prompt = input_strings["input_prompt_file"]
-        modified_code = input_strings["modified_code_file"]
-        input_code = input_strings.get("input_code_file")
-        time = ctx.obj.get('time', DEFAULT_TIME)
-
-        if not modified_code.strip():
-            raise ValueError("Modified code file cannot be empty when updating or generating a prompt.")
-
-        if not input_prompt.strip():
-            input_prompt = "no prompt exists yet, create a new one"
-            if not use_git and input_code is None:
-                input_code = ""
-            if not quiet:
-                rprint("[bold yellow]Empty prompt file detected. Generating a new prompt from the modified code.[/bold yellow]")
-
-        if use_git:
+            # Prepare input_file_paths for construct_paths
+            input_file_paths = {
+                "input_prompt_file": actual_input_prompt_file,
+                "modified_code_file": modified_code_file
+            }
             if input_code_file:
-                raise ValueError("Cannot use both --git and provide an input code file.")
-            modified_prompt, total_cost, model_name = git_update(
-                input_prompt=input_prompt,
-                modified_code_file=modified_code_file,
-                strength=ctx.obj.get("strength", 0.5),
-                temperature=ctx.obj.get("temperature", 0),
-                verbose=ctx.obj.get("verbose", False),
-                time=time
-            )
-        else:
-            if input_code is None:
-                input_code = ""
-            modified_prompt, total_cost, model_name = update_prompt(
-                input_prompt=input_prompt,
-                input_code=input_code,
-                modified_code=modified_code,
-                strength=ctx.obj.get("strength", 0.5),
-                temperature=ctx.obj.get("temperature", 0),
-                verbose=ctx.obj.get("verbose", False),
-                time=time
+                input_file_paths["input_code_file"] = input_code_file
+
+            # Determine output path
+            final_output_path = output or actual_input_prompt_file
+            command_options = {"output": final_output_path}
+                
+            _, input_strings, output_file_paths, _ = construct_paths(
+                input_file_paths=input_file_paths,
+                force=ctx.obj.get("force", False),
+                quiet=quiet,
+                command="update",
+                command_options=command_options,
+                context_override=ctx.obj.get('context')
             )
 
-        with open(output_file_paths["output"], "w") as f:
-            f.write(modified_prompt)
+            input_prompt = input_strings["input_prompt_file"]
+            modified_code = input_strings["modified_code_file"]
+            input_code = input_strings.get("input_code_file")
+            time = ctx.obj.get('time', DEFAULT_TIME)
 
-        if not quiet:
-            rprint("[bold green]Prompt updated successfully.[/bold green]")
-            rprint(f"[bold]Model used:[/bold] {model_name}")
-            rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-            rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
+            if not modified_code.strip():
+                raise ValueError("Modified code file cannot be empty when updating or generating a prompt.")
 
-        return modified_prompt, total_cost, model_name
+            if not input_prompt.strip():
+                input_prompt = "no prompt exists yet, create a new one"
+                if not use_git and input_code is None:
+                    input_code = ""
+                if not quiet:
+                    rprint("[bold yellow]Empty prompt file detected. Generating a new prompt from the modified code.[/bold yellow]")
+
+            if use_git:
+                if input_code_file:
+                    raise ValueError("Cannot use both --git and provide an input code file.")
+                modified_prompt, total_cost, model_name = git_update(
+                    input_prompt=input_prompt,
+                    modified_code_file=modified_code_file,
+                    strength=ctx.obj.get("strength", 0.5),
+                    temperature=ctx.obj.get("temperature", 0),
+                    verbose=ctx.obj.get("verbose", False),
+                    time=time
+                )
+            else:
+                if input_code is None:
+                    # This will now only be triggered if --git is not used and no input_code_file is provided,
+                    # which is an error state for a true update.
+                    raise ValueError("For a true update, you must either provide an original code file or use the --git flag.")
+                
+                modified_prompt, total_cost, model_name = update_prompt(
+                    input_prompt=input_prompt,
+                    input_code=input_code,
+                    modified_code=modified_code,
+                    strength=ctx.obj.get("strength", 0.5),
+                    temperature=ctx.obj.get("temperature", 0),
+                    verbose=ctx.obj.get("verbose", False),
+                    time=time
+                )
+
+            with open(output_file_paths["output"], "w") as f:
+                f.write(modified_prompt)
+
+            if not quiet:
+                rprint("[bold green]Prompt updated successfully.[/bold green]")
+                rprint(f"[bold]Model used:[/bold] {model_name}")
+                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
+
+            return modified_prompt, total_cost, model_name
 
     except (ValueError, git.InvalidGitRepositoryError) as e:
         if not quiet:
