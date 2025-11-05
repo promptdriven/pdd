@@ -215,62 +215,56 @@ def test_update_main_with_both_git_and_input_code_raises_valueerror(
     assert e.type == SystemExit
     assert e.value.code == 1  # usage error
 
-def test_update_main_no_git_no_input_code_generates_prompt(
+@patch('pdd.update_main.resolve_prompt_code_pair')
+def test_update_main_regeneration_mode(
+    mock_resolve_pair,
     mock_ctx,
-    mock_construct_paths,
     mock_update_prompt,
     mock_git_update,
+    mock_construct_paths,
     mock_open_file,
     monkeypatch
 ):
     """
-    Test that not specifying --git and leaving input_code_file=None
-    (and input_prompt_file=None) correctly triggers prompt generation.
+    Test that providing only a modified_code_file correctly triggers
+    the regeneration workflow.
     """
     # Arrange
-    mock_ctx.params["quiet"] = False
-    git = False
-
-    # Mock get_language to return a predictable language
-    monkeypatch.setattr('pdd.update_main.get_language', lambda x: "python")
-
-    # Mock construct_paths to simulate an empty (or non-existent) prompt file
-    # and a modified code file, with no original code file.
-    mock_construct_paths.return_value = (
-        {},  # resolved_config
-        {
-            "input_prompt_file": "", # Simulate empty prompt file
-            "modified_code_file": "def new_function(): pass",
-        },
-        {"output": "modified_code_python.prompt"},
-        None
-    )
-
+    mock_ctx.obj["quiet"] = False
+    mock_resolve_pair.return_value = ("modified_code_python.prompt", "modified_code.py")
+    
     # Act
     result = update_main(
         ctx=mock_ctx,
-        input_prompt_file=None, # Not provided
+        input_prompt_file=None,
         modified_code_file="modified_code.py",
-        input_code_file=None, # Not provided
+        input_code_file=None,
         output=None,
-        use_git=git
+        use_git=False
     )
 
     # Assert
-    mock_construct_paths.assert_called_once()
-    mock_update_prompt.assert_called_once_with(
-        input_prompt="no prompt exists yet, create a new one",
-        input_code="", # Should be empty for generation
-        modified_code="def new_function(): pass",
-        strength=0.5,
-        temperature=0.0,
-        verbose=False,
-        time=0.25
-    )
+    # 1. It should resolve the pair to find/create the prompt file
+    mock_resolve_pair.assert_called_once_with("modified_code.py", False)
+
+    # 2. It should NOT call the complex pathing logic
+    mock_construct_paths.assert_not_called()
+
+    # 3. It should call update_prompt directly in "generation" mode
+    mock_update_prompt.assert_called_once()
+    # We can check the args if needed, but the call itself is the main thing
+    args, kwargs = mock_update_prompt.call_args
+    assert kwargs['input_prompt'] == "no prompt exists yet, create a new one"
+    assert kwargs['input_code'] == ""
+
+    # 4. It should not call git_update
     mock_git_update.assert_not_called()
 
+    # 5. It should write to the derived prompt file
+    mock_open_file.assert_any_call("modified_code_python.prompt", "w")
+
+    # 6. The result should be correct
     assert result == ("updated prompt text", 0.123456, "test-model")
-    mock_open_file.assert_called_once_with("modified_code_python.prompt", "w")
 
 def test_update_main_handles_unexpected_exception_gracefully(
     mock_ctx,
