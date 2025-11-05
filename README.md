@@ -1493,6 +1493,9 @@ pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modifie
 
 # Update an existing prompt by manually providing original code
 pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+
+# Repository-wide update filtered by extension
+pdd [GLOBAL OPTIONS] update --extensions py,js
 ```
 
 Arguments:
@@ -1505,6 +1508,7 @@ Arguments:
 Options:
 - `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten.**
 - `--git`: Use Git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument in update scenarios (B).
+- `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
 
 ### 10. detect
 
