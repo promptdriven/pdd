@@ -1031,6 +1031,7 @@ def test_cli_fix_multiple_test_files(runner, tmp_path):
     error_file.write_text("error content")
 
     with patch('pdd.cli.fix_main') as mock_fix_main:
+        mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
         result = runner.invoke(cli.cli, [
             'fix',
             str(prompt_file),
@@ -1040,8 +1041,37 @@ def test_cli_fix_multiple_test_files(runner, tmp_path):
             str(error_file),
         ])
         assert result.exit_code == 0
-        mock_fix_main.assert_called_once()
-        assert mock_fix_main.call_args[1]['unit_test_files'] == [str(test_file_1), str(test_file_2)]
+        assert mock_fix_main.call_count == 2
+        mock_fix_main.assert_any_call(
+            ctx=ANY,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            unit_test_file=str(test_file_1),
+            error_file=str(error_file),
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False,
+        )
+        mock_fix_main.assert_any_call(
+            ctx=ANY,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            unit_test_file=str(test_file_2),
+            error_file=str(error_file),
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False,
+        )
 
 def test_cli_test_multiple_existing_tests(runner, tmp_path):
     """Test that the test command accepts multiple existing test files."""
