@@ -98,17 +98,8 @@ def bug_main(
                 os.makedirs(dir_path, exist_ok=True)
             
             # Write the file
-            if os.path.exists(output_path):
-                base, ext = os.path.splitext(output_path)
-                i = 1
-                while os.path.exists(f"{base}_{i}{ext}"):
-                    i += 1
-                output_path = f"{base}_{i}{ext}"
-            
             with open(output_path, 'w') as f:
                 f.write(unit_test)
-
-            output_file_paths["output"] = output_path
 
         # Provide user feedback
         if not ctx.obj.get('quiet', False):
