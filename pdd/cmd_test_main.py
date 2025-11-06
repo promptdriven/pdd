@@ -181,11 +181,21 @@ def cmd_test_main(
     try:
         # Ensure parent directory exists
         output_path = Path(output_file)
+        
+        # Handle existing files by adding a numeric suffix
+        if output_path.exists():
+            base = output_path.stem
+            ext = output_path.suffix
+            i = 1
+            while output_path.exists():
+                output_path = output_path.with_name(f"{base}_{i}{ext}")
+                i += 1
+        
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(output_file, "w", encoding="utf-8") as file_handle:
+        with open(str(output_path), "w", encoding="utf-8") as file_handle:
             file_handle.write(unit_test)
-        print(f"[bold green]Unit tests saved to:[/bold green] {output_file}")
+        print(f"[bold green]Unit tests saved to:[/bold green] {str(output_path)}")
     except Exception as exception:
         # A broad exception is caught here to handle potential file system errors
         # (e.g., permissions, disk space) that can occur when writing the
