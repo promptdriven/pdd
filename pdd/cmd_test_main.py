@@ -20,7 +20,7 @@ def cmd_test_main(
     output: str | None,
     language: str | None,
     coverage_report: str | None,
-    existing_tests: str | None,
+    existing_tests: list[str] | None,
     target_coverage: float | None,
     merge: bool | None,
 ) -> tuple[str, float, str]:
@@ -37,7 +37,7 @@ def cmd_test_main(
         output (str | None): Path to save the generated test file.
         language (str | None): Programming language.
         coverage_report (str | None): Path to the coverage report file.
-        existing_tests (str | None): Path to the existing unit test file.
+        existing_tests (list[str] | None): Paths to the existing unit test files.
         target_coverage (float | None): Desired code coverage percentage.
         merge (bool | None): Whether to merge new tests with existing tests.
 
@@ -73,7 +73,7 @@ def cmd_test_main(
         if coverage_report:
             input_file_paths["coverage_report"] = coverage_report
         if existing_tests:
-            input_file_paths["existing_tests"] = existing_tests
+            input_file_paths["existing_tests"] = existing_tests[0]
 
         command_options = {
             "output": output,
@@ -90,6 +90,14 @@ def cmd_test_main(
             command_options=command_options,
             context_override=ctx.obj.get('context')
         )
+
+        if existing_tests:
+            existing_tests_content = ""
+            for test_file in existing_tests:
+                with open(test_file, 'r') as f:
+                    existing_tests_content += f.read() + "\n"
+            input_strings["existing_tests"] = existing_tests_content
+
     except Exception as exception:
         # Catching a general exception is necessary here to handle a wide range of
         # potential errors during file I/O and path construction, ensuring the
@@ -163,7 +171,7 @@ def cmd_test_main(
         else:
             output_file = output
     if merge and existing_tests:
-        output_file = existing_tests
+        output_file = existing_tests[0] if existing_tests else None
 
     if not output_file:
         print("[bold red]Error: Output file path could not be determined.[/bold red]")
