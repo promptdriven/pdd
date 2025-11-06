@@ -690,36 +690,47 @@ def construct_paths(
          raise # Re-raise the ValueError
 
     # ------------- Step 4: overwrite confirmation ------------
-    # Check if any output *file* exists (operate on Path objects)
-    existing_files: Dict[str, Path] = {}
-    for k, p_obj in output_paths_resolved.items():
-        # p_obj = Path(p_val) # Conversion now happens earlier
-        if p_obj.is_file():
-            existing_files[k] = p_obj # Store the Path object
+    if command in ["test", "bug"] and not force:
+        for key, path in output_paths_resolved.items():
+            if path.is_file():
+                base, ext = os.path.splitext(path)
+                i = 1
+                new_path = Path(f"{base}_{i}{ext}")
+                while new_path.exists():
+                    i += 1
+                    new_path = Path(f"{base}_{i}{ext}")
+                output_paths_resolved[key] = new_path
+    else:
+        # Check if any output *file* exists (operate on Path objects)
+        existing_files: Dict[str, Path] = {}
+        for k, p_obj in output_paths_resolved.items():
+            # p_obj = Path(p_val) # Conversion now happens earlier
+            if p_obj.is_file():
+                existing_files[k] = p_obj # Store the Path object
 
-    if existing_files and not force:
-        if not quiet:
-            # Use the Path objects stored in existing_files for resolve()
-            # Print without Rich tags for easier testing
-            paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
-            console.print(
-                f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
-                style="warning"
-            )
-        # Use click.confirm for user interaction
-        try:
-            if not click.confirm(
-                click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
-            ):
-                click.secho("Operation cancelled.", fg="red", err=True)
-                sys.exit(1) # Exit if user chooses not to overwrite
-        except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
-            if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
-                # Non-interactive environment, default to not overwriting
-                click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
-            else:
-                click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
-            sys.exit(1)
+        if existing_files and not force:
+            if not quiet:
+                # Use the Path objects stored in existing_files for resolve()
+                # Print without Rich tags for easier testing
+                paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
+                console.print(
+                    f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
+                    style="warning"
+                )
+            # Use click.confirm for user interaction
+            try:
+                if not click.confirm(
+                    click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
+                ):
+                    click.secho("Operation cancelled.", fg="red", err=True)
+                    sys.exit(1) # Exit if user chooses not to overwrite
+            except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
+                if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
+                    # Non-interactive environment, default to not overwriting
+                    click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
+                else:
+                    click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
+                sys.exit(1)
 
 
     # ------------- Final reporting ---------------------------
