@@ -94,7 +94,7 @@ def test_fix_main_without_loop(
             ctx=mock_ctx,
             prompt_file="prompt_file.prompt",
             code_file="code_file.py",
-            unit_test_file="test_code_file.py",
+            unit_test_files=["test_code_file.py"],
             error_file="errors.log",
             output_test=None,
             output_code=None,
@@ -136,7 +136,7 @@ def test_fix_main_without_loop(
     assert model_name == "gpt-4"
 
     # Assert file writing
-    m_open.assert_called_once_with('output/test_code_fixed.py', 'w')
+    m_open.assert_any_call('output/test_code_fixed.py', 'w')
     handle = m_open()
     handle.write.assert_called_once_with("Fixed unit test content")
 
@@ -191,7 +191,7 @@ def test_fix_main_with_loop(
             ctx=mock_ctx,
             prompt_file="prompt_file.prompt",
             code_file="code_file.py",
-            unit_test_file="test_code_file.py",
+            unit_test_files=["test_code_file.py"],
             error_file="errors.log",  # This should not matter when loop=True
             output_test=None,
             output_code=None,
@@ -256,7 +256,7 @@ def test_fix_main_loop_requires_verification_program(mock_ctx):
             ctx=mock_ctx,
             prompt_file="prompt_file.prompt",
             code_file="code_file.py",
-            unit_test_file="test_code_file.py",
+            unit_test_files=["test_code_file.py"],
             error_file="errors.log",
             output_test=None,
             output_code=None,
@@ -288,7 +288,7 @@ def test_fix_main_handles_exception_and_exits(mocked_construct_paths, mock_path,
             ctx=mock_ctx,
             prompt_file="prompt_file.prompt",
             code_file="code_file.py",
-            unit_test_file="test_code_file.py",
+            unit_test_files=["test_code_file.py"],
             error_file="errors.log", # This check will now pass
             output_test=None,
             output_code=None,
@@ -307,3 +307,65 @@ def test_fix_main_handles_exception_and_exits(mocked_construct_paths, mock_path,
     # Check that Path('errors.log').exists() was called
     mock_path.assert_called_once_with('errors.log')
     mock_path_instance.exists.assert_called_once()
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_multiple_test_files(
+    mock_fix_errors_from_unit_tests,
+    mock_construct_paths,
+    mock_path,
+    mock_ctx
+):
+    """
+    Test that fix_main correctly handles multiple unit test files by concatenating them.
+    """
+    mock_path_instance = mock_path.return_value
+    mock_path_instance.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'Test prompt file content',
+            'code_file': 'Test code file content',
+            'error_file': 'Error message content'
+        },
+        {
+            'output_test': 'output/test_code_fixed.py',
+            'output_code': 'output/code_fixed.py',
+            'output_results': 'results/fix_results.log'
+        },
+        None
+    )
+
+    mock_fix_errors_from_unit_tests.return_value = (
+        True, False, "Fixed unit test content", "", "Analysis results", 0.75, "gpt-4"
+    )
+
+    # Simulate reading two test files
+    m_open = mock_open()
+    m_open.side_effect = [
+        mock_open(read_data='test file 1 content\n').return_value,
+        mock_open(read_data='test file 2 content\n').return_value,
+        mock_open().return_value,  # For the output file
+    ]
+    with patch('builtins.open', m_open):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt_file.prompt",
+            code_file="code_file.py",
+            unit_test_files=["test1.py", "test2.py"],
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    mock_fix_errors_from_unit_tests.assert_called_once()
+    # Check that the `unit_test` argument is the concatenated content
+    assert mock_fix_errors_from_unit_tests.call_args[1]['unit_test'] == 'test file 1 content\n\ntest file 2 content\n\n'
