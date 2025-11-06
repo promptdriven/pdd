@@ -970,29 +970,37 @@ def fix(
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Fix code based on a prompt and unit test errors."""
     try:
-        # The actual logic is in fix_main
-        success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_main(
-            ctx=ctx,
-            prompt_file=prompt_file,
-            code_file=code_file,
-            unit_test_files=list(unit_test_files),
-            error_file=error_file,
-            output_test=output_test,
-            output_code=output_code,
-            output_results=output_results,
-            loop=loop,
-            verification_program=verification_program,
-            max_attempts=max_attempts,
-            budget=budget,
-            auto_submit=auto_submit,
-        )
-        result = {
-            "success": success,
-            "fixed_unit_test": fixed_unit_test,
-            "fixed_code": fixed_code,
-            "attempts": attempts,
-        }
-        return result, total_cost, model_name
+        all_results = []
+        total_cost = 0.0
+        model_name = ""
+
+        for unit_test_file in unit_test_files:
+            success, fixed_unit_test, fixed_code, attempts, cost, model = fix_main(
+                ctx=ctx,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                unit_test_file=unit_test_file,
+                error_file=error_file,
+                output_test=output_test,
+                output_code=output_code,
+                output_results=output_results,
+                loop=loop,
+                verification_program=verification_program,
+                max_attempts=max_attempts,
+                budget=budget,
+                auto_submit=auto_submit,
+            )
+            all_results.append({
+                "success": success,
+                "fixed_unit_test": fixed_unit_test,
+                "fixed_code": fixed_code,
+                "attempts": attempts,
+            })
+            total_cost += cost
+            model_name = model
+        
+        return {"results": all_results}, total_cost, model_name
+
     except Exception as exception:
         handle_error(exception, "fix", ctx.obj.get("quiet", False))
         return None
