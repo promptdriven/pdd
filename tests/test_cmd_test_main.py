@@ -386,3 +386,42 @@ def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture
         m_open.assert_called_once_with(str(resolved_file), "w", encoding="utf-8")
         handle = m_open()
         handle.write.assert_called_once_with("unit_test_code")
+
+def test_cmd_test_main_output_file_exists(mock_ctx_fixture, mock_files_fixture, tmp_path):
+    """
+    Tests that if the output file already exists, a new file with a numeric suffix is created.
+    """
+    output_file = tmp_path / "existing_test.py"
+    output_file.write_text("existing content", encoding="utf-8")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open(read_data="existing content")) as m_open:
+
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": str(output_file)},
+            "python",
+        )
+        mock_generate_test.return_value = ("new unit test code", 0.10, "model_v1")
+
+        cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=str(output_file),
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        new_output_file = tmp_path / "existing_test_1.py"
+        m_open.assert_called_with(str(new_output_file), "w", encoding="utf-8")
+        handle = m_open()
+        handle.write.assert_called_with("new unit test code")
+        
+        # Verify original file was not overwritten
+        assert output_file.read_text(encoding="utf-8") == "existing content"

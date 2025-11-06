@@ -255,3 +255,52 @@ def test_bug_main_language_from_construct_paths(mock_ctx, mock_input_files):
         
         # Assertions on the result
         assert result == ("Generated unit test", 0.001, "gpt-4")
+
+def test_bug_main_output_file_exists(mock_ctx, mock_input_files, tmpdir):
+    """Test case for bug_main when the output file already exists."""
+    output_file = str(tmpdir.join("output_test.py"))
+    
+    # Create an existing file
+    with open(output_file, 'w') as f:
+        f.write("Existing content")
+    
+    with patch('pdd.bug_main.construct_paths') as mock_construct_paths, \
+         patch('pdd.bug_main.bug_to_unit_test') as mock_bug_to_unit_test:
+        
+        # Mock construct_paths
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {
+                "prompt_file": "Prompt content",
+                "code_file": "Code content",
+                "program_file": "Program content",
+                "current_output": "Current output content",
+                "desired_output": "Desired output content"
+            },
+            {"output": output_file},
+            None
+        )
+        
+        # Mock bug_to_unit_test
+        mock_bug_to_unit_test.return_value = ("Generated unit test", 0.001, "gpt-4")
+        
+        # Call the function
+        bug_main(
+            mock_ctx,
+            mock_input_files["prompt_file"],
+            mock_input_files["code_file"],
+            mock_input_files["program_file"],
+            mock_input_files["current_output"],
+            mock_input_files["desired_output"],
+            output=output_file
+        )
+        
+        # Assertions
+        new_output_file = str(tmpdir.join("output_test_1.py"))
+        assert os.path.exists(new_output_file)
+        with open(new_output_file, 'r') as f:
+            assert f.read() == "Generated unit test"
+        
+        # Check that the original file is untouched
+        with open(output_file, 'r') as f:
+            assert f.read() == "Existing content"
