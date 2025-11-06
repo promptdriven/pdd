@@ -776,9 +776,11 @@ def example(
 )
 @click.option(
     "--existing-tests",
+    "existing_tests",
+    multiple=True,
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="Path to the existing unit test file.",
+    help="Path to the existing unit test file(s).",
 )
 @click.option(
     "--target-coverage",
@@ -801,7 +803,7 @@ def test(
     output: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
-    existing_tests: Optional[str],
+    existing_tests: Optional[Tuple[str, ...]],
     target_coverage: Optional[float],
     merge: bool,
 ) -> Optional[Tuple[str, float, str]]:
@@ -814,7 +816,7 @@ def test(
             output=output,
             language=language,
             coverage_report=coverage_report,
-            existing_tests=existing_tests,
+            existing_tests=list(existing_tests) if existing_tests else None,
             target_coverage=target_coverage,
             merge=merge,
         )
@@ -897,7 +899,7 @@ def preprocess(
 @cli.command("fix")
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("unit_test_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("unit_test_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
 @click.argument("error_file", type=click.Path(dir_okay=False))  # Allow non-existent for loop mode
 @click.option(
     "--output-test",
@@ -955,7 +957,7 @@ def fix(
     ctx: click.Context,
     prompt_file: str,
     code_file: str,
-    unit_test_file: str,
+    unit_test_files: Tuple[str, ...],
     error_file: str,
     output_test: Optional[str],
     output_code: Optional[str],
@@ -973,7 +975,7 @@ def fix(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
-            unit_test_file=unit_test_file,
+            unit_test_files=list(unit_test_files),
             error_file=error_file,
             output_test=output_test,
             output_code=output_code,
@@ -1111,8 +1113,8 @@ def change(
 
 
 @cli.command("update")
-@click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False), required=False)
-@click.argument("modified_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("modified_code_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("input_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
 @click.option(
     "--output",
@@ -1122,77 +1124,41 @@ def change(
 )
 @click.option(
     "--git",
-    "use_git",
     is_flag=True,
     default=False,
     help="Use git history to find the original code file.",
-)
-@click.option(
-    "--extensions",
-    type=str,
-    default=None,
-    help="Comma-separated list of file extensions to update in repo mode (e.g., 'py,js,ts').",
 )
 @click.pass_context
 @track_cost
 def update(
     ctx: click.Context,
-    input_prompt_file: Optional[str],
-    modified_code_file: Optional[str],
+    input_prompt_file: str,
+    modified_code_file: str,
     input_code_file: Optional[str],
     output: Optional[str],
-    use_git: bool,
-    extensions: Optional[str],
-) -> Optional[Tuple[str, float, str]]:
-    """
-    Update prompts based on code changes.
-
-    This command operates in two modes:
-
-    1.  **Single-File Mode:** When you provide at least a code file, it updates
-        or generates a single prompt.
-        - `pdd update [PROMPT_FILE] <CODE_FILE>`: Updates prompt based on code.
-        - `pdd update <CODE_FILE>`: Generates a new prompt for the code.
-
-    2.  **Repository-Wide Mode:** When you provide no file arguments, it scans the
-        entire repository, finds all code/prompt pairs, creates missing prompts,
-        and updates them all based on the latest git changes.
-    """
+    git: bool,
+) -> Optional[Tuple[str, float, str]]: # Modified return type
+    """Update the original prompt file based on modified code."""
     quiet = ctx.obj.get("quiet", False)
     command_name = "update"
     try:
-        # If only one file is provided, it's the modified_code_file for generation
-        if input_prompt_file and not modified_code_file:
-            actual_modified_code_file = input_prompt_file
-            actual_input_prompt_file = None
-        else:
-            actual_modified_code_file = modified_code_file
-            actual_input_prompt_file = input_prompt_file
-
-        is_repo_mode = not actual_input_prompt_file and not actual_modified_code_file
-
-        if is_repo_mode:
-            if any([input_code_file, output, use_git]):
-                raise click.UsageError(
-                    "Cannot use file-specific arguments or flags like --git or --output in repository-wide mode (when no files are provided)."
-                )
-        elif extensions:
-            raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")
+        if git and input_code_file:
+            raise click.UsageError("Cannot use --git and specify an INPUT_CODE_FILE simultaneously.")
+        if not git and not input_code_file:
+            raise click.UsageError("INPUT_CODE_FILE is required when not using --git.")
 
         updated_prompt, total_cost, model_name = update_main(
             ctx=ctx,
-            input_prompt_file=actual_input_prompt_file,
-            modified_code_file=actual_modified_code_file,
+            input_prompt_file=input_prompt_file,
+            modified_code_file=modified_code_file,
             input_code_file=input_code_file,
             output=output,
-            use_git=use_git,
-            repo=is_repo_mode,
-            extensions=extensions,
+            git=git,
         )
         return updated_prompt, total_cost, model_name
-    except (click.UsageError, Exception) as e:
+    except (click.UsageError, Exception) as e: # Catch specific and general exceptions
         handle_error(e, command_name, quiet)
-        return None
+        return None # Return None on failure
 
 
 @cli.command("detect")

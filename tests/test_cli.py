@@ -1017,6 +1017,61 @@ def test_cli_onboarding_reminder_suppressed_by_api_env(monkeypatch, runner, tmp_
     assert result.exit_code == 0
     assert "Complete onboarding with `pdd setup`" not in result.output
 
+def test_cli_fix_multiple_test_files(runner, tmp_path):
+    """Test that the fix command accepts multiple test files."""
+    prompt_file = tmp_path / "prompt.prompt"
+    prompt_file.write_text("prompt content")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("code content")
+    test_file_1 = tmp_path / "test_1.py"
+    test_file_1.write_text("test 1 content")
+    test_file_2 = tmp_path / "test_2.py"
+    test_file_2.write_text("test 2 content")
+    error_file = tmp_path / "error.txt"
+    error_file.write_text("error content")
+
+    with patch('pdd.cli.fix_main') as mock_fix_main:
+        result = runner.invoke(cli.cli, [
+            'fix',
+            str(prompt_file),
+            str(code_file),
+            str(test_file_1),
+            str(test_file_2),
+            str(error_file),
+        ])
+        assert result.exit_code == 0
+        mock_fix_main.assert_called_once()
+        assert mock_fix_main.call_args[1]['unit_test_files'] == [str(test_file_1), str(test_file_2)]
+
+def test_cli_test_multiple_existing_tests(runner, tmp_path):
+    """Test that the test command accepts multiple existing test files."""
+    prompt_file = tmp_path / "prompt.prompt"
+    prompt_file.write_text("prompt content")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("code content")
+    test_file_1 = tmp_path / "test_1.py"
+    test_file_1.write_text("test 1 content")
+    test_file_2 = tmp_path / "test_2.py"
+    test_file_2.write_text("test 2 content")
+    coverage_report = tmp_path / "coverage.xml"
+    coverage_report.write_text("coverage content")
+
+    with patch('pdd.cli.cmd_test_main') as mock_cmd_test_main:
+        result = runner.invoke(cli.cli, [
+            'test',
+            str(prompt_file),
+            str(code_file),
+            '--existing-tests',
+            str(test_file_1),
+            '--existing-tests',
+            str(test_file_2),
+            '--coverage-report',
+            str(coverage_report),
+        ])
+        assert result.exit_code == 0
+        mock_cmd_test_main.assert_called_once()
+        assert mock_cmd_test_main.call_args[1]['existing_tests'] == [str(test_file_1), str(test_file_2)]
+
 # --- Real Command Tests (No Mocking) ---
 # These tests remain largely unchanged as they call the *_main functions directly
 # or expect exceptions to be raised by those main functions.

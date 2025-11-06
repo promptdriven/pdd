@@ -24,7 +24,7 @@ def fix_main(
     ctx: click.Context,
     prompt_file: str,
     code_file: str,
-    unit_test_file: str,
+    unit_test_files: list[str],
     error_file: str,
     output_test: Optional[str],
     output_code: Optional[str],
@@ -33,8 +33,7 @@ def fix_main(
     verification_program: Optional[str],
     max_attempts: int,
     budget: float,
-    auto_submit: bool,
-    agentic_fallback: bool = True
+    auto_submit: bool
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -43,7 +42,7 @@ def fix_main(
         ctx: Click context containing command-line parameters
         prompt_file: Path to the prompt file that generated the code
         code_file: Path to the code file to be fixed
-        unit_test_file: Path to the unit test file
+        unit_test_files: List of paths to the unit test files
         error_file: Path to the error log file
         output_test: Path to save the fixed unit test file
         output_code: Path to save the fixed code file
@@ -53,7 +52,7 @@ def fix_main(
         max_attempts: Maximum number of fix attempts
         budget: Maximum cost allowed for fixing
         auto_submit: Whether to auto-submit example if tests pass
-        agentic_fallback: Whether the cli agent fallback is triggered
+
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -81,7 +80,7 @@ def fix_main(
         input_file_paths = {
             "prompt_file": prompt_file,
             "code_file": code_file,
-            "unit_test_file": unit_test_file
+            "unit_test_file": unit_test_files[0] if unit_test_files else None
         }
         if not loop:
             input_file_paths["error_file"] = error_file
@@ -102,6 +101,14 @@ def fix_main(
             context_override=ctx.obj.get('context')
         )
 
+        # Concatenate all unit test files
+        unit_test_content = ""
+        for test_file in unit_test_files:
+            with open(test_file, 'r') as f:
+                unit_test_content += f.read() + "\n"
+        
+        input_strings["unit_test_file"] = unit_test_content
+
         # Get parameters from context
         strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0)
@@ -111,9 +118,8 @@ def fix_main(
         if loop:
             # Use fix_error_loop for iterative fixing
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
-                unit_test_file=unit_test_file,
+                unit_test_file=unit_test_files[0] if unit_test_files else "",
                 code_file=code_file,
-                prompt_file=prompt_file,
                 prompt=input_strings["prompt_file"],
                 verification_program=verification_program,
                 strength=strength,
@@ -122,8 +128,7 @@ def fix_main(
                 max_attempts=max_attempts,
                 budget=budget,
                 error_log_file=output_file_paths.get("output_results"),
-                verbose=verbose,
-                agentic_fallback=agentic_fallback
+                verbose=verbose
             )
         else:
             # Use fix_errors_from_unit_tests for single-pass fixing
