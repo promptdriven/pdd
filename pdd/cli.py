@@ -776,9 +776,11 @@ def example(
 )
 @click.option(
     "--existing-tests",
+    "existing_tests",
+    multiple=True,
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="Path to the existing unit test file.",
+    help="Path to the existing unit test file(s).",
 )
 @click.option(
     "--target-coverage",
@@ -801,7 +803,7 @@ def test(
     output: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
-    existing_tests: Optional[str],
+    existing_tests: Optional[Tuple[str, ...]],
     target_coverage: Optional[float],
     merge: bool,
 ) -> Optional[Tuple[str, float, str]]:
@@ -814,7 +816,7 @@ def test(
             output=output,
             language=language,
             coverage_report=coverage_report,
-            existing_tests=existing_tests,
+            existing_tests=list(existing_tests) if existing_tests else None,
             target_coverage=target_coverage,
             merge=merge,
         )
@@ -897,7 +899,7 @@ def preprocess(
 @cli.command("fix")
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("unit_test_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("unit_test_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
 @click.argument("error_file", type=click.Path(dir_okay=False))  # Allow non-existent for loop mode
 @click.option(
     "--output-test",
@@ -955,7 +957,7 @@ def fix(
     ctx: click.Context,
     prompt_file: str,
     code_file: str,
-    unit_test_file: str,
+    unit_test_files: Tuple[str, ...],
     error_file: str,
     output_test: Optional[str],
     output_code: Optional[str],
@@ -973,7 +975,7 @@ def fix(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
-            unit_test_file=unit_test_file,
+            unit_test_files=list(unit_test_files),
             error_file=error_file,
             output_test=output_test,
             output_code=output_code,
