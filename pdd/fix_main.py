@@ -118,7 +118,7 @@ def fix_main(
         if loop:
             # Use fix_error_loop for iterative fixing
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
-                unit_test_file=unit_test_files[0] if unit_test_files else "",
+                unit_test_file=input_strings["unit_test_file"],
                 code_file=code_file,
                 prompt=input_strings["prompt_file"],
                 verification_program=verification_program,
