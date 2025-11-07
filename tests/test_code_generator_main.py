@@ -202,7 +202,9 @@ def mock_requests_post_fixture(monkeypatch):
 
 @pytest.fixture(autouse=True) 
 def mock_subprocess_run_fixture(monkeypatch):
+    original_run = subprocess.run
     mock = MagicMock(return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""))
+    mock.original_run = original_run
     monkeypatch.setattr("pdd.code_generator_main.subprocess.run", mock) 
     monkeypatch.setattr(subprocess, "run", mock) 
     return mock
@@ -1492,3 +1494,72 @@ def test_architecture_postprocess_passes_absolute_input_path(
     input_arg = render_cmd[2]
     assert os.path.isabs(input_arg)
     assert input_arg == str(expected_output_path.resolve())
+
+
+def test_architecture_postprocess_rewrites_json_pretty(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    """render_mermaid should normalize architecture.json so diffs stay stable."""
+    mock_ctx.obj['local'] = True
+    real_run = mock_subprocess_run_fixture.original_run
+    def render_side_effect(cmd, *args, **kwargs):
+        if len(cmd) >= 2 and pathlib.Path(cmd[1]).name == "render_mermaid.py":
+            return real_run(cmd, *args, **kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    mock_subprocess_run_fixture.side_effect = render_side_effect
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt").resolve()
+    template_content = template_path.read_text(encoding="utf-8")
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "architecture.prompt"
+    create_file(prompt_file_path, template_content)
+
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Render pretty regression")
+
+    output_path = temp_dir_setup["output_dir"] / "architecture.json"
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": template_content},
+        {"output": str(output_path)},
+        "json",
+    )
+
+    unformatted_entries = [
+        {
+            "reason": "Pretty print regression",
+            "description": "Ensure render_mermaid rewrites JSON.",
+            "dependencies": [],
+            "priority": 1,
+            "filename": "foo.py",
+            "filepath": "src/foo.py",
+        }
+    ]
+    mock_local_generator_fixture.return_value = (
+        json.dumps(unformatted_entries, separators=(',', ':')),
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_path),
+        None,
+        False,
+        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+    )
+
+    # render_mermaid should rewrite the file with pretty formatting
+    render_calls = [
+        call for call in mock_subprocess_run_fixture.call_args_list
+        if len(call[0][0]) >= 2 and pathlib.Path(call[0][0][1]).name == "render_mermaid.py"
+    ]
+    assert render_calls, "render_mermaid.py was never invoked"
+    expected = json.dumps(unformatted_entries, indent=2) + "\n"
+    actual = output_path.read_text(encoding="utf-8")
+    assert actual == expected
