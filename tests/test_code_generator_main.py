@@ -1419,3 +1419,76 @@ Generate a simple module.
 
     # Post-process should be invoked
     assert mock_subprocess_run_fixture.called
+
+
+def test_architecture_postprocess_passes_absolute_input_path(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+    monkeypatch,
+):
+    """render_mermaid should receive an absolute path so it can open architecture.json from any cwd."""
+    mock_ctx.obj['local'] = True
+
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt").resolve()
+    template_content = template_path.read_text(encoding="utf-8")
+
+    # Work inside the temp repo to mimic running `pdd` from project root with a relative --output
+    monkeypatch.chdir(temp_dir_setup["tmp_path"])
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "architecture.prompt"
+    create_file(prompt_file_path, template_content)
+
+    relative_output = "architecture.json"
+    expected_output_path = temp_dir_setup["tmp_path"] / relative_output
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Spec content for absolute path regression")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": template_content},
+        {"output": relative_output},
+        "json",
+    )
+
+    generated_json = json.dumps(
+        [
+            {
+                "reason": "Diagram generation",
+                "description": "Minimal architecture entry for render_mermaid.",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "orders/api.py",
+                "filepath": "orders/api.py",
+            }
+        ]
+    )
+    mock_local_generator_fixture.return_value = (
+        generated_json,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        relative_output,
+        None,
+        False,
+        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+    )
+
+    render_cmd = None
+    for call in mock_subprocess_run_fixture.call_args_list:
+        cmd = call[0][0]
+        if len(cmd) >= 2 and pathlib.Path(cmd[1]).name == "render_mermaid.py":
+            render_cmd = cmd
+            break
+
+    assert render_cmd is not None, "render_mermaid.py should run for architecture template"
+    input_arg = render_cmd[2]
+    assert os.path.isabs(input_arg)
+    assert input_arg == str(expected_output_path.resolve())
