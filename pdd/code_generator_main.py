@@ -918,8 +918,9 @@ def code_generator_main(
                     if script_path2 and pathlib.Path(script_path2).exists():
                         app_name2 = os.environ.get('APP_NAME') or (env_vars or {}).get('APP_NAME') or 'System Architecture'
                         out_html2 = os.environ.get('POST_PROCESS_OUTPUT') or str(p_output.with_name(f"{p_output.stem}_diagram.html").resolve())
-                        # Only run if HTML not present yet
-                        if not pathlib.Path(out_html2).exists():
+                        html_missing = not pathlib.Path(out_html2).exists()
+                        always_run_for_arch = pathlib.Path(str(p_output)).name == 'architecture.json'
+                        if always_run_for_arch or html_missing:
                             try:
                                 py_exec2 = detect_host_python_executable()
                             except Exception:
