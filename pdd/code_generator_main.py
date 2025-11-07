@@ -798,7 +798,7 @@ def code_generator_main(
                             # Write payload to a temp file for scripts expecting a file path input
                             suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
                             if output_path and llm_enabled:
-                                temp_input_path = output_path
+                                temp_input_path = str(pathlib.Path(output_path).resolve())
                                 pathlib.Path(temp_input_path).parent.mkdir(parents=True, exist_ok=True)
                                 with open(temp_input_path, 'w', encoding='utf-8') as f:
                                     f.write(stdin_payload or '')
