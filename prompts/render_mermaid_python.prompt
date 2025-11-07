@@ -1,6 +1,7 @@
 Create a Python script that converts architecture.json files into interactive HTML Mermaid diagrams.
 Requirements:
 - Parse architecture.json file (array of module objects with filename, priority, dependencies, tags)
+- After loading, rewrite architecture.json using deterministic pretty-printed JSON (2-space indent) so future diffs remain stable
 - Generate Mermaid flowchart code with:
   - Top node for application name
   - Frontend subgraph (tags: frontend, react, nextjs, ui, page, component)
@@ -27,4 +28,3 @@ Example/Usage Generation Rules (when used with `pdd example`):
 - Produce a small usage script that parses an input JSON, calls the imported functions, and writes HTML.
 - NEVER define functions named `generate_mermaid_code` or `generate_html` in the example.
 - Ensure the output is syntactically valid Python; avoid duplicated tokens like `def def`.
-
