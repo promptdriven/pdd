@@ -332,14 +332,48 @@ def _determine_language(
         ext = path_obj.suffix
         # Prioritize non-prompt code files
         if ext and ext != ".prompt":
-            language = get_language(ext)
-            if language:
-                return language.lower()
+            try:
+                language = get_language(ext)
+                if language:
+                    return language.lower()
+            except ValueError:
+                # Fallback: load language CSV file directly when PDD_PATH is not set
+                try:
+                    import csv
+                    import os
+                    # Try to find the CSV file relative to this script
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    csv_path = os.path.join(script_dir, 'data', 'language_format.csv')
+                    if os.path.exists(csv_path):
+                        with open(csv_path, 'r') as csvfile:
+                            reader = csv.DictReader(csvfile)
+                            for row in reader:
+                                if row['extension'].lower() == ext.lower():
+                                    return row['language'].lower()
+                except (FileNotFoundError, csv.Error):
+                    pass
         # Handle files without extension like Makefile
         elif not ext and path_obj.is_file(): # Check it's actually a file
-            language = get_language(path_obj.name) # Check name (e.g., 'Makefile')
-            if language:
-                return language.lower()
+            try:
+                language = get_language(path_obj.name) # Check name (e.g., 'Makefile')
+                if language:
+                    return language.lower()
+            except ValueError:
+                # Fallback: load language CSV file directly for files without extension
+                try:
+                    import csv
+                    import os
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    csv_path = os.path.join(script_dir, 'data', 'language_format.csv')
+                    if os.path.exists(csv_path):
+                        with open(csv_path, 'r') as csvfile:
+                            reader = csv.DictReader(csvfile)
+                            for row in reader:
+                                # Check if the filename matches (for files without extension)
+                                if not row['extension'] and path_obj.name.lower() == row['language'].lower():
+                                    return row['language'].lower()
+                except (FileNotFoundError, csv.Error):
+                    pass
 
     # 3 – parse from prompt filename suffix
     prompt_path = _candidate_prompt_path(input_file_paths)
@@ -690,47 +724,36 @@ def construct_paths(
          raise # Re-raise the ValueError
 
     # ------------- Step 4: overwrite confirmation ------------
-    if command in ["test", "bug"] and not force:
-        for key, path in output_paths_resolved.items():
-            if path.is_file():
-                base, ext = os.path.splitext(path)
-                i = 1
-                new_path = Path(f"{base}_{i}{ext}")
-                while new_path.exists():
-                    i += 1
-                    new_path = Path(f"{base}_{i}{ext}")
-                output_paths_resolved[key] = new_path
-    else:
-        # Check if any output *file* exists (operate on Path objects)
-        existing_files: Dict[str, Path] = {}
-        for k, p_obj in output_paths_resolved.items():
-            # p_obj = Path(p_val) # Conversion now happens earlier
-            if p_obj.is_file():
-                existing_files[k] = p_obj # Store the Path object
+    # Check if any output *file* exists (operate on Path objects)
+    existing_files: Dict[str, Path] = {}
+    for k, p_obj in output_paths_resolved.items():
+        # p_obj = Path(p_val) # Conversion now happens earlier
+        if p_obj.is_file():
+            existing_files[k] = p_obj # Store the Path object
 
-        if existing_files and not force:
-            if not quiet:
-                # Use the Path objects stored in existing_files for resolve()
-                # Print without Rich tags for easier testing
-                paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
-                console.print(
-                    f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
-                    style="warning"
-                )
-            # Use click.confirm for user interaction
-            try:
-                if not click.confirm(
-                    click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
-                ):
-                    click.secho("Operation cancelled.", fg="red", err=True)
-                    sys.exit(1) # Exit if user chooses not to overwrite
-            except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
-                if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
-                    # Non-interactive environment, default to not overwriting
-                    click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
-                else:
-                    click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
-                sys.exit(1)
+    if existing_files and not force:
+        if not quiet:
+            # Use the Path objects stored in existing_files for resolve()
+            # Print without Rich tags for easier testing
+            paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
+            console.print(
+                f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
+                style="warning"
+            )
+        # Use click.confirm for user interaction
+        try:
+            if not click.confirm(
+                click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
+            ):
+                click.secho("Operation cancelled.", fg="red", err=True)
+                sys.exit(1) # Exit if user chooses not to overwrite
+        except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
+            if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
+                # Non-interactive environment, default to not overwriting
+                click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
+            else:
+                click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
+            sys.exit(1)
 
 
     # ------------- Final reporting ---------------------------
