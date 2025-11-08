@@ -8,7 +8,6 @@ import requests
 import asyncio
 import os
 from pathlib import Path
-import json
 
 from .preprocess import preprocess
 
