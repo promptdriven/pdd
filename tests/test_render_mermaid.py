@@ -4,7 +4,7 @@ import json
 import html
 from pathlib import Path
 
-from pdd.render_mermaid import generate_mermaid_code, generate_html
+from pdd.render_mermaid import generate_mermaid_code, generate_html, write_pretty_architecture_json
 
 
 # Test Plan
@@ -264,3 +264,22 @@ class TestGenerateHTML:
         # part is correct in its JSON serialization. The f-string for title/h1 is the        # more direct vulnerability in the Python code, which this test should fail.
 
 
+def test_write_pretty_architecture_json(tmp_path):
+    """Ensures render_mermaid rewrites architecture.json with consistent indentation."""
+    arch_path = tmp_path / "architecture.json"
+    data = [
+        {
+            "filename": "src/api.py",
+            "priority": 1,
+            "dependencies": [],
+            "tags": ["backend"],
+        }
+    ]
+    arch_path.write_text(json.dumps(data), encoding="utf-8")
+
+    write_pretty_architecture_json(arch_path, data)
+
+    content = arch_path.read_text(encoding="utf-8")
+    assert content.startswith('[\n  {\n')
+    assert content.endswith('\n')
+    assert json.loads(content) == data
