@@ -42,19 +42,25 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Fetch PR from public repo
+      - name: Apply public PR on top of private repo
         run: |
           echo "Fetching PR #${{ inputs.public_pr_number }} from public repo..."
-          git remote add public https://github.com/promptdriven/pdd.git
+          if git remote | grep -qx "public"; then
+            git remote set-url public https://github.com/promptdriven/pdd.git
+          else
+            git remote add public https://github.com/promptdriven/pdd.git
+          fi
+          
+          git fetch public main
           git fetch public pull/${{ inputs.public_pr_number }}/head:pr-${{ inputs.public_pr_number }}
           
-          echo "Current branch:"
-          git branch -v
+          echo "Creating patch between public main and PR..."
+          git diff --binary public/main...pr-${{ inputs.public_pr_number }} > /tmp/public_pr.patch
           
-          echo "Merging PR locally (not pushing)..."
-          git merge --no-ff pr-${{ inputs.public_pr_number }} -m "Test merge of public PR #${{ inputs.public_pr_number }}"
+          echo "Applying patch to private repo..."
+          git apply -3 /tmp/public_pr.patch
           
-          echo "Merge complete. Running tests on merged code..."
+          echo "Patch applied. Running tests on combined code..."
           
       - name: Set up Python
         uses: actions/setup-python@v5
