@@ -1,3 +1,27 @@
+## v0.0.66 (2025-11-07)
+
+### Feat
+
+- implement consistent formatting for architecture JSON and enhance code generation logic
+- enhance architecture visualization with Mermaid diagram support and update model documentation
+- enhance LLM toggle functionality and post-processing pipeline
+- add LLM toggle functionality and force flag improvements
+
+### Fix
+
+- resolve output path handling to ensure absolute paths are used in code generation
+- resolve test generation issues (#88) and test warnings
+- update code_generator_main_python.prompt to use python_env_detector example file
+- remove references to non-existent example files in code_generator_main_python.prompt
+- update template usage examples to use --template flag
+- update architecture template usage examples to use --template flag
+
+### Refactor
+
+- restructure hello example script and move hello function to src directory
+- reorganize PDD CLI context and update output paths for consistency
+- update prompt files for clarity and consistency in code module references
+
 ## v0.0.65 (2025-10-24)
 
 ### Architecture Visualization

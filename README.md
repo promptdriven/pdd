@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.65-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.66-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.65
+Current version: 0.0.66
 
 To check your installed version, run:
 ```
@@ -888,6 +888,40 @@ Included starter templates
 
 - `architecture/architecture_json.prompt`: Universal architecture generator (requires `-e PRD_FILE=...`; supports optional `TECH_STACK_FILE`, `DOC_FILES`, `INCLUDE_FILES`).
 
+**LLM Toggle Functionality:**
+
+All templates support the `llm` parameter to control whether LLM generation runs:
+
+- **`llm=true`** (default): Full generation with LLM + post-processing
+- **`llm=false`**: Skip LLM generation, run only post-processing
+
+**Architecture JSON Template Features:**
+
+The `architecture/architecture_json` template includes automatic **Mermaid diagram generation**:
+
+- **Post-processing**: Automatically converts the generated JSON into an interactive HTML Mermaid diagram
+- **Visualization**: Creates `architecture_diagram.html` with color-coded modules (frontend/backend/shared)
+- **Interactive**: Hover tooltips show module details, dependencies, and descriptions
+- **Self-contained**: HTML file works offline with embedded Mermaid library
+
+**Example Commands:**
+
+```bash
+# Full generation (LLM + post-processing + Mermaid HTML)
+pdd generate --template architecture/architecture_json \
+  -e PRD_FILE=docs/specs.md \
+  -e APP_NAME="MyApp" \
+  --output architecture.json
+# Results in: architecture.json + architecture_diagram.html
+
+# Post-processing only (skip LLM, generate HTML from existing JSON)
+pdd generate --template architecture/architecture_json \
+  -e APP_NAME="MyApp" \
+  -e llm=false \
+  --output architecture.json
+# Results in: architecture_diagram.html (from existing architecture.json)
+```
+
 Front Matter (YAML) metadata
 
 - Templates include YAML front matter with human-readable metadata:
@@ -1222,10 +1256,10 @@ Arguments:
 - `CODE_FILE`: The filename of the code file to be tested.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_1.py`) will be created instead of overwriting.
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
 - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
 - `--coverage-report PATH`: Path to the coverage report file for existing tests. When provided, generates additional tests to improve coverage.
-- `--existing-tests PATH [PATH...]`: Path(s) to the existing unit test file(s). Required when using --coverage-report. Multiple paths can be provided.
+- `--existing-tests PATH`: Path to the existing unit test file. Required when using --coverage-report.
 - `--target-coverage FLOAT`: Desired code coverage percentage to achieve (default is 90.0).
 - `--merge`: When used with --existing-tests, merges new tests with existing test file instead of creating a separate file.
 
@@ -1254,9 +1288,9 @@ could influence the output of the `pdd test` command when run in the same direct
 pdd [GLOBAL OPTIONS] test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
-2. Generate additional tests to improve coverage (with multiple existing test files):
+2. Generate additional tests to improve coverage:
 ```
-pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --existing-tests tests/test_calculator_edge_cases.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
+pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
 ```
 
 3. Improve coverage and merge with existing tests:
@@ -1373,11 +1407,11 @@ pdd [GLOBAL OPTIONS] fix [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FI
 Arguments:
 - `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
 - `CODE_FILE`: The filename of the code file to be fixed.
-- `UNIT_TEST_FILES`: The filename(s) of the unit test file(s). Multiple files can be provided, and each will be processed individually.
+- `UNIT_TEST_FILE`: The filename of the unit test file.
 - `ERROR_FILE`: The filename containing the unit test runtime error messages. Optional and does not need to exist when used with the `--loop` command.
 
 Options:
-- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`.
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.log`. If an environment variable `PDD_FIX_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--loop`: Enable iterative fixing process.
@@ -1389,8 +1423,8 @@ Options:
 When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
 Outputs:
-- Fixed unit test file(s).
-- Fixed code file.
+- Fixed unit test file
+- Fixed code file
 - Results file containing the LLM model's output with unit test results.
 - Print out of results when using '--loop' containing:
   - Success status (boolean)
@@ -1400,9 +1434,9 @@ Outputs:
 
 Example:
 ```
-pdd [GLOBAL OPTIONS] fix --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py tests/test_factorial_calculator_edge_cases.py errors.log
+pdd [GLOBAL OPTIONS] fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
 ```
-In this example, `pdd fix` will be run for each test file, and the fixed test files will be saved as `tests/test_factorial_calculator_fixed.py` and `tests/test_factorial_calculator_edge_cases_fixed.py`.
+In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
 
 ### 7. split
 
@@ -1604,7 +1638,7 @@ Arguments:
 - `DESIRED_OUTPUT_FILE`: File containing the desired (correct) output of the program.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_bug_1.py`) will be created instead of overwriting.
+- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`.
 - `--language`: Specify the programming language for the unit test (default is "Python").
 
 Example:
