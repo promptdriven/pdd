@@ -1,26 +1,20 @@
 ## v0.0.66 (2025-11-07)
 
-### Feat
+### Architecture & Code Generation
 
-- implement consistent formatting for architecture JSON and enhance code generation logic
-- enhance architecture visualization with Mermaid diagram support and update model documentation
-- enhance LLM toggle functionality and post-processing pipeline
-- add LLM toggle functionality and force flag improvements
+- Architecture JSON emission and Mermaid rendering now produce deterministic formatting, `.pddrc` defaults stay in sync with those paths, and the regression suite (`tests/test_code_generator_main.py`, `tests/test_render_mermaid.py`) locks the behavior down so downstream tools always find the generated assets.
+- The LLM toggle plus force flag flows through `code_generator_main.py`, prompt templates, and the Mermaid renderer, letting templates skip or re-run expensive post-processing per invocation; the CLI now pre-parses front matter, writes JSON outputs before post-process scripts run, and always regenerates architecture diagrams when `architecture.json` changes.
 
-### Fix
+### Templates & Examples
 
-- resolve output path handling to ensure absolute paths are used in code generation
-- resolve test generation issues (#88) and test warnings
-- update code_generator_main_python.prompt to use python_env_detector example file
-- remove references to non-existent example files in code_generator_main_python.prompt
-- update template usage examples to use --template flag
-- update architecture template usage examples to use --template flag
+- Prompt assets and their drivers now ship module-aware metadata (source/test paths, module names) so generated examples/tests import the right files; they also showcase the new `context/python_env_detector_example.py`, adopt the `--template` flag in docs, and drop the obsolete `mermaid_diagram.prompt`.
+- `.pddrc` now declares explicit `src/` and `tests/` output paths for example contexts, and `generate_output_paths.py` bootstraps an `examples/` directory automatically so newly generated artifacts never depend on `context/example.prompt` or `context/test.prompt`.
+- The hello sample workspace was rebuilt around `examples/hello/src/hello.py` with refreshed metadata, updated `pdd/generate_test.py`, and rewritten prompts/tests so the example mirrors the current CLI workflow.
 
-### Refactor
+### Docs & Quality
 
-- restructure hello example script and move hello function to src directory
-- reorganize PDD CLI context and update output paths for consistency
-- update prompt files for clarity and consistency in code module references
+- Issue #88’s test-generation failures were fixed by tightening `construct_paths`, cleaning prompt instructions, passing resolved file paths into the LLM, and enforcing absolute output paths during code-generation—covered by new tests in `tests/test_construct_paths.py`, `tests/test_generate_test.py`, and `tests/test_generate_output_paths.py`.
+- Onboarding and troubleshooting docs now cover `~/.pdd/llm_model.csv` quota issues and explain the LLM toggle workflow, with the README/model docs updated to match.
 
 ## v0.0.65 (2025-10-24)
 
