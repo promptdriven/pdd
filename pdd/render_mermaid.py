@@ -25,6 +25,15 @@ LEVELS = {
     'style': 1
 }
 
+def write_pretty_architecture_json(arch_file, architecture):
+    """Rewrite architecture JSON with consistent formatting so diffs stay stable."""
+    path = Path(arch_file)
+    formatted = json.dumps(architecture, indent=2)
+    if not formatted.endswith("\n"):
+        formatted += "\n"
+    path.write_text(formatted, encoding="utf-8")
+
+
 def generate_mermaid_code(architecture, app_name="System"):
     """Generate Mermaid flowchart code from architecture JSON."""
     # Escape quotes for Mermaid label, which uses HTML entities
@@ -214,6 +223,7 @@ if __name__ == "__main__":
     
     with open(arch_file) as f:
         architecture = json.load(f)
+    write_pretty_architecture_json(arch_file, architecture)
     
     mermaid_code = generate_mermaid_code(architecture, app_name)
     html_content = generate_html(mermaid_code, architecture, app_name)
@@ -224,4 +234,3 @@ if __name__ == "__main__":
     print(f"✅ Generated: {output_file}")
     print(f"📊 Modules: {len(architecture)}")
     print(f"🌐 Open {output_file} in your browser!")
-

@@ -202,7 +202,9 @@ def mock_requests_post_fixture(monkeypatch):
 
 @pytest.fixture(autouse=True) 
 def mock_subprocess_run_fixture(monkeypatch):
+    original_run = subprocess.run
     mock = MagicMock(return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""))
+    mock.original_run = original_run
     monkeypatch.setattr("pdd.code_generator_main.subprocess.run", mock) 
     monkeypatch.setattr(subprocess, "run", mock) 
     return mock
@@ -732,6 +734,7 @@ def test_incremental_with_env_vars_substitution(
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_env_prompt.prompt"
     output_file_path = temp_dir_setup["output_dir"] / "inc_env_output.py"
+    create_file(prompt_file_path, "New says $NAME")
     create_file(output_file_path, "Existing code body")
 
     mock_construct_paths_fixture.return_value = (
@@ -747,7 +750,7 @@ def test_incremental_with_env_vars_substitution(
         str(output_file_path),
         None,
         True,
-        env_vars={"NAME": "Alice"},
+        env_vars={"NAME": "Alice", "llm": "true"},
     )
 
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
@@ -942,13 +945,13 @@ def test_front_matter_language_override(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_lang.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 language: json
 ---
 Say hi to the user.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -957,7 +960,7 @@ Say hi to the user.
         "python",
     )
 
-    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False)
+    code_generator_main(mock_ctx, str(prompt_file_path), None, None, False, env_vars={"llm": "true"})
 
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     assert called_kwargs["language"] == "json"
@@ -973,7 +976,6 @@ def test_front_matter_output_path_with_env_substitution(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_output.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     output_template_path = temp_dir_setup["tmp_path"] / "templated_outputs" / "${NAME}.py"
     front_matter_prompt = f"""---
@@ -984,6 +986,7 @@ variables:
 ---
 Generate module for $NAME.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -998,7 +1001,7 @@ Generate module for $NAME.
         None,
         None,
         False,
-        env_vars={"NAME": "Widget"},
+        env_vars={"NAME": "Widget", "llm": "true"},
     )
 
     expected_path = pathlib.Path(str(output_template_path).replace("${NAME}", "Widget")).resolve()
@@ -1015,7 +1018,6 @@ def test_front_matter_variable_defaults_and_no_override(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_defaults.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 variables:
@@ -1030,6 +1032,7 @@ variables:
 ---
 Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -1044,7 +1047,7 @@ Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
         str(temp_dir_setup["output_dir"] / "defaults.py"),
         None,
         False,
-        env_vars={"NAME": "Ada", "OVERRIDE": "custom"},
+        env_vars={"NAME": "Ada", "OVERRIDE": "custom", "llm": "true"},
     )
 
     called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
@@ -1063,7 +1066,6 @@ def test_front_matter_missing_required_variable_returns_error(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_missing.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     front_matter_prompt = """---
 variables:
@@ -1072,6 +1074,7 @@ variables:
 ---
 Hello $NAME
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -1086,7 +1089,7 @@ Hello $NAME
         str(temp_dir_setup["output_dir"] / "missing.py"),
         None,
         False,
-        env_vars={},
+        env_vars={"llm": "true"},
     )
 
     assert code == ""
@@ -1110,7 +1113,6 @@ def test_front_matter_discovery_populates_env_vars(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_discover.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     docs_dir = temp_dir_setup["tmp_path"] / "docs"
     docs_dir.mkdir(exist_ok=True)
@@ -1132,6 +1134,7 @@ discover:
 ---
 Docs included: $DOC_FILES
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -1164,7 +1167,6 @@ def test_front_matter_output_schema_validation_failure(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["prompts_dir"] / "front_schema.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     schema_output_path = temp_dir_setup["tmp_path"] / "schema_output.json"
     front_matter_prompt = f"""---
@@ -1177,6 +1179,7 @@ output_schema:
 ---
 Return JSON for the spec.
 """
+    create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
         {},
@@ -1247,18 +1250,18 @@ def test_architecture_template_datasource_object_passes_schema(
 
     generated_json = json.dumps(
         [
-                {
-                    "reason": "Replication",
-                    "description": "Expose dataSources schema mismatch",
-                    "dependencies": [],
-                    "priority": 1,
-                    "filename": "architecture.prompt",
-                    "filepath": "frontend/app/inventory/page.tsx",
-                    "interface": {
-                        "type": "page",
-                        "page": {
-                            "route": "/inventory",
-                            "dataSources": [
+            {
+                "reason": "Replication",
+                "description": "Expose dataSources schema mismatch",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "architecture_json.prompt",
+                "filepath": "src/architecture.json",
+                "interface": {
+                    "type": "page",
+                    "page": {
+                        "route": "/inventory",
+                        "dataSources": [
                             {
                                 "kind": "api",
                                 "source": "/api/inventory",
@@ -1304,13 +1307,13 @@ def test_architecture_template_datasource_string_rejected(
 ):
     mock_ctx.obj['local'] = True
     prompt_file_path = temp_dir_setup["output_dir"] / "architecture_string.prompt"
-    create_file(prompt_file_path, "placeholder")
 
     prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
     create_file(prd_path, "Spec content for schema regression")
 
     template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt")
     template_content = template_path.read_text(encoding="utf-8")
+    create_file(prompt_file_path, template_content)
     output_path = temp_dir_setup["output_dir"] / "architecture_string.json"
 
     mock_construct_paths_fixture.return_value = (
@@ -1351,7 +1354,7 @@ def test_architecture_template_datasource_string_rejected(
         str(output_path),
         None,
         False,
-        env_vars={"PRD_FILE": str(prd_path)},
+        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
     )
 
     observed = [
@@ -1369,3 +1372,194 @@ def test_architecture_template_datasource_string_rejected(
         "Generated JSON does not match output_schema" in message and "/api/inventory" in message
         for message in observed
     )
+
+
+def test_postprocess_uses_output_path_as_input_when_llm_enabled(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    """When LLM is enabled and an output path is resolved, the post-process input file should be the output path."""
+    mock_ctx.obj['local'] = True
+
+    # Build a prompt with front matter enabling a post-process script
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "postprocess_prompt_python.prompt"
+    output_file_path = temp_dir_setup["output_dir"] / "pp_output.py"
+
+    front_matter_prompt = """---
+language: python
+post_process_python: "./dummy_post_process.py"
+---
+Generate a simple module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    # construct_paths should return our prompt content and resolved output
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    # Run generation with llm enabled (default); a post-process will be attempted
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_file_path),
+        None,
+        False,
+        env_vars={"llm": "true"},
+    )
+
+    # Output should be written prior to post-process and match generated code
+    assert output_file_path.exists()
+    assert output_file_path.read_text(encoding="utf-8") == DEFAULT_MOCK_GENERATED_CODE
+
+    # Post-process should be invoked
+    assert mock_subprocess_run_fixture.called
+
+
+def test_architecture_postprocess_passes_absolute_input_path(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+    monkeypatch,
+):
+    """render_mermaid should receive an absolute path so it can open architecture.json from any cwd."""
+    mock_ctx.obj['local'] = True
+
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt").resolve()
+    template_content = template_path.read_text(encoding="utf-8")
+
+    # Work inside the temp repo to mimic running `pdd` from project root with a relative --output
+    monkeypatch.chdir(temp_dir_setup["tmp_path"])
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "architecture.prompt"
+    create_file(prompt_file_path, template_content)
+
+    relative_output = "architecture.json"
+    expected_output_path = temp_dir_setup["tmp_path"] / relative_output
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Spec content for absolute path regression")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": template_content},
+        {"output": relative_output},
+        "json",
+    )
+
+    generated_json = json.dumps(
+        [
+            {
+                "reason": "Diagram generation",
+                "description": "Minimal architecture entry for render_mermaid.",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "orders/api.py",
+                "filepath": "orders/api.py",
+            }
+        ]
+    )
+    mock_local_generator_fixture.return_value = (
+        generated_json,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        relative_output,
+        None,
+        False,
+        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+    )
+
+    render_cmd = None
+    for call in mock_subprocess_run_fixture.call_args_list:
+        cmd = call[0][0]
+        if len(cmd) >= 2 and pathlib.Path(cmd[1]).name == "render_mermaid.py":
+            render_cmd = cmd
+            break
+
+    assert render_cmd is not None, "render_mermaid.py should run for architecture template"
+    input_arg = render_cmd[2]
+    assert os.path.isabs(input_arg)
+    assert input_arg == str(expected_output_path.resolve())
+
+
+def test_architecture_postprocess_rewrites_json_pretty(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    """render_mermaid should normalize architecture.json so diffs stay stable."""
+    mock_ctx.obj['local'] = True
+    real_run = mock_subprocess_run_fixture.original_run
+    def render_side_effect(cmd, *args, **kwargs):
+        if len(cmd) >= 2 and pathlib.Path(cmd[1]).name == "render_mermaid.py":
+            return real_run(cmd, *args, **kwargs)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    mock_subprocess_run_fixture.side_effect = render_side_effect
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt").resolve()
+    template_content = template_path.read_text(encoding="utf-8")
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "architecture.prompt"
+    create_file(prompt_file_path, template_content)
+
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Render pretty regression")
+
+    output_path = temp_dir_setup["output_dir"] / "architecture.json"
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": template_content},
+        {"output": str(output_path)},
+        "json",
+    )
+
+    unformatted_entries = [
+        {
+            "reason": "Pretty print regression",
+            "description": "Ensure render_mermaid rewrites JSON.",
+            "dependencies": [],
+            "priority": 1,
+            "filename": "foo.py",
+            "filepath": "src/foo.py",
+        }
+    ]
+    mock_local_generator_fixture.return_value = (
+        json.dumps(unformatted_entries, separators=(',', ':')),
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_path),
+        None,
+        False,
+        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+    )
+
+    # render_mermaid should rewrite the file with pretty formatting
+    render_calls = [
+        call for call in mock_subprocess_run_fixture.call_args_list
+        if len(call[0][0]) >= 2 and pathlib.Path(call[0][0][1]).name == "render_mermaid.py"
+    ]
+    assert render_calls, "render_mermaid.py was never invoked"
+    expected = json.dumps(unformatted_entries, indent=2) + "\n"
+    actual = output_path.read_text(encoding="utf-8")
+    assert actual == expected

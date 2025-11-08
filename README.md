@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.65-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.66-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.65
+Current version: 0.0.66
 
 To check your installed version, run:
 ```
@@ -887,6 +887,40 @@ Where built-ins live (packaged)
 Included starter templates
 
 - `architecture/architecture_json.prompt`: Universal architecture generator (requires `-e PRD_FILE=...`; supports optional `TECH_STACK_FILE`, `DOC_FILES`, `INCLUDE_FILES`).
+
+**LLM Toggle Functionality:**
+
+All templates support the `llm` parameter to control whether LLM generation runs:
+
+- **`llm=true`** (default): Full generation with LLM + post-processing
+- **`llm=false`**: Skip LLM generation, run only post-processing
+
+**Architecture JSON Template Features:**
+
+The `architecture/architecture_json` template includes automatic **Mermaid diagram generation**:
+
+- **Post-processing**: Automatically converts the generated JSON into an interactive HTML Mermaid diagram
+- **Visualization**: Creates `architecture_diagram.html` with color-coded modules (frontend/backend/shared)
+- **Interactive**: Hover tooltips show module details, dependencies, and descriptions
+- **Self-contained**: HTML file works offline with embedded Mermaid library
+
+**Example Commands:**
+
+```bash
+# Full generation (LLM + post-processing + Mermaid HTML)
+pdd generate --template architecture/architecture_json \
+  -e PRD_FILE=docs/specs.md \
+  -e APP_NAME="MyApp" \
+  --output architecture.json
+# Results in: architecture.json + architecture_diagram.html
+
+# Post-processing only (skip LLM, generate HTML from existing JSON)
+pdd generate --template architecture/architecture_json \
+  -e APP_NAME="MyApp" \
+  -e llm=false \
+  --output architecture.json
+# Results in: architecture_diagram.html (from existing architecture.json)
+```
 
 Front Matter (YAML) metadata
 
