@@ -1,6 +1,8 @@
-def hello() -> None:
-    """Prints a hello message to the console."""
-    print("hello")
+def hello():
+  """
+  This function takes no arguments and prints the string "hello" to the console.
+  """
+  print("hello")
 
-if __name__ == "__main__":
-    hello()
+# To use it, you still just call it by name
+hello()

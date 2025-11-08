@@ -20,7 +20,7 @@ def cmd_test_main(
     output: str | None,
     language: str | None,
     coverage_report: str | None,
-    existing_tests: list[str] | None,
+    existing_tests: str | None,
     target_coverage: float | None,
     merge: bool | None,
 ) -> tuple[str, float, str]:
@@ -37,7 +37,7 @@ def cmd_test_main(
         output (str | None): Path to save the generated test file.
         language (str | None): Programming language.
         coverage_report (str | None): Path to the coverage report file.
-        existing_tests (list[str] | None): Paths to the existing unit test files.
+        existing_tests (str | None): Path to the existing unit test file.
         target_coverage (float | None): Desired code coverage percentage.
         merge (bool | None): Whether to merge new tests with existing tests.
 
@@ -73,7 +73,7 @@ def cmd_test_main(
         if coverage_report:
             input_file_paths["coverage_report"] = coverage_report
         if existing_tests:
-            input_file_paths["existing_tests"] = existing_tests[0]
+            input_file_paths["existing_tests"] = existing_tests
 
         command_options = {
             "output": output,
@@ -90,14 +90,6 @@ def cmd_test_main(
             command_options=command_options,
             context_override=ctx.obj.get('context')
         )
-
-        if existing_tests:
-            existing_tests_content = ""
-            for test_file in existing_tests:
-                with open(test_file, 'r') as f:
-                    existing_tests_content += f.read() + "\n"
-            input_strings["existing_tests"] = existing_tests_content
-
     except Exception as exception:
         # Catching a general exception is necessary here to handle a wide range of
         # potential errors during file I/O and path construction, ensuring the
@@ -108,6 +100,31 @@ def cmd_test_main(
 
     if verbose:
         print(f"[bold blue]Language detected:[/bold blue] {language}")
+
+    # Determine where the generated tests will be written so we can share it with the LLM
+    resolved_output = output_file_paths["output"]
+    if output is None:
+        output_file = resolved_output
+    else:
+        try:
+            is_dir_hint = output.endswith('/')
+        except Exception:
+            is_dir_hint = False
+        if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
+            output_file = resolved_output
+        else:
+            output_file = output
+    if merge and existing_tests:
+        output_file = existing_tests
+
+    if not output_file:
+        print("[bold red]Error: Output file path could not be determined.[/bold red]")
+        ctx.exit(1)
+        return "", 0.0, ""
+
+    source_file_path_for_prompt = str(Path(code_file).expanduser().resolve())
+    test_file_path_for_prompt = str(Path(output_file).expanduser().resolve())
+    module_name_for_prompt = Path(source_file_path_for_prompt).stem if source_file_path_for_prompt else ""
 
     # Generate or enhance unit tests
     if not coverage_report:
@@ -120,6 +137,9 @@ def cmd_test_main(
                 time=time,
                 language=language,
                 verbose=verbose,
+                source_file_path=source_file_path_for_prompt,
+                test_file_path=test_file_path_for_prompt,
+                module_name=module_name_for_prompt,
             )
         except Exception as exception:
             # A general exception is caught to handle various errors that can occur
@@ -156,28 +176,6 @@ def cmd_test_main(
             ctx.exit(1)
             return "", 0.0, ""
 
-    # Handle output - if output is a directory, use resolved file path from construct_paths
-    resolved_output = output_file_paths["output"]
-    if output is None:
-        output_file = resolved_output
-    else:
-        try:
-            is_dir_hint = output.endswith('/')
-        except Exception:
-            is_dir_hint = False
-        # Prefer resolved file if user passed a directory path
-        if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
-            output_file = resolved_output
-        else:
-            output_file = output
-    if merge and existing_tests:
-        output_file = existing_tests[0] if existing_tests else None
-
-    if not output_file:
-        print("[bold red]Error: Output file path could not be determined.[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
-    
     # Check if unit_test content is empty
     if not unit_test or not unit_test.strip():
         print(f"[bold red]Error: Generated unit test content is empty or whitespace-only.[/bold red]")
