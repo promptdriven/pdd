@@ -84,7 +84,11 @@ def test_defaults_for_all_commands(command):
     assert list(result.keys()).sort() == list(expected_keys).sort()
     for key in expected_keys:
         expected_filename = get_expected_default_name(command, key, TEST_BASENAME, TEST_LANG, TEST_EXT_WITH_DOT)
-        expected_path = abs_path_cwd(expected_filename)
+        # Default for 'example' now uses examples/ directory
+        if command == 'example':
+            expected_path = abs_path_cwd(os.path.join('examples', expected_filename))
+        else:
+            expected_path = abs_path_cwd(expected_filename)
         assert key in result
         assert result[key] == expected_path
         assert os.path.isabs(result[key])

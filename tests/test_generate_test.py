@@ -89,7 +89,11 @@ def test_generate_test_maximum_values(valid_inputs):
     assert len(result) == 3
 
 # Test different languages
-def test_generate_test_different_languages():
+def test_generate_test_different_languages(monkeypatch):
+    # Avoid dependence on structured output in continuation by stubbing continue_generation
+    def _stub_continue(formatted_input_prompt, llm_output, strength, temperature, time=0.25, language=None, verbose=False):
+        return (llm_output, 0.0, "stub-model")
+    monkeypatch.setattr("pdd.generate_test.continue_generation", _stub_continue)
     languages = ['python', 'javascript', 'java', 'cpp']
     for lang in languages:
         result = generate_test(
