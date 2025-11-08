@@ -1,0 +1,210 @@
+name: Test Public PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      public_pr_number:
+        description: 'PR number from public repo (promptdriven/pdd) to test'
+        required: true
+        type: string
+      public_pr_url:
+        description: 'PR URL from public repo (auto-filled by Makefile)'
+        required: false
+        type: string
+      branch:
+        description: 'Base branch in private repo to test against'
+        required: false
+        type: string
+        default: 'main'
+
+env:
+  PYTHON_VERSION: '3.12'
+  INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+  INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+  INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+
+jobs:
+  run-tests:
+    name: Run All Test Suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: gltanaka/pdd
+          ref: ${{ inputs.branch || 'main' }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Fetch PR from public repo
+        run: |
+          echo "Fetching PR #${{ inputs.public_pr_number }} from public repo..."
+          git remote add public https://github.com/promptdriven/pdd.git
+          git fetch public pull/${{ inputs.public_pr_number }}/head:pr-${{ inputs.public_pr_number }}
+          
+          echo "Current branch:"
+          git branch -v
+          
+          echo "Merging PR locally (not pushing)..."
+          git merge --no-ff pr-${{ inputs.public_pr_number }} -m "Test merge of public PR #${{ inputs.public_pr_number }}"
+          
+          echo "Merge complete. Running tests on merged code..."
+          
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: false
+          activate-environment: pdd
+          environment-file: environment.yml
+          python-version: ${{ env.PYTHON_VERSION }}
+          auto-update-conda: true
+          
+      - name: Install Infisical CLI
+        run: |
+          curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo -E bash
+          sudo apt-get update && sudo apt-get install -y infisical
+          
+      - name: Verify Infisical installation
+        run: |
+          infisical --version
+          
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git
+          
+      - name: Install project dependencies
+        shell: bash -l {0}
+        run: |
+          conda activate pdd
+          pip install -r requirements.txt
+          pip install -e .
+          
+      - name: Verify environment
+        shell: bash -l {0}
+        run: |
+          conda activate pdd
+          python --version
+          pip list
+          which pdd || echo "pdd not in PATH, will use python -m pdd.cli"
+          
+      - name: Create test results directory
+        run: mkdir -p test_results
+        
+      - name: Run all test suites
+        id: run_tests
+        shell: bash -l {0}
+        continue-on-error: true
+        env:
+          INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+        run: |
+          conda activate pdd
+          
+          # Export Infisical secrets to environment
+          export $(infisical export --format=dotenv | xargs)
+          
+          # Use public PR information
+          PR_NUMBER="${{ inputs.public_pr_number }}"
+          PR_URL="${{ inputs.public_pr_url }}"
+          
+          # If no PR URL but we have PR number, construct it for public repo
+          if [ -z "$PR_URL" ] && [ -n "$PR_NUMBER" ]; then
+            PR_URL="https://github.com/promptdriven/pdd/pull/${PR_NUMBER}"
+          fi
+          
+          # Run the test suite with public PR information
+          echo "Running tests for public PR #$PR_NUMBER: $PR_URL"
+          echo "Testing merged code: private repo (gltanaka/pdd) + public PR"
+          python scripts/run_all_tests_with_results.py --pr-number "$PR_NUMBER" --pr-url "$PR_URL"
+          
+      - name: Read test results
+        id: test_results
+        if: always()
+        run: |
+          if [ -f test_results/latest_comment.md ]; then
+            echo "results_available=true" >> $GITHUB_OUTPUT
+            
+            # Store results in output (truncate if too long)
+            COMMENT_BODY=$(cat test_results/latest_comment.md | head -c 50000)
+            echo "comment_body<<EOF" >> $GITHUB_OUTPUT
+            echo "$COMMENT_BODY" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "results_available=false" >> $GITHUB_OUTPUT
+            echo "comment_body=FAILED: Test execution failed - no results generated" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Comment on public repo PR
+        if: always() && steps.test_results.outputs.results_available == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          script: |
+            const commentBody = `${{ steps.test_results.outputs.comment_body }}`;
+            const publicPrNumber = ${{ inputs.public_pr_number }};
+            
+            // Post to public repo (promptdriven/pdd)
+            const owner = 'promptdriven';
+            const repo = 'pdd';
+            
+            // Find existing comment from this workflow
+            const comments = await github.rest.issues.listComments({
+              owner: owner,
+              repo: repo,
+              issue_number: publicPrNumber,
+            });
+            
+            const botComment = comments.data.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('Test Results')
+            );
+            
+            // Update or create comment
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: owner,
+                repo: repo,
+                comment_id: botComment.id,
+                body: commentBody
+              });
+              console.log('Updated existing comment on public PR');
+            } else {
+              await github.rest.issues.createComment({
+                owner: owner,
+                repo: repo,
+                issue_number: publicPrNumber,
+                body: commentBody
+              });
+              console.log('Created new comment on public PR');
+            }
+            
+      - name: Upload test results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-public-pr-${{ inputs.public_pr_number }}
+          path: test_results/
+          retention-days: 30
+          
+      - name: Set job status
+        if: always()
+        run: |
+          if [ "${{ steps.run_tests.outcome }}" == "success" ]; then
+            echo "PASS: All tests passed"
+            exit 0
+          else
+            echo "FAIL: Some tests failed"
+            exit 1
+          fi

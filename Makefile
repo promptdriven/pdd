@@ -23,6 +23,9 @@ help:
 	@echo "  make regression [TEST_NUM=n] - Run regression tests (optionally specific test number)"
 	@echo "  make sync-regression [TEST_NUM=n] - Run sync regression tests (optionally specific test number)"
 	@echo "  make all-regression 		  - Run all regression test suites"
+	@echo "  make test-all-ci [PR_NUMBER=n] [PR_URL=url] - Run all tests with result capture"
+	@echo "  make test-all-with-infisical [PR_NUMBER=n] [PR_URL=url] - Run all tests with Infisical"
+	@echo "  make pr-test pr-url=URL      - Test any GitHub PR on GitHub Actions (e.g., https://github.com/owner/repo/pull/123)"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -412,6 +415,69 @@ endif
 
 all-regression: regression sync-regression
 	@echo "All regression test suites completed."
+
+# Automated test runner with Infisical for CI/CD
+.PHONY: test-all-ci
+test-all-ci:
+	@echo "Running all test suites with result capture for CI/CD"
+	@mkdir -p test_results
+ifdef PR_NUMBER
+ifdef PR_URL
+	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER) --pr-url $(PR_URL)
+else
+	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER)
+endif
+else
+	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
+endif
+
+# Run all tests with Infisical (for local development and CI)
+.PHONY: test-all-with-infisical
+test-all-with-infisical:
+	@echo "Running all test suites with Infisical"
+	@if ! command -v infisical &> /dev/null; then \
+		echo "Error: Infisical CLI not found. Please install it:"; \
+		echo "npm install -g @infisical/cli"; \
+		exit 1; \
+	fi
+	@mkdir -p test_results
+ifdef PR_NUMBER
+ifdef PR_URL
+	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER) --pr-url $(PR_URL)
+else
+	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER)
+endif
+else
+	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
+endif
+
+# Test a PR from a public or private repo by triggering GitHub Actions
+.PHONY: pr-test
+pr-test:
+	@if [ -z "$(pr-url)" ]; then \
+		echo "Error: pr-url is required"; \
+		echo "Usage: make pr-test pr-url=https://github.com/owner/repo/pull/123"; \
+		exit 1; \
+	fi
+	@echo "Triggering GitHub Actions to test PR at $(pr-url)..."
+	@if ! command -v gh &> /dev/null; then \
+		echo "Error: GitHub CLI (gh) not found. Please install it:"; \
+		echo "  macOS: brew install gh"; \
+		echo "  Linux: https://github.com/cli/cli/blob/trunk/docs/install_linux.md"; \
+		exit 1; \
+	fi
+	@PR_NUMBER=$$(echo "$(pr-url)" | grep -o '[0-9]*$$'); \
+	if [ -z "$$PR_NUMBER" ]; then \
+		echo "Error: Could not extract PR number from URL."; \
+		exit 1; \
+	fi; \
+	gh workflow run pr-tests.yml \
+		--repo gltanaka/pdd \
+		--field public_pr_number=$$PR_NUMBER \
+		--field public_pr_url=$(pr-url)
+	@echo "Workflow triggered successfully!"
+	@echo "View progress: https://github.com/gltanaka/pdd/actions"
+	@echo "Results will be posted to: $(pr-url)"
 
 install:
 	@echo "Installing pdd"

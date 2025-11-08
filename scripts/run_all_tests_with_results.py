@@ -1,0 +1,441 @@
+#!/usr/bin/env python3
+"""
+Run all PDD test suites and capture results for GitHub PR comments.
+This script runs unit tests, regression tests, and sync regression tests,
+capturing pass/fail counts and reasons for failures.
+"""
+
+import sys
+import subprocess
+import json
+import re
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Tuple
+
+
+class TestRunner:
+    """Orchestrates test execution and result collection."""
+    
+    def __init__(self, project_root: Path, pr_number: str = None, pr_url: str = None):
+        self.project_root = project_root
+        self.pr_number = pr_number
+        self.pr_url = pr_url
+        self.results = {
+            "timestamp": datetime.now().isoformat(),
+            "pr_number": pr_number,
+            "pr_url": pr_url,
+            "test_suites": {},
+            "summary": {
+                "total_passed": 0,
+                "total_failed": 0,
+                "total_skipped": 0,
+                "duration_seconds": 0
+            }
+        }
+        
+    def run_unit_tests(self) -> Dict:
+        """Run pytest unit tests and capture results."""
+        print("=" * 60)
+        print("Running Unit Tests (pytest)")
+        print("=" * 60)
+        
+        start_time = datetime.now()
+        
+        cmd = [
+            "infisical", "run", "--",
+            "make", "test"
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            cwd=self.project_root,
+            capture_output=True,
+            text=True
+        )
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        # Parse pytest output
+        passed, failed, skipped, failures = self._parse_pytest_output(result.stdout + result.stderr)
+        
+        test_result = {
+            "name": "Unit Tests (pytest)",
+            "command": " ".join(cmd),
+            "exit_code": result.exit_code,
+            "passed": passed,
+            "failed": failed,
+            "skipped": skipped,
+            "duration_seconds": duration,
+            "failures": failures,
+            "stdout": result.stdout[-5000:],  # Last 5000 chars
+            "stderr": result.stderr[-5000:]
+        }
+        
+        self.results["test_suites"]["unit_tests"] = test_result
+        return test_result
+        
+    def run_regression_tests(self) -> Dict:
+        """Run regression tests and capture results."""
+        print("\n" + "=" * 60)
+        print("Running Regression Tests")
+        print("=" * 60)
+        
+        start_time = datetime.now()
+        
+        cmd = [
+            "infisical", "run", "--",
+            "make", "regression"
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            cwd=self.project_root,
+            capture_output=True,
+            text=True
+        )
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        # Parse regression script output
+        passed, failed, errors = self._parse_regression_output(result.stdout + result.stderr)
+        
+        test_result = {
+            "name": "Regression Tests",
+            "command": " ".join(cmd),
+            "exit_code": result.exit_code,
+            "passed": passed,
+            "failed": failed,
+            "errors": errors,
+            "duration_seconds": duration,
+            "stdout": result.stdout[-5000:],
+            "stderr": result.stderr[-5000:]
+        }
+        
+        self.results["test_suites"]["regression_tests"] = test_result
+        return test_result
+        
+    def run_sync_regression_tests(self) -> Dict:
+        """Run sync regression tests and capture results."""
+        print("\n" + "=" * 60)
+        print("Running Sync Regression Tests")
+        print("=" * 60)
+        
+        start_time = datetime.now()
+        
+        cmd = [
+            "infisical", "run", "--",
+            "make", "sync-regression"
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            cwd=self.project_root,
+            capture_output=True,
+            text=True
+        )
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        # Parse sync regression script output
+        passed, failed, errors = self._parse_regression_output(result.stdout + result.stderr)
+        
+        test_result = {
+            "name": "Sync Regression Tests",
+            "command": " ".join(cmd),
+            "exit_code": result.exit_code,
+            "passed": passed,
+            "failed": failed,
+            "errors": errors,
+            "duration_seconds": duration,
+            "stdout": result.stdout[-5000:],
+            "stderr": result.stderr[-5000:]
+        }
+        
+        self.results["test_suites"]["sync_regression_tests"] = test_result
+        return test_result
+        
+    def _parse_pytest_output(self, output: str) -> Tuple[int, int, int, List[Dict]]:
+        """Parse pytest output to extract test counts and failures."""
+        passed = 0
+        failed = 0
+        skipped = 0
+        failures = []
+        
+        # Look for pytest summary line like "5 passed, 2 failed, 1 skipped in 10.5s"
+        summary_pattern = r'(\d+)\s+passed'
+        if match := re.search(summary_pattern, output):
+            passed = int(match.group(1))
+            
+        fail_pattern = r'(\d+)\s+failed'
+        if match := re.search(fail_pattern, output):
+            failed = int(match.group(1))
+            
+        skip_pattern = r'(\d+)\s+skipped'
+        if match := re.search(skip_pattern, output):
+            skipped = int(match.group(1))
+            
+        # Extract failure details with more comprehensive patterns
+        # Pattern 1: FAILED test_file.py::test_name - error
+        failure_sections = re.findall(
+            r'FAILED\s+([\w/]+\.py::[\w_\[\]]+)(?:\s+-\s+(.+?))?(?=FAILED|\n\n|$)',
+            output,
+            re.DOTALL
+        )
+        
+        for test_name, error_msg in failure_sections:
+            # Extract test number if present in test name (e.g., test_regression[5])
+            test_num_match = re.search(r'\[(\d+)\]', test_name)
+            test_number = test_num_match.group(1) if test_num_match else None
+            
+            failure_info = {
+                "test": test_name.strip(),
+                "test_number": test_number,
+                "error": error_msg.strip()[:500] if error_msg else "No error message captured"
+            }
+            failures.append(failure_info)
+        
+        # Also look for FAILED lines in verbose output (test_file.py::test_name FAILED)
+        if not failures:
+            verbose_failures = re.findall(
+                r'([\w/]+\.py::[\w_\[\]]+)\s+FAILED',
+                output
+            )
+            for test_name in verbose_failures:
+                test_num_match = re.search(r'\[(\d+)\]', test_name)
+                test_number = test_num_match.group(1) if test_num_match else None
+                
+                failures.append({
+                    "test": test_name.strip(),
+                    "test_number": test_number,
+                    "error": "Failed (see logs for details)"
+                })
+            
+        return passed, failed, skipped, failures
+        
+    def _parse_regression_output(self, output: str) -> Tuple[int, int, List[str]]:
+        """Parse regression test output to extract results."""
+        passed = 0
+        failed = 0
+        errors = []
+        
+        # Count validation success/failure messages
+        passed = len(re.findall(r'Validation success:', output))
+        failed = len(re.findall(r'Validation failed:', output))
+        
+        # Extract error messages
+        error_lines = re.findall(r'\[ERROR\]\s+(.*)', output)
+        errors = [err.strip() for err in error_lines[:20]]  # Limit to 20 errors
+        
+        return passed, failed, errors
+        
+    def calculate_summary(self):
+        """Calculate overall test summary."""
+        total_passed = 0
+        total_failed = 0
+        total_skipped = 0
+        total_duration = 0
+        
+        for suite_name, suite_data in self.results["test_suites"].items():
+            total_passed += suite_data.get("passed", 0)
+            total_failed += suite_data.get("failed", 0)
+            total_skipped += suite_data.get("skipped", 0)
+            total_duration += suite_data.get("duration_seconds", 0)
+            
+        self.results["summary"] = {
+            "total_passed": total_passed,
+            "total_failed": total_failed,
+            "total_skipped": total_skipped,
+            "duration_seconds": total_duration,
+            "all_passed": total_failed == 0
+        }
+        
+    def generate_github_comment(self) -> str:
+        """Generate a formatted GitHub comment from test results."""
+        summary = self.results["summary"]
+        
+        # Determine overall status
+        status = "PASS" if summary["all_passed"] else "FAIL"
+        
+        comment = f"""## Test Results - {status}
+"""
+        
+        # Add PR link if available
+        if self.pr_url:
+            comment += f"\n**Pull Request:** {self.pr_url}\n"
+        elif self.pr_number:
+            # Construct URL from PR number (assumes GitHub)
+            comment += f"\n**Pull Request:** #{self.pr_number}\n"
+        
+        comment += f"""
+**Overall Summary:**
+- Passed: {summary['total_passed']}
+- Failed: {summary['total_failed']}
+- Skipped: {summary['total_skipped']}
+- Duration: {summary['duration_seconds']:.1f}s
+"""
+        
+        # Collect all failed test numbers across all suites
+        all_failed_test_numbers = []
+        for suite_name, suite_data in self.results["test_suites"].items():
+            if "failures" in suite_data and suite_data["failures"]:
+                for failure in suite_data["failures"]:
+                    if failure.get("test_number"):
+                        all_failed_test_numbers.append(failure["test_number"])
+        
+        # Show failed test numbers prominently if any exist
+        if all_failed_test_numbers:
+            comment += f"\n**FAILED TEST NUMBERS:** {', '.join(sorted(set(all_failed_test_numbers)))}\n"
+        
+        comment += "\n---\n\n"
+        
+        # Add details for each test suite
+        for suite_name, suite_data in self.results["test_suites"].items():
+            suite_status = "PASS" if suite_data["exit_code"] == 0 else "FAIL"
+            
+            comment += f"""### {suite_data['name']} - {suite_status}
+
+**Results:**
+- Passed: {suite_data.get('passed', 0)}
+- Failed: {suite_data.get('failed', 0)}
+"""
+            
+            if suite_data.get("skipped"):
+                comment += f"- Skipped: {suite_data['skipped']}\n"
+                
+            comment += f"- Duration: {suite_data['duration_seconds']:.1f}s\n"
+            
+            # Add failure details for unit tests
+            if "failures" in suite_data and suite_data["failures"]:
+                comment += "\n**Failed Tests:**\n"
+                
+                # Group by test number if available
+                numbered_failures = [f for f in suite_data["failures"] if f.get("test_number")]
+                unnumbered_failures = [f for f in suite_data["failures"] if not f.get("test_number")]
+                
+                if numbered_failures:
+                    test_numbers = [f["test_number"] for f in numbered_failures]
+                    comment += f"\n**Failed Test Numbers:** {', '.join(test_numbers)}\n\n"
+                
+                # Show details (limit to 10)
+                for failure in suite_data["failures"][:10]:
+                    if failure.get("test_number"):
+                        comment += f"- Test #{failure['test_number']}: `{failure['test']}`\n"
+                    else:
+                        comment += f"- `{failure['test']}`\n"
+                    if failure.get('error'):
+                        error_preview = failure['error'][:200].replace('\n', ' ')
+                        comment += f"  ```\n  {error_preview}...\n  ```\n"
+                    
+            # Add error details for regression tests
+            if "errors" in suite_data and suite_data["errors"]:
+                comment += "\n**Errors:**\n"
+                for error in suite_data["errors"][:10]:  # Limit to 10 errors
+                    comment += f"- {error}\n"
+                    
+            comment += "\n---\n\n"
+            
+        comment += f"""
+<details>
+<summary>View Full Logs</summary>
+
+Test run completed at: {self.results['timestamp']}
+
+</details>
+"""
+        
+        return comment
+        
+    def save_results(self, output_file: Path):
+        """Save detailed results to JSON file."""
+        with open(output_file, 'w') as f:
+            json.dump(self.results, f, indent=2)
+        print(f"\nDetailed results saved to: {output_file}")
+        
+    def save_github_comment(self, output_file: Path):
+        """Save GitHub comment to file."""
+        comment = self.generate_github_comment()
+        with open(output_file, 'w') as f:
+            f.write(comment)
+        print(f"GitHub comment saved to: {output_file}")
+
+
+def main():
+    """Main entry point for test runner."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Run all PDD test suites and capture results')
+    parser.add_argument('--pr-number', type=str, help='GitHub PR number')
+    parser.add_argument('--pr-url', type=str, help='GitHub PR URL')
+    args = parser.parse_args()
+    
+    project_root = Path(__file__).parent.parent
+    
+    # Initialize runner with PR information
+    runner = TestRunner(project_root, pr_number=args.pr_number, pr_url=args.pr_url)
+    
+    # Run all test suites
+    try:
+        runner.run_unit_tests()
+    except Exception as e:
+        print(f"ERROR: Failed running unit tests: {e}")
+        
+    try:
+        runner.run_regression_tests()
+    except Exception as e:
+        print(f"ERROR: Failed running regression tests: {e}")
+        
+    try:
+        runner.run_sync_regression_tests()
+    except Exception as e:
+        print(f"ERROR: Failed running sync regression tests: {e}")
+        
+    # Calculate summary
+    runner.calculate_summary()
+    
+    # Save results
+    output_dir = project_root / "test_results"
+    output_dir.mkdir(exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    runner.save_results(output_dir / f"test_results_{timestamp}.json")
+    runner.save_github_comment(output_dir / f"github_comment_{timestamp}.md")
+    
+    # Also save latest results
+    runner.save_results(output_dir / "latest_results.json")
+    runner.save_github_comment(output_dir / "latest_comment.md")
+    
+    # Print summary
+    print("\n" + "=" * 60)
+    print("TEST RUN COMPLETE")
+    print("=" * 60)
+    print(f"Total Passed: {runner.results['summary']['total_passed']}")
+    print(f"Total Failed: {runner.results['summary']['total_failed']}")
+    print(f"Total Skipped: {runner.results['summary']['total_skipped']}")
+    print(f"Duration: {runner.results['summary']['duration_seconds']:.1f}s")
+    
+    # Show failed test numbers if any
+    failed_test_numbers = []
+    for suite_name, suite_data in runner.results["test_suites"].items():
+        if "failures" in suite_data and suite_data["failures"]:
+            for failure in suite_data["failures"]:
+                if failure.get("test_number"):
+                    failed_test_numbers.append(failure["test_number"])
+    
+    if failed_test_numbers:
+        print("\n" + "=" * 60)
+        print("FAILED TEST NUMBERS")
+        print("=" * 60)
+        print(f"Test Numbers: {', '.join(sorted(set(failed_test_numbers)))}")
+        print("\nTo rerun specific tests:")
+        for num in sorted(set(failed_test_numbers)):
+            print(f"  make regression TEST_NUM={num}")
+    
+    # Exit with appropriate code
+    sys.exit(0 if runner.results['summary']['all_passed'] else 1)
+
+
+if __name__ == "__main__":
+    main()
+
