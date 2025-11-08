@@ -18,19 +18,7 @@ contexts:
       budget: 10.0
       max_attempts: 3
 
-  # Main PDD CLI codebase context
-  pdd_cli:
-    paths: ["pdd/**", "*.py", "prompts/**", "tests/**"]
-    defaults:
-      generate_output_path: "pdd/"
-      test_output_path: "tests/"
-      example_output_path: "examples/"
-      default_language: "python"
-      target_coverage: 10.0
-      strength: 0.75
-      temperature: 0.0
-      budget: 10.0
-      max_attempts: 3
+
 
   # Context-specific examples and utilities
   context:
@@ -47,8 +35,8 @@ contexts:
   examples:
     paths: ["examples/**"]
     defaults:
-      generate_output_path: "examples/"
-      test_output_path: "examples/tests/"
+      generate_output_path: "src/"
+      test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 80.0
@@ -102,6 +90,21 @@ contexts:
   default:
     defaults:
       generate_output_path: "./"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 10.0
+      strength: 0.75
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
+
+  # Main PDD CLI codebase context
+  pdd_cli:
+    paths: ["pdd/**", "*.py", "prompts/**", "tests/**"]
+    defaults:
+      generate_output_path: "pdd/"
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
