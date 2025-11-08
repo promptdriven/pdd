@@ -8,6 +8,9 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration Data ---
 
+# Default directory names
+EXAMPLES_DIR = "examples"
+
 # Define the expected output keys for each command
 # Use underscores for keys as requested
 COMMAND_OUTPUT_KEYS: Dict[str, List[str]] = {
@@ -313,11 +316,23 @@ def generate_output_paths(
                 logger.debug(f"Env path '{env_path}' identified as a specific file path.")
                 final_path = env_path # Assume it's a full path or filename
 
-        # 4. Use Default Naming Convention in CWD
+        # 4. Use Default Naming Convention
         else:
             source = "default"
-            logger.debug(f"Using default filename '{default_filename}' in current directory.")
-            final_path = default_filename # Relative to CWD initially
+            # For example command, default to examples/ directory if no .pddrc config
+            if command == "example":
+                examples_dir = EXAMPLES_DIR  # Fallback constant
+                # Create examples directory if it doesn't exist
+                try:
+                    os.makedirs(examples_dir, exist_ok=True)
+                    logger.debug(f"Created examples directory: {examples_dir}")
+                except OSError as e:
+                    logger.warning(f"Could not create examples directory: {e}")
+                final_path = os.path.join(examples_dir, default_filename)
+                logger.debug(f"Using default filename '{default_filename}' in examples directory.")
+            else:
+                final_path = default_filename # Relative to CWD initially
+                logger.debug(f"Using default filename '{default_filename}' in current directory.")
 
         # Resolve to absolute path
         if final_path:
