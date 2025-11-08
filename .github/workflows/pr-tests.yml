@@ -119,7 +119,7 @@ jobs:
           conda activate pdd
           
           # Export Infisical secrets to environment
-          export $(infisical export --format=dotenv | xargs)
+          export $(infisical export --token "$INFISICAL_TOKEN" --format=dotenv | xargs)
           
           # Use public PR information
           PR_NUMBER="${{ inputs.public_pr_number }}"

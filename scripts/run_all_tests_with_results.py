@@ -5,6 +5,7 @@ This script runs unit tests, regression tests, and sync regression tests,
 capturing pass/fail counts and reasons for failures.
 """
 
+import os
 import sys
 import subprocess
 import json
@@ -33,6 +34,16 @@ class TestRunner:
                 "duration_seconds": 0
             }
         }
+
+    def _build_infisical_command(self, base_command: List[str]) -> List[str]:
+        """Wrap a shell command with Infisical so secrets are available."""
+        cmd = ["infisical", "run"]
+        token = os.getenv("INFISICAL_TOKEN")
+        if token:
+            cmd.extend(["--token", token])
+        cmd.append("--")
+        cmd.extend(base_command)
+        return cmd
         
     def run_unit_tests(self) -> Dict:
         """Run pytest unit tests and capture results."""
@@ -42,10 +53,7 @@ class TestRunner:
         
         start_time = datetime.now()
         
-        cmd = [
-            "infisical", "run", "--",
-            "make", "test"
-        ]
+        cmd = self._build_infisical_command(["make", "test"])
         
         result = subprocess.run(
             cmd,
@@ -62,7 +70,7 @@ class TestRunner:
         test_result = {
             "name": "Unit Tests (pytest)",
             "command": " ".join(cmd),
-            "exit_code": result.exit_code,
+            "exit_code": result.returncode,
             "passed": passed,
             "failed": failed,
             "skipped": skipped,
@@ -83,10 +91,7 @@ class TestRunner:
         
         start_time = datetime.now()
         
-        cmd = [
-            "infisical", "run", "--",
-            "make", "regression"
-        ]
+        cmd = self._build_infisical_command(["make", "regression"])
         
         result = subprocess.run(
             cmd,
@@ -103,7 +108,7 @@ class TestRunner:
         test_result = {
             "name": "Regression Tests",
             "command": " ".join(cmd),
-            "exit_code": result.exit_code,
+            "exit_code": result.returncode,
             "passed": passed,
             "failed": failed,
             "errors": errors,
@@ -123,10 +128,7 @@ class TestRunner:
         
         start_time = datetime.now()
         
-        cmd = [
-            "infisical", "run", "--",
-            "make", "sync-regression"
-        ]
+        cmd = self._build_infisical_command(["make", "sync-regression"])
         
         result = subprocess.run(
             cmd,
@@ -143,7 +145,7 @@ class TestRunner:
         test_result = {
             "name": "Sync Regression Tests",
             "command": " ".join(cmd),
-            "exit_code": result.exit_code,
+            "exit_code": result.returncode,
             "passed": passed,
             "failed": failed,
             "errors": errors,
@@ -438,4 +440,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
