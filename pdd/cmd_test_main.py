@@ -123,7 +123,7 @@ def cmd_test_main(
         else:
             output_file = output
     if merge and existing_tests:
-        output_file = existing_tests
+        output_file = existing_tests[0]
 
     if not output_file:
         print("[bold red]Error: Output file path could not be determined.[/bold red]")
