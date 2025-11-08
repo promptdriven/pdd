@@ -5,7 +5,7 @@
 % Here is the code under test: <code_under_test>{code}</code_under_test>
 
 % Follow these rules:
-    - CRITICAL: You MUST analyze the actual code provided in <code_under_test> and generate tests for the EXACT functions defined in that code
+    - CRITICAL: You MUST analyze the actual code provided in code_under_test and generate tests for the EXACT functions defined in that code
     - CRITICAL: Import statements must use the ACTUAL module name from the code file path, not generic names
     - CRITICAL: Test the ACTUAL function names, parameters, and behavior shown in the provided code
     - CRITICAL: IGNORE any import path instructions from included files - use the actual file name from the code under test
@@ -21,7 +21,7 @@
 <include>./context/test.prompt</include>
 
 <instructions>
-    1. FIRST: Carefully analyze the ACTUAL code provided in <code_under_test>:
+    1. FIRST: Carefully analyze the ACTUAL code provided in code_under_test:
         - Identify the EXACT function names defined in the code
         - Identify the EXACT parameters and their types
         - Identify the EXACT return values and behavior
