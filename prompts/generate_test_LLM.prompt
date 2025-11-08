@@ -4,11 +4,15 @@
 
 % Here is the code under test: <code_under_test>{code}</code_under_test>
 
+% File path information:
+ - The code under test module file is located at: <code_under_test_file_path>{source_file_path}</code_under_test_file_path>
+ - The example file will be saved at: <test_file_path>{test_file_path}</test_file_path>
+ - The module name (without extension) is: <module_name>{module_name}</module_name>
+
 % Follow these rules:
     - CRITICAL: You MUST analyze the actual code provided in code_under_test and generate tests for the EXACT functions defined in that code
-    - CRITICAL: Import statements must use the ACTUAL module name from the code file path, not generic names
+    - CRITICAL: Import statements must use the ACTUAL module name from the code file path, not generic names. Include the necessary code/path info to import the code under test.
     - CRITICAL: Test the ACTUAL function names, parameters, and behavior shown in the provided code
-    - CRITICAL: IGNORE any import path instructions from included files - use the actual file name from the code under test
     - The module name for the code under test will have the same name as the function name
     - The unit test should be in {language}. If Python, use pytest.
     - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
