@@ -24,7 +24,8 @@ mkdir -p "$LOG_BASE"
 SYNC_CASES=${SYNC_TEST_CASES:-"1 2 3 4 5 6 7 8 9 10"}
 MAX_PROCS=${SYNC_MAX_PROCS:-3}
 
-declare -A PID_TO_CASE=()
+declare -a PIDS=()
+declare -a CASE_IDS=()
 
 launch_case() {
     local case_id=$1
@@ -43,19 +44,18 @@ for case_id in $SYNC_CASES; do
         launch_case "$case_id"
     } > "$LOG_BASE/case_${case_id}.log" 2>&1 &
 
-    PID_TO_CASE[$!]="$case_id"
+    PIDS+=($!)
+    CASE_IDS+=("$case_id")
 done
 
-# Wait for each job explicitly to correctly associate PIDs with exit statuses.
-# NOTE: The previous implementation using `wait -n` had a race condition bug where
-# exit statuses could be misattributed when multiple jobs finished close together.
 status=0
-for pid in "${!PID_TO_CASE[@]}"; do
-    case_id="${PID_TO_CASE[$pid]}"
+for idx in "${!PIDS[@]}"; do
+    pid=${PIDS[$idx]}
+    case_id=${CASE_IDS[$idx]}
     if wait "$pid"; then
         echo "[sync-regression] Case $case_id completed successfully"
     else
-        echo "[sync-regression] Case $case_id failed (exit $?)" >&2
+        echo "[sync-regression] Case $case_id failed" >&2
         status=1
     fi
 done
