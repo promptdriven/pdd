@@ -115,6 +115,7 @@ jobs:
         continue-on-error: true
         env:
           INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+          SKIP_MAKEFILE_REGEN: "1"
         run: |
           conda activate pdd
           

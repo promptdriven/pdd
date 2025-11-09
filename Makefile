@@ -74,6 +74,7 @@ PY_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_python.prompt,$(PDD_DIR)/%.py,$(PY_PRO
 # Makefile
 MAKEFILE_PROMPT := $(PROMPTS_DIR)/Makefile_makefile.prompt
 MAKEFILE_OUTPUT := $(STAGING_DIR)/Makefile
+SKIP_MAKEFILE_REGEN ?= 0
 
 # CSV files
 CSV_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_csv.prompt)
@@ -99,10 +100,15 @@ $(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
 	@PYTHONPATH=$(PROD_DIR) pdd --strength 1 generate --output $@ $< || touch $@
 
 # Generate Makefile
+ifeq ($(SKIP_MAKEFILE_REGEN),1)
+$(MAKEFILE_OUTPUT):
+	@echo "Skipping Makefile regeneration (SKIP_MAKEFILE_REGEN=1)"
+else
 $(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)
 	@echo "Generating $@"
 	@mkdir -p $(STAGING_DIR)
 	@PYTHONPATH=$(PROD_DIR) pdd generate --output $@ $<
+endif
 
 # Generate CSV files
 $(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
