@@ -1687,6 +1687,13 @@ def setup_cmd(ctx: click.Context) -> None:
     except Exception as exc:
         handle_error(exc, command_name, quiet_mode)
 
+# --- Aliases for generate subcommands ---
+# Users can now run:
+#   pdd generate tests ...
+#   pdd generate examples ...
+
+cli.add_command(test, "generate tests")
+cli.add_command(example, "generate examples")
 
 # --- Entry Point ---
 if __name__ == "__main__":
