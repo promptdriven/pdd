@@ -22,6 +22,8 @@ class TestRunner:
         self.project_root = project_root
         self.pr_number = pr_number
         self.pr_url = pr_url
+        self.base_env = os.environ.copy()
+        self.base_env.setdefault("SKIP_MAKEFILE_REGEN", "1")
         self.results = {
             "timestamp": datetime.now().isoformat(),
             "pr_number": pr_number,
@@ -59,7 +61,8 @@ class TestRunner:
             cmd,
             cwd=self.project_root,
             capture_output=True,
-            text=True
+            text=True,
+            env=self.base_env
         )
         
         duration = (datetime.now() - start_time).total_seconds()
@@ -97,7 +100,8 @@ class TestRunner:
             cmd,
             cwd=self.project_root,
             capture_output=True,
-            text=True
+            text=True,
+            env=self.base_env
         )
         
         duration = (datetime.now() - start_time).total_seconds()
@@ -134,7 +138,8 @@ class TestRunner:
             cmd,
             cwd=self.project_root,
             capture_output=True,
-            text=True
+            text=True,
+            env=self.base_env
         )
         
         duration = (datetime.now() - start_time).total_seconds()
