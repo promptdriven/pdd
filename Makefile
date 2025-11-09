@@ -58,7 +58,7 @@ help:
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
 PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
 # Top-level files to publish if present
-PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example README.md .gitignore SETUP_WITH_GEMINI.md
+PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example README.md .gitignore SETUP_WITH_GEMINI.md Makefile
 # Include core unit tests by default
 PUBLIC_COPY_TESTS ?= 1
 PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py
@@ -66,6 +66,7 @@ PUBLIC_TEST_EXCLUDE ?= tests/regression* tests/sync_regression* tests/**/regress
 PUBLIC_COPY_CONTEXT ?= 1
 PUBLIC_CONTEXT_INCLUDE ?= context/*_example.py
 PUBLIC_CONTEXT_EXCLUDE ?= context/**/__pycache__ context/**/*.log context/**/*.csv
+PUBLIC_REGRESSION_SCRIPTS ?= $(wildcard tests/*regression*.sh)
 
 # Python files
 PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
@@ -601,6 +602,18 @@ publish-public:
 			cp "$$f" $(PUBLIC_PDD_REPO_DIR)/; \
 		fi; \
 	done
+	@if [ -n "$(strip $(PUBLIC_REGRESSION_SCRIPTS))" ]; then \
+		echo "Copying regression scripts to public repo"; \
+		mkdir -p $(PUBLIC_PDD_REPO_DIR)/tests; \
+		for script in $(PUBLIC_REGRESSION_SCRIPTS); do \
+			if [ -f "$$script" ]; then \
+				echo "  -> $$script"; \
+				cp "$$script" $(PUBLIC_PDD_REPO_DIR)/tests/; \
+			fi; \
+		done; \
+	else \
+		echo "No regression scripts found to copy"; \
+	fi
 	@if [ "$(PUBLIC_COPY_TESTS)" = "1" ]; then \
 		echo "Copying core unit tests to public repo"; \
 		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \

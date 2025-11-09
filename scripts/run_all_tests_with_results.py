@@ -131,8 +131,8 @@ class TestRunner:
         
         duration = (datetime.now() - start_time).total_seconds()
         
-        # Parse regression script output
-        passed, failed, errors = self._parse_regression_output(log_contents)
+        # Parse regression script output using full log file
+        passed, failed, errors = self._parse_regression_output_full(log_path)
         
         test_result = {
             "name": "Regression Tests",
@@ -181,8 +181,8 @@ class TestRunner:
         
         duration = (datetime.now() - start_time).total_seconds()
         
-        # Parse sync regression script output
-        passed, failed, errors = self._parse_regression_output(log_contents)
+        # Parse sync regression script output using full log file
+        passed, failed, errors = self._parse_regression_output_full(log_path)
         
         test_result = {
             "name": "Sync Regression Tests",
@@ -257,19 +257,17 @@ class TestRunner:
             
         return passed, failed, skipped, failures
         
-    def _parse_regression_output(self, output: str) -> Tuple[int, int, List[str]]:
+    def _parse_regression_output_full(self, log_path: Path) -> Tuple[int, int, List[str]]:
         """Parse regression test output to extract results."""
-        passed = 0
-        failed = 0
+        text = log_path.read_text()
+        passed = text.count("Validation success:")
+        failed = text.count("Validation failed:")
         errors = []
         
-        # Count validation success/failure messages
-        passed = len(re.findall(r'Validation success:', output))
-        failed = len(re.findall(r'Validation failed:', output))
-        
-        # Extract error messages
-        error_lines = re.findall(r'\[ERROR\]\s+(.*)', output)
-        errors = [err.strip() for err in error_lines[:20]]  # Limit to 20 errors
+        for match in re.findall(r'\[ERROR\]\s+(.*)', text):
+            errors.append(match.strip())
+            if len(errors) >= 20:
+                break
         
         return passed, failed, errors
 
@@ -349,6 +347,8 @@ class TestRunner:
         
         comment += "\n---\n\n"
         
+        log_snippets = []
+
         # Add details for each test suite
         for suite_name, suite_data in self.results["test_suites"].items():
             suite_status = "PASS" if suite_data["exit_code"] == 0 else "FAIL"
@@ -392,14 +392,24 @@ class TestRunner:
                 comment += "\n**Errors:**\n"
                 for error in suite_data["errors"][:10]:  # Limit to 10 errors
                     comment += f"- {error}\n"
+                    log_snippets.append(error)
                     
             comment += "\n---\n\n"
             
+            # Capture a snippet of raw log output for detail view
+            if suite_data.get("stdout"):
+                snippet = suite_data["stdout"][-3000:]
+                log_snippets.append(f"### {suite_data['name']}\n```\n{snippet}\n```")
+        
+        log_details = "\n\n".join(log_snippets) if log_snippets else "No additional log output captured."
+
         comment += f"""
 <details>
 <summary>View Full Logs</summary>
 
 Test run completed at: {self.results['timestamp']}
+
+{log_details}
 
 </details>
 """
