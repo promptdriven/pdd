@@ -815,8 +815,37 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
 fi
 
 # 6. Sync Log and Analysis
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
+    log "6. Testing sync log and analysis features"
+    
+    log "6a. Testing 'sync --log'"
+    if run_pdd_command sync --log "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --log produced output"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --log"
+    fi
+    
+    log "6b. Testing verbose sync log"
+    if run_pdd_command --verbose sync --log "$SIMPLE_BASENAME"; then
+        log "Validation success: verbose sync log"
+    else
+        log_timestamped "[ERROR] Validation failed: verbose sync log"
+    fi
+    
+    log "6c. Running sync to generate log entries"
+    rm -f "${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}_example.py" "test_${SIMPLE_BASENAME}.py"
+    if run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"; then
+        log "Validation success: sync generated log entries"
+    else
+        log_timestamped "[ERROR] Validation failed: sync log generation"
+    fi
+    
     log "6d. Viewing logs after sync operations"
-    run_pdd_command sync --log "$SIMPLE_BASENAME"
+    if run_pdd_command sync --log "$SIMPLE_BASENAME"; then
+        log "Validation success: viewed logs after sync operations"
+    else
+        log_timestamped "[ERROR] Validation failed: viewing logs after sync operations"
+    fi
 fi
 
 # 7. Complex Sync with Advanced Features
