@@ -57,19 +57,31 @@ class TestRunner:
         start_time = datetime.now()
         
         cmd = self._build_infisical_command(["make", "test"])
+        log_path = self.project_root / "test_results" / "unit_tests.log"
         
-        result = subprocess.run(
-            cmd,
-            cwd=self.project_root,
-            capture_output=True,
-            text=True,
-            env=self.base_env
-        )
+        log_path.parent.mkdir(exist_ok=True)
+        with log_path.open("w") as log_file:
+            start_msg = f"[{start_time:%H:%M:%S}] [unit_tests] starting…"
+            print(start_msg, flush=True)
+            print(start_msg, file=log_file, flush=True)
+            result = subprocess.run(
+                cmd,
+                cwd=self.project_root,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=self.base_env
+            )
+            end_msg = f"[{datetime.now():%H:%M:%S}] [unit_tests] finished (rc={result.returncode})"
+            print(end_msg, flush=True)
+            print(end_msg, file=log_file, flush=True)
+        log_contents = log_path.read_text()
+        log_output = log_contents[-5000:]
         
         duration = (datetime.now() - start_time).total_seconds()
         
         # Parse pytest output
-        passed, failed, skipped, failures = self._parse_pytest_output(result.stdout + result.stderr)
+        passed, failed, skipped, failures = self._parse_pytest_output(log_contents)
         
         test_result = {
             "name": "Unit Tests (pytest)",
@@ -80,8 +92,8 @@ class TestRunner:
             "skipped": skipped,
             "duration_seconds": duration,
             "failures": failures,
-            "stdout": result.stdout[-5000:],  # Last 5000 chars
-            "stderr": result.stderr[-5000:]
+            "stdout": log_output,
+            "stderr": ""
         }
         
         self.results["test_suites"]["unit_tests"] = test_result
@@ -96,19 +108,31 @@ class TestRunner:
         start_time = datetime.now()
         
         cmd = self._build_infisical_command(["make", "regression"])
+        log_path = self.project_root / "test_results" / "regression_tests.log"
         
-        result = subprocess.run(
-            cmd,
-            cwd=self.project_root,
-            capture_output=True,
-            text=True,
-            env=self.base_env
-        )
+        log_path.parent.mkdir(exist_ok=True)
+        with log_path.open("w") as log_file:
+            start_msg = f"[{start_time:%H:%M:%S}] [regression_tests] starting…"
+            print(start_msg, flush=True)
+            print(start_msg, file=log_file, flush=True)
+            result = subprocess.run(
+                cmd,
+                cwd=self.project_root,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=self.base_env
+            )
+            end_msg = f"[{datetime.now():%H:%M:%S}] [regression_tests] finished (rc={result.returncode})"
+            print(end_msg, flush=True)
+            print(end_msg, file=log_file, flush=True)
+        log_contents = log_path.read_text()
+        log_output = log_contents[-5000:]
         
         duration = (datetime.now() - start_time).total_seconds()
         
         # Parse regression script output
-        passed, failed, errors = self._parse_regression_output(result.stdout + result.stderr)
+        passed, failed, errors = self._parse_regression_output(log_contents)
         
         test_result = {
             "name": "Regression Tests",
@@ -118,8 +142,8 @@ class TestRunner:
             "failed": failed,
             "errors": errors,
             "duration_seconds": duration,
-            "stdout": result.stdout[-5000:],
-            "stderr": result.stderr[-5000:]
+            "stdout": log_output,
+            "stderr": ""
         }
         
         self.results["test_suites"]["regression_tests"] = test_result
@@ -134,19 +158,31 @@ class TestRunner:
         start_time = datetime.now()
         
         cmd = self._build_infisical_command(["make", "sync-regression"])
+        log_path = self.project_root / "test_results" / "sync_regression_tests.log"
         
-        result = subprocess.run(
-            cmd,
-            cwd=self.project_root,
-            capture_output=True,
-            text=True,
-            env=self.base_env
-        )
+        log_path.parent.mkdir(exist_ok=True)
+        with log_path.open("w") as log_file:
+            start_msg = f"[{start_time:%H:%M:%S}] [sync_regression_tests] starting…"
+            print(start_msg, flush=True)
+            print(start_msg, file=log_file, flush=True)
+            result = subprocess.run(
+                cmd,
+                cwd=self.project_root,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=self.base_env
+            )
+            end_msg = f"[{datetime.now():%H:%M:%S}] [sync_regression_tests] finished (rc={result.returncode})"
+            print(end_msg, flush=True)
+            print(end_msg, file=log_file, flush=True)
+        log_contents = log_path.read_text()
+        log_output = log_contents[-5000:]
         
         duration = (datetime.now() - start_time).total_seconds()
         
         # Parse sync regression script output
-        passed, failed, errors = self._parse_regression_output(result.stdout + result.stderr)
+        passed, failed, errors = self._parse_regression_output(log_contents)
         
         test_result = {
             "name": "Sync Regression Tests",
@@ -156,8 +192,8 @@ class TestRunner:
             "failed": failed,
             "errors": errors,
             "duration_seconds": duration,
-            "stdout": result.stdout[-5000:],
-            "stderr": result.stderr[-5000:]
+            "stdout": log_output,
+            "stderr": ""
         }
         
         self.results["test_suites"]["sync_regression_tests"] = test_result
