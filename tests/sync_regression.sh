@@ -979,8 +979,21 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     
     # Test working directory context
     log "9c. Testing working directory context integration"
-    # Check that PDD respects the current working directory for file placement
-    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
+    # Run sync locally with an explicit timeout so hung cloud calls don't stall CI
+    WORKDIR_CONTEXT_TIMEOUT="${WORKDIR_CONTEXT_TIMEOUT:-600}s"
+    WORKDIR_CONTEXT_CMD=("$PDD_SCRIPT" --force --output-cost "$REGRESSION_DIR/$COST_FILE" --strength "$STRENGTH" --temperature "$TEMPERATURE" --local sync --skip-verify "$SIMPLE_BASENAME")
+    WORKDIR_CONTEXT_CMD_STR="${WORKDIR_CONTEXT_CMD[*]}"
+    log_timestamped "----------------------------------------"
+    log_timestamped "Starting command with timeout ($WORKDIR_CONTEXT_TIMEOUT): $WORKDIR_CONTEXT_CMD_STR"
+    log "Running with timeout ($WORKDIR_CONTEXT_TIMEOUT): $WORKDIR_CONTEXT_CMD_STR"
+    if run_with_timeout "$WORKDIR_CONTEXT_TIMEOUT" "${WORKDIR_CONTEXT_CMD[@]}" < /dev/null >> "$LOG_FILE" 2>&1; then
+        log "Command completed successfully."
+        log_timestamped "Command: $WORKDIR_CONTEXT_CMD_STR - Completed successfully."
+    else
+        log_error "Working directory context sync timed out or failed"
+        log_timestamped "[ERROR] Validation failed: Working directory context sync timed out or failed"
+        exit 1
+    fi
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
         log "Working directory context integration successful"
         log_timestamped "Validation success: Working directory context working"
