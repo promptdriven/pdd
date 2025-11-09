@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 
 class TestRunner:
@@ -132,7 +132,7 @@ class TestRunner:
         duration = (datetime.now() - start_time).total_seconds()
         
         # Parse regression script output using full log file
-        passed, failed, errors = self._parse_regression_output_full(log_path)
+        passed, failed, errors = self._parse_regression_output_full([log_path])
         
         test_result = {
             "name": "Regression Tests",
@@ -156,6 +156,7 @@ class TestRunner:
         print("=" * 60)
         
         start_time = datetime.now()
+        start_timestamp = start_time.timestamp()
         
         cmd = self._build_infisical_command(["make", "sync-regression"])
         log_path = self.project_root / "test_results" / "sync_regression_tests.log"
@@ -181,8 +182,21 @@ class TestRunner:
         
         duration = (datetime.now() - start_time).total_seconds()
         
-        # Parse sync regression script output using full log file
-        passed, failed, errors = self._parse_regression_output_full(log_path)
+        # Parse sync regression output; include per-case logs when running in parallel
+        log_paths = [log_path]
+        parallel_log_dir = log_path.parent / "sync_parallel_logs"
+        if parallel_log_dir.exists():
+            case_logs = []
+            for path in sorted(parallel_log_dir.glob("case_*.log")):
+                if not path.is_file():
+                    continue
+                try:
+                    if path.stat().st_mtime >= start_timestamp:
+                        case_logs.append(path)
+                except FileNotFoundError:
+                    continue
+            log_paths.extend(case_logs)
+        passed, failed, errors = self._parse_regression_output_full(log_paths)
         
         test_result = {
             "name": "Sync Regression Tests",
@@ -257,14 +271,23 @@ class TestRunner:
             
         return passed, failed, skipped, failures
         
-    def _parse_regression_output_full(self, log_path: Path) -> Tuple[int, int, List[str]]:
+    def _parse_regression_output_full(self, log_paths: Union[Path, List[Path]]) -> Tuple[int, int, List[str]]:
         """Parse regression test output to extract results."""
-        text = log_path.read_text()
-        passed = text.count("Validation success:")
-        failed = text.count("Validation failed:")
+        if isinstance(log_paths, Path):
+            paths = [log_paths]
+        else:
+            paths = list(log_paths)
+        
+        combined_text = ""
+        for path in paths:
+            if path.exists():
+                combined_text += path.read_text()
+        
+        passed = combined_text.count("Validation success:")
+        failed = combined_text.count("Validation failed:")
         errors = []
         
-        for match in re.findall(r'\[ERROR\]\s+(.*)', text):
+        for match in re.findall(r'\[ERROR\]\s+(.*)', combined_text):
             errors.append(match.strip())
             if len(errors) >= 20:
                 break
