@@ -265,6 +265,24 @@ def _extract_basename(
     """
     Deduce the project basename according to the rules explained in *Step A*.
     """
+    # Handle 'fix' command specifically to create a unique basename per test file
+    if command == "fix":
+        prompt_path = _candidate_prompt_path(input_file_paths)
+        if not prompt_path:
+            raise ValueError("Could not determine prompt file for 'fix' command.")
+        
+        prompt_basename = _strip_language_suffix(prompt_path)
+        
+        unit_test_path = input_file_paths.get("unit_test_file")
+        if not unit_test_path:
+            # Fallback to just the prompt basename if no unit test file is provided
+            # This might happen in some edge cases, but 'fix' command structure requires it
+            return prompt_basename
+
+        # Use the stem of the unit test file to make the basename unique
+        test_basename = Path(unit_test_path).stem
+        return f"{prompt_basename}_{test_basename}"
+        
     # Handle conflicts first due to its unique structure
     if command == "conflicts":
         key1 = "prompt1"
@@ -724,36 +742,47 @@ def construct_paths(
          raise # Re-raise the ValueError
 
     # ------------- Step 4: overwrite confirmation ------------
-    # Check if any output *file* exists (operate on Path objects)
-    existing_files: Dict[str, Path] = {}
-    for k, p_obj in output_paths_resolved.items():
-        # p_obj = Path(p_val) # Conversion now happens earlier
-        if p_obj.is_file():
-            existing_files[k] = p_obj # Store the Path object
+    if command in ["test", "bug"] and not force:
+        for key, path in output_paths_resolved.items():
+            if path.is_file():
+                base, ext = os.path.splitext(path)
+                i = 1
+                new_path = Path(f"{base}_{i}{ext}")
+                while new_path.exists():
+                    i += 1
+                    new_path = Path(f"{base}_{i}{ext}")
+                output_paths_resolved[key] = new_path
+    else:
+        # Check if any output *file* exists (operate on Path objects)
+        existing_files: Dict[str, Path] = {}
+        for k, p_obj in output_paths_resolved.items():
+            # p_obj = Path(p_val) # Conversion now happens earlier
+            if p_obj.is_file():
+                existing_files[k] = p_obj # Store the Path object
 
-    if existing_files and not force:
-        if not quiet:
-            # Use the Path objects stored in existing_files for resolve()
-            # Print without Rich tags for easier testing
-            paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
-            console.print(
-                f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
-                style="warning"
-            )
-        # Use click.confirm for user interaction
-        try:
-            if not click.confirm(
-                click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
-            ):
-                click.secho("Operation cancelled.", fg="red", err=True)
-                sys.exit(1) # Exit if user chooses not to overwrite
-        except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
-            if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
-                # Non-interactive environment, default to not overwriting
-                click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
-            else:
-                click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
-            sys.exit(1)
+        if existing_files and not force:
+            if not quiet:
+                # Use the Path objects stored in existing_files for resolve()
+                # Print without Rich tags for easier testing
+                paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
+                console.print(
+                    f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
+                    style="warning"
+                )
+            # Use click.confirm for user interaction
+            try:
+                if not click.confirm(
+                    click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
+                ):
+                    click.secho("Operation cancelled.", fg="red", err=True)
+                    sys.exit(1) # Exit if user chooses not to overwrite
+            except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
+                if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
+                    # Non-interactive environment, default to not overwriting
+                    click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
+                else:
+                    click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
+                sys.exit(1)
 
 
     # ------------- Final reporting ---------------------------
