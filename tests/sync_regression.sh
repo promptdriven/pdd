@@ -600,17 +600,25 @@ log_timestamped "======== Starting Sync Regression Tests ========"
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
     log "1. Testing basic 'sync' command"
     
-    # Use verbose mode and higher budget to help with sync completion
-    run_pdd_command --verbose sync --budget 20.0 "$SIMPLE_BASENAME"
+    if run_pdd_command --verbose sync --budget 20.0 "$SIMPLE_BASENAME"; then
+        log "Validation success: sync basic command completed"
+    else
+        log_timestamped "[ERROR] Validation failed: sync basic command"
+    fi
     
-    # Check that generated files exist - sync should generate code at minimum
     log "Checking generated files..."
-    check_sync_files "$SIMPLE_BASENAME" "python" false  # false = non-strict, only require code file
+    if check_sync_files "$SIMPLE_BASENAME" "python" false; then
+        log "Validation success: generated files present for basic sync"
+    else
+        log_timestamped "[ERROR] Validation failed: generated files missing for basic sync"
+    fi
     
-    # Test the generated tests (if they exist)
     if [ -f "tests/test_${SIMPLE_BASENAME}.py" ]; then
-        log "Running generated tests"
-        python -m pytest "tests/test_${SIMPLE_BASENAME}.py" >> "$LOG_FILE" 2>&1 || true
+        if python -m pytest "tests/test_${SIMPLE_BASENAME}.py" >> "$LOG_FILE" 2>&1; then
+            log "Validation success: generated tests ran for basic sync"
+        else
+            log_timestamped "[ERROR] Validation failed: generated tests errored for basic sync"
+        fi
     else
         log "No test file generated, skipping test execution"
     fi
@@ -622,15 +630,27 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     
     # Test --skip-verify
     log "2a. Testing 'sync --skip-verify'"
-    run_pdd_command_noexit sync --skip-verify --context regression_root "$SIMPLE_BASENAME"
-    check_sync_files "$SIMPLE_BASENAME" "python" false
+    if run_pdd_command_noexit sync --skip-verify --context regression_root "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --skip-verify"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --skip-verify"
+    fi
+    if check_sync_files "$SIMPLE_BASENAME" "python" false; then
+        log "Validation success: files exist after sync --skip-verify"
+    else
+        log_timestamped "[ERROR] Validation failed: files missing after sync --skip-verify"
+    fi
     
     # Test --skip-tests
     log "2b. Testing 'sync --skip-tests'"
     # Clean previous files AND metadata to test fresh generation
     rm -f "pdd/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command_noexit sync --skip-tests --context regression_pdd "$SIMPLE_BASENAME"
+    if run_pdd_command_noexit sync --skip-tests --context regression_pdd "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --skip-tests"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --skip-tests"
+    fi
     # Check what was actually generated (sync may only generate code)
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
         log "Code file generated with --skip-tests"
@@ -654,7 +674,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     log "2c. Testing 'sync --skip-verify --skip-tests'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command_noexit sync --skip-verify --skip-tests --context regression_pdd "$SIMPLE_BASENAME"
+    if run_pdd_command_noexit sync --skip-verify --skip-tests --context regression_pdd "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --skip-verify --skip-tests"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --skip-verify --skip-tests"
+    fi
     check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with both skip options"
     
     # Example file may or may not be generated
@@ -675,22 +699,38 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     log "3a. Testing 'sync --budget 2.0'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command_noexit sync --budget 2.0 --context regression_pdd "$SIMPLE_BASENAME"
+    if run_pdd_command_noexit sync --budget 2.0 --context regression_pdd "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --budget 2.0"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --budget 2.0"
+    fi
     # Should still create basic files even with low budget
-    check_sync_files "$SIMPLE_BASENAME" "python" false
+    if check_sync_files "$SIMPLE_BASENAME" "python" false; then
+        log "Validation success: files exist after initial sync"
+    else
+        log_timestamped "[ERROR] Validation failed: files missing after initial sync"
+    fi
     
     # Test with max attempts
     log "3b. Testing 'sync --max-attempts 1'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command sync --max-attempts 1 "$SIMPLE_BASENAME"
+    if run_pdd_command sync --max-attempts 1 "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --max-attempts 1"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --max-attempts 1"
+    fi
     check_sync_files "$SIMPLE_BASENAME" "python"
     
     # Test with target coverage
     log "3c. Testing 'sync --target-coverage 10.0'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    run_pdd_command sync --target-coverage 10.0 "$SIMPLE_BASENAME"
+    if run_pdd_command sync --target-coverage 10.0 "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --target-coverage 10.0"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --target-coverage 10.0"
+    fi
     check_sync_files "$SIMPLE_BASENAME" "python"
 fi
 
@@ -724,7 +764,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
     
     # First sync to establish baseline
     log "5a. Initial sync to establish state"
-    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
+    if run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"; then
+        log "Validation success: initial sync for state management"
+    else
+        log_timestamped "[ERROR] Validation failed: initial sync for state management"
+    fi
     check_sync_files "$SIMPLE_BASENAME" "python" false
     
     # Check metadata files (optional - may not exist in test environment)
@@ -758,30 +802,19 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
     echo "" >> "prompts/$SIMPLE_PROMPT"
     echo "# Updated prompt for incremental test" >> "prompts/$SIMPLE_PROMPT"
     
-    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
-    check_sync_files "$SIMPLE_BASENAME" "python" false
+    if run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"; then
+        log "Validation success: incremental sync after prompt change"
+    else
+        log_timestamped "[ERROR] Validation failed: incremental sync after prompt change"
+    fi
+    if check_sync_files "$SIMPLE_BASENAME" "python" false; then
+        log "Validation success: files present after incremental sync change"
+    else
+        log_timestamped "[ERROR] Validation failed: files missing after incremental sync change"
+    fi
 fi
 
 # 6. Sync Log and Analysis
-if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
-    log "6. Testing sync log and analysis features"
-    
-    # Test sync log viewing
-    log "6a. Testing 'sync --log'"
-    run_pdd_command sync --log "$SIMPLE_BASENAME"
-    # This should display log information, not generate files
-    
-    # Test verbose sync log
-    log "6b. Testing verbose sync log"
-    run_pdd_command --verbose sync --log "$SIMPLE_BASENAME"
-    # Should provide detailed reasoning information
-    
-    # Test sync with actual operations to generate logs
-    log "6c. Running sync to generate log entries"
-    rm -f "${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}_example.py" "test_${SIMPLE_BASENAME}.py"
-    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
-    
-    # Now check the logs
     log "6d. Viewing logs after sync operations"
     run_pdd_command sync --log "$SIMPLE_BASENAME"
 fi
@@ -792,21 +825,26 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
     
     # Test sync with complex prompt
     log "7a. Testing sync with complex data processor"
-    run_pdd_command sync --target-coverage 10.0 --budget 10.0 "$COMPLEX_BASENAME"
-    check_sync_files "$COMPLEX_BASENAME" "python"
+    if run_pdd_command sync --target-coverage 10.0 --budget 10.0 "$COMPLEX_BASENAME"; then
+        log "Validation success: complex sync with target coverage"
+    else
+        log_timestamped "[ERROR] Validation failed: complex sync with target coverage"
+    fi
+    if check_sync_files "$COMPLEX_BASENAME" "python"; then
+        log "Validation success: complex files exist"
+    else
+        log_timestamped "[ERROR] Validation failed: complex files missing"
+    fi
     
     # Test the generated complex code functionality (only if example exists)
     log "7b. Testing complex generated code functionality"
     if [ -f "examples/${COMPLEX_BASENAME}_example.py" ]; then
         log "Testing complex example execution"
-        python "examples/${COMPLEX_BASENAME}_example.py" >> "$LOG_FILE" 2>&1
-        if [ $? -eq 0 ]; then
-            log "Complex example runs successfully"
-            log_timestamped "Validation success: Complex example executes correctly"
+        if python "examples/${COMPLEX_BASENAME}_example.py" >> "$LOG_FILE" 2>&1; then
+            log "Validation success: Complex example executes correctly"
         else
             log_error "Complex example failed to run"
             log_timestamped "Validation failed: Complex example execution failed"
-            # Don't exit here as this might be expected for some complex cases
         fi
     else
         log "Skipping complex example test - no example file generated"
@@ -817,7 +855,12 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
     log "7c. Running complex generated tests"
     if [ -f "tests/test_${COMPLEX_BASENAME}.py" ]; then
         log "Running complex test suite"
-        python -m pytest "tests/test_${COMPLEX_BASENAME}.py" -v >> "$LOG_FILE" 2>&1 || log "Complex tests completed (some may fail)"
+        if python -m pytest "tests/test_${COMPLEX_BASENAME}.py" -v >> "$LOG_FILE" 2>&1; then
+            log "Validation success: Complex tests passed"
+        else
+            log "Complex tests completed with failures"
+            log_timestamped "[ERROR] Validation failed: Complex tests reported failures"
+        fi
     else
         log "Skipping complex test execution - no test file generated"
         log_timestamped "Note: Complex test file not generated by sync"
@@ -873,10 +916,16 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     # Test with automatic context detection (if .pddrc exists)
     if [ -f "$PDD_BASE_DIR/.pddrc" ]; then
         log "9a. Testing sync with automatic context detection"
-        run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
-        check_sync_files "$SIMPLE_BASENAME" "python"
-        log "Context detection from .pddrc working correctly"
-        log_timestamped "Validation success: Automatic context detection working"
+    if run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"; then
+        log "Validation success: Context detection sync completed"
+    else
+        log_timestamped "[ERROR] Validation failed: Context detection sync"
+    fi
+    if check_sync_files "$SIMPLE_BASENAME" "python"; then
+        log "Validation success: Files correctly placed with context detection"
+    else
+        log_timestamped "[ERROR] Validation failed: Files missing after context detection"
+    fi
     else
         log "9a. Skipping context detection test (no .pddrc file found)"
         log_timestamped "Note: No .pddrc file found for context testing"

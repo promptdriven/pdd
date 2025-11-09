@@ -96,7 +96,7 @@ jobs:
         run: |
           conda activate pdd
           pip install -r requirements.txt
-          pip install -e .
+          pip install -e ".[dev]"
           
       - name: Verify environment
         shell: bash -l {0}
@@ -116,11 +116,12 @@ jobs:
         env:
           INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
           SKIP_MAKEFILE_REGEN: "1"
+          INFISICAL_ENV: "dev"
         run: |
           conda activate pdd
           
           # Export Infisical secrets to environment
-          export $(infisical export --token "$INFISICAL_TOKEN" --format=dotenv | xargs)
+          export $(infisical export --env "$INFISICAL_ENV" --token "$INFISICAL_TOKEN" --format=dotenv | xargs)
           
           # Use public PR information
           PR_NUMBER="${{ inputs.public_pr_number }}"
