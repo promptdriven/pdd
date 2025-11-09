@@ -131,8 +131,11 @@ class TestRunner:
         
         duration = (datetime.now() - start_time).total_seconds()
         
-        # Parse regression script output using full log file
-        passed, failed, errors = self._parse_regression_output_full([log_path])
+        # Parse regression script output; include underlying regression log if available
+        log_paths = [log_path]
+        additional_logs = self._extract_log_paths(log_contents, keyword="Log file:")
+        log_paths.extend(additional_logs)
+        passed, failed, errors = self._parse_regression_output_full(log_paths)
         
         test_result = {
             "name": "Regression Tests",
@@ -293,6 +296,27 @@ class TestRunner:
                 break
         
         return passed, failed, errors
+
+    def _extract_log_paths(self, text: str, keyword: str) -> List[Path]:
+        """Extract filesystem paths from log output that match the given keyword."""
+        paths: List[Path] = []
+        seen = set()
+        pattern = rf'{re.escape(keyword)}\s*(.+)'
+        for match in re.findall(pattern, text, flags=re.IGNORECASE):
+            candidate = match.strip()
+            if not candidate:
+                continue
+            # Take the first whitespace-separated token to avoid trailing messages
+            candidate = candidate.split()[0]
+            path = Path(candidate)
+            if not path.is_absolute():
+                path = (self.project_root / path).resolve()
+            else:
+                path = path.resolve()
+            if path.exists() and str(path) not in seen:
+                seen.add(str(path))
+                paths.append(path)
+        return paths
 
     def run_all_suites(self):
         """Run all suites concurrently to reduce total runtime."""
