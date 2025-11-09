@@ -160,7 +160,9 @@ jobs:
         with:
           github-token: ${{ secrets.PUBLIC_REPO_TOKEN }}
           script: |
-            const commentBody = `${{ steps.test_results.outputs.comment_body }}`;
+            const commentBody = JSON.parse(
+              `${{ toJson(steps.test_results.outputs.comment_body) }}`
+            );
             const publicPrNumber = ${{ inputs.public_pr_number }};
             
             // Post to public repo (promptdriven/pdd)
