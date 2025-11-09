@@ -12,6 +12,7 @@ import json
 import re
 from pathlib import Path
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
 
@@ -235,6 +236,22 @@ class TestRunner:
         errors = [err.strip() for err in error_lines[:20]]  # Limit to 20 errors
         
         return passed, failed, errors
+
+    def run_all_suites(self):
+        """Run all suites concurrently to reduce total runtime."""
+        suites = [
+            ("unit_tests", self.run_unit_tests),
+            ("regression_tests", self.run_regression_tests),
+            ("sync_regression_tests", self.run_sync_regression_tests),
+        ]
+        with ThreadPoolExecutor(max_workers=len(suites)) as executor:
+            future_map = {executor.submit(func): name for name, func in suites}
+            for future in as_completed(future_map):
+                suite_name = future_map[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    print(f"ERROR: Failed running {suite_name}: {exc}")
         
     def calculate_summary(self):
         """Calculate overall test summary."""
@@ -381,21 +398,8 @@ def main():
     # Initialize runner with PR information
     runner = TestRunner(project_root, pr_number=args.pr_number, pr_url=args.pr_url)
     
-    # Run all test suites
-    try:
-        runner.run_unit_tests()
-    except Exception as e:
-        print(f"ERROR: Failed running unit tests: {e}")
-        
-    try:
-        runner.run_regression_tests()
-    except Exception as e:
-        print(f"ERROR: Failed running regression tests: {e}")
-        
-    try:
-        runner.run_sync_regression_tests()
-    except Exception as e:
-        print(f"ERROR: Failed running sync regression tests: {e}")
+    # Run all test suites (in parallel)
+    runner.run_all_suites()
         
     # Calculate summary
     runner.calculate_summary()
