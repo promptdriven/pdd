@@ -740,7 +740,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
     
     # Test multi-language sync with higher budget
     log "4a. Testing Python calculator sync"
-    run_pdd_command sync --budget 30.0 "$MULTI_LANG_BASENAME"
+    run_pdd_command sync --local --budget 30.0 "$MULTI_LANG_BASENAME"
     check_sync_files "$MULTI_LANG_BASENAME" "python"
     
     # Test JavaScript variant (if prompt exists)
@@ -748,7 +748,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
         log "4b. Testing JavaScript calculator sync"
         # Note: This would require JavaScript test runner setup in a real scenario
         # For now, just test that sync processes the JS prompt
-        run_pdd_command_noexit sync "$MULTI_LANG_BASENAME"
+        run_pdd_command_noexit sync --local "$MULTI_LANG_BASENAME"
         # JavaScript files should be created alongside Python files
         if [ -f "${MULTI_LANG_BASENAME}.js" ]; then
             log "JavaScript files generated successfully"
