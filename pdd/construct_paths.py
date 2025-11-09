@@ -332,14 +332,48 @@ def _determine_language(
         ext = path_obj.suffix
         # Prioritize non-prompt code files
         if ext and ext != ".prompt":
-            language = get_language(ext)
-            if language:
-                return language.lower()
+            try:
+                language = get_language(ext)
+                if language:
+                    return language.lower()
+            except ValueError:
+                # Fallback: load language CSV file directly when PDD_PATH is not set
+                try:
+                    import csv
+                    import os
+                    # Try to find the CSV file relative to this script
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    csv_path = os.path.join(script_dir, 'data', 'language_format.csv')
+                    if os.path.exists(csv_path):
+                        with open(csv_path, 'r') as csvfile:
+                            reader = csv.DictReader(csvfile)
+                            for row in reader:
+                                if row['extension'].lower() == ext.lower():
+                                    return row['language'].lower()
+                except (FileNotFoundError, csv.Error):
+                    pass
         # Handle files without extension like Makefile
         elif not ext and path_obj.is_file(): # Check it's actually a file
-            language = get_language(path_obj.name) # Check name (e.g., 'Makefile')
-            if language:
-                return language.lower()
+            try:
+                language = get_language(path_obj.name) # Check name (e.g., 'Makefile')
+                if language:
+                    return language.lower()
+            except ValueError:
+                # Fallback: load language CSV file directly for files without extension
+                try:
+                    import csv
+                    import os
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    csv_path = os.path.join(script_dir, 'data', 'language_format.csv')
+                    if os.path.exists(csv_path):
+                        with open(csv_path, 'r') as csvfile:
+                            reader = csv.DictReader(csvfile)
+                            for row in reader:
+                                # Check if the filename matches (for files without extension)
+                                if not row['extension'] and path_obj.name.lower() == row['language'].lower():
+                                    return row['language'].lower()
+                except (FileNotFoundError, csv.Error):
+                    pass
 
     # 3 – parse from prompt filename suffix
     prompt_path = _candidate_prompt_path(input_file_paths)

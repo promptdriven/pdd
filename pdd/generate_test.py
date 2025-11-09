@@ -15,11 +15,14 @@ console = Console()
 def generate_test(
     prompt: str,
     code: str,
-    strength: float=DEFAULT_STRENGTH,
-    temperature: float=0.0,
+    strength: float = DEFAULT_STRENGTH,
+    temperature: float = 0.0,
     time: float = DEFAULT_TIME,
     language: str = "python",
-    verbose: bool = False
+    verbose: bool = False,
+    source_file_path: Optional[str] = None,
+    test_file_path: Optional[str] = None,
+    module_name: Optional[str] = None
 ) -> Tuple[str, float, str]:
     """
     Generate a unit test from a code file using LLM.
@@ -32,6 +35,9 @@ def generate_test(
         language (str): The programming language for the unit test.
         time (float, optional): Time budget for LLM calls. Defaults to DEFAULT_TIME.
         verbose (bool): Whether to print detailed information.
+        source_file_path (Optional[str]): Absolute or relative path to the code under test.
+        test_file_path (Optional[str]): Destination path for the generated test file.
+        module_name (Optional[str]): Module name (without extension) for proper imports.
 
     Returns:
         Tuple[str, float, str]: (unit_test, total_cost, model_name)
@@ -53,7 +59,10 @@ def generate_test(
         input_json = {
             "prompt_that_generated_code": processed_prompt,
             "code": code,
-            "language": language
+            "language": language,
+            "source_file_path": source_file_path or "",
+            "test_file_path": test_file_path or "",
+            "module_name": module_name or ""
         }
 
         if verbose:
