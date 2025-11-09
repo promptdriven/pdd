@@ -170,7 +170,7 @@ run-examples: $(EXAMPLE_FILES)
 test:
 	@echo "Running staging tests"
 	@cd $(STAGING_DIR)
-	@conda run -n pdd --no-capture-output PDD_RUN_REAL_LLM_TESTS=1 PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
+	@conda run -n pdd --no-capture-output PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
 
 # Run tests with coverage
 coverage:
@@ -409,14 +409,21 @@ else
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 endif
 
+SYNC_PARALLEL ?= 1
+
 sync-regression:
 	@echo "Running sync regression tests"
 ifdef TEST_NUM
 	@echo "Running specific sync test: $(TEST_NUM)"
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/sync_regression.sh $(TEST_NUM)
 else
-	@echo "Running all sync regression tests"
+ifeq ($(SYNC_PARALLEL),1)
+	@echo "Running sync regression suite in parallel"
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/sync_regression_parallel.sh
+else
+	@echo "Running all sync regression tests sequentially"
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/sync_regression.sh
+endif
 endif
 
 all-regression: regression sync-regression
