@@ -54,6 +54,14 @@ jobs:
           git fetch public main
           git fetch public pull/${{ inputs.public_pr_number }}/head:pr-${{ inputs.public_pr_number }}
           
+          # Replace symlinked pdd/prompts with a real directory so git apply can touch files there
+          if [ -L pdd/prompts ]; then
+            echo "Replacing pdd/prompts symlink with real directory..."
+            rm pdd/prompts
+            mkdir -p pdd/prompts
+            cp -R prompts/. pdd/prompts/
+          fi
+          
           echo "Creating patch between public main and PR..."
           git diff --binary public/main...pr-${{ inputs.public_pr_number }} > /tmp/public_pr.patch
           
