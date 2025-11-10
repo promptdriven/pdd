@@ -18,6 +18,7 @@ from rich import box
 from rich.console import Console
 from rich.markup import MarkupError, escape
 from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 # --- Relative Imports for Internal Modules ---
@@ -440,8 +441,22 @@ def templates_list(as_json: bool, filter_tag: Optional[str]):
                 return
             console.print("[info]Available Templates:[/info]")
             for it in items:
+                # Print the template name on its own line to avoid Rich wrapping
+                name_line = Text(f"- {it['name']}", style="bold", no_wrap=True)
+                console.print(name_line)
+                # Print details on the next line(s) with a small indent; wrapping is fine here
+                version = it.get("version", "")
+                description = it.get("description", "")
                 tags = ", ".join(it.get("tags", []))
-                console.print(f"- [bold]{it['name']}[/bold] ({it.get('version','')}) — {it.get('description','')} [dim]{tags}[/dim]")
+                details_parts = []
+                if version:
+                    details_parts.append(f"({version})")
+                if description:
+                    details_parts.append(description)
+                if tags:
+                    details_parts.append(f"[{tags}]")
+                if details_parts:
+                    console.print("  " + " — ".join(details_parts))
     except Exception as e:
         handle_error(e, "templates list", False)
 
