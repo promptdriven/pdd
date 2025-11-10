@@ -18,6 +18,7 @@ from rich import box
 from rich.console import Console
 from rich.markup import MarkupError, escape
 from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 # --- Relative Imports for Internal Modules ---
@@ -439,8 +440,22 @@ def templates_list(as_json: bool, filter_tag: Optional[str]):
                 return
             console.print("[info]Available Templates:[/info]")
             for it in items:
+                # Print the template name on its own line to avoid Rich wrapping
+                name_line = Text(f"- {it['name']}", style="bold", no_wrap=True)
+                console.print(name_line)
+                # Print details on the next line(s) with a small indent; wrapping is fine here
+                version = it.get("version", "")
+                description = it.get("description", "")
                 tags = ", ".join(it.get("tags", []))
-                console.print(f"- [bold]{it['name']}[/bold] ({it.get('version','')}) — {it.get('description','')} [dim]{tags}[/dim]")
+                details_parts = []
+                if version:
+                    details_parts.append(f"({version})")
+                if description:
+                    details_parts.append(description)
+                if tags:
+                    details_parts.append(f"[{tags}]")
+                if details_parts:
+                    console.print("  " + " — ".join(details_parts))
     except Exception as e:
         handle_error(e, "templates list", False)
 
@@ -776,11 +791,9 @@ def example(
 )
 @click.option(
     "--existing-tests",
-    "existing_tests",
-    multiple=True,
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="Path to the existing unit test file(s).",
+    help="Path to the existing unit test file.",
 )
 @click.option(
     "--target-coverage",
@@ -803,7 +816,7 @@ def test(
     output: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
-    existing_tests: Optional[Tuple[str, ...]],
+    existing_tests: Optional[str],
     target_coverage: Optional[float],
     merge: bool,
 ) -> Optional[Tuple[str, float, str]]:
@@ -816,7 +829,7 @@ def test(
             output=output,
             language=language,
             coverage_report=coverage_report,
-            existing_tests=list(existing_tests) if existing_tests else None,
+            existing_tests=existing_tests,
             target_coverage=target_coverage,
             merge=merge,
         )
@@ -899,7 +912,7 @@ def preprocess(
 @cli.command("fix")
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("unit_test_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
+@click.argument("unit_test_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("error_file", type=click.Path(dir_okay=False))  # Allow non-existent for loop mode
 @click.option(
     "--output-test",
@@ -957,7 +970,7 @@ def fix(
     ctx: click.Context,
     prompt_file: str,
     code_file: str,
-    unit_test_files: Tuple[str, ...],
+    unit_test_file: str,
     error_file: str,
     output_test: Optional[str],
     output_code: Optional[str],
@@ -970,37 +983,29 @@ def fix(
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Fix code based on a prompt and unit test errors."""
     try:
-        all_results = []
-        total_cost = 0.0
-        model_name = ""
-
-        for unit_test_file in unit_test_files:
-            success, fixed_unit_test, fixed_code, attempts, cost, model = fix_main(
-                ctx=ctx,
-                prompt_file=prompt_file,
-                code_file=code_file,
-                unit_test_file=unit_test_file,
-                error_file=error_file,
-                output_test=output_test,
-                output_code=output_code,
-                output_results=output_results,
-                loop=loop,
-                verification_program=verification_program,
-                max_attempts=max_attempts,
-                budget=budget,
-                auto_submit=auto_submit,
-            )
-            all_results.append({
-                "success": success,
-                "fixed_unit_test": fixed_unit_test,
-                "fixed_code": fixed_code,
-                "attempts": attempts,
-            })
-            total_cost += cost
-            model_name = model
-        
-        return {"results": all_results}, total_cost, model_name
-
+        # The actual logic is in fix_main
+        success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_main(
+            ctx=ctx,
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=unit_test_file,
+            error_file=error_file,
+            output_test=output_test,
+            output_code=output_code,
+            output_results=output_results,
+            loop=loop,
+            verification_program=verification_program,
+            max_attempts=max_attempts,
+            budget=budget,
+            auto_submit=auto_submit,
+        )
+        result = {
+            "success": success,
+            "fixed_unit_test": fixed_unit_test,
+            "fixed_code": fixed_code,
+            "attempts": attempts,
+        }
+        return result, total_cost, model_name
     except Exception as exception:
         handle_error(exception, "fix", ctx.obj.get("quiet", False))
         return None
