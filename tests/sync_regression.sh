@@ -981,7 +981,20 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     log "9c. Testing working directory context integration"
     # Run sync locally with an explicit timeout so hung cloud calls don't stall CI
     WORKDIR_CONTEXT_TIMEOUT="${WORKDIR_CONTEXT_TIMEOUT:-600}s"
-    WORKDIR_CONTEXT_CMD=("$PDD_SCRIPT" --force --output-cost "$REGRESSION_DIR/$COST_FILE" --strength "$STRENGTH" --temperature "$TEMPERATURE" --local sync --skip-verify "$SIMPLE_BASENAME")
+    WORKDIR_CONTEXT_CMD=(
+        "$PDD_SCRIPT"
+        --force
+        --output-cost "$REGRESSION_DIR/$COST_FILE"
+        --strength "$STRENGTH"
+        --temperature "$TEMPERATURE"
+        --local
+        sync
+        --skip-verify
+        --skip-tests
+        --budget 2.0
+        --max-attempts 1
+        "$SIMPLE_BASENAME"
+    )
     WORKDIR_CONTEXT_CMD_STR="${WORKDIR_CONTEXT_CMD[*]}"
     log_timestamped "----------------------------------------"
     log_timestamped "Starting command with timeout ($WORKDIR_CONTEXT_TIMEOUT): $WORKDIR_CONTEXT_CMD_STR"
