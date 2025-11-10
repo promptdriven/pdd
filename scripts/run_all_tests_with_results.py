@@ -199,7 +199,15 @@ class TestRunner:
                 except FileNotFoundError:
                     continue
             log_paths.extend(case_logs)
-        passed, failed, errors = self._parse_regression_output_full(log_paths)
+        
+        base_passed, base_failed, base_errors = self._parse_regression_output_full(log_paths)
+        case_summary = self._parse_sync_parallel_summary(log_contents)
+        if case_summary:
+            case_passed, case_failed, case_errors = case_summary
+            passed, failed = case_passed, case_failed
+            errors = self._combine_errors(case_errors, base_errors)
+        else:
+            passed, failed, errors = base_passed, base_failed, base_errors
         
         test_result = {
             "name": "Sync Regression Tests",
@@ -296,6 +304,43 @@ class TestRunner:
                 break
         
         return passed, failed, errors
+
+    def _parse_sync_parallel_summary(self, log_text: str):
+        """Parse sync-regression parallel launcher output for per-case results."""
+        success_matches = re.findall(r'\[sync-regression\]\s+Case\s+(\d+)\s+completed successfully', log_text)
+        failure_matches = re.findall(r'\[sync-regression\]\s+Case\s+(\d+)\s+failed \(exit\s+([^)]+)\)', log_text)
+        
+        if not success_matches and not failure_matches:
+            return None
+        
+        def unique(items):
+            seen = set()
+            ordered = []
+            for item in items:
+                if item not in seen:
+                    seen.add(item)
+                    ordered.append(item)
+            return ordered
+        
+        success_cases = unique(success_matches)
+        failure_cases = unique(failure_matches)
+        
+        case_errors = [f"Case {case} failed (exit {code})" for case, code in failure_cases]
+        return len(success_cases), len(failure_cases), case_errors
+
+    def _combine_errors(self, *error_lists: List[str]) -> List[str]:
+        """Merge multiple error lists while preserving order and limiting duplicates."""
+        merged: List[str] = []
+        seen = set()
+        for errors in error_lists:
+            for error in errors:
+                if not error or error in seen:
+                    continue
+                merged.append(error)
+                seen.add(error)
+                if len(merged) >= 20:
+                    return merged
+        return merged
 
     def _extract_log_paths(self, text: str, keyword: str) -> List[Path]:
         """Extract filesystem paths from log output that match the given keyword."""
