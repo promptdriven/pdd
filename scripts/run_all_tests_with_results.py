@@ -135,7 +135,13 @@ class TestRunner:
         log_paths = [log_path]
         additional_logs = self._extract_log_paths(log_contents, keyword="Log file:")
         log_paths.extend(additional_logs)
-        passed, failed, errors = self._parse_regression_output_full(log_paths)
+        base_passed, base_failed, errors = self._parse_regression_output_full(log_paths)
+        regression_summary = self._parse_regression_test_summary(log_contents, result.returncode)
+        if regression_summary:
+            passed, failed, summary_errors = regression_summary
+            errors = self._combine_errors(errors, summary_errors)
+        else:
+            passed, failed = base_passed, base_failed
         
         test_result = {
             "name": "Regression Tests",
@@ -327,6 +333,21 @@ class TestRunner:
         
         case_errors = [f"Case {case} failed (exit {code})" for case, code in failure_cases]
         return len(success_cases), len(failure_cases), case_errors
+
+    def _parse_regression_test_summary(self, log_text: str, exit_code: int):
+        """Parse top-level regression tests (0.,1.,...) to approximate pass/fail counts."""
+        matches = re.findall(r'\[INFO\]\s+(\d+)\.\s+Testing', log_text)
+        if not matches:
+            return None
+        test_numbers = [int(m) for m in matches if int(m) > 0]
+        if not test_numbers:
+            return None
+        total_started = len(test_numbers)
+        if exit_code == 0:
+            return total_started, 0, []
+        failed_test = test_numbers[-1]
+        passed = max(total_started - 1, 0)
+        return passed, 1, [f"Test {failed_test} failed (see logs)"]
 
     def _combine_errors(self, *error_lists: List[str]) -> List[str]:
         """Merge multiple error lists while preserving order and limiting duplicates."""
