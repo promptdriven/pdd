@@ -8,11 +8,11 @@ import os
 import sys
 import subprocess
 import json
-import requests
 import csv
 import importlib.resources
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
+from pdd.llm_invoke import llm_invoke
 
 # Global variables for non-ASCII characters and colors
 HEAVY_HORIZONTAL = "━"
@@ -101,114 +101,81 @@ def print_pdd_logo():
     print()
     print_colored("Let's get set up quickly with a solid basic configuration!", WHITE, bold=True)
     print()
-    print_colored("Supported: OpenAI, Google Gemini, and Anthropic Claude", WHITE)
-    print_colored("from their respective API endpoints (no third-parties, such as Azure)", WHITE)
+    print_colored("Supports all major LLM providers including:", WHITE)
+    print_colored("OpenAI, Google Gemini, Anthropic Claude, Fireworks, Groq, Vertex AI, and more", WHITE)
     print()
 
 def get_csv_variable_names() -> Dict[str, str]:
-    """Inspect packaged CSV to determine API key variable names per provider.
+    """Inspect packaged CSV to determine all unique API key variable names.
 
-    Focus on direct providers only: OpenAI GPT models (model startswith 'gpt-'),
-    Google Gemini (model startswith 'gemini/'), and Anthropic (model startswith 'anthropic/').
+    Returns a dictionary mapping each unique API key variable name to itself.
+    This allows discovery of all providers configured in the CSV.
     """
     header, rows = _read_packaged_llm_model_csv()
     variable_names: Dict[str, str] = {}
 
     for row in rows:
-        model = (row.get('model') or '').strip()
         api_key = (row.get('api_key') or '').strip()
-        provider = (row.get('provider') or '').strip().upper()
+        if api_key and api_key not in variable_names:
+            # Map the API key name to itself
+            variable_names[api_key] = api_key
 
-        if not api_key:
-            continue
-
-        if model.startswith('gpt-') and provider == 'OPENAI':
-            variable_names['OPENAI'] = api_key
-        elif model.startswith('gemini/') and provider == 'GOOGLE':
-            # Prefer direct Gemini key, not Vertex
-            variable_names['GOOGLE'] = api_key
-        elif model.startswith('anthropic/') and provider == 'ANTHROPIC':
-            variable_names['ANTHROPIC'] = api_key
-
-    # Fallbacks if not detected (keep prior behavior)
-    variable_names.setdefault('OPENAI', 'OPENAI_API_KEY')
-    # Prefer GEMINI_API_KEY name for Google if present
-    variable_names.setdefault('GOOGLE', 'GEMINI_API_KEY')
-    variable_names.setdefault('ANTHROPIC', 'ANTHROPIC_API_KEY')
     return variable_names
 
 def discover_api_keys() -> Dict[str, Optional[str]]:
     """Discover API keys from environment variables"""
-    # Get the variable names actually used in CSV template
+    # Get all the variable names actually used in CSV template
     csv_vars = get_csv_variable_names()
     
-    keys = {
-        'OPENAI_API_KEY': os.getenv('OPENAI_API_KEY'),
-        'ANTHROPIC_API_KEY': os.getenv('ANTHROPIC_API_KEY'),
-    }
-    
-    # For Google, check both possible environment variables but use CSV template's variable name
-    google_var_name = csv_vars.get('GOOGLE', 'GEMINI_API_KEY')  # Default to GEMINI_API_KEY
-    google_api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GOOGLE_API_KEY')
-    keys[google_var_name] = google_api_key
+    keys = {}
+    for api_key_name in csv_vars.values():
+        keys[api_key_name] = os.getenv(api_key_name)
     
     return keys
 
-def test_openai_key(api_key: str) -> bool:
-    """Test OpenAI API key validity"""
-    if not api_key or not api_key.strip():
+def test_api_key_with_llm_invoke(api_key_name: str, api_key_value: str) -> bool:
+    """Test an API key by attempting to invoke llm with a simple prompt.
+    
+    Args:
+        api_key_name: The environment variable name for the API key (e.g., 'OPENAI_API_KEY')
+        api_key_value: The actual API key value to test
+        
+    Returns:
+        True if the API key works, False otherwise
+    """
+    if not api_key_value or not api_key_value.strip():
         return False
     
+    # Temporarily set the API key in the environment
+    old_value = os.environ.get(api_key_name)
     try:
-        headers = {
-            'Authorization': f'Bearer {api_key.strip()}',
-            'Content-Type': 'application/json'
-        }
-        response = requests.get(
-            'https://api.openai.com/v1/models',
-            headers=headers,
-            timeout=10
+        os.environ[api_key_name] = api_key_value.strip()
+        
+        # Try to invoke llm with a simple prompt
+        # Use a very simple prompt and low cost settings
+        response = llm_invoke(
+            prompt="Say hello",
+            input_json={},
+            strength=0.0,  # Use cheapest model
+            temperature=0.1,
+            verbose=False
         )
-        return response.status_code == 200
+        
+        # If we get here without exception and have a result, the key works
+        return response is not None and 'result' in response
+        
     except Exception:
+        # Any exception means the key doesn't work
         return False
-
-def test_google_key(api_key: str) -> bool:
-    """Test Google Gemini API key validity"""
-    if not api_key or not api_key.strip():
-        return False
-    
-    try:
-        response = requests.get(
-            f'https://generativelanguage.googleapis.com/v1beta/models?key={api_key.strip()}',
-            timeout=10
-        )
-        return response.status_code == 200
-    except Exception:
-        return False
-
-def test_anthropic_key(api_key: str) -> bool:
-    """Test Anthropic API key validity"""
-    if not api_key or not api_key.strip():
-        return False
-    
-    try:
-        headers = {
-            'x-api-key': api_key.strip(),
-            'Content-Type': 'application/json'
-        }
-        response = requests.get(
-            'https://api.anthropic.com/v1/messages',
-            headers=headers,
-            timeout=10
-        )
-        # Anthropic returns 400 for invalid request structure but 401/403 for bad keys
-        return response.status_code != 401 and response.status_code != 403
-    except Exception:
-        return False
+    finally:
+        # Restore the original environment
+        if old_value is not None:
+            os.environ[api_key_name] = old_value
+        elif api_key_name in os.environ:
+            del os.environ[api_key_name]
 
 def test_api_keys(keys: Dict[str, Optional[str]]) -> Dict[str, bool]:
-    """Test all discovered API keys"""
+    """Test all discovered API keys using llm_invoke"""
     results = {}
     
     print_colored(f"\n{LIGHT_HORIZONTAL * 40}", CYAN)
@@ -218,14 +185,7 @@ def test_api_keys(keys: Dict[str, Optional[str]]) -> Dict[str, bool]:
     for key_name, key_value in keys.items():
         if key_value:
             print(f"Testing {key_name}...", end=" ", flush=True)
-            if key_name == 'OPENAI_API_KEY':
-                valid = test_openai_key(key_value)
-            elif key_name in ['GEMINI_API_KEY', 'GOOGLE_API_KEY']:
-                valid = test_google_key(key_value)
-            elif key_name == 'ANTHROPIC_API_KEY':
-                valid = test_anthropic_key(key_value)
-            else:
-                valid = False
+            valid = test_api_key_with_llm_invoke(key_name, key_value)
             
             if valid:
                 print_colored(f"{CHECK_MARK} Valid", CYAN)
@@ -245,14 +205,17 @@ def get_user_keys(current_keys: Dict[str, Optional[str]]) -> Dict[str, Optional[
     print_colored("API Key Configuration", YELLOW, bold=True)
     print_colored(f"{create_fat_divider()}", YELLOW)
     
-    print_colored("You need only one API key to get started", WHITE)
+    print_colored("You need at least one API key to get started", WHITE)
     print()
-    print_colored("Get API keys here:", WHITE)
+    print_colored("Get API keys here (most common providers):", WHITE)
     print_colored(f"  OpenAI {ARROW_RIGHT} https://platform.openai.com/api-keys", CYAN)
     print_colored(f"  Google Gemini {ARROW_RIGHT} https://aistudio.google.com/app/apikey", CYAN)
     print_colored(f"  Anthropic {ARROW_RIGHT} https://console.anthropic.com/settings/keys", CYAN)
+    print_colored(f"  Fireworks {ARROW_RIGHT} https://fireworks.ai/api-keys", CYAN)
+    print_colored(f"  Groq {ARROW_RIGHT} https://console.groq.com/keys", CYAN)
     print()
     print_colored("A free instant starter key is available from Google Gemini (above)", CYAN)
+    print_colored("PDD supports all major LLM providers - check llm_model.csv for the full list", CYAN)
     print()
     
     new_keys = current_keys.copy()
@@ -350,25 +313,12 @@ def save_configuration(valid_keys: Dict[str, str]) -> Tuple[List[str], bool, Opt
     api_env_file.chmod(0o755)
     saved_files.append(str(api_env_file))
     
-    # Create llm_model.csv with models from packaged CSV filtered by provider and available keys
+    # Create llm_model.csv with models from packaged CSV filtered by available keys
     header_fields, rows = _read_packaged_llm_model_csv()
 
-    # Keep only direct Google Gemini (model startswith 'gemini/'), OpenAI GPT (gpt-*) and Anthropic (anthropic/*)
-    def _is_supported_model(row: Dict[str, str]) -> bool:
-        model = (row.get('model') or '').strip()
-        if model.startswith('gpt-'):
-            return True
-        if model.startswith('gemini/'):
-            return True
-        if model.startswith('anthropic/'):
-            return True
-        return False
-
-    # Filter rows by supported models and by api_key presence in valid_keys
+    # Filter rows to include only those with api_key present in valid_keys
     filtered_rows: List[Dict[str, str]] = []
     for row in rows:
-        if not _is_supported_model(row):
-            continue
         api_key_name = (row.get('api_key') or '').strip()
         # Include only if we have a validated key for this row
         if api_key_name and api_key_name in valid_keys:
