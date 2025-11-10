@@ -658,7 +658,49 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
   # Make sure example program exists and is runnable first
   run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
   log "Running example program before introducing error..."
-  python "$MATH_VERIFICATION_PROGRAM" >> "$LOG_FILE" 2>&1
+  # Run the example once and if it fails, immediately try to fix with 'crash'
+  set +e
+  python "$MATH_VERIFICATION_PROGRAM" > "$MATH_ERROR_LOG" 2>&1
+  initial_status=$?
+  set -e
+
+  if [ $initial_status -ne 0 ]; then
+      log "Initial example run failed; invoking 'crash' to fix it..."
+      run_pdd_command crash --output "$CRASH_FIXED_SCRIPT" \
+                            --output-program "$CRASH_FIXED_PROGRAM" \
+                            "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
+                            "$MATH_VERIFICATION_PROGRAM" "$MATH_ERROR_LOG"
+
+      # Adopt fixed files if they were created
+      if [ -s "$CRASH_FIXED_SCRIPT" ]; then
+          log "Adopting fixed script from initial 'crash' command."
+          cp "$CRASH_FIXED_SCRIPT" "$MATH_SCRIPT"
+      else
+          log "Initial 'crash' did not produce a fixed script (may not be needed)."
+      fi
+
+      if [ -s "$CRASH_FIXED_PROGRAM" ]; then
+          log "Adopting fixed program from initial 'crash' command."
+          cp "$CRASH_FIXED_PROGRAM" "$MATH_VERIFICATION_PROGRAM"
+      else
+          log "Initial 'crash' did not produce a fixed program (may not be needed)."
+      fi
+
+      # Verify the fix
+      log "Re-running example program after initial 'crash' fix"
+      python "$MATH_VERIFICATION_PROGRAM" >> "$LOG_FILE" 2>&1
+      rerun_status=$?
+      if [ $rerun_status -ne 0 ]; then
+          log_error "Program still failed after initial 'crash' fix."
+          exit 1
+      else
+          log "Program ran successfully after initial 'crash' fix."
+      fi
+  else
+      # On success, append the normal output to the main log and continue
+      cat "$MATH_ERROR_LOG" >> "$LOG_FILE" 2>/dev/null || true
+      log "Example program ran successfully before introducing error."
+  fi
   log "Introducing error into $MATH_VERIFICATION_PROGRAM"
   # Intentionally cause a TypeError
   echo "import $MATH_BASENAME" > "$MATH_VERIFICATION_PROGRAM" # Overwrite

@@ -646,11 +646,16 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     # Clean previous files AND metadata to test fresh generation
     rm -f "pdd/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
+    {
+    set +e
     if run_pdd_command_noexit sync --skip-tests --context regression_pdd "$SIMPLE_BASENAME"; then
         log "Validation success: sync --skip-tests"
     else
-        log_timestamped "[ERROR] Validation failed: sync --skip-tests"
+        status=$?
+        log_timestamped "[ERROR] Validation failed: sync --skip-tests (exit $status)"
     fi
+    set -e
+}
     # Check what was actually generated (sync may only generate code)
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
         log "Code file generated with --skip-tests"
@@ -674,11 +679,16 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     log "2c. Testing 'sync --skip-verify --skip-tests'"
     rm -f "pdd/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
+    {
+    set +e
     if run_pdd_command_noexit sync --skip-verify --skip-tests --context regression_pdd "$SIMPLE_BASENAME"; then
         log "Validation success: sync --skip-verify --skip-tests"
     else
-        log_timestamped "[ERROR] Validation failed: sync --skip-verify --skip-tests"
+        status=$?
+        log_timestamped "[ERROR] Validation failed: sync --skip-verify --skip-tests (exit $status)"
     fi
+    set -e
+}
     check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with both skip options"
     
     # Example file may or may not be generated
@@ -740,7 +750,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
     
     # Test multi-language sync with higher budget
     log "4a. Testing Python calculator sync"
-    run_pdd_command sync --local --budget 30.0 "$MULTI_LANG_BASENAME"
+    run_pdd_command --local sync --budget 30.0 "$MULTI_LANG_BASENAME"
     check_sync_files "$MULTI_LANG_BASENAME" "python"
     
     # Test JavaScript variant (if prompt exists)
@@ -748,7 +758,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
         log "4b. Testing JavaScript calculator sync"
         # Note: This would require JavaScript test runner setup in a real scenario
         # For now, just test that sync processes the JS prompt
-        run_pdd_command_noexit sync --local "$MULTI_LANG_BASENAME"
+        run_pdd_command_noexit --local sync "$MULTI_LANG_BASENAME"
         # JavaScript files should be created alongside Python files
         if [ -f "${MULTI_LANG_BASENAME}.js" ]; then
             log "JavaScript files generated successfully"
@@ -979,8 +989,34 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     
     # Test working directory context
     log "9c. Testing working directory context integration"
-    # Check that PDD respects the current working directory for file placement
-    run_pdd_command sync --skip-verify "$SIMPLE_BASENAME"
+    # Run sync locally with an explicit timeout so hung cloud calls don't stall CI
+    WORKDIR_CONTEXT_TIMEOUT="${WORKDIR_CONTEXT_TIMEOUT:-600}s"
+    WORKDIR_CONTEXT_CMD=(
+        "$PDD_SCRIPT"
+        --force
+        --output-cost "$REGRESSION_DIR/$COST_FILE"
+        --strength "$STRENGTH"
+        --temperature "$TEMPERATURE"
+        --local
+        sync
+        --skip-verify
+        --skip-tests
+        --budget 2.0
+        --max-attempts 1
+        "$SIMPLE_BASENAME"
+    )
+    WORKDIR_CONTEXT_CMD_STR="${WORKDIR_CONTEXT_CMD[*]}"
+    log_timestamped "----------------------------------------"
+    log_timestamped "Starting command with timeout ($WORKDIR_CONTEXT_TIMEOUT): $WORKDIR_CONTEXT_CMD_STR"
+    log "Running with timeout ($WORKDIR_CONTEXT_TIMEOUT): $WORKDIR_CONTEXT_CMD_STR"
+    if run_with_timeout "$WORKDIR_CONTEXT_TIMEOUT" "${WORKDIR_CONTEXT_CMD[@]}" < /dev/null >> "$LOG_FILE" 2>&1; then
+        log "Command completed successfully."
+        log_timestamped "Command: $WORKDIR_CONTEXT_CMD_STR - Completed successfully."
+    else
+        log_error "Working directory context sync timed out or failed"
+        log_timestamped "[ERROR] Validation failed: Working directory context sync timed out or failed"
+        exit 1
+    fi
     if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
         log "Working directory context integration successful"
         log_timestamped "Validation success: Working directory context working"
