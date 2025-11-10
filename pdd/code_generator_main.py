@@ -35,6 +35,17 @@ CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
+# --- Helper Functions ---
+def _parse_llm_bool(value: str) -> bool:
+    """Parse LLM boolean value from string."""
+    if not value:
+        return True
+    llm_str = str(value).strip().lower()
+    if llm_str in {"0", "false", "no", "off"}:
+        return False
+    else:
+        return llm_str in {"1", "true", "yes", "on"}
+
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
     """Runs a git command and returns (return_code, stdout, stderr)."""
@@ -202,19 +213,48 @@ def code_generator_main(
     command_options: Dict[str, Any] = {"output": output}
 
     try:
+        # Read prompt content once to determine LLM state and for construct_paths
+        with open(prompt_file, 'r', encoding='utf-8') as f:
+            raw_prompt_content = f.read()
+        
+        # Phase-2 templates: parse front matter metadata
+        fm_meta, body = _parse_front_matter(raw_prompt_content)
+        if fm_meta:
+            prompt_content = body
+        else:
+            prompt_content = raw_prompt_content
+        
+        # Determine LLM state early to avoid unnecessary overwrite prompts
+        llm_enabled: bool = True
+        env_llm_raw = None
+        try:
+            if env_vars and 'llm' in env_vars:
+                env_llm_raw = str(env_vars.get('llm'))
+            elif os.environ.get('llm') is not None:
+                env_llm_raw = os.environ.get('llm')
+            elif os.environ.get('LLM') is not None:
+                env_llm_raw = os.environ.get('LLM')
+        except Exception:
+            env_llm_raw = None
+
+        # Environment variables should override front matter
+        if env_llm_raw is not None:
+            llm_enabled = _parse_llm_bool(env_llm_raw)
+        elif fm_meta and isinstance(fm_meta, dict) and 'llm' in fm_meta:
+            llm_enabled = bool(fm_meta.get('llm', True))
+        # else: keep default True
+        
+        # If LLM is disabled, we're only doing post-processing, so skip overwrite confirmation
+        effective_force = force_overwrite or not llm_enabled
+        
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths=input_file_paths_dict,
-            force=force_overwrite,
+            force=effective_force,
             quiet=quiet,
             command="generate",
             command_options=command_options,
             context_override=ctx.obj.get('context')
         )
-        prompt_content = input_strings["prompt_file"]
-        # Phase-2 templates: parse front matter metadata
-        fm_meta, body = _parse_front_matter(prompt_content)
-        if fm_meta:
-            prompt_content = body
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")
         if output is None:
@@ -466,47 +506,12 @@ def code_generator_main(
         can_attempt_incremental = False
 
     try:
-        # Determine template-driven switches
-        llm_enabled: bool = True
+        # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         post_process_script: Optional[str] = None
         prompt_body_for_script: str = prompt_content
-        # Allow environment override for LLM toggle when front matter omits it
-        env_llm_raw = None
-        try:
-            if env_vars and 'llm' in env_vars:
-                env_llm_raw = str(env_vars.get('llm'))
-            elif os.environ.get('llm') is not None:
-                env_llm_raw = os.environ.get('llm')
-            elif os.environ.get('LLM') is not None:
-                env_llm_raw = os.environ.get('LLM')
-        except Exception:
-            env_llm_raw = None
-        if fm_meta and isinstance(fm_meta, dict):
-            try:
-                if 'llm' in fm_meta:
-                    llm_enabled = bool(fm_meta.get('llm', True))
-                elif env_llm_raw is not None:
-                    llm_str = str(env_llm_raw).strip().lower()
-                    if llm_str in {"0", "false", "no", "off"}:
-                        llm_enabled = False
-                    else:
-                        llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
-        elif env_llm_raw is not None:
-            try:
-                llm_str = str(env_llm_raw).strip().lower()
-                if llm_str in {"0", "false", "no", "off"}:
-                    llm_enabled = False
-                else:
-                    llm_enabled = llm_str in {"1", "true", "yes", "on"}
-            except Exception:
-                llm_enabled = True
         
         if verbose:
             console.print(f"[blue]LLM enabled:[/blue] {llm_enabled}")
-        
-        # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         try:
             post_process_script = None
             script_override = None
@@ -792,9 +797,15 @@ def code_generator_main(
                         else:
                             # Write payload to a temp file for scripts expecting a file path input
                             suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
-                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
-                                tf.write(stdin_payload or '')
-                                temp_input_path = tf.name
+                            if output_path and llm_enabled:
+                                temp_input_path = str(pathlib.Path(output_path).resolve())
+                                pathlib.Path(temp_input_path).parent.mkdir(parents=True, exist_ok=True)
+                                with open(temp_input_path, 'w', encoding='utf-8') as f:
+                                    f.write(stdin_payload or '')
+                            else:
+                                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
+                                    tf.write(stdin_payload or '')
+                                    temp_input_path = tf.name
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         # Compute placeholder values
                         app_name_val = (env_vars or {}).get('APP_NAME') if env_vars else None
@@ -858,8 +869,6 @@ def code_generator_main(
                     console.print(f"[yellow]Post-process failed (rc={rc}). Stderr:\n{err[:500]}[/yellow]")
             except FileNotFoundError:
                 console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
-            except FileNotFoundError:
-                console.print(f"[yellow]Post-process script not found: {post_process_script}. Skipping.[/yellow]")
             except subprocess.TimeoutExpired:
                 console.print("[yellow]Post-process script timed out. Skipping.[/yellow]")
             except Exception as e:
@@ -872,7 +881,7 @@ def code_generator_main(
                         is_json_output = False
                         if isinstance(language, str) and str(language).lower().strip() == "json":
                             is_json_output = True
-                        elif output_path and str(output_path).endswith(".json"):
+                        elif output_path and str(output_path).lower().endswith(".json"):
                             is_json_output = True
                         if is_json_output:
                             parsed = json.loads(generated_code_content)
@@ -909,8 +918,9 @@ def code_generator_main(
                     if script_path2 and pathlib.Path(script_path2).exists():
                         app_name2 = os.environ.get('APP_NAME') or (env_vars or {}).get('APP_NAME') or 'System Architecture'
                         out_html2 = os.environ.get('POST_PROCESS_OUTPUT') or str(p_output.with_name(f"{p_output.stem}_diagram.html").resolve())
-                        # Only run if HTML not present yet
-                        if not pathlib.Path(out_html2).exists():
+                        html_missing = not pathlib.Path(out_html2).exists()
+                        always_run_for_arch = pathlib.Path(str(p_output)).name == 'architecture.json'
+                        if always_run_for_arch or html_missing:
                             try:
                                 py_exec2 = detect_host_python_executable()
                             except Exception:
