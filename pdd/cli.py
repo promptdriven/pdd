@@ -791,9 +791,11 @@ def example(
 )
 @click.option(
     "--existing-tests",
+    "existing_tests",
+    multiple=True,
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="Path to the existing unit test file.",
+    help="Path to the existing unit test file(s).",
 )
 @click.option(
     "--target-coverage",
@@ -816,7 +818,7 @@ def test(
     output: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
-    existing_tests: Optional[str],
+    existing_tests: Optional[Tuple[str, ...]],
     target_coverage: Optional[float],
     merge: bool,
 ) -> Optional[Tuple[str, float, str]]:
@@ -829,7 +831,7 @@ def test(
             output=output,
             language=language,
             coverage_report=coverage_report,
-            existing_tests=existing_tests,
+            existing_tests=list(existing_tests) if existing_tests else None,
             target_coverage=target_coverage,
             merge=merge,
         )
@@ -912,7 +914,7 @@ def preprocess(
 @cli.command("fix")
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("unit_test_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("unit_test_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
 @click.argument("error_file", type=click.Path(dir_okay=False))  # Allow non-existent for loop mode
 @click.option(
     "--output-test",
@@ -970,7 +972,7 @@ def fix(
     ctx: click.Context,
     prompt_file: str,
     code_file: str,
-    unit_test_file: str,
+    unit_test_files: Tuple[str, ...],
     error_file: str,
     output_test: Optional[str],
     output_code: Optional[str],
@@ -983,29 +985,37 @@ def fix(
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Fix code based on a prompt and unit test errors."""
     try:
-        # The actual logic is in fix_main
-        success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_main(
-            ctx=ctx,
-            prompt_file=prompt_file,
-            code_file=code_file,
-            unit_test_file=unit_test_file,
-            error_file=error_file,
-            output_test=output_test,
-            output_code=output_code,
-            output_results=output_results,
-            loop=loop,
-            verification_program=verification_program,
-            max_attempts=max_attempts,
-            budget=budget,
-            auto_submit=auto_submit,
-        )
-        result = {
-            "success": success,
-            "fixed_unit_test": fixed_unit_test,
-            "fixed_code": fixed_code,
-            "attempts": attempts,
-        }
-        return result, total_cost, model_name
+        all_results = []
+        total_cost = 0.0
+        model_name = ""
+
+        for unit_test_file in unit_test_files:
+            success, fixed_unit_test, fixed_code, attempts, cost, model = fix_main(
+                ctx=ctx,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                unit_test_file=unit_test_file,
+                error_file=error_file,
+                output_test=output_test,
+                output_code=output_code,
+                output_results=output_results,
+                loop=loop,
+                verification_program=verification_program,
+                max_attempts=max_attempts,
+                budget=budget,
+                auto_submit=auto_submit,
+            )
+            all_results.append({
+                "success": success,
+                "fixed_unit_test": fixed_unit_test,
+                "fixed_code": fixed_code,
+                "attempts": attempts,
+            })
+            total_cost += cost
+            model_name = model
+        
+        return {"results": all_results}, total_cost, model_name
+
     except Exception as exception:
         handle_error(exception, "fix", ctx.obj.get("quiet", False))
         return None

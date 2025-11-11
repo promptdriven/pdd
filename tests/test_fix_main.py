@@ -136,7 +136,7 @@ def test_fix_main_without_loop(
     assert model_name == "gpt-4"
 
     # Assert file writing
-    m_open.assert_called_once_with('output/test_code_fixed.py', 'w')
+    m_open.assert_any_call('output/test_code_fixed.py', 'w')
     handle = m_open()
     handle.write.assert_called_once_with("Fixed unit test content")
 

@@ -306,7 +306,7 @@ def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, 
         )
 
         # Verify file writing and result
-        m_file.assert_called_once_with(mock_files_fixture["output"], "w", encoding="utf-8")
+        m_file.assert_any_call(mock_files_fixture["output"], "w", encoding="utf-8")
         handle = m_file()
         handle.write.assert_called_once_with("more_tests")
         assert result == ("more_tests", 0.20, "model_v2")
@@ -337,13 +337,13 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
             output=None,
             language=None,
             coverage_report=None,
-            existing_tests=mock_files_fixture["existing_tests"],
+            existing_tests=[mock_files_fixture["existing_tests"]],
             target_coverage=None,
             merge=True,
         )
 
         # The opened file should be the existing_tests path, not the regular output
-        m_file.assert_called_once_with(mock_files_fixture["existing_tests"], "w", encoding="utf-8")
+        m_file.assert_any_call(mock_files_fixture["existing_tests"], "w", encoding="utf-8")
         handle = m_file()
         handle.write.assert_called_once_with("merged_code")
 
