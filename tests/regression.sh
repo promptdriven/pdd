@@ -253,6 +253,10 @@ run_pdd_command_base() {
             global_ctx_args+=("--list-contexts")
             i=$((i+1))
             continue
+        elif [ "$a" = "--local" ]; then
+            global_ctx_args+=("--local")
+            i=$((i+1))
+            continue
         else
             sub_args+=("$a")
             i=$((i+1))
