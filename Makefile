@@ -62,7 +62,7 @@ PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
 PUBLIC_PDD_CAP_REPO_DIR ?= staging/public/pdd_cap
 PUBLIC_PDD_CAP_REMOTE ?= https://github.com/promptdriven/pdd_cap.git
 # Top-level files to publish if present
-PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example README.md .gitignore SETUP_WITH_GEMINI.md Makefile
+PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example README.md .gitignore SETUP_WITH_GEMINI.md Makefile pdd-local.sh
 # Include core unit tests by default
 PUBLIC_COPY_TESTS ?= 1
 PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py
