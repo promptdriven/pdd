@@ -1,37 +1,60 @@
+#!/usr/bin/env python3
 """
-This script provides a clear example of how to define and use a simple function.
-It combines the definition of a `hello` function and a script to run it
-into a single, self-contained, and runnable file.
+This script provides a complete, runnable example of how to use the 'hello'
+function from the 'hello' module.
+
+To make the 'hello' module importable, this script dynamically adds the 'src'
+directory (which contains 'hello.py') to the system's path. This is a common
+pattern when an example script is in a separate directory from the source code.
 """
 
-def hello() -> None:
+import os
+import sys
+
+def main():
     """
-    Prints the string "hello" to the standard output.
+    Demonstrates the usage of the hello() function.
 
-    This function takes no arguments and has no return value (implicitly returns None).
-    Its sole side effect is printing the literal string "hello" to the console,
-    followed by a newline character.
+    This main function imports the `hello` function from the sibling `src`
+    directory and calls it to print a greeting to the console.
     """
-    print("hello")
+    # --- Path Setup ---
+    # This section is necessary to ensure the script can find the 'hello' module.
+    # It adds the 'src' directory, which is a sibling to the 'examples'
+    # directory, to the Python path.
 
+    # Get the absolute path to the directory containing this script (examples/).
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # Get the path to the parent directory (project root).
+    project_root = os.path.dirname(current_dir)
+    # Construct the path to the 'src' directory.
+    src_path = os.path.join(project_root, "src")
+    # Add the 'src' directory to the system path.
+    sys.path.insert(0, src_path)
 
-def run_example() -> None:
-    """
-    Demonstrates the proper usage of the `hello` function.
+    # --- Module Import ---
+    # Now that the 'src' directory is in the path, we can import the 'hello'
+    # function from the 'hello.py' module.
+    try:
+        from hello import hello
+    except ImportError:
+        print(f"Error: Could not import the 'hello' module.")
+        print(f"Please ensure 'hello.py' exists in the '{src_path}' directory.")
+        sys.exit(1)
 
-    This function serves as a wrapper for the example call, making the script's
-    purpose clear.
-    """
-    print("Calling the `hello` function...")
+    # --- Function Usage ---
+    print("Calling the imported 'hello()' function...")
 
-    # Call the function. It takes no arguments and its only action
-    # is to print "hello" to the console.
+    # Call the function. It will print "hello" to the console.
+    # The hello() function is defined as:
+    # def hello():
+    #   """
+    #   This function takes no arguments and prints the string "hello" to the console.
+    #   """
+    #   print("hello")
     hello()
 
-    print("...function call complete.")
+    print("\nExample finished.")
 
-
-# The `if __name__ == "__main__"` block is standard Python practice.
-# It ensures the code inside only runs when the script is executed directly.
 if __name__ == "__main__":
-    run_example()
+    main()

@@ -39,6 +39,17 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         prompt_content = input_strings["prompt_file"]
         code_content = input_strings["code_file"]
 
+        # Get resolved output path for file path information
+        resolved_output = output_file_paths["output"]
+        
+        # Determine file path information for correct imports
+        from pathlib import Path
+        source_file_path = str(Path(code_file).resolve())
+        example_file_path = str(Path(resolved_output).resolve()) if resolved_output else ""
+        
+        # Extract module name from the code file
+        module_name = Path(code_file).stem
+
         # Generate example code
         strength = ctx.obj.get('strength', 0.5)
         temperature = ctx.obj.get('temperature', 0)
@@ -50,11 +61,13 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             strength=strength,
             temperature=temperature,
             time=time,
-            verbose=ctx.obj.get('verbose', False)
+            verbose=ctx.obj.get('verbose', False),
+            source_file_path=source_file_path,
+            example_file_path=example_file_path,
+            module_name=module_name
         )
 
         # Save results - if output is a directory, use resolved file path from construct_paths
-        resolved_output = output_file_paths["output"]
         if output is None:
             final_output_path = resolved_output
         else:
