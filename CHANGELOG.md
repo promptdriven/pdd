@@ -1,3 +1,32 @@
+## v0.0.66 (2025-11-07)
+
+### Architecture & Code Generation
+
+- Architecture JSON emission and Mermaid rendering now produce deterministic formatting, `.pddrc` defaults stay in sync with those paths, and the regression suite (`tests/test_code_generator_main.py`, `tests/test_render_mermaid.py`) locks the behavior down so downstream tools always find the generated assets.
+- The LLM toggle plus force flag flows through `code_generator_main.py`, prompt templates, and the Mermaid renderer, letting templates skip or re-run expensive post-processing per invocation; the CLI now pre-parses front matter, writes JSON outputs before post-process scripts run, and always regenerates architecture diagrams when `architecture.json` changes.
+
+### Templates & Examples
+
+- Prompt assets and their drivers now ship module-aware metadata (source/test paths, module names) so generated examples/tests import the right files; they also showcase the new `context/python_env_detector_example.py`, adopt the `--template` flag in docs, and drop the obsolete `mermaid_diagram.prompt`.
+- `.pddrc` now declares explicit `src/` and `tests/` output paths for example contexts, and `generate_output_paths.py` bootstraps an `examples/` directory automatically so newly generated artifacts never depend on `context/example.prompt` or `context/test.prompt`.
+- The hello sample workspace was rebuilt around `examples/hello/src/hello.py` with refreshed metadata, updated `pdd/generate_test.py`, and rewritten prompts/tests so the example mirrors the current CLI workflow.
+
+### Docs & Quality
+
+- Issue #88’s test-generation failures were fixed by tightening `construct_paths`, cleaning prompt instructions, passing resolved file paths into the LLM, and enforcing absolute output paths during code-generation—covered by new tests in `tests/test_construct_paths.py`, `tests/test_generate_test.py`, and `tests/test_generate_output_paths.py`.
+- Onboarding and troubleshooting docs now cover `~/.pdd/llm_model.csv` quota issues and explain the LLM toggle workflow, with the README/model docs updated to match.
+
+## v0.0.65 (2025-10-24)
+
+### Architecture Visualization
+
+- Shipped `pdd/render_mermaid.py`, a turnkey helper plus `examples/tictactoe` assets for turning architecture JSON specs into Mermaid diagrams and interactive HTML, backed by regression coverage in `tests/test_render_mermaid.py`.
+- Wired the architecture JSON generator's post-process hook so `pdd/code_generator_main.py` can toggle Mermaid rendering after each run, letting templates emit diagrams automatically.
+
+### Data & Models
+
+- Documented the Snowflake-hosted `openai/claude-sonnet-4-5` endpoint in `data/llm_model.csv`, including credentials, context limits, and billing metadata.
+
 ## v0.0.64 (2025-10-12)
 
 ### Data & Formats
@@ -68,7 +97,6 @@ Thanks Sai Vathsavayi for altering me that this was missing!
 - VS Code extension quickstart: add installation guidance for VSCodium, Kiro, Windsurf, and other OpenVSX‑compatible IDEs.
 
 Thanks Shrenya Mathur for your contributions on OpenVSX compatibility!
-
 
 ## v0.0.60 (2025-09-23)
 

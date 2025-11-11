@@ -1,5 +1,6 @@
 import pytest
 import sys
+import os
 from unittest.mock import patch, MagicMock, mock_open
 import click
 from click.testing import CliRunner
@@ -109,7 +110,7 @@ def test_update_main_with_input_code_and_no_git(
         modified_code_file=minimal_input_files["modified_code_file"],
         input_code_file=minimal_input_files["input_code_file"],
         output=output,
-        git=git
+        use_git=git
     )
 
     # Assert
@@ -167,7 +168,7 @@ def test_update_main_with_git_no_input_code(
         modified_code_file="modified_code.py",
         input_code_file=None,  # Not provided
         output=output,
-        git=git
+        use_git=git
     )
 
     # Assert
@@ -206,7 +207,7 @@ def test_update_main_with_both_git_and_input_code_raises_valueerror(
             modified_code_file=minimal_input_files["modified_code_file"],
             input_code_file=minimal_input_files["input_code_file"],  # This triggers the error
             output=None,
-            git=git
+            use_git=git
         )
 
     # Assert
@@ -214,32 +215,56 @@ def test_update_main_with_both_git_and_input_code_raises_valueerror(
     assert e.type == SystemExit
     assert e.value.code == 1  # usage error
 
-def test_update_main_no_git_no_input_code_raises_valueerror(
+@patch('pdd.update_main.resolve_prompt_code_pair')
+def test_update_main_regeneration_mode(
+    mock_resolve_pair,
     mock_ctx,
-    mock_construct_paths,
     mock_update_prompt,
-    mock_git_update
+    mock_git_update,
+    mock_construct_paths,
+    mock_open_file,
+    monkeypatch
 ):
     """
-    Test that not specifying --git and leaving input_code_file=None raises ValueError.
+    Test that providing only a modified_code_file correctly triggers
+    the regeneration workflow.
     """
     # Arrange
-    mock_ctx.params["quiet"] = True
-    git = False
-
-    with pytest.raises(SystemExit) as exit_info:
-        update_main(
-            ctx=mock_ctx,
-            input_prompt_file="some_prompt_file.prompt",
-            modified_code_file="modified_code.py",
-            input_code_file=None,
-            output=None,
-            git=git
-        )
+    mock_ctx.obj["quiet"] = False
+    mock_resolve_pair.return_value = ("modified_code_python.prompt", "modified_code.py")
+    
+    # Act
+    result = update_main(
+        ctx=mock_ctx,
+        input_prompt_file=None,
+        modified_code_file="modified_code.py",
+        input_code_file=None,
+        output=None,
+        use_git=False
+    )
 
     # Assert
-    assert exit_info.type == SystemExit
-    assert exit_info.value.code == 1
+    # 1. It should resolve the pair to find/create the prompt file
+    mock_resolve_pair.assert_called_once_with("modified_code.py", False)
+
+    # 2. It should NOT call the complex pathing logic
+    mock_construct_paths.assert_not_called()
+
+    # 3. It should call update_prompt directly in "generation" mode
+    mock_update_prompt.assert_called_once()
+    # We can check the args if needed, but the call itself is the main thing
+    args, kwargs = mock_update_prompt.call_args
+    assert kwargs['input_prompt'] == "no prompt exists yet, create a new one"
+    assert kwargs['input_code'] == ""
+
+    # 4. It should not call git_update
+    mock_git_update.assert_not_called()
+
+    # 5. It should write to the derived prompt file
+    mock_open_file.assert_any_call("modified_code_python.prompt", "w")
+
+    # 6. The result should be correct
+    assert result == ("updated prompt text", 0.123456, "test-model")
 
 def test_update_main_handles_unexpected_exception_gracefully(
     mock_ctx,
@@ -262,7 +287,7 @@ def test_update_main_handles_unexpected_exception_gracefully(
             modified_code_file=minimal_input_files["modified_code_file"],
             input_code_file=minimal_input_files["input_code_file"],
             output=None,
-            git=False
+            use_git=False
         )
 
     assert exit_info.type == SystemExit
@@ -270,3 +295,115 @@ def test_update_main_handles_unexpected_exception_gracefully(
 
     # The open should never be called because we failed early
     mock_open_file.assert_not_called()
+
+# --- Tests for --repo functionality ---
+
+import os
+from pathlib import Path
+import git
+from pdd.update_main import find_and_resolve_all_pairs
+
+@pytest.fixture
+def mock_get_language_for_repo(monkeypatch):
+    """Mocks get_language to return predictable results for repo tests."""
+    def mock_func(file_path):
+        if str(file_path).endswith(".py"):
+            return "python"
+        if str(file_path).endswith(".js"):
+            return "javascript"
+        return None
+    monkeypatch.setattr('pdd.update_main.get_language', mock_func)
+
+@pytest.fixture
+def temp_git_repo(tmp_path, mock_get_language_for_repo):
+    """Creates a temporary Git repository with a file structure for testing."""
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+    repo = git.Repo.init(repo_path)
+    
+    (repo_path / "src").mkdir()
+    (repo_path / "src" / "module1.py").write_text("def func1(): pass")
+    (repo_path / "src" / "module2.js").write_text("function func2() {}")
+    (repo_path / "src" / "existing_module.py").write_text("def existing(): pass")
+    (repo_path / "src" / "existing_module_python.prompt").write_text("Existing prompt.")
+    
+    # Add all files to be tracked by git
+    repo.index.add([
+        str(repo_path / "src" / "module1.py"),
+        str(repo_path / "src" / "module2.js"),
+        str(repo_path / "src" / "existing_module.py"),
+        str(repo_path / "src" / "existing_module_python.prompt")
+    ])
+    repo.index.commit("Initial commit")
+    
+    # Change directory into the repo for the test
+    original_cwd = os.getcwd()
+    os.chdir(repo_path)
+    yield repo_path
+    os.chdir(original_cwd)
+
+def test_create_and_find_prompt_code_pairs(temp_git_repo):
+    """
+    Test that the helper function correctly finds code files and creates missing prompts.
+    """
+    repo_path_str = str(temp_git_repo)
+    
+    # Prompts for module1 and module2 should not exist yet
+    module1_prompt_path = temp_git_repo / "src" / "module1_python.prompt"
+    module2_prompt_path = temp_git_repo / "src" / "module2_javascript.prompt"
+    assert not module1_prompt_path.exists()
+    assert not module2_prompt_path.exists()
+
+    # Run the function
+    pairs = find_and_resolve_all_pairs(repo_path_str)
+
+    # Assert that missing prompts were created
+    assert module1_prompt_path.exists()
+    assert module1_prompt_path.read_text() == ""
+    assert module2_prompt_path.exists()
+    assert module2_prompt_path.read_text() == ""
+
+    # Assert that the returned pairs are correct
+    expected_pairs = [
+        (str(temp_git_repo / "src" / "existing_module_python.prompt"), str(temp_git_repo / "src" / "existing_module.py")),
+        (str(module1_prompt_path), str(temp_git_repo / "src" / "module1.py")),
+        (str(module2_prompt_path), str(temp_git_repo / "src" / "module2.js")),
+    ]
+    assert len(pairs) == len(expected_pairs)
+    assert sorted(p[1] for p in pairs) == sorted(ep[1] for ep in expected_pairs)
+
+@patch('pdd.update_main.update_file_pair')
+def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_repo, capsys):
+    """
+    Test the main orchestration logic of update_main in --repo mode.
+    """
+    # Use a side_effect to return dynamic values based on input
+    def mock_update_logic(prompt_file, code_file, ctx, repo):
+        return {
+            "prompt_file": prompt_file,
+            "status": "✅ Success",
+            "cost": 0.01,
+            "model": "mock_model",
+            "error": ""
+        }
+    mock_update_file_pair.side_effect = mock_update_logic
+
+    ctx = click.Context(click.Command('update'))
+    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+    # Run update_main in repo mode
+    result = update_main(ctx=ctx, input_prompt_file=None, modified_code_file=None, input_code_file=None, output=None, use_git=False, repo=True)
+
+    # Assert that the update function was called for each pair
+    assert mock_update_file_pair.call_count == 3
+
+    # Check the console output for the summary table
+    captured = capsys.readouterr()
+    assert "Repository Update Summary" in captured.out
+    assert "src/module1_python.prompt" in captured.out
+    assert "src/module2_javascript.prompt" in captured.out
+    assert "src/existing_module_python.prompt" in captured.out
+    assert "Total Estimated Cost" in captured.out
+    
+    assert result is not None
+    assert result[0] == "Repository update complete."

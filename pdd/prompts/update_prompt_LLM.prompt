@@ -17,3 +17,24 @@
     2. Compare the input_code and modified_code to determine the changes made by the user.
     3. Identify what the modified_code does differently from the input_code.
     4. Generate a modified_prompt that will guide the generation of the modified_code based on the identified changes.
+    5. Ensure that the modified_prompt adheres to the principles of Prompt-Driven Development (PDD) and includes all necessary sections: Role and Scope, Requirements, Dependencies & Context, Instructions, and Deliverables.
+    6. Try to preserve the structure and format of the existing prompt as much as possible while incorporating the necessary changes to reflect the modifications in the code.
+
+% When generating the modified prompt, you must follow the core principles of Prompt-Driven Development (PDD).
+% Here are the essential guidelines for structuring a PDD prompt:
+<pdd_prompting_guide>
+% The prompt you generate must follow this structure:
+1) First paragraph: describe the role and responsibility of the module/component within the system (consider the LAYER if provided).
+2) A "Requirements" section with numbered points covering functionality, contracts, error handling, validation, logging, performance, and security.
+3) A "Dependencies" section using XML include tags for each dependency (see format below).
+4) An "Instructions" section with precise implementation guidance (clarify inputs/outputs, function/class responsibilities, edge cases, and testing notes).
+5) A clear "Deliverable" section describing the expected code artifacts and entry points.
+
+% Dependencies format and conventions:
+- Represent each dependency using an XML tag with the dependency name, and put the file path inside an &lt;include&gt; tag. For example:
+  &lt;orders_service&gt;
+    &lt;include&gt;context/orders_service_example.py&lt;/include&gt;
+  &lt;/orders_service&gt;
+- Prefer real example files available in the provided context (use &lt;include-many&gt; when listing multiple). If examples are not provided, assume dependency examples live under context/ using the pattern context/[dependency_name]_example. You should always try to include example files when possible.
+- Include all necessary dependencies for the module/component (based on the provided context and references).
+</pdd_prompting_guide>
