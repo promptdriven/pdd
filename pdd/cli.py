@@ -51,6 +51,7 @@ from .trace_main import trace_main
 from .track_cost import track_cost
 from .update_main import update_main
 from . import template_registry
+from . import help_content
 
 
 # --- Initialize Rich Console ---
@@ -642,7 +643,7 @@ class GenerateCommand(click.Command):
 
 # --- Command Definitions ---
 
-@cli.command("generate", cls=GenerateCommand)
+@cli.command("generate", cls=GenerateCommand, help=help_content.GENERATE_HELP)
 @click.argument("prompt_file", required=False, type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",
@@ -737,7 +738,7 @@ def generate(
         return None
 
 
-@cli.command("example")
+@cli.command("example", help=help_content.EXAMPLE_HELP)
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
 @click.option(
@@ -768,7 +769,7 @@ def example(
         return None
 
 
-@cli.command("test")
+@cli.command("test", help=help_content.TEST_HELP)
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
 @click.option(
@@ -839,7 +840,7 @@ def test(
         return None
 
 
-@cli.command("preprocess")
+@cli.command("preprocess", help=help_content.PREPROCESS_HELP)
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",
@@ -909,7 +910,7 @@ def preprocess(
         return None
 
 
-@cli.command("fix")
+@cli.command("fix", help=help_content.FIX_HELP)
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("unit_test_file", type=click.Path(exists=True, dir_okay=False))
@@ -1011,7 +1012,7 @@ def fix(
         return None
 
 
-@cli.command("split")
+@cli.command("split", help=help_content.SPLIT_HELP)
 @click.argument("input_prompt", type=click.Path(exists=True, dir_okay=False))
 @click.argument("input_code", type=click.Path(exists=True, dir_okay=False))
 @click.argument("example_code", type=click.Path(exists=True, dir_okay=False))
@@ -1055,7 +1056,7 @@ def split(
         return None # Return None on failure
 
 
-@cli.command("change")
+@cli.command("change", help=help_content.CHANGE_HELP)
 @click.argument("change_prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("input_code", type=click.Path(exists=True)) # Can be file or dir
 @click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False), required=False)
@@ -1125,7 +1126,7 @@ def change(
         return None # Return None on failure
 
 
-@cli.command("update")
+@cli.command("update", help=help_content.UPDATE_HELP)
 @click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("modified_code_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("input_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
@@ -1243,7 +1244,7 @@ def conflicts(
         return None # Return None on failure
 
 
-@cli.command("crash")
+@cli.command("crash", help=help_content.CRASH_HELP)
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("program_file", type=click.Path(exists=True, dir_okay=False))
@@ -1405,7 +1406,7 @@ def bug(
         return None # Return None on failure
 
 
-@cli.command("auto-deps")
+@cli.command("auto-deps", help=help_content.AUTO_DEPS_HELP)
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("directory_path", type=str) # Path with potential glob pattern
 @click.option(
@@ -1465,7 +1466,7 @@ def auto_deps(
         return None # Return None on failure
 
 
-@cli.command("verify")
+@cli.command("verify", help=help_content.VERIFY_HELP)
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("program_file", type=click.Path(exists=True, dir_okay=False))
@@ -1544,7 +1545,7 @@ def verify(
         return None # Return None on failure
 
 
-@cli.command("sync")
+@cli.command("sync", help=help_content.SYNC_HELP)
 @click.argument("basename", type=str)
 @click.option(
     "--max-attempts",
