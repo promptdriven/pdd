@@ -26,9 +26,9 @@ EXPECTED_RELATIVE_PATH = os.path.basename(MODIFIED_CODE_FILE)
 def mock_repo():
     with patch('pdd.git_update.git.Repo') as mock_repo_class:
         mock_repo_instance = MagicMock()
-        # Mock rev_parse to return the directory of MODIFIED_CODE_FILE as repo_root
+        # Mock the working_tree_dir to return the directory of MODIFIED_CODE_FILE
         # This makes os.path.relpath(MODIFIED_CODE_FILE, repo_root) yield the basename.
-        mock_repo_instance.git.rev_parse.return_value = os.path.dirname(MODIFIED_CODE_FILE)
+        mock_repo_instance.working_tree_dir = os.path.dirname(MODIFIED_CODE_FILE)
         mock_repo_class.return_value = mock_repo_instance
         yield mock_repo_instance
 
