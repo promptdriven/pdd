@@ -152,6 +152,14 @@ def main(argv: list[str] | None = None) -> int:
         default=os.getcwd(),
         help="Project root containing pyproject.toml (default: cwd)",
     )
+    # Optional: add extra package-data copy patterns (relative to 'pdd/')
+    parser.add_argument(
+        "--extra-pattern",
+        action="append",
+        default=[],
+        help="Additional glob patterns under 'pdd/' to copy (can be repeated). Example: 'prompts/**/*.prompt'",
+    )
+
     # Optional: copy tests
     parser.add_argument("--copy-tests", action="store_true", help="Copy core tests to public repo")
     parser.add_argument(
@@ -189,6 +197,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Copy package data
     patterns = load_package_data_patterns(pyproject_path)
+    # Allow callers to include extra patterns (e.g., all prompts for CAP repo)
+    if args.extra_pattern:
+        patterns = list(patterns) + list(args.extra_pattern)
     if patterns:
         os.makedirs(os.path.join(args.dest, "pdd"), exist_ok=True)
         copied_data = copy_patterns_to_public(patterns, args.dest)

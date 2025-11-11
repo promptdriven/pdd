@@ -49,6 +49,7 @@ help:
 	@echo "  make build                   - Build pdd package"
 	@echo "  make publish                 - Build & upload current version"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
+	@echo "  make publish-public-cap      - Copy artifacts to CAP public repo only"
 	@echo "  make release                 - Bump version and build package"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
@@ -57,6 +58,9 @@ help:
 # Public repo paths (override via env if needed)
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
 PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
+# CAP public repo (optional second destination)
+PUBLIC_PDD_CAP_REPO_DIR ?= staging/public/pdd_cap
+PUBLIC_PDD_CAP_REMOTE ?= https://github.com/promptdriven/pdd_cap.git
 # Top-level files to publish if present
 PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example README.md .gitignore SETUP_WITH_GEMINI.md Makefile
 # Include core unit tests by default
@@ -90,7 +94,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory
 EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -512,7 +516,7 @@ build:
 publish:
 	@echo "Building and uploading package"
 	@$(MAKE) build
-	@$(MAKE) publish-public
+	@$(MAKE) publish-public publish-public-cap
 
 release:
 	@echo "Preparing release"
@@ -658,7 +662,107 @@ public-ensure:
 		fi; \
 	else \
 		echo "Public repo clone already present: $(PUBLIC_PDD_REPO_DIR)"; \
+		fi
+
+# Publish to CAP public repo (copies all prompts, including non _LLM.prompt)
+.PHONY: publish-public-cap
+publish-public-cap:
+	@# Ensure target directory is a Git repo (clone if empty and not a repo)
+	@if [ ! -d "$(PUBLIC_PDD_CAP_REPO_DIR)/.git" ]; then \
+		if [ ! -d "$(PUBLIC_PDD_CAP_REPO_DIR)" ] || [ -z "$$(/bin/ls -A "$(PUBLIC_PDD_CAP_REPO_DIR)" 2>/dev/null)" ]; then \
+			echo "Cloning public CAP repo $(PUBLIC_PDD_CAP_REMOTE) into $(PUBLIC_PDD_CAP_REPO_DIR)"; \
+			mkdir -p "$(dir $(PUBLIC_PDD_CAP_REPO_DIR))"; \
+			git clone "$(PUBLIC_PDD_CAP_REMOTE)" "$(PUBLIC_PDD_CAP_REPO_DIR)"; \
+		else \
+			echo "Warning: $(PUBLIC_PDD_CAP_REPO_DIR) exists and is not a Git repo."; \
+			echo "Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE) or remove the directory and re-run."; \
+		fi; \
 	fi
+	@echo "Ensuring CAP public repo directory exists: $(PUBLIC_PDD_CAP_REPO_DIR)"
+	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)
+	@echo "Copying examples to CAP public repo"
+	@cp -r ./examples $(PUBLIC_PDD_CAP_REPO_DIR)/
+	@echo "Copying doctrine doc to CAP public repo"
+	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs
+	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
+	@echo "Copying demo video to CAP public repo"
+	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs/videos
+	@cp docs/videos/handpaint_demo.gif $(PUBLIC_PDD_CAP_REPO_DIR)/docs/videos/
+	@echo "Copying specific whitepaper files to CAP public repo"
+	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report
+	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report
+	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" $(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/
+	@cp \
+		docs/whitepaper_with_benchmarks/analysis_report/overall_success_rate.png \
+		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_execution_time.png \
+		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_api_cost.png \
+		docs/whitepaper_with_benchmarks/analysis_report/cost_per_successful_task.png \
+		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_file_size.png \
+		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_file_size.png \
+		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_file_size.png \
+		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_edit_type.png \
+		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_edit_type.png \
+		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_edit_type.png \
+		$(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report/
+	@cp \
+		docs/whitepaper_with_benchmarks/creation_report/total_cost_comparison.png \
+		docs/whitepaper_with_benchmarks/creation_report/total_time_comparison.png \
+		docs/whitepaper_with_benchmarks/creation_report/pdd_avg_cost_per_module_dist.png \
+		docs/whitepaper_with_benchmarks/creation_report/claude_cost_per_run_dist.png \
+		$(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report/
+	@echo "Copying VS Code extension to CAP public repo"
+	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/utils
+	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_CAP_REPO_DIR)/utils/
+	@echo "Copying selected top-level files to CAP public repo (if present): $(PUBLIC_ROOT_FILES)"
+	@set -e; for f in $(PUBLIC_ROOT_FILES); do \
+		if [ -f "$$f" ]; then \
+			echo "  -> $$f"; \
+			cp "$$f" $(PUBLIC_PDD_CAP_REPO_DIR)/; \
+		fi; \
+	done
+	@if [ -n "$(strip $(PUBLIC_REGRESSION_SCRIPTS))" ]; then \
+		echo "Copying regression scripts to CAP public repo"; \
+		mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/tests; \
+		for script in $(PUBLIC_REGRESSION_SCRIPTS); do \
+			if [ -f "$$script" ]; then \
+				echo "  -> $$script"; \
+				cp "$$script" $(PUBLIC_PDD_CAP_REPO_DIR)/tests/; \
+			fi; \
+		done; \
+	else \
+		echo "No regression scripts found to copy"; \
+	fi
+	@if [ "$(PUBLIC_COPY_TESTS)" = "1" ]; then \
+		echo "Copying core unit tests to CAP public repo"; \
+		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
+			--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
+			--copy-tests \
+			$(foreach pat,$(PUBLIC_TEST_INCLUDE),--tests-include '$(pat)') \
+			$(foreach xpat,$(PUBLIC_TEST_EXCLUDE),--tests-exclude '$(xpat)'); \
+	else \
+		echo "Skipping tests copy (PUBLIC_COPY_TESTS=$(PUBLIC_COPY_TESTS))"; \
+	fi
+	@if [ "$(PUBLIC_COPY_CONTEXT)" = "1" ]; then \
+		echo "Copying context examples to CAP public repo"; \
+		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
+			--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
+			--copy-context \
+			$(foreach pat,$(PUBLIC_CONTEXT_INCLUDE),--context-include '$(pat)') \
+			$(foreach xpat,$(PUBLIC_CONTEXT_EXCLUDE),--context-exclude '$(xpat)'); \
+	else \
+		echo "Skipping context copy (PUBLIC_COPY_CONTEXT=$(PUBLIC_COPY_CONTEXT))"; \
+	fi
+		@echo "Copying package-data files (including all prompts) to CAP public repo"
+		@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/pdd
+		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
+			--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
+			--extra-pattern 'prompts/**/*.prompt'
+	@echo "Committing and pushing updates in CAP public repo"
+	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \
+		else \
+			echo "Skip commit: $(PUBLIC_PDD_CAP_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE)."; \
+		fi
 
 # Update the public repo clone to its default branch
 public-update: public-ensure
