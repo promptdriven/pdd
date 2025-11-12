@@ -33,7 +33,8 @@ def fix_main(
     verification_program: Optional[str],
     max_attempts: int,
     budget: float,
-    auto_submit: bool
+    auto_submit: bool,
+    agentic_fallback: bool = True
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -52,7 +53,7 @@ def fix_main(
         max_attempts: Maximum number of fix attempts
         budget: Maximum cost allowed for fixing
         auto_submit: Whether to auto-submit example if tests pass
-
+        agentic_fallback: Whether the cli agent fallback is triggered
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -112,6 +113,7 @@ def fix_main(
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
                 unit_test_file=unit_test_file,
                 code_file=code_file,
+                prompt_file=prompt_file,
                 prompt=input_strings["prompt_file"],
                 verification_program=verification_program,
                 strength=strength,
@@ -120,7 +122,8 @@ def fix_main(
                 max_attempts=max_attempts,
                 budget=budget,
                 error_log_file=output_file_paths.get("output_results"),
-                verbose=verbose
+                verbose=verbose,
+                agentic_fallback=agentic_fallback
             )
         else:
             # Use fix_errors_from_unit_tests for single-pass fixing
