@@ -1,0 +1,11 @@
+You are generating a single JavaScript source file.
+
+TARGET FILE NAME: main.js
+GOAL: Provide a tiny console application that depends on a separate utility module `utils.js`.
+REQUIREMENTS:
+- Call `utils.add(a, b)` and print the result to STDOUT.
+- Keep the file minimal: a main function that runs when the script is executed.
+- No external libraries; only standard Node.js.
+- Output ONLY valid JavaScript code for main.js (no commentary, no markdown fences).
+
+Deliver ONLY the full contents of main.js.
