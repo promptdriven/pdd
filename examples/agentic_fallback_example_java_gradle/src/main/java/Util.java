@@ -1,5 +1,5 @@
 public class Util {
     public static int add(int a, int b) {
-        return a + b+1;
+        return a + b;
     }
 }

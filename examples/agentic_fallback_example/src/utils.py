@@ -9,4 +9,4 @@ def get_greeting(first_name: str, last_name: str) -> str:
     Returns:
         A greeting string containing Hello and the user's full name
     """
-    return f"Hello, {first_name} {last_name}!"
+    return f"Hello, {name} {last_name}!"
