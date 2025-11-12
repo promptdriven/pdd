@@ -4,6 +4,11 @@ import os
 from typing import Any
 
 import pytest
+from dotenv import load_dotenv
+
+
+# Load environment variables from .env early in collection
+load_dotenv()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -26,3 +31,8 @@ def pytest_configure(config: pytest.Config) -> None:
     else:
         os.environ.setdefault("PDD_RUN_ALL_TESTS", "0")
 
+
+# Ignore CSV-driven assets under tests/csv during collection
+collect_ignore_glob = [
+    "csv/*",
+]
