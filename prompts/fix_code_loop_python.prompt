@@ -1,27 +1,29 @@
 
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_code_loop", that will attempt to fix errors in a code module through multiple iterations, with an added verbose mode for detailed logging.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_code_loop", that attempts to fix errors in a code module through multiple iterations, with an added verbose mode for detailed logging and an agentic fallback for non-Python or stuck scenarios.
 
 <include>context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-  Inputs:
-    - `code_file`: A string containing the path to the code file being tested.
-    - `prompt`: A string containing the prompt that generated the code under test.
-    - `verification_program`: A string containing the path to a Python program that verifies if the code runs correctly.
-    - `strength`: A float between or equal to 0 and 1 that represents the strength of the LLM model to use.
-    - `temperature`: A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
-    - `time`: A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
-    - `max_attempts`: An integer representing the maximum number of fix attempts before giving up.
-    - `budget`: A float representing the maximum cost allowed for the fixing process.
-    - `error_log_file`: A string containing the path to the error log file (default: "error_code.log").
-    - `verbose`: A boolean flag to enable detailed logging of the fixing process (default: False).
+  Inputs (match the Python signature exactly):
+    - `code_file`: Path to the code file under test.
+    - `prompt`: Prompt text that originally generated the code.
+    - `verification_program`: Path to the Python verification script or unit-test driver.
+    - `strength`: Float in [0, 1] controlling LLM model strength (no implicit clamping, but document expectation).
+    - `temperature`: Float in [0, 1] controlling LLM sampling temperature.
+    - `max_attempts`: Maximum number of iterative LLM-driven fix attempts.
+    - `budget`: Maximum cumulative cost allowed before stopping.
+    - `error_log_file`: Path to the XML error log file (no default; required).
+    - `verbose`: Optional boolean (default False) enabling extra console logging.
+    - `time`: Optional float in [0, 1] (default DEFAULT_TIME) forwarded to LLM calls.
+    - `prompt_file`: Optional string (default empty) for the agentic fallback prompt.
+    - `agentic_fallback`: Optional boolean (default True) that toggles the backup agentic fixer.
   Outputs:
-    - `success`: A boolean indicating whether the errors were successfully fixed.
-    - `final_program`: A string containing the contents of the final verification program file.
-    - `final_code`: A string containing the contents of the final code file.
-    - `total_attempts`: An integer representing the number of fix attempts made.
-    - `total_cost`: A float representing the total cost of all fix attempts.
-    - `model_name`: A string representing the name of the LLM model used.
+    - `success`: Boolean indicating whether verification ultimately passed (including agentic fallback).
+    - `final_program`: Contents of the final verification program when `success` is True, otherwise an empty string even if files were restored.
+    - `final_code`: Contents of the final code file when `success` is True, otherwise an empty string.
+    - `total_attempts`: Integer count of LLM fix cycles that completed (verification-only successes or no-change exits report 0).
+    - `total_cost`: Float total of all LLM/agentic costs.
+    - `model_name`: String identifying the last LLM model used, or `None` if no LLM call happened.
 
 % Here are examples of how to use internal modules:
 <internal_example_modules>
@@ -67,46 +69,32 @@
 </internal_example_modules>
 
 % This function will do the following:
-  Step 1. Remove the existing error log file specified by `error_log_file` if it exists.
-  Step 2. Initialize variables:
-    - Counter for the number of attempts.
-    - Total cost accumulator.
-    - Initialize history log for tracking attempts with structured XML format.
-  Step 3. Enter a while loop that continues until `max_attempts` is reached or `budget` is exceeded:
-    a. Print out to console and error log file the attempt iteration.
-    b. Run the `verification_program` to test the `code_file`, capturing its output and errors.
-    c. If the program runs without errors, break the loop.
-    d. If the program fails:
-       - Create a structured history log with specific XML tags:
-         * Use <attempt number="X"> to start each attempt record
-         * Within each attempt, include these sections:
-           <verification>
-             Status: Success/failure status with return code
-             Output: [Standard output text]
-             Error: [Error message text]
-           </verification>
-           
-           <current_error>
-             [Current error message to be fixed]
-           </current_error>
-           
-           <fixing>
-             <llm_analysis>
-               [Analysis from the LLM in human-readable format]
-             </llm_analysis>
-             <decision>
-               update_program: true/false
-               update_code: true/false
-             </decision>
-           </fixing>
-         * Use human-readable formatting within XML tags
-         * Save this structured log incrementally to the error log file
-         * Pass the complete history log to `fix_code_module_errors` using the `errors` parameter for context on previous attempts
-       - Create backup copies of the verification program and code file
-       - Read the contents of both files
-       - Call `fix_code_module_errors` with the enriched history, strength, temperature, and `time` parameter.
-       - Update files based on the fix results
-       - Track total cost and check against budget
-    e. Increment the attempt counter.
-  Step 4. If the last run didn't work, copy back the `verification_program` and `code_file` from the original.
-  Step 5. Return the success status, final verification program, final code contents, total number of attempts, total cost, and model name.
+  Step 0. Validate that `code_file` and `verification_program` exist. If the code is not a Python file, look up the language, run its default verification command, and immediately trigger `run_agentic_fix` (via `_safe_run_agentic_fix`) on failure or return success with the captured files if verification passes. The non-Python path should write the raw stdout/stderr text to `error_log_file` and uses `prompt_file` when invoking the agentic fixer.
+  Step 1. Remove the existing `error_log_file` if it exists, then create initial backups (`*_original_backup.*`) of both the code and verification files so they can be restored on failure.
+  Step 2. Initialize:
+    - `attempts` counter (counts completed LLM fix cycles only).
+    - `total_cost` accumulator (float).
+    - `history_log` string seeded with `<history>\n` for structured XML logging.
+  Step 3. While `attempts < max_attempts` and `total_cost <= budget`:
+    a. Print the attempt number to the Rich console (verbose adds more detail). Start an `<attempt number="X">` entry in memory.
+    b. Run the Python verification program via `subprocess.run([sys.executable, verification_program], capture_output=True, text=True, encoding="utf-8")`.
+    c. Append a `<verification>` section with nested `<status>`, `<output>`, and `<error>` tags, each wrapping human-readable text inside CDATA blocks for stdout/stderr.
+    d. If the return code is zero:
+         - Mark success, close the `<attempt>` entry, append it to `history_log`, and break.
+       Otherwise:
+         - Add a `<current_error>` block (CDATA with stderr) to the attempt entry.
+         - Check budget/max-attempt thresholds before calling the LLM; log and break if exceeded.
+         - Create per-attempt backup copies (`*_X.ext`) of both files.
+         - Read current file contents (utf-8) for use by `fix_code_module_errors`.
+         - Build a temporary `<history>...</history>` string combining the accumulated `history_log` plus the in-progress attempt entry and pass it as the `errors` argument to `fix_code_module_errors`, along with `strength`, `temperature`, `time`, and `verbose`.
+         - Capture the returned tuple `(update_program, update_code, fixed_program, fixed_code, analysis, cost, model)`; append `<fixing>` XML containing an `<llm_analysis>` CDATA block, a `<decision>` stanza listing both booleans, `<cost>`, and `<model>`.
+         - Rewrite `error_log_file` with `history_log + "</history>\n"` after each attempt (the file always contains a complete XML document, not incremental fragments).
+         - Add `cost` to `total_cost`, stop if the budget is exceeded, and stop if both `update_program` and `update_code` are False while verification is still failing.
+         - When updates are requested, overwrite the respective files with the new contents.
+         - Increment `attempts` only after successfully applying fixes (so pure verification passes or “no change” exits leave `attempts` unchanged).
+  Step 4. If `success` is still False after the loop, restore the original backups (if they exist). Regardless of success, attempt to remove the initial backup files and rewrite `error_log_file` with the final `history_log + "</history>\n"`.
+  Step 5. If `success` is True, read the final file contents into `final_program` and `final_code`; otherwise return empty strings for both.
+  Step 6. Compute `final_attempts_reported` as the number of completed fix cycles (`attempts`), bumping by one when the last verification failed before reaching `max_attempts`. If `agentic_fallback` is enabled and the primary loop failed, invoke `_safe_run_agentic_fix` as a last resort, accumulate its cost, and re-read the files on success.
+  Step 7. Return `(success, final_program, final_code, final_attempts_reported, total_cost, model_name)` where `model_name` may be `None` if no LLM calls took place. Document that failure cases intentionally return empty strings even though the originals were restored.
+
+% Implementation note: keep the demonstration harness under `if __name__ == "__main__":` that writes dummy files and monkeypatches `fix_code_module_errors` for manual testing.

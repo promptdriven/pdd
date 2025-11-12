@@ -353,6 +353,7 @@ def test_loop_mode_success(
         program_file=setup_files["program"],
         code_file=setup_files["code"],
         prompt='Original prompt content',
+        prompt_file=setup_files["prompt"],
         verification_program=setup_files["verifier"],
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -361,7 +362,8 @@ def test_loop_mode_success(
         verification_log_file=output_results_path,
         verbose=False,
         program_args=[],
-        llm_time=DEFAULT_TIME
+        llm_time=DEFAULT_TIME,
+        agentic_fallback=True
     )
     mock_fix_errors.assert_not_called()
     mock_run_prog.assert_not_called()
@@ -412,6 +414,7 @@ def test_loop_mode_failure(
         program_file=setup_files["program"],
         code_file=setup_files["code"],
         prompt='Original prompt content',
+        prompt_file=setup_files["prompt"],
         verification_program=setup_files["verifier"],
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -420,7 +423,8 @@ def test_loop_mode_failure(
         verification_log_file=mock_construct_paths_response[2]["output_results"],
         verbose=False,
         program_args=[],
-        llm_time=DEFAULT_TIME
+        llm_time=DEFAULT_TIME,
+        agentic_fallback=True
     )
     assert mock_fix_loop.call_args[1]['max_attempts'] == 5
     mock_fix_errors.assert_not_called()
@@ -628,7 +632,8 @@ def test_verbose_flag_propagation(
     mock_fix_loop.assert_called_once_with(
         program_file=ANY, code_file=ANY, prompt=ANY, verification_program=ANY,
         strength=ANY, temperature=ANY, max_attempts=ANY, budget=ANY,
-        verification_log_file=ANY, verbose=True, program_args=ANY, llm_time=DEFAULT_TIME
+        verification_log_file=ANY, verbose=True, program_args=ANY, llm_time=DEFAULT_TIME,
+        prompt_file=ANY, agentic_fallback=True
     )
 
 
@@ -718,6 +723,7 @@ def test_force_flag_retrieved_from_ctx_obj(
         program_file=setup_files["program"],
         code_file=setup_files["code"],
         prompt=mock_construct_paths_response[1]["prompt_file"],
+        prompt_file=setup_files["prompt"],
         verification_program=setup_files["verifier"],
         strength=DEFAULT_STRENGTH,
         temperature=DEFAULT_TEMPERATURE,
@@ -726,5 +732,6 @@ def test_force_flag_retrieved_from_ctx_obj(
         verification_log_file=mock_construct_paths_response[2]["output_results"],
         verbose=False, # mock_context.obj['verbose'] is False here
         program_args=[],
-        llm_time=DEFAULT_TIME
+        llm_time=DEFAULT_TIME,
+        agentic_fallback=True
     )

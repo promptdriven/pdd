@@ -22,6 +22,7 @@
         - `verification_program` (Optional[str]): Path to a Python program that verifies if the code still runs correctly after modifications. Required if --loop is used.
         - `max_attempts` (int): Maximum number of verification attempts before giving up. Default is 3.
         - `budget` (float): Maximum cost allowed for the verification process. Default is $5.0.
+        - `agentic_fallback` (bool): If True, allow an agentic fallback path in loop mode when primary fixing fails. Default is True.
     Outputs:
         - Returns a tuple containing:
             - `bool`: Success status of verification (True if program verified successfully)
@@ -34,6 +35,7 @@
 % Important Implementation Notes:
 1. File Path Handling and Parameter Passing:
    - When calling `fix_verification_errors_loop`, pass the *content* of the `prompt_file`, the *path* to the `code_file`, the *path* to the `program_file`, the *path* to the `verification_program`, and the `llm_time` argument using the `time` value from `ctx.obj`. Also pass the path for the `verification_log_file` if provided. Do not pass output file paths to the loop.
+   - It is acceptable (and sometimes useful) to also pass `prompt_file` (its path) to the loop function for downstream logging or fallback mechanisms, in addition to the `prompt` content.
    - When calling `fix_verification_errors`, read the contents of the files first and pass them as strings (including the combined program output), and pass the `time` value from `ctx.obj`.
    - Use `construct_paths` to generate default output paths when not explicitly provided. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored. If `construct_paths` raises an "invalid command" error for `verify`, fall back to manual handling: read input files and derive default paths, including `output_program`. For other `construct_paths` errors, print a formatted error and `sys.exit(1)`.
    - Ensure the final program content is written to the `output_program` path when one is resolved.
@@ -44,21 +46,23 @@
    - Handle file operations:
      * Use try/except blocks for file reading/writing
      * Provide formatted error messages using rich.print
-   - Exit with sys.exit(1) on critical errors
+   - Exit with `sys.exit(1)` on critical/unrecoverable errors (e.g., invalid command in `construct_paths` without a viable fallback, missing mandatory files). For recoverable issues (e.g., LLM call failures), returning partial results with appropriate warnings is acceptable.
 
 3. Verification Process:
    - For `loop=True`:
-     * Call `fix_verification_errors_loop` with all required parameters including `max_attempts`, `budget`, `llm_time` (from `ctx.obj['time']`), and the `verification_log_file` path. Pass through `verbose` and default `program_args=[]`.
+     * Call `fix_verification_errors_loop` with all required parameters including `max_attempts`, `budget`, `llm_time` (from `ctx.obj['time']`), and the `verification_log_file` path. Pass through `verbose`, `agentic_fallback`, and default `program_args=[]`.
      * This handles the entire iterative verification and fixing process.
    - For `loop=False`:
-     * Execute the `program_file` and capture stdout/stderr. Choose interpreter by extension: `.py` via an environment-aware Python (`detect_host_python_executable()`), `.js` via `node`, `.sh` via `bash`. Set `cwd` to the program directory, set `PYTHONUNBUFFERED=1`, and use a 60s timeout. If stderr contains a Python syntax error, prefix it with `SYNTAX_ERROR:`.
+     * Execute the `program_file` and capture stdout/stderr. Choose interpreter by extension: `.py` via an environment-aware Python (`detect_host_python_executable()`), `.js` via `node`, `.sh` via `bash`. Implementations may support additional interpreters where available. Set `cwd` to the program directory, set `PYTHONUNBUFFERED=1`, and use a 60s timeout. If stderr contains a Python syntax error, prefix it with `SYNTAX_ERROR:`.
      * Combine stdout and stderr for verification (prepend a `--- STDERR ---` delimiter only when stderr is present).
      * Call `fix_verification_errors` once, passing the *content* of the prompt file, the *content* of the code file, the *content* of the program file, the combined program output, and `time`.
      * If issues are found, it will generate a single round of fixes.
 
-4. Verbose Output:
+4. Verbose/Quiet Output:
    - Add a `verbose` parameter to both function calls.
-   - When `verbose` is True, provide additional debugging information during the verification process, including resolved paths, invoked command, environment hints, and formatted panels for errors.
+   - When `verbose` is True, provide additional debugging information during the verification process, including resolved paths, invoked command, working directory, environment hints, and formatted panels for errors.
+   - In non-verbose mode, show minimal, single-line warnings on non-zero program exits and critical errors only; do not echo command/cwd/env details or render error panels.
+   - When `quiet` is True, suppress all non-critical output; still show fatal errors that precede an exit.
 
 5. User Feedback:
    - Use rich.print for formatted output
@@ -67,7 +71,7 @@
    - Show model name used
    - List saved file paths (including `output_code`, `output_results`, and `output_program`)
    - Summarize verification results and any improvements made
-   - In single-pass mode, write a "PDD Verify Results (Single Pass)" log with timestamp, files, success, issue count, change flags, model, cost, explanation, and combined program output.
+   - In single-pass mode, write a "PDD Verify Results (Single Pass)" log with a current ISO-8601 timestamp (optionally include input file mtimes for context), files, success, issue count, change flags, model, cost, explanation, and combined program output.
    - In loop mode, delegate log writing to `fix_verification_errors_loop`; the wrapper only confirms the expected log path.
    - Note: Output files are written when specified, regardless of verification success, to allow inspection of the final state
 
@@ -112,3 +116,9 @@
 <cli_command_readme>
    <include>./README.md</include>
 </cli_command_readme>
+8. Output Writing Guarantees and Formatting:
+   - Always attempt to write `output_program`, `output_code`, and `output_results` when their paths are resolved, regardless of success, so users can inspect the final state.
+   - `fix_verification_errors` returns a single string explanation; append it directly to the log (do not iterate or split character-by-character).
+
+9. Interpreter Extensibility:
+   - The baseline requires `.py`/`.js`/`.sh` handling as above. Implementations may add support for additional extensions/interpreters where appropriate.

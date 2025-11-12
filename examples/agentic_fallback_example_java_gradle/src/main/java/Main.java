@@ -1,9 +1,8 @@
 public class Main {
     public static void main(String[] args) {
-        int result = testComputeSomething(0);
-        System.out.println(result);
+        System.out.println("Hello, World!");
     }
-
+    
     public static int testComputeSomething(int x) {
         return Util.add(x, 3);
     }
