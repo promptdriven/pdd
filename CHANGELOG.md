@@ -1,5 +1,31 @@
 ## v0.0.68 (2025-11-12)
 
+### Feat
+
+- add agentic fallback fixer with multi‑provider support (Anthropic, Google, OpenAI) and deterministic multi‑file patch application using explicit BEGIN/END file markers
+- add language‑aware verification with sensible defaults (pytest, npm/jest, Maven/Gradle) and optional agent‑supplied TESTCMD execution on failure
+- integrate agentic fallback path into CLI fix flow and harden the error loop with clearer logging, timeouts, and safer env handling
+- add new prompt templates for agentic fix and langtest; refine CLI/fix prompt templates
+
+### Examples
+
+- add agentic_fallback examples for Python, Java (Maven and Gradle), JavaScript, and TypeScript, each with prompts, minimal source, and tests
+
+### Tests
+
+- add tests for agentic fixer and language‑aware verification (tests/test_agentic_fix.py, tests/test_agentic_langtest.py)
+- move pytest configuration into tests/conftest.py and update fix error‑loop coverage
+
+### Docs
+
+- update README and examples documentation to cover agentic fallback workflows; refresh PyPI long description
+
+### Chore
+
+- update .gitignore for Node/Yarn artifacts; adjust Makefile test targets and pyproject settings
+
+Many thanks to Jiamin Cai for your amazing contributions!
+
 ## v0.0.67 (2025-11-11)
 
 ### Feat
