@@ -22,6 +22,7 @@
 
 % Auto-update behavior: run `auto_update()` unless the environment variable `PDD_AUTO_UPDATE` equals `'false'` (case-insensitive).
 % If `--list-contexts` is provided, perform the listing and exit before running subcommands or auto-update. An onboarding reminder may be shown before this early exit.
+% The CLI may print a brief status message (e.g., 'Checking for updates...') when not `--quiet`.
 
 % Expose CLI version with `click.version_option(version=__version__, package_name='pdd-cli')`.
 
@@ -103,6 +104,8 @@
         <generate_test_example>
         <include>context/cmd_test_main_example.py</include>
         </generate_test_example>
+        - `test` options:
+            - `--merge`: Merge new tests with an existing test file instead of creating a separate file.
 
         - `preprocess` command: The core logic is implemented in the `preprocess_main` function, defined in a separate module. Here's how to use `preprocess_main`:
         <preprocess_main_example>
@@ -123,6 +126,8 @@
         <update_prompt_example>
         <include>context/update_main_example.py</include>
         </update_prompt_example>
+        - `update` options and validation:
+            - `--extensions EXT1,EXT2,...`: Only valid in repository-wide mode (when no files are provided). If files are provided, raise a `click.UsageError`.
 
         - `detect` command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the `detect_change_main` function. Here is an example of how to detect prompts that need changes:
         <detect_change_example>
@@ -153,11 +158,16 @@
         <auto_deps_main_example>
         <include>context/auto_deps_main_example.py</include>
         </auto_deps_main_example>
+        - `auto-deps` options:
+            - `--force-scan`: Force rescanning of all potential dependency files.
  
         - `verify` command: The core logic is implemented in the `fix_verification_main` function, defined in a separate module. This command verifies functional correctness of generated code by executing a specified program and using an LLM to judge the program's output against the original prompt's intent. Here's how to use `fix_verification_main`:
         <verify_main_example>
         <include>context/fix_verification_main_example.py</include>
         </verify_main_example>
+        - `verify` options:
+            - `--max-attempts N`: Maximum number of fix attempts in the verification loop.
+            - `--budget FLOAT`: Maximum LLM spend for verification and fixes.
         
         - `setup` command: Expose an interactive bootstrap flow that installs shell completions and gathers API keys by invoking the existing `install_completion` helper and the packaged `pdd.setup_tool` module.
 
@@ -180,14 +190,16 @@
         - Decorate LLM-using commands with `@track_cost` and return `(result, total_cost, model_name)`.
         - Local-only commands (e.g., `preprocess`) are not cost-tracked; return a dummy `("", 0.0, "local")` when needed for chain summaries.
         - `install_completion` returns `None` and prints its own status.
+        - Utility/self-reporting commands that return `None` (e.g., `install_completion`, `pytest-output`) are shown as "completed" in the chain summary rather than "failed".
+        - The chain summary prints "Total Estimated Cost" only when at least one step reports a cost.
         - Detect first-run state (missing `~/.pdd/api-env` or shell completion hook) before executing subcommands; if onboarding has not run, print a reminder banner suggesting `pdd setup` and continue with the requested command. Suppress the banner once `~/.pdd/api-env` exists or when the current project already supplies credentials via `.env` or a `.pdd/` directory.
         - For `generate`, implement `@click.option("-e", "--env", "env_kv", multiple=True, help="Set template variable (KEY=VALUE) or read KEY from env")` and parse it into `env_vars: Dict[str, str]` as described above, then pass `env_vars` into `code_generator_main`.
         - Add `@click.option("--template", "template_name", type=str, default=None, help="Use a packaged/project template by name (e.g., architecture/architecture_json)")`. If provided, resolve the prompt file via `pdd.template_registry.load_template(template_name)` and pass the resolved absolute path to `code_generator_main`. Disallow passing both `--template` and a positional `prompt_file` simultaneously.
         - Add a `templates` command group with subcommands:
-            * `templates list [--json] [--filter tag=...]`: call `pdd.template_registry.list_templates(filter_tag)`; render a compact list or a simple table; when `--json` is set, print JSON.
+            * `templates list [--json] [--filter TAG | --filter tag=TAG]`: call `pdd.template_registry.list_templates(filter_tag)`; render a compact list or a simple table; when `--json` is set, print JSON.
             * `templates show NAME`: call `pdd.template_registry.show_template(name)` and render each section with Rich tables for readability. Use compact key/value tables for the summary (name, description, version, tags, language, output, path) and discover settings, and a multi-column table for variables (`Name | Required | Type | Description | Default/Examples`). Usage examples should render with a two-column table (`Name | Command`). Fall back to plain text only when a section is missing or not tabular (e.g., free-form notes).
             * `templates copy NAME --to DIR`: call `pdd.template_registry.copy_template(name, dest_dir)` and print the destination.
-        - Templating behavior for `generate`: `$VAR` and `${VAR}` in prompt content and `--output` path are replaced using only keys present in `env_vars`. Unknown placeholders remain unchanged.
+        - Templating behavior for `generate`: `$VAR` and `${VAR}` in prompt content and `--output` path are replaced using only keys present in `env_vars`. Unknown placeholders remain unchanged. This substitution may be implemented in the backend (e.g., `code_generator_main`) rather than the CLI wrapper.
         - When using `--template`, if the template front matter includes a `discover` section, execute discovery before preprocessing to populate variables used in includes; merge results into `env_vars` unless overridden by `-e`. This logic may be implemented in the command backend (e.g., `code_generator_main`) instead of the CLI wrapper.
         - When using `--template`, if the template front matter provides an `output_schema` and the generated artifact is JSON, validate the output against the schema and raise a friendly `click.UsageError` on validation failure. This validation may also be implemented in the backend.
         - Implement a centralized `handle_error()` that uses Rich with a custom Theme and formats exceptions (including `click.UsageError` and `MarkupError`). After logging, commands may return `None` without re-raising; non-zero exit status is emitted only when a command chooses to re-raise.
@@ -197,6 +209,9 @@
 
     % Utility command:
         - `pytest-output` command: Run pytest on a given test file and emit structured output. Option `--json-only` prints only JSON to stdout. This command is not cost-tracked and is intended for internal debugging/support.
+
+    % Additional CLI options supported:
+        - `sync` options: `--max-attempts N`, `--budget FLOAT`, `--skip-verify`, `--skip-tests`, `--target-coverage PERCENT`, `--log`.
 
     % Ensure consistency across commands, following shared coding standards and documentation practices.
 </instructions>

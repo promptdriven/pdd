@@ -25,6 +25,7 @@
         - `max_attempts` (int): Maximum number of fix attempts before giving up. Only used with --loop. Default is 3.
         - `budget` (float): Maximum cost allowed for fixing process. Only used with --loop. Default is $5.0.
         - `auto_submit` (bool): If True, automatically submits example if all unit tests pass during fix loop.
+        - `agentic_fallback` (Optional[bool]): Whether to enable the CLI agent fallback behavior (default True). Pass through to `fix_error_loop` when supported.
 
     Outputs:
         - Returns a tuple containing:
@@ -44,13 +45,17 @@
     - Retrieve `force = ctx.obj.get('force', False)`.
     - Retrieve `quiet = ctx.obj.get('quiet', False)`.
     - It is fine to pass `force`/`quiet` directly to `construct_paths` without first storing locals.
+    - Optionally accept `agentic_fallback: bool = True` and pass through to `fix_error_loop` when supported.
 
 2.  File Path Handling and Function Calls:
     - When calling `fix_error_loop`, pass the original file paths (`code_file` and `unit_test_file`), `prompt` content, `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), and `verbose` directly.
+    - When calling `fix_error_loop`, also pass `agentic_fallback` when available.
     - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths['output_results']`, along with `strength`, `temperature`, `time`, and `verbose`.
     - In non-loop mode, pre‑validate the provided `error_file` exists before constructing paths; raise `FileNotFoundError` if missing.
     - Call `construct_paths(..., create_error_file=loop, context_override=ctx.obj.get('context'))` so an empty error log is created only during loop mode and the global `--context` is honored.
     - Handle both fixing approaches appropriately based on the `--loop` parameter.
+    - Write fixed files only when the corresponding fixed content (`fixed_unit_test`, `fixed_code`) is non-empty.
+    - Using `output_file_paths.get('output_results')` is acceptable where the results path may be absent; when missing but in‑memory `analysis_results` exists, include that instead.
 
 3.  Error Handling Requirements:
     - Validate verification program:
@@ -63,15 +68,17 @@
         * API submission errors.
         * Missing environment variables.
     - Exit with `sys.exit(1)` on critical errors.
-    - When printing any analysis output in verbose mode, show only a short preview and handle Rich `MarkupError` safely by escaping content when needed.
+    - When printing any analysis output in verbose mode, show only a short preview (e.g., first ~200 characters) and handle Rich `MarkupError` safely by escaping content when needed. Implementations may attempt a Rich-rendered string first and fall back to escaped text on `MarkupError` or other exceptions during printing.
+    - A single outer try/except that encompasses file operations is acceptable, provided errors are reported via `rich.print` and the process exits on critical failures.
 
 4.  Auto-submit Functionality:
     When `auto_submit` is True and the fix is successful:
     a) Authentication:
         - Get JWT token using `get_jwt_token()`.
-        - Required environment variables:
-            * `NEXT_PUBLIC_FIREBASE_API_KEY` (or `REACT_APP_FIREBASE_API_KEY`)
+        - Required environment variables (use fallback order shown):
+            * `NEXT_PUBLIC_FIREBASE_API_KEY`, else fall back to `REACT_APP_FIREBASE_API_KEY`
             * `GITHUB_CLIENT_ID`
+        - Implementations MAY optionally provide an `app_name` to `get_jwt_token` for telemetry/UX purposes.
     b) Submission Payload:
         - Input files:
             * prompts (content and filename) — preprocess via `preprocess(..., recursive=False, double_curly_brackets=True)` for submission only
@@ -93,8 +100,12 @@
             * price: 0.0
     c) Submit to endpoint:
         - URL: `https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample`
-        - Headers: Authorization with JWT token.
+        - Headers: Authorization with JWT token and `Content-Type: application/json`.
         - Handle response and provide user feedback.
+
+    d) Scope of auto-submit (guidance):
+        - By default, trigger auto-submit when unit tests pass during the fix loop.
+        - Implementations MAY also trigger auto-submit on non-loop success if they have an external verification program or policy that ensures correctness; loop usage is strongly preferred for verification.
 
 5.  Verbose Output:
     - The `verbose` parameter (retrieved from `ctx`) should be passed to both `fix_error_loop` and `fix_errors_from_unit_tests` calls.

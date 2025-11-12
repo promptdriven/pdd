@@ -1,0 +1,11 @@
+You are generating a single JavaScript source file.
+
+TARGET FILE NAME: utils.js
+GOAL: Provide a reusable utility module used by `main.js`.
+REQUIREMENTS:
+- Export a function `add(a, b)` that returns `a + b`.
+- Keep the file minimal and self-contained.
+- No external libraries; only standard Node.js.
+- Output ONLY valid JavaScript code for utils.js (no commentary, no markdown fences).
+
+Deliver ONLY the full contents of utils.js.

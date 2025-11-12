@@ -1,0 +1,46 @@
+%  Your should fix a bug in {code_abs} that fails the test in {test_abs}. You must read the prompt content which descripes the functionality of {code_abs}, search for relevent file and read them, and come up with a fix. Your solution should modify {code_abs} and/or other files. Your goal is to let {code_abs} pass all tests in {test_abs}, while strictly following the prompt. Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests.
+
+<inputs>
+    <paths>
+        <code_file>{code_abs}</code_file>
+        <test_file>{test_abs}</test_file>
+        <begin_marker>{begin}</begin_marker>
+        <end_marker>{end}</end_marker>
+    </paths>
+
+    <context>
+        <original_prompt>
+            {prompt_content}
+        </original_prompt>
+        <error_log>
+            {error_content}
+        </error_log>
+    </context>
+</inputs>
+
+% Edit policy:
+    • You MAY modify:
+        - The target source file at {code_abs}
+        - The test file at {test_abs}
+        - Additional supporting files in the same project when necessary
+    • Keep changes minimal and directly related to the failure.
+    • Prefer fixing implementation over weakening tests.
+
+% Follow these instructions:
+
+PRIMARY PATH (edit-enabled; do NOT run commands yourself):
+  1) You MAY edit files in-place (directly) if your tool supports it, but you MUST also output the final corrected contents using the markers below.
+  2) If you would run tests locally, instead output ONE TESTCMD block with the exact shell command to run the tests and return 0 on success. The host will execute it.
+  3) Keep edits minimal and directly related to the failure. Ensure your emitted files reflect the final state.
+
+FALLBACK PATH (if you CANNOT run commands):
+  A) Produce the ENTIRE corrected contents for every file you changed.
+  B) For EACH changed file, print ONE block using this exact wrapping:
+       <<<BEGIN_FILE:/absolute/or/relative/path/to/file>>>
+       <FULL CORRECTED FILE CONTENT HERE>
+       <<<END_FILE:/absolute/or/relative/path/to/file>>>
+  C) If you cannot run tests locally, ALSO output a single block with the exact shell command to run the tests:
+       <<<BEGIN_TESTCMD>>>
+       <single-line or multi-line shell command to run the tests and return 0 on success>
+       <<<END_TESTCMD>>>
+  D) Print nothing else.

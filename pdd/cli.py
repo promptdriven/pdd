@@ -964,6 +964,12 @@ def preprocess(
     default=False,
     help="Automatically submit the example if all unit tests pass.",
 )
+@click.option( 
+    "--agentic-fallback/--no-agentic-fallback",
+    is_flag=True,
+    default=True,
+    help="Enable agentic fallback if the primary fix mechanism fails.",
+)
 @click.pass_context
 @track_cost
 def fix(
@@ -980,6 +986,7 @@ def fix(
     max_attempts: int,
     budget: float,
     auto_submit: bool,
+    agentic_fallback: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Fix code based on a prompt and unit test errors."""
     try:
@@ -998,6 +1005,7 @@ def fix(
             max_attempts=max_attempts,
             budget=budget,
             auto_submit=auto_submit,
+            agentic_fallback=agentic_fallback,
         )
         result = {
             "success": success,
