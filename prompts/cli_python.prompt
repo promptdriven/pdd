@@ -16,12 +16,12 @@
 % All these global options should be passed to the `cli` function and stored in `ctx.obj`.
 </context>
 
-% Use `@click.group(chain=True, invoke_without_command=True)` for `cli` to support chaining and allow `pdd` to run without subcommands. Implement a `@cli.result_callback()` that summarizes each command’s `(result, cost, model_name)` and prints the total chain cost. Label steps using the invoked subcommand names.
+% Use `@click.group(invoke_without_command=True)` for `cli` to allow `pdd` to run without subcommands. Implement a `@cli.result_callback()` that summarizes each command’s `(result, cost, model_name)` and prints the total cost. Label steps using the invoked subcommand names. Click’s chaining mode is optional and not required.
 
 % Call `get_local_pdd_path()` at the very start of `cli()` to ensure `PDD_PATH` is set (e.g., for UV installs).
 
 % Auto-update behavior: run `auto_update()` unless the environment variable `PDD_AUTO_UPDATE` equals `'false'` (case-insensitive).
-% If `--list-contexts` is provided, perform the listing and exit BEFORE auto-update or any subcommands.
+% If `--list-contexts` is provided, perform the listing and exit before running subcommands or auto-update. An onboarding reminder may be shown before this early exit.
 
 % Expose CLI version with `click.version_option(version=__version__, package_name='pdd-cli')`.
 
@@ -184,16 +184,16 @@
         - For `generate`, implement `@click.option("-e", "--env", "env_kv", multiple=True, help="Set template variable (KEY=VALUE) or read KEY from env")` and parse it into `env_vars: Dict[str, str]` as described above, then pass `env_vars` into `code_generator_main`.
         - Add `@click.option("--template", "template_name", type=str, default=None, help="Use a packaged/project template by name (e.g., architecture/architecture_json)")`. If provided, resolve the prompt file via `pdd.template_registry.load_template(template_name)` and pass the resolved absolute path to `code_generator_main`. Disallow passing both `--template` and a positional `prompt_file` simultaneously.
         - Add a `templates` command group with subcommands:
-            * `templates list [--json] [--filter tag=...]`: call `pdd.template_registry.list_templates(filter_tag)`; pretty-print as a table or JSON when `--json` is set.
+            * `templates list [--json] [--filter tag=...]`: call `pdd.template_registry.list_templates(filter_tag)`; render a compact list or a simple table; when `--json` is set, print JSON.
             * `templates show NAME`: call `pdd.template_registry.show_template(name)` and render each section with Rich tables for readability. Use compact key/value tables for the summary (name, description, version, tags, language, output, path) and discover settings, and a multi-column table for variables (`Name | Required | Type | Description | Default/Examples`). Usage examples should render with a two-column table (`Name | Command`). Fall back to plain text only when a section is missing or not tabular (e.g., free-form notes).
             * `templates copy NAME --to DIR`: call `pdd.template_registry.copy_template(name, dest_dir)` and print the destination.
         - Templating behavior for `generate`: `$VAR` and `${VAR}` in prompt content and `--output` path are replaced using only keys present in `env_vars`. Unknown placeholders remain unchanged.
-        - When using `--template`, if the template front matter includes a `discover` section, execute discovery before preprocessing to populate variables used in includes; merge results into `env_vars` unless overridden by `-e`.
-        - When using `--template`, if the template front matter provides an `output_schema` and the generated artifact is JSON, validate the output against the schema and raise a friendly `click.UsageError` on validation failure.
-        - Implement a centralized `handle_error()` that uses Rich with a custom Theme and formats exceptions (including `click.UsageError` and `MarkupError`). After logging, re-raise the exception so Click propagates the appropriate exit status unless the command has a documented reason to continue.
+        - When using `--template`, if the template front matter includes a `discover` section, execute discovery before preprocessing to populate variables used in includes; merge results into `env_vars` unless overridden by `-e`. This logic may be implemented in the command backend (e.g., `code_generator_main`) instead of the CLI wrapper.
+        - When using `--template`, if the template front matter provides an `output_schema` and the generated artifact is JSON, validate the output against the schema and raise a friendly `click.UsageError` on validation failure. This validation may also be implemented in the backend.
+        - Implement a centralized `handle_error()` that uses Rich with a custom Theme and formats exceptions (including `click.UsageError` and `MarkupError`). After logging, commands may return `None` without re-raising; non-zero exit status is emitted only when a command chooses to re-raise.
         - When `--quiet` is active, suppress non-essential console output and chain summaries.
-        - The `trace` command should exit non-zero on exceptions.
-        - The chain result callback may use `ctx.obj['invoked_subcommands']` (tracked by `@track_cost`) to label steps.
+        - The `trace` command logs errors; exiting non-zero occurs when exceptions are re-raised; otherwise it may return `None`.
+        - The chain result callback may use `ctx.obj['invoked_subcommands']` (tracked by `@track_cost`) to label steps. For commands not decorated with `@track_cost`, the summary may fall back to labels like `Unknown Command X`.
 
     % Utility command:
         - `pytest-output` command: Run pytest on a given test file and emit structured output. Option `--json-only` prints only JSON to stdout. This command is not cost-tracked and is intended for internal debugging/support.

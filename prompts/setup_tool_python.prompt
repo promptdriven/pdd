@@ -1,0 +1,61 @@
+You are an expert Python developer. Your task is to create a standalone, interactive command-line setup script for a tool called "PDD" (Prompt Driven Development). This script, named `pdd_setup.py`, will be the first thing a new user runs after installing the PDD package. Its primary goal is to guide the user through configuring their LLM API keys, and to bootstrap their local environment with the necessary configuration files so they can start using PDD immediately. The script must be user-friendly, robust, and provide clear instructions for what to do next.
+
+### Requirements
+
+1.  **Interactive Command-Line Interface (CLI):**
+    *   The script must be executable directly from the shell.
+    *   It must present a clear, visually appealing interface using colors and box-drawing characters for structure (e.g., dividers, logos, menus).
+    *   It must feature a main menu that allows the user to:
+        1.  Enter/update API keys.
+        2.  Re-test the currently configured keys.
+        3.  Save the configuration and exit.
+        4.  Exit without saving.
+    *   It must handle `KeyboardInterrupt` (Ctrl+C) gracefully at any point, exiting with a "Setup cancelled" message.
+
+2.  **API Key Management:**
+    *   **Discovery:** On startup, automatically discover API keys from the user's environment for OpenAI, Google, and Anthropic. The script should check for `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `GOOGLE_API_KEY`.
+    *   **Dynamic Variable Names:** The script must inspect a packaged data file (`pdd/data/llm_model.csv`) to determine the canonical environment variable names for each provider (e.g., `OPENAI_API_KEY` for OpenAI). This ensures the setup tool stays in sync with the main application's configuration.
+    *   **Validation:** Implement functions to test the validity of each API key by making a lightweight, authenticated request to the provider's public API endpoint.
+        *   OpenAI: `GET https://api.openai.com/v1/models` (expects 200 OK).
+        *   Google Gemini: `GET https://generativelanguage.googleapis.com/v1beta/models` (expects 200 OK).
+        *   Anthropic: `GET https://api.anthropic.com/v1/messages` (expects a status code other than 401 or 403, as a valid key with a malformed request returns 400).
+    *   **User Input:** Interactively prompt the user to enter keys, especially if none are found or if existing ones are invalid. Clearly indicate the status (e.g., "found", "not found", "valid", "invalid"). Provide URLs to obtain keys for each provider.
+
+3.  **Configuration File Generation:**
+    *   The script must create a `~/.pdd/` directory if it does not exist.
+    *   **Shell Integration:** It must detect the user's shell (e.g., `bash`, `zsh`, `fish`, `csh`, `tcsh`) and generate a corresponding environment script (`~/.pdd/api-env.< shell >`) that exports the validated API keys. The script must use the correct syntax for the detected shell (`export`, `set -gx`, `setenv`).
+    *   **Shell Startup File:** It must append a line to the user's shell initialization file (e.g., `~/.bashrc`, `~/.zshrc`, `~/.config/fish/config.fish`) to source the generated environment script. The script must check for the existence of this line to avoid duplicates.
+    *   **Model Configuration:** It must generate a `~/.pdd/llm_model.csv` file. This file's content should be derived from a packaged `llm_model.csv` but filtered to only include models from providers for which the user has provided a valid API key.
+
+4.  **User Onboarding:**
+    *   Create a sample `success_python.prompt` file in the user's current directory to give them a ready-to-use example for their first `pdd generate` command.
+    *   Upon successful configuration, display a comprehensive, color-coded summary in the terminal.
+    *   Save this same summary to a file named `PDD-SETUP-SUMMARY.txt` in the current directory.
+
+5.  **Exit Summary Content:**
+    *   The summary must be detailed and actionable.
+    *   It must list the API keys that were configured (mask the key values for security, showing only the first few and last few characters).
+    *   It must list all files that were created or modified (e.g., `~/.pdd/`, `~/.pdd/api-env.zsh`, `~/.zshrc`).
+    *   It must include a "QUICK START" section with the *exact* commands the user needs to run next:
+        1.  The command to reload their shell environment (e.g., `source ~/.pdd/api-env.zsh`).
+        2.  The command to generate code from the sample prompt (`pdd generate success_python.prompt`).
+    *   Include "LEARN MORE" and "TIPS" sections with links to documentation, the project website, and the Discord community.
+
+### Dependencies & Context
+
+*   **External Libraries:** The script will depend on the `requests` library for making HTTP API calls. All other dependencies (`os`, `sys`, `pathlib`, `csv`, `importlib.resources`, etc.) are part of the Python standard library.
+*   **Packaged Data:** The script needs to read a data file that is packaged with the application. Assume this file is located at `pdd/data/llm_model.csv` and can be accessed using `importlib.resources.files('pdd').joinpath(...)`. This CSV contains columns such as `model`, `provider`, and `api_key`.
+
+### Instructions
+
+1.  **Structure:** Organize the code into logical functions (e.g., `print_pdd_logo`, `discover_api_keys`, `test_openai_key`, `save_configuration`, `create_exit_summary`, `main`).
+2.  **Constants:** Define global constants for UI elements (box-drawing characters like `HEAVY_HORIZONTAL`, `BULLET`) and ANSI color codes (`CYAN`, `YELLOW`, `BOLD`, `RESET`) for a consistent and maintainable UI.
+3.  **Main Loop:** The `main()` function should orchestrate the workflow: display the logo, perform initial discovery and testing, and then enter a `while` loop for the main menu.
+4.  **File Handling:** Use `pathlib.Path` for all file and directory manipulations. Ensure correct file permissions are set where necessary (e.g., `0o755` for the `~/.pdd` directory and the `api-env` script).
+5.  **CSV Filtering:** When creating `~/.pdd/llm_model.csv`, read the packaged CSV, filter its rows based on whether the `api_key` value for a given row is present in the set of validated keys, and then write the filtered rows out to the new file, preserving the original header.
+6.  **Security:** When displaying the final summary, do not print the full API keys. Mask them to prevent accidental exposure.
+7.  **Clarity:** The final summary is the most critical part of the user experience. Ensure the "QUICK START" instructions are unambiguous and correct for the user's detected shell.
+
+### Deliverable
+
+A single, executable Python script named `pdd_setup.py`. The script must begin with `#!/usr/bin/env python3` and have a standard `if __name__ == '__main__':` entry point that calls the `main()` function. The script should contain all the logic, constants, and functions described above, with no external code dependencies other than the `requests` library.

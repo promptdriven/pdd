@@ -1,4 +1,9 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "git_update", that will read in modified_code_file, restore the prior checked-in version from GitHub and load it to be the original_input_code, call update_prompt, then write back the modified_code_file over the prior version, and finally return outputs without committing the changes to the Git repository.
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "git_update", that will:
+%   1) Read the current contents of 'modified_code_file' (this is the user's modified code).
+%   2) Restore the prior checked-in version from the local Git repository (HEAD) without fetching from remote, and load it as 'original_input_code'.
+%   3) Call 'update_prompt' with input_prompt, original_input_code, modified_code, strength, temperature, verbose, and time.
+%   4) Overwrite 'modified_code_file' with the previously read modified contents (i.e., keep the user's edits on disk).
+% Finally, return outputs without staging or committing any changes to the Git repository.
 
 <include>context/python_preamble.prompt</include>
 
@@ -8,12 +13,18 @@
         - 'modified_code_file' - A string of the filepath that contains the code that was modified by the user.
         - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
-        - 'time': A float between 0 and 1 that controls the thinking effort for the LLM model, passed to update_prompt. Default is DEFAULT_TIME.
-        - 'verbose': A boolean value representing whether to print verbose output.
+        - 'time': A float between 0 and 1 that controls the thinking effort for the LLM model, passed to update_prompt. Default is DEFAULT_TIME. 
+        - 'verbose': A boolean value representing whether to print verbose output. The flag is forwarded to update_prompt for its internal logging.
     Outputs:
         - 'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
         - 'total_cost': A float value representing the total cost of running the function.
         - 'model_name': A string representing the name of the selected LLM model.
+
+% Behavioral details and error handling:
+%   - Always print a concise Rich success panel on success (showing modified_prompt, total_cost, model_name).
+%   - On any error (e.g., invalid inputs, missing file, not a Git repo, update_prompt failure, or write failure), print a Rich error panel and return (None, 0.0, "").
+%   - If the file was temporarily checked out to HEAD, ensure the user's modified contents are restored back to 'modified_code_file' before returning from an error path.
+%   - Validate that 'input_prompt' and 'modified_code_file' are provided and that the file exists. If the path is not inside a Git repository (or checkout fails), treat it as an error.
 
 % Here are examples of how to use internal modules:
 <internal_example_modules>
