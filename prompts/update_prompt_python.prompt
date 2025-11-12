@@ -2,19 +2,25 @@
 
 <include>./context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
+% Here are the inputs and outputs of the function (with explicit validation and semantics):
     Inputs:
         - 'input_prompt' - A string that contains the prompt that generated the original code.
         - 'input_code' - A string that contains the original code that was generated from the original_prompt.
         - 'modified_code' - A string that contains the code that was modified by the user.
-        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior. Range is between 0 and 1.
-        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output. Range is between 0 and 1.
+        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior. Range is between 0 and 1. Invalid values should raise ValueError.
+        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output. Range is between 0 and 1. Invalid values should raise ValueError.
         - 'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         - 'verbose': A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple:
         - 'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
         - 'total_cost': A float value representing the total cost of running the function.
-        - 'model_name': A string representing the name of the selected LLM model.
+        - 'model_name': A string representing the name of the selected LLM model (from the first invocation).
+
+% Special cases and input validation details:
+    - If 'input_prompt' equals the sentinel string "no prompt exists yet, create a new one", allow 'input_code' to be empty for new-prompt generation.
+    - Otherwise, for prompt updates, require non-empty 'input_code'; raise ValueError if empty.
+    - Missing templates or failed LLM invocations should raise RuntimeError.
+    - You may order parameters such that 'verbose' appears before or after 'time' as long as defaults remain: verbose=False and time=DEFAULT_TIME.
 
 % Here is how to use the internal modules:
     <internal_modules>
@@ -32,6 +38,7 @@
     </internal_modules>
 
 % Steps to be followed by the function:
+    0. Validate inputs and handle the "new prompt" sentinel case as described above.
     1. Load the prompt templates:
         a. Load 'update_prompt_LLM' prompt template using load_prompt_template and preprocess it with recursive=False and double_curly_brackets=False.
         b. Load 'extract_prompt_update_LLM' prompt template using load_prompt_template and preprocess it with the same parameters.
@@ -48,9 +55,10 @@
         b. Pass the result from step 2 as 'llm_output' parameter.
         c. Use a fixed strength value of 0.5, the provided temperature, and time.
         d. If verbose is True, pretty print the running message with token count and cost.
-        e. The Pydantic output will contain the 'modified_prompt' key.
+        e. Parse with a Pydantic model, e.g., output_pydantic=PromptUpdate where PromptUpdate has a single field 'modified_prompt: str'. The Pydantic output will contain the 'modified_prompt' key.
     4. If verbose is True, pretty print the extracted modified_prompt using Rich Markdown function.
     5. Calculate total cost by summing costs from both invocations.
     6. Return the modified_prompt string, total_cost, and model_name from the first invocation.
+    7. Error handling: Wrap the flow in try/except, print a user-friendly error message (Rich styling optional), and re-raise as RuntimeError so callers can handle failures.
 
-% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses, by raising ValueError for invalid inputs and RuntimeError for runtime failures as noted above.
