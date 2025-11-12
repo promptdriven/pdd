@@ -24,7 +24,8 @@ def crash_main(
     output_program: Optional[str] = None,
     loop: bool = False,
     max_attempts: Optional[int] = None,
-    budget: Optional[float] = None
+    budget: Optional[float] = None,
+    agentic_fallback: bool = True
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in a code module and its calling program that caused a crash.
@@ -39,6 +40,7 @@ def crash_main(
     :param loop: Enable iterative fixing process.
     :param max_attempts: Maximum number of fix attempts before giving up.
     :param budget: Maximum cost allowed for the fixing process.
+    :param agentic_fallback: Enable agentic fallback if the primary fix mechanism fails.
     :return: A tuple containing:
         - bool: Success status
         - str: The final fixed code module
@@ -95,7 +97,8 @@ def crash_main(
         if loop:
             success, final_program, final_code, attempts, cost, model = fix_code_loop(
                 code_file, prompt_content, program_file, strength, temperature,
-                max_attempts or 3, budget or 5.0, error_file, verbose, time_param
+                max_attempts or 3, budget or 5.0, error_file, verbose, time_param,
+                prompt_file=prompt_file, agentic_fallback=agentic_fallback
             )
             # Always set final_code/final_program to something non-empty
             if not final_code:
