@@ -2,7 +2,6 @@ import sys
 from typing import Tuple, Optional, List, Dict, Any
 import click
 from rich import print as rprint
-import concurrent.futures
 import os
 from pathlib import Path
 import git
@@ -62,13 +61,15 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
     pairs = []
     ignored_dirs = {'.git', '.idea', '.vscode', '__pycache__', 'node_modules', '.venv', 'venv', 'dist', 'build'}
     
-    console.print(f"[info]Scanning repository and resolving prompt/code pairs...[/info]")
+    if not quiet:
+        console.print(f"[info]Scanning repository and resolving prompt/code pairs...[/info]")
 
     allowed_extensions: Optional[set] = None
     if extensions:
         ext_list = [e.strip().lower() for e in extensions.split(',')]
         allowed_extensions = {f'.{e}' if not e.startswith('.') else e for e in ext_list}
-        console.print(f"[info]Filtering for extensions: {', '.join(allowed_extensions)}[/info]")
+        if not quiet:
+            console.print(f"[info]Filtering for extensions: {', '.join(allowed_extensions)}[/info]")
 
     all_files = []
     for root, dirs, files in os.walk(repo_root, topdown=True):
@@ -131,7 +132,7 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
                 strength=ctx.obj.get("strength", 0.5),
                 temperature=ctx.obj.get("temperature", 0),
                 verbose=ctx.obj.get("verbose", False),
-                time=ctx.obj.get("time"),
+                time=ctx.obj.get('time', DEFAULT_TIME),
             )
         # UPDATE MODE: Only trigger if the file is tracked AND the prompt has content.
         else:
@@ -141,7 +142,7 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
                 strength=ctx.obj.get("strength", 0.5),
                 temperature=ctx.obj.get("temperature", 0),
                 verbose=ctx.obj.get("verbose", False),
-                time=ctx.obj.get("time"),
+                time=ctx.obj.get('time', DEFAULT_TIME),
             )
         
         if modified_prompt is not None:
