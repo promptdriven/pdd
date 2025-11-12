@@ -1256,10 +1256,10 @@ Arguments:
 - `CODE_FILE`: The filename of the code file to be tested.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_1.py`) will be created instead of overwriting.
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
 - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
 - `--coverage-report PATH`: Path to the coverage report file for existing tests. When provided, generates additional tests to improve coverage.
-- `--existing-tests PATH [PATH...]`: Path(s) to the existing unit test file(s). Required when using --coverage-report. Multiple paths can be provided.
+- `--existing-tests PATH`: Path to the existing unit test file. Required when using --coverage-report.
 - `--target-coverage FLOAT`: Desired code coverage percentage to achieve (default is 90.0).
 - `--merge`: When used with --existing-tests, merges new tests with existing test file instead of creating a separate file.
 
@@ -1288,9 +1288,9 @@ could influence the output of the `pdd test` command when run in the same direct
 pdd [GLOBAL OPTIONS] test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
-2. Generate additional tests to improve coverage (with multiple existing test files):
+2. Generate additional tests to improve coverage:
 ```
-pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --existing-tests tests/test_calculator_edge_cases.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
+pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
 ```
 
 3. Improve coverage and merge with existing tests:
@@ -1407,11 +1407,11 @@ pdd [GLOBAL OPTIONS] fix [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FI
 Arguments:
 - `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
 - `CODE_FILE`: The filename of the code file to be fixed.
-- `UNIT_TEST_FILES`: The filename(s) of the unit test file(s). Multiple files can be provided, and each will be processed individually.
+- `UNIT_TEST_FILE`: The filename of the unit test file.
 - `ERROR_FILE`: The filename containing the unit test runtime error messages. Optional and does not need to exist when used with the `--loop` command.
 
 Options:
-- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. **Warning: If multiple `UNIT_TEST_FILES` are provided along with this option, only the fixed content of the last processed test file will be saved to this location, overwriting previous results. For individual fixed files, omit this option.**
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.log`. If an environment variable `PDD_FIX_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--loop`: Enable iterative fixing process.
@@ -1423,8 +1423,8 @@ Options:
 When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
 Outputs:
-- Fixed unit test file(s).
-- Fixed code file.
+- Fixed unit test file
+- Fixed code file
 - Results file containing the LLM model's output with unit test results.
 - Print out of results when using '--loop' containing:
   - Success status (boolean)
@@ -1434,9 +1434,9 @@ Outputs:
 
 Example:
 ```
-pdd [GLOBAL OPTIONS] fix --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py tests/test_factorial_calculator_edge_cases.py errors.log
+pdd [GLOBAL OPTIONS] fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
 ```
-In this example, `pdd fix` will be run for each test file, and the fixed test files will be saved as `tests/test_factorial_calculator_fixed.py` and `tests/test_factorial_calculator_edge_cases_fixed.py`.
+In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
 
 ### 7. split
 
@@ -1490,39 +1490,59 @@ pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv s
 
 ### 9. update
 
-Update the original prompt file based on the modified code and optionally the original code.
+Update prompts based on code changes. This command operates in two primary modes:
 
-```
-pdd [GLOBAL OPTIONS] update [OPTIONS] INPUT_PROMPT_FILE MODIFIED_CODE_FILE [INPUT_CODE_FILE]
+1.  **Repository-Wide Mode (Default)**: When run with no file arguments, `pdd update` scans the entire repository. It finds all code/prompt pairs, creates any missing prompt files, and updates all of them based on the latest Git changes. This is the easiest way to keep your entire project in sync.
+
+2.  **Single-File Mode**: When you provide file arguments, the command operates on a specific file. There are three distinct use cases for this mode:
+
+    **A) Prompt Generation / Regeneration**
+    To generate a brand new prompt for a code file from scratch, or to regenerate an existing prompt, simply provide the path to that code file. This will create a new prompt file or overwrite an existing one.
+    ```bash
+    pdd update <path/to/your_code_file.py>
+    ```
+
+    **B) Prompt Update (using Git)**
+    To update an existing prompt by comparing the modified code against the version in your last commit. This requires the prompt file and the modified code file.
+    ```bash
+    pdd update --git <path/to/prompt.prompt> <path/to/modified_code.py>
+    ```
+
+    **C) Prompt Update (Manual)**
+    To update an existing prompt by manually providing the original code, the modified code, and the prompt. This is for scenarios where Git history is not available or desired.
+    ```bash
+    pdd update <path/to/prompt.prompt> <path/to/modified_code.py> <path/to/original_code.py>
+    ```
+
+```bash
+# Repository-Wide Mode (no arguments)
+pdd [GLOBAL OPTIONS] update
+
+# Single-File Mode: Examples
+# Generate/Regenerate a prompt for a code file
+pdd [GLOBAL OPTIONS] update src/my_new_module.py
+
+# Update an existing prompt using Git history
+pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
+
+# Update an existing prompt by manually providing original code
+pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+
+# Repository-wide update filtered by extension
+pdd [GLOBAL OPTIONS] update --extensions py,js
 ```
 
 Arguments:
-- `INPUT_PROMPT_FILE`: The filename of the prompt file that generated the original code.
-- `MODIFIED_CODE_FILE`: The filename of the code that was modified by the user.
-- `INPUT_CODE_FILE`: (Optional) The filename of the original code that was generated from the input prompt file. This argument is not required when using the `--git` option.
+- `MODIFIED_CODE_FILE`: The filename of the code that was modified or for which a prompt should be generated/regenerated.
+- `INPUT_PROMPT_FILE`: (Optional) The filename of the prompt file that generated the original code. Required for true update scenarios (B and C).
+- `INPUT_CODE_FILE`: (Optional) The filename of the original code. Required for manual update (C), not required when using `--git` (B), and not applicable for generation (A).
 
-**Important**: The `update` command has special behavior compared to other PDD commands. By default, it overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth." This ensures prompts remain in their canonical location and continue to serve as the authoritative specification.
+**Important**: By default, this command overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth."
 
 Options:
-- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
-- `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
-
-Example (overwrite original prompt - default behavior):
-```
-pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place
-```
-
-Example (save to different location):
-```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-```
-
-Example using the `--git` option:
-```
-pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place using git history
-```
+- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten.**
+- `--git`: Use Git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument in update scenarios (B).
+- `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
 
 ### 10. detect
 
@@ -1638,7 +1658,7 @@ Arguments:
 - `DESIRED_OUTPUT_FILE`: File containing the desired (correct) output of the program.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_bug_1.py`) will be created instead of overwriting.
+- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`.
 - `--language`: Specify the programming language for the unit test (default is "Python").
 
 Example:
