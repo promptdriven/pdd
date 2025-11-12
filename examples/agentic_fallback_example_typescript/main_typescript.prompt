@@ -1,0 +1,11 @@
+You are generating a single TypeScript source file.
+
+TARGET FILE NAME: main.ts
+GOAL: Provide a tiny console application that depends on a separate utility module `utils.ts`.
+REQUIREMENTS:
+- Call `utils.add(a, b)` and print the result to STDOUT.
+- Keep the file minimal: a main function that runs when the script is executed.
+- No external libraries; only standard Node.js.
+- Output ONLY valid TypeScript code for main.ts (no commentary, no markdown fences).
+
+Deliver ONLY the full contents of main.ts.

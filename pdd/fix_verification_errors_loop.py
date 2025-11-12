@@ -27,6 +27,41 @@ except ImportError:
 
 from . import DEFAULT_TIME # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
+from .get_language import get_language
+from .agentic_langtest import default_verify_cmd_for
+from .agentic_fix import run_agentic_fix
+
+def _normalize_agentic_result(result):
+    """
+    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str)
+    Handles older 2/3-tuple shapes used by tests/monkeypatches.
+    """
+    if isinstance(result, tuple):
+        if len(result) == 4:
+            ok, msg, cost, model = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli")
+        if len(result) == 3:
+            ok, msg, cost = result
+            return bool(ok), str(msg), float(cost), "agentic-cli"
+        if len(result) == 2:
+            ok, msg = result
+            return bool(ok), str(msg), 0.0, "agentic-cli"
+    # Fallback (shouldn't happen)
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli"
+
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+    """
+    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
+    """
+    if not prompt_file:
+        return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli"
+    res = run_agentic_fix(
+        prompt_file=prompt_file,
+        code_file=code_file,
+        unit_test_file=unit_test_file,
+        error_log_file=error_log_file,
+    )
+    return _normalize_agentic_result(res)
 
 # Initialize Rich Console for pretty printing
 console = Console()
@@ -95,6 +130,7 @@ def fix_verification_errors_loop(
     program_file: str,
     code_file: str,
     prompt: str,
+    prompt_file: str,
     verification_program: str,
     strength: float,
     temperature: float,
@@ -105,7 +141,8 @@ def fix_verification_errors_loop(
     output_program_path: Optional[str] = None,
     verbose: bool = False,
     program_args: Optional[list[str]] = None,
-    llm_time: float = DEFAULT_TIME # Add time parameter
+    llm_time: float = DEFAULT_TIME, # Add time parameter
+    agentic_fallback: bool = True,
 ) -> Dict[str, Any]:
     """
     Attempts to fix errors in a code file based on program execution output
@@ -115,6 +152,7 @@ def fix_verification_errors_loop(
         program_file: Path to the Python program exercising the code.
         code_file: Path to the code file being tested/verified.
         prompt: The prompt defining the intended behavior.
+        prompt_file: Path to the prompt file.
         verification_program: Path to a secondary program to verify code changes.
         strength: LLM model strength (0.0 to 1.0).
         temperature: LLM temperature (0.0 to 1.0).
@@ -126,6 +164,7 @@ def fix_verification_errors_loop(
         verbose: Enable verbose logging (default: False).
         program_args: Optional list of command-line arguments for the program_file.
         llm_time: Time parameter for fix_verification_errors calls (default: DEFAULT_TIME).
+        agentic_fallback: Enable agentic fallback if the primary fix mechanism fails.
 
     Returns:
         A dictionary containing:
@@ -137,6 +176,49 @@ def fix_verification_errors_loop(
             'model_name': str | None - Name of the LLM model used.
             'statistics': dict - Detailed statistics about the process.
     """
+    is_python = str(code_file).lower().endswith(".py")
+    if not is_python:
+        # For non-Python files, run the verification program to get an initial error state
+        console.print(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
+        lang = get_language(os.path.splitext(code_file)[1])
+        verify_cmd = default_verify_cmd_for(lang, verification_program)
+        if not verify_cmd:
+            raise ValueError(f"No default verification command for language: {lang}")
+        
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
+        pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
+        console.print("[cyan]Non-Python target detected. Triggering agentic fallback...[/cyan]")
+        with open(verification_log_file, "w") as f:
+            f.write(pytest_output)
+        
+        success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=verification_program,
+            error_log_file=verification_log_file,
+        )
+        final_program = ""
+        final_code = ""
+        try:
+            with open(verification_program, "r") as f:
+                final_program = f.read()
+        except Exception:
+            pass
+        try:
+            with open(code_file, "r") as f:
+                final_code = f.read()
+        except Exception:
+            pass
+        return {
+            "success": success,
+            "final_program": final_program,
+            "final_code": final_code,
+            "total_attempts": 1,
+            "total_cost": agent_cost,
+            "model_name": agent_model,
+            "statistics": {},
+        }
+
     program_path = Path(program_file).resolve()
     code_path = Path(code_file).resolve()
     verification_program_path = Path(verification_program).resolve()
@@ -863,6 +945,27 @@ def fix_verification_errors_loop(
     # Ensure final success status matches reality (e.g., if regression occurred)
     if final_known and stats['final_issues'] != 0:
         overall_success = False
+
+    if not overall_success and agentic_fallback:
+        console.print("[bold yellow]Initiating agentic fallback...[/bold yellow]")
+        agent_success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=verification_program,
+            error_log_file=verification_log_file,
+        )
+        total_cost += agent_cost
+        if agent_success:
+            console.print("[bold green]Agentic fallback successful.[/bold green]")
+            overall_success = True
+            model_name = agent_model or model_name
+            try:
+                final_code_content = Path(code_file).read_text(encoding="utf-8")
+                final_program_content = Path(program_file).read_text(encoding="utf-8")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
+        else:
+            console.print("[bold red]Agentic fallback failed.[/bold red]")
 
     return {
         "success": overall_success,

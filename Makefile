@@ -65,7 +65,7 @@ PUBLIC_PDD_CAP_REMOTE ?= https://github.com/promptdriven/pdd_cap.git
 PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example README.md .gitignore SETUP_WITH_GEMINI.md Makefile pdd-local.sh
 # Include core unit tests by default
 PUBLIC_COPY_TESTS ?= 1
-PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py
+PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py tests/conftest.py
 PUBLIC_TEST_EXCLUDE ?= tests/regression* tests/sync_regression* tests/**/regression* tests/**/sync_regression* tests/**/*.ipynb tests/csv/**
 PUBLIC_COPY_CONTEXT ?= 1
 PUBLIC_CONTEXT_INCLUDE ?= context/*_example.py

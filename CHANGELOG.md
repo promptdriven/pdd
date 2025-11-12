@@ -1,3 +1,51 @@
+## v0.0.68 (2025-11-12)
+
+## v0.0.67 (2025-11-11)
+
+### Feat
+
+- add pdd-local.sh to the list of public root files for publishing
+- add support for --local option in regression tests to enhance context argument handling
+- improve template listing in CLI by enhancing output formatting for better readability
+- implement error recovery in regression tests by adding a 'crash' command to fix failed example runs
+- extend sync command in regression tests with additional options for budget and max attempts
+- add regression test summary parsing to TestRunner for improved pass/fail reporting
+- enhance TestRunner with detailed parsing for sync regression results and improve error handling
+- enhance TestRunner to extract additional log paths and improve regression output parsing
+- improve test result parsing and logging in TestRunner to handle multiple log files
+- enhance Makefile to copy regression scripts and update TestRunner to parse full log files
+- add sync log and analysis tests to regression suite
+- add parallel execution for sync regression tests and update test command in Makefile
+- add make pr-test command to test public PRs against private codebase
+- include PR link in test results comment
+- extract and display failed test numbers in results
+- add manual workflow trigger support without requiring keys in code
+- automate test execution with GitHub Actions and Infisical
+
+### Fix
+
+- improve error logging in sync regression tests by capturing exit status for failed commands
+- improve patch application process in PR tests workflow with fallback mechanism
+- simplify comment body parsing in PR tests workflow
+- update sync command to include local flag for multi-language tests
+- update Infisical environment variable usage and improve sync regression test logging
+- update repository references from pdd_cloud to gltanaka/pdd
+- update all repository URLs to promptdriven/pdd_cloud
+- update repository references to promptdriven organization
+
+### Refactor
+
+- enhance `update` command functionality in CLI to support repository-wide updates and improved prompt handling (Thank you Jiamin Cai for your contributions!)
+- enhance test logging and output handling in TestRunner
+- enhance Infisical integration in test scripts and update workflow for token usage
+- update GitHub Actions workflow to apply public PR patches on private repo
+- use pr-url instead of pr-num for flexibility
+- change workflow to manual-only execution
+
+### Docs
+
+- add developer setup section with test optimization and dependencies
+
 ## v0.0.66 (2025-11-07)
 
 ### Architecture & Code Generation
