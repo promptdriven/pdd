@@ -4,7 +4,6 @@
 
 - add pdd-local.sh to the list of public root files for publishing
 - add support for --local option in regression tests to enhance context argument handling
-- add support for publishing to CAP public repo and enhance package data copying with extra patterns
 - improve template listing in CLI by enhancing output formatting for better readability
 - implement error recovery in regression tests by adding a 'crash' command to fix failed example runs
 - extend sync command in regression tests with additional options for budget and max attempts
@@ -17,11 +16,9 @@
 - add parallel execution for sync regression tests and update test command in Makefile
 - add make pr-test command to test public PRs against private codebase
 - include PR link in test results comment
-- automate Cloud Run setup with GitHub Actions workflow
-- add Google Cloud Run test execution support
 - extract and display failed test numbers in results
 - add manual workflow trigger support without requiring keys in code
-- automate test execution with GitHub Actions, Infisical, and Google Cloud Run
+- automate test execution with GitHub Actions and Infisical
 
 ### Fix
 
@@ -36,14 +33,16 @@
 
 ### Refactor
 
-- enhance `update` command functionality in CLI to support repository-wide updates and improved prompt handling
+- enhance `update` command functionality in CLI to support repository-wide updates and improved prompt handling (Thank you Jiamin Cai for your contributions!)
 - enhance test logging and output handling in TestRunner
 - enhance Infisical integration in test scripts and update workflow for token usage
 - update GitHub Actions workflow to apply public PR patches on private repo
 - use pr-url instead of pr-num for flexibility
 - change workflow to manual-only execution
-- remove all Google Cloud Platform implementation
-- remove emojis from code files
+
+### Docs
+
+- add developer setup section with test optimization and dependencies
 
 ## v0.0.66 (2025-11-07)
 
