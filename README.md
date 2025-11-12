@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.66-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.68-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.66
+Current version: 0.0.68
 
 To check your installed version, run:
 ```
@@ -456,7 +456,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 - **[`update`](#9-update)**: Updates the original prompt file based on modified code.
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description.
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
-- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash.
+- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash. Includes an agentic fallback mode for complex errors.
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line.
 - **[`bug`](#14-bug)**: Generates a unit test based on observed vs. desired program outputs.
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
@@ -1540,9 +1540,72 @@ Arguments:
 **Important**: By default, this command overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth."
 
 Options:
-- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten.**
-- `--git`: Use Git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument in update scenarios (B).
+- `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
+- `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
+
+Example (overwrite original prompt - default behavior):
+```
+pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+# This overwrites factorial_calculator_python.prompt in place
+```
+
+#### Agentic Fallback Mode
+
+(This feature is also available for the `crash` command.)
+
+For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
+
+**How it Works:**
+If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
+
+**How to Use:**
+
+This feature only takes effect when `--loop` is set.
+
+When the `--loop` flag is set, agentic fallback is enabled by default:
+```bash
+pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+Or you may want to enable it explicitly
+
+```bash
+pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+To disable this feature while using `--loop`, add `--no-agentic-fallback` to turn it off.
+
+```bash
+pdd [GLOBAL OPTIONS] fix --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+**Prerequisites:**
+For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed and the corresponding API key configured in your environment. The agents are tried in the following order of preference:
+
+1.  **Anthropic Claude:**
+    *   Requires the `claude` CLI to be installed and in your `PATH`.
+    *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
+2.  **Google Gemini:**
+    *   Requires the `gemini` CLI to be installed and in your `PATH`.
+    *   Requires the `GOOGLE_API_KEY` environment variable to be set.
+3.  **OpenAI Codex/GPT:**
+    *   Requires the `codex` CLI to be installed and in your `PATH`.
+    *   Requires the `OPENAI_API_KEY` environment variable to be set.
+
+You can configure these keys using `pdd setup` or by setting them in your shell's environment.
+
+Example (save to different location):
+```
+pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+```
+
+Example using the `--git` option:
+```
+pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
+# This overwrites factorial_calculator_python.prompt in place using git history
+```
+
 
 ### 10. detect
 
@@ -1606,8 +1669,11 @@ Options:
 - `--loop`: Enable iterative fixing process.
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
   - `--budget FLOAT`: Set the maximum cost allowed for the fixing process (default is $5.0).
+- `--agentic-fallback / --no-agentic-fallback`: Enable or disable the agentic fallback mode (default: enabled).
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
+
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, or Codex) installed and the corresponding API key configured in your environment.
 
 Example:
 ```
@@ -1719,6 +1785,7 @@ Options:
 - `--output-program LOCATION`: Specify where to save the final program file after verification attempts (even if verification doesn't fully succeed). The default file name is `<program_basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_PROGRAM_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--max-attempts INT`: Set the maximum number of fix attempts within the verification loop before giving up (default is 3).
 - `--budget FLOAT`: Set the maximum cost allowed for the entire verification and iterative fixing process (default is $5.0).
+- `--agentic-fallback / --no-agentic-fallback`: Enable or disable the agentic fallback mode (default: enabled).
 
 The command operates iteratively if the initial run of `PROGRAM_FILE` produces output judged incorrect by the LLM based on the `PROMPT_FILE`. After each fix attempt on `CODE_FILE`, `PROGRAM_FILE` is re-run, and its output is re-evaluated. This continues until the output is judged correct, `--max-attempts` is reached, or the `--budget` is exhausted. Intermediate code files may be generated during the loop, similar to the `fix` command.
 
