@@ -18,6 +18,7 @@ from rich import box
 from rich.console import Console
 from rich.markup import MarkupError, escape
 from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 # --- Relative Imports for Internal Modules ---
@@ -439,8 +440,22 @@ def templates_list(as_json: bool, filter_tag: Optional[str]):
                 return
             console.print("[info]Available Templates:[/info]")
             for it in items:
+                # Print the template name on its own line to avoid Rich wrapping
+                name_line = Text(f"- {it['name']}", style="bold", no_wrap=True)
+                console.print(name_line)
+                # Print details on the next line(s) with a small indent; wrapping is fine here
+                version = it.get("version", "")
+                description = it.get("description", "")
                 tags = ", ".join(it.get("tags", []))
-                console.print(f"- [bold]{it['name']}[/bold] ({it.get('version','')}) — {it.get('description','')} [dim]{tags}[/dim]")
+                details_parts = []
+                if version:
+                    details_parts.append(f"({version})")
+                if description:
+                    details_parts.append(description)
+                if tags:
+                    details_parts.append(f"[{tags}]")
+                if details_parts:
+                    console.print("  " + " — ".join(details_parts))
     except Exception as e:
         handle_error(e, "templates list", False)
 
@@ -1111,8 +1126,8 @@ def change(
 
 
 @cli.command("update")
-@click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("modified_code_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.argument("modified_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
 @click.argument("input_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
 @click.option(
     "--output",
@@ -1122,41 +1137,77 @@ def change(
 )
 @click.option(
     "--git",
+    "use_git",
     is_flag=True,
     default=False,
     help="Use git history to find the original code file.",
+)
+@click.option(
+    "--extensions",
+    type=str,
+    default=None,
+    help="Comma-separated list of file extensions to update in repo mode (e.g., 'py,js,ts').",
 )
 @click.pass_context
 @track_cost
 def update(
     ctx: click.Context,
-    input_prompt_file: str,
-    modified_code_file: str,
+    input_prompt_file: Optional[str],
+    modified_code_file: Optional[str],
     input_code_file: Optional[str],
     output: Optional[str],
-    git: bool,
-) -> Optional[Tuple[str, float, str]]: # Modified return type
-    """Update the original prompt file based on modified code."""
+    use_git: bool,
+    extensions: Optional[str],
+) -> Optional[Tuple[str, float, str]]:
+    """
+    Update prompts based on code changes.
+
+    This command operates in two modes:
+
+    1.  **Single-File Mode:** When you provide at least a code file, it updates
+        or generates a single prompt.
+        - `pdd update [PROMPT_FILE] <CODE_FILE>`: Updates prompt based on code.
+        - `pdd update <CODE_FILE>`: Generates a new prompt for the code.
+
+    2.  **Repository-Wide Mode:** When you provide no file arguments, it scans the
+        entire repository, finds all code/prompt pairs, creates missing prompts,
+        and updates them all based on the latest git changes.
+    """
     quiet = ctx.obj.get("quiet", False)
     command_name = "update"
     try:
-        if git and input_code_file:
-            raise click.UsageError("Cannot use --git and specify an INPUT_CODE_FILE simultaneously.")
-        if not git and not input_code_file:
-            raise click.UsageError("INPUT_CODE_FILE is required when not using --git.")
+        # If only one file is provided, it's the modified_code_file for generation
+        if input_prompt_file and not modified_code_file:
+            actual_modified_code_file = input_prompt_file
+            actual_input_prompt_file = None
+        else:
+            actual_modified_code_file = modified_code_file
+            actual_input_prompt_file = input_prompt_file
+
+        is_repo_mode = not actual_input_prompt_file and not actual_modified_code_file
+
+        if is_repo_mode:
+            if any([input_code_file, output, use_git]):
+                raise click.UsageError(
+                    "Cannot use file-specific arguments or flags like --git or --output in repository-wide mode (when no files are provided)."
+                )
+        elif extensions:
+            raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")
 
         updated_prompt, total_cost, model_name = update_main(
             ctx=ctx,
-            input_prompt_file=input_prompt_file,
-            modified_code_file=modified_code_file,
+            input_prompt_file=actual_input_prompt_file,
+            modified_code_file=actual_modified_code_file,
             input_code_file=input_code_file,
             output=output,
-            git=git,
+            use_git=use_git,
+            repo=is_repo_mode,
+            extensions=extensions,
         )
         return updated_prompt, total_cost, model_name
-    except (click.UsageError, Exception) as e: # Catch specific and general exceptions
+    except (click.UsageError, Exception) as e:
         handle_error(e, command_name, quiet)
-        return None # Return None on failure
+        return None
 
 
 @cli.command("detect")
