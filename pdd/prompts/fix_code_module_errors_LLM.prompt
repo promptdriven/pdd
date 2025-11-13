@@ -8,7 +8,7 @@
 - If you are not able to fix the calling program, or if you cannot access it, you shouldn't guess at fixes to the calling program. Do not add the functionality of the calling program to the code_module.
 - You must ensure that the code_module strictly adheres to the prompt requirements
 
-% Here is the program that is running the code_module that crashed and/or has errors: <program>{program}</program>
+% Here is the calling program that is running the code_module that crashed and/or has errors: <program>{program}</program>
 
 % Here is the prompt that generated the code_module below: <prompt>{prompt}</prompt>
 
