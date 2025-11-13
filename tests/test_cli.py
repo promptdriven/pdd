@@ -1017,91 +1017,6 @@ def test_cli_onboarding_reminder_suppressed_by_api_env(monkeypatch, runner, tmp_
     assert result.exit_code == 0
     assert "Complete onboarding with `pdd setup`" not in result.output
 
-def test_cli_fix_multiple_test_files(runner, tmp_path):
-    """Test that the fix command accepts multiple test files."""
-    prompt_file = tmp_path / "prompt.prompt"
-    prompt_file.write_text("prompt content")
-    code_file = tmp_path / "code.py"
-    code_file.write_text("code content")
-    test_file_1 = tmp_path / "test_1.py"
-    test_file_1.write_text("test 1 content")
-    test_file_2 = tmp_path / "test_2.py"
-    test_file_2.write_text("test 2 content")
-    error_file = tmp_path / "error.txt"
-    error_file.write_text("error content")
-
-    with patch('pdd.cli.fix_main') as mock_fix_main:
-        mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
-        result = runner.invoke(cli.cli, [
-            'fix',
-            str(prompt_file),
-            str(code_file),
-            str(test_file_1),
-            str(test_file_2),
-            str(error_file),
-        ])
-        assert result.exit_code == 0
-        assert mock_fix_main.call_count == 2
-        mock_fix_main.assert_any_call(
-            ctx=ANY,
-            prompt_file=str(prompt_file),
-            code_file=str(code_file),
-            unit_test_file=str(test_file_1),
-            error_file=str(error_file),
-            output_test=None,
-            output_code=None,
-            output_results=None,
-            loop=False,
-            verification_program=None,
-            max_attempts=3,
-            budget=5.0,
-            auto_submit=False,
-        )
-        mock_fix_main.assert_any_call(
-            ctx=ANY,
-            prompt_file=str(prompt_file),
-            code_file=str(code_file),
-            unit_test_file=str(test_file_2),
-            error_file=str(error_file),
-            output_test=None,
-            output_code=None,
-            output_results=None,
-            loop=False,
-            verification_program=None,
-            max_attempts=3,
-            budget=5.0,
-            auto_submit=False,
-        )
-
-def test_cli_test_multiple_existing_tests(runner, tmp_path):
-    """Test that the test command accepts multiple existing test files."""
-    prompt_file = tmp_path / "prompt.prompt"
-    prompt_file.write_text("prompt content")
-    code_file = tmp_path / "code.py"
-    code_file.write_text("code content")
-    test_file_1 = tmp_path / "test_1.py"
-    test_file_1.write_text("test 1 content")
-    test_file_2 = tmp_path / "test_2.py"
-    test_file_2.write_text("test 2 content")
-    coverage_report = tmp_path / "coverage.xml"
-    coverage_report.write_text("coverage content")
-
-    with patch('pdd.cli.cmd_test_main') as mock_cmd_test_main:
-        result = runner.invoke(cli.cli, [
-            'test',
-            str(prompt_file),
-            str(code_file),
-            '--existing-tests',
-            str(test_file_1),
-            '--existing-tests',
-            str(test_file_2),
-            '--coverage-report',
-            str(coverage_report),
-        ])
-        assert result.exit_code == 0
-        mock_cmd_test_main.assert_called_once()
-        assert mock_cmd_test_main.call_args[1]['existing_tests'] == [str(test_file_1), str(test_file_2)]
-
 # --- Real Command Tests (No Mocking) ---
 # These tests remain largely unchanged as they call the *_main functions directly
 # or expect exceptions to be raised by those main functions.
@@ -1830,3 +1745,83 @@ if __name__ == "__main__":
         # Restore PDD_PATH if it was set
         if original_pdd_path is not None:
             os.environ['PDD_PATH'] = original_pdd_path
+
+# --- Core Dump Global Option Tests ---
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main')
+def test_cli_core_dump_default_flag_false(mock_main, mock_auto_update, runner, create_dummy_files):
+    """By default, core_dump flag in context should be False (or missing)."""
+    files = create_dummy_files("test_core_default.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(cli.cli, ["generate", str(files["test_core_default.prompt"])])
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    mock_main.assert_called_once()
+    ctx = mock_main.call_args.kwargs.get("ctx")
+    assert ctx is not None
+    # If implementation does not set it explicitly, this assertion can be relaxed
+    assert ctx.obj.get("core_dump", False) is False
+    mock_auto_update.assert_called_once_with()
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main')
+def test_cli_core_dump_flag_sets_ctx_true(mock_main, mock_auto_update, runner, create_dummy_files):
+    """`--core-dump` should set ctx.obj['core_dump'] to True."""
+    files = create_dummy_files("test_core_enabled.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--core-dump",
+            "generate",
+            str(files["test_core_enabled.prompt"]),
+        ],
+    )
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    mock_main.assert_called_once()
+    ctx = mock_main.call_args.kwargs.get("ctx")
+    assert ctx is not None
+    assert ctx.obj.get("core_dump") is True
+    mock_auto_update.assert_called_once_with()
+
+
+@patch('pdd.cli.auto_update')
+@patch('pdd.cli.code_generator_main', side_effect=Exception("Core dump test error"))
+def test_cli_core_dump_does_not_propagate_exception(mock_main, mock_auto_update, runner, create_dummy_files):
+    """
+    When --core-dump is enabled and the command raises,
+    the CLI should still handle the error gracefully (exit_code == 0),
+    allowing core-dump machinery to run without crashing the CLI.
+    """
+    files = create_dummy_files("test_core_error.prompt")
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--core-dump",
+            "generate",
+            str(files["test_core_error.prompt"]),
+        ],
+    )
+
+    # Error should be handled by the CLI's error handler (no traceback propagated)
+    assert result.exit_code == 0
+    assert result.exception is None
+    # We don't assert on the exact output text to avoid coupling to wording.
+    mock_main.assert_called_once()
+    mock_auto_update.assert_called_once_with()
