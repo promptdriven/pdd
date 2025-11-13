@@ -66,7 +66,7 @@ These patterns are used across prompts in this repo:
 
 - Preamble and role: start with a concise, authoritative description of the task and audience (e.g., “You are an expert Python engineer…”).
 - Includes for context: bring only what the model needs.
-  - Single include: `<include>path/to/file</include>`
+  - Single include: `<include>path/to/file</include>` (handles both text and images based on file extension)
   - Multiple: `<include-many>path1, path2, …</include-many>`
   - Grouping: wrap includes in a semantic tag to name the dependency or file they represent, for example:
     ```xml
