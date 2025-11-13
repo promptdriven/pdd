@@ -1,3 +1,10 @@
+## v0.0.70 (2025-11-13)
+
+### Feat
+
+- enhance image processing and prompt generation capabilities
+- enhance crash command and agentic fallback functionality
+
 ## v0.0.69 (2025-11-12)
 
 ### Feat
