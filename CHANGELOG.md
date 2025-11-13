@@ -1,3 +1,10 @@
+## v0.0.69 (2025-11-12)
+
+### Feat
+
+- enhance crash command with agentic fallback and update documentation
+- enhance agentic fallback functionality and documentation
+
 ## v0.0.68 (2025-11-12)
 
 ### Feat
