@@ -2,8 +2,18 @@
 
 ### Feat
 
-- enhance crash command with agentic fallback and update documentation
-- enhance agentic fallback functionality and documentation
+- crash command: add `--agentic-fallback/--no-agentic-fallback` (default on), wire into the iterative fixer, and always write `--output` and `--output-program` even when unchanged; improve path resolution, messaging, and summary output
+- agentic fallback: normalize result shapes in fix loops, roll agentic cost/model into totals, and re-read final files on success to return the actual post-fix content
+
+### Docs
+
+- README and language examples updated to document crash flow with agentic fallback; refreshed agentic_fallback example READMEs for Python, Java (Maven/Gradle), JavaScript, and TypeScript
+
+### Tests
+
+- strengthen fix verification tests to ensure outputs are written on failure/no-op, propagate `agentic_fallback=True`, validate verbose/force handling, and refine attempt counting
+
+Many thanks to Jiamin Cai for bringing the entire agentic fallback suite contributions to the project!
 
 ## v0.0.68 (2025-11-12)
 
