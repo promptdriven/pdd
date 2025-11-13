@@ -481,8 +481,29 @@ These options can be used with any command:
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
+- `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
+
+### Core Dump Debug Bundles
+
+If something goes wrong and you want the PDD team to be able to reproduce it, you can run any command with a core dump enabled:
+
+```bash
+pdd --core-dump sync factorial_calculator
+pdd --core-dump crash prompts/calc_python.prompt src/calc.py examples/run_calc.py crash_errors.log
+```
+
+When `--core-dump` is set, PDD:
+
+- Captures the full CLI command and arguments
+- Records relevant logs and internal trace information for that run
+- Bundles the prompt(s), generated code, and key metadata needed to replay the issue
+
+At the end of the run, PDD prints the path to the core dump bundle.  
+Attach that bundle when you open a GitHub issue or send a bug report so maintainers can quickly reproduce and diagnose your problem.
+
+---
 
 ### Context Selection Flags
 
