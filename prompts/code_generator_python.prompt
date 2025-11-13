@@ -8,13 +8,13 @@
         'language' - A string that is the language type (e.g. python, bash) of file that will be outputed by the LLM.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
-        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
+        'time' - A float in [0,1] or None that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME. If None, treat as DEFAULT_TIME before invoking llm_invoke.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
         'preprocess_prompt' - A boolean that indicates whether to preprocess the prompt. Default is True.
     Outputs:
         'runnable_code' - A string that is runnable code
-        'total_cost' - A float that is the total cost of the model run
-        'model_name' - A string that is the name of the selected LLM model
+        'total_cost' - A float that is the total cost of all LLM calls within this function (initial generation, unfinished check, continuation if used, and postprocess)
+        'model_name' - A string that is the name of the selected LLM model used for the main generation (or continuation). Postprocess may use a different model internally and does not change this value.
 
 % Here is how to use the internal modules:
     <internal_modules>
@@ -45,11 +45,21 @@
     </internal_modules>
 
 % This program will do the following:
-    Step 1. Conditionally preprocess the raw prompt using the preprocess function from the preprocess module based on the value of 'preprocess_prompt'. If 'preprocess_prompt' is True, preprocess the prompt; otherwise, use the raw prompt directly.
+    Step 1. Conditionally preprocess the raw prompt using the preprocess function from the preprocess module based on the value of 'preprocess_prompt'. If 'preprocess_prompt' is True, preprocess the prompt; otherwise, use the raw prompt directly. When preprocessing, it is acceptable to enable options such as double_curly_brackets=True and recursive=False to preserve placeholders and avoid over-expansion.
 
-    Step 2. Run the prompt (either preprocessed or raw) through llm_invoke with an empty dictionary ('{}') and the provided strength, temperature, and time.
+    Step 2. Generate the initial response as follows:
+        - If the prompt contains embedded data URLs (e.g., 'data:image/...;base64,...'), split the prompt into alternating text and image parts (preserving order) and call llm_invoke with messages=[{role: 'user', content: [{type: 'image_url', image_url: {url: ...}}, {type: 'text', text: ...}, ...]}] and the provided strength, temperature, time, and verbose.
+        - Otherwise, call llm_invoke with the (preprocessed or raw) prompt, input_json={}, and the provided strength, temperature, time, and verbose.
 
-    Step 3. Detect if the generation is incomplete using the unfinished_prompt function (strength .5) by passing in the last 600 characters of the output of Step 3.
-        - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant. Be sure to pass in all parameters like verbose to postprocess.
-    Step 4. Return the runnable_code, total_cost and model_name.
+    Step 3. Detect if the generation is incomplete using the unfinished_prompt function (use strength=0.5, temperature=0.0) by passing in the last 600 characters of the output of Step 2. Pass through language, time, and verbose.
+        - a. If incomplete, call the continue_generation function to complete the generation and set final_output to that result.
+        - b. Else, set final_output to the initial model output.
+
+    Step 4. Postprocess the final_output using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant. Use temperature=0.0 and pass through language, time, and verbose.
+
+    Step 5. Return the runnable_code, total_cost and model_name.
+
+% Validation and defaults:
+    - Validate non-empty 'prompt' and 'language'.
+    - Enforce 0 ≤ strength ≤ 1 and 0 ≤ temperature ≤ 2.
+    - Enforce 0 ≤ time ≤ 1 when provided; if time is None, substitute DEFAULT_TIME before llm_invoke.

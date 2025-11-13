@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 import subprocess
 from typing import List, Optional, Tuple
 import traceback
@@ -166,13 +167,54 @@ def process_include_tags(text: str, recursive: bool) -> str:
         file_path = match.group(1).strip()
         try:
             full_path = get_file_path(file_path)
-            console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
-            with open(full_path, 'r', encoding='utf-8') as file:
-                content = file.read()
-                if recursive:
-                    content = preprocess(content, recursive=True, double_curly_brackets=False)
-                _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
-                return content
+            ext = os.path.splitext(file_path)[1].lower()
+            image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']
+            
+            if ext in image_extensions:
+                console.print(f"Processing image include: [cyan]{full_path}[/cyan]")
+                from PIL import Image
+                import io
+                import pillow_heif
+                
+                pillow_heif.register_heif_opener()
+
+                MAX_DIMENSION = 1024
+                with open(full_path, 'rb') as file:
+                    img = Image.open(file)
+                    img.load() # Force loading the image data before the file closes
+                    
+                    if img.width > MAX_DIMENSION or img.height > MAX_DIMENSION:
+                        img.thumbnail((MAX_DIMENSION, MAX_DIMENSION))
+                        console.print(f"Image resized to {img.size}")
+
+                # Handle GIFs: convert to a static PNG of the first frame
+                if ext == '.gif':
+                    img.seek(0)
+                    img = img.convert("RGB")
+                    img_format = 'PNG'
+                    mime_type = 'image/png'
+                elif ext == '.heic':
+                    img_format = 'JPEG'
+                    mime_type = 'image/jpeg'
+                else:
+                    img_format = 'JPEG' if ext in ['.jpg', '.jpeg'] else 'PNG'
+                    mime_type = f'image/{img_format.lower()}'
+
+                # Save the (potentially resized and converted) image to an in-memory buffer
+                buffer = io.BytesIO()
+                img.save(buffer, format=img_format)
+                content = buffer.getvalue()
+
+                encoded_string = base64.b64encode(content).decode('utf-8')
+                return f"data:{mime_type};base64,{encoded_string}"
+            else:
+                console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
+                with open(full_path, 'r', encoding='utf-8') as file:
+                    content = file.read()
+                    if recursive:
+                        content = preprocess(content, recursive=True, double_curly_brackets=False)
+                    _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
+                    return content
         except FileNotFoundError:
             console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             _dbg(f"Missing XML include: {file_path}")

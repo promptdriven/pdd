@@ -1,3 +1,4 @@
+import re
 from typing import Tuple, Optional
 from rich.console import Console
 from . import EXTRACTION_STRENGTH
@@ -62,14 +63,35 @@ def code_generator(
         # Step 2: Generate initial response
         if verbose:
             console.print("[bold blue]Step 2: Generating initial response[/bold blue]")
-        response = llm_invoke(
-            prompt=processed_prompt,
-            input_json={},
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=verbose
-        )
+        
+        if 'data:image' in processed_prompt:
+            parts = re.split(r'(data:image/[^;]+;base64,[A-Za-z0-9+/=]+)', processed_prompt)
+            
+            content = []
+            for part in parts:
+                if part.startswith('data:image'):
+                    content.append({"type": "image_url", "image_url": {"url": part}})
+                elif part != "":
+                    content.append({"type": "text", "text": part})
+            
+            messages = [{"role": "user", "content": content}]
+
+            response = llm_invoke(
+                messages=messages,
+                strength=strength,
+                temperature=temperature,
+                time=time,
+                verbose=verbose
+            )
+        else:
+            response = llm_invoke(
+                prompt=processed_prompt,
+                input_json={},
+                strength=strength,
+                temperature=temperature,
+                time=time,
+                verbose=verbose
+            )
         initial_output = response['result']
         total_cost += response['cost']
         model_name = response['model_name']
