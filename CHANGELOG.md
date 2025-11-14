@@ -2,8 +2,28 @@
 
 ### Feat
 
-- enhance image processing and prompt generation capabilities
-- enhance crash command and agentic fallback functionality
+- Image includes in prompts: `<include>` now embeds images as base64 data URLs with sensible defaults. Supports `.png`, `.jpg/.jpeg`, `.gif`, `.webp`, and `.heic`; enforces max dimension ~1024px while preserving aspect ratio; converts GIFs to first‑frame PNG and HEIC to JPEG for compatibility.
+- Multimodal generation: `code_generator` detects `data:image/...;base64,...` in prompts and calls the model with mixed `text` + `image_url` content, enabling image‑conditioned generations alongside normal text prompts.
+- Prompt templates updated: clarify parameter validation/defaults (including `time=None` semantics) and document multimodal message construction and image include behavior.
+- Minor: small enhancements around crash/agentic fallback flows.
+
+### Examples
+
+- Added `examples/image_prompt_example/` showing how to include an image in a prompt and generate a Python script that describes it.
+
+### Docs
+
+- Prompting guide notes that `<include>` handles images in addition to text; README and PyPI long description updated with the new version badge.
+
+### Tests
+
+- Expanded coverage for preprocess include flows (include‑many, recursive deferral for shell/web, curly‑brace handling) and added multimodal path tests for `code_generator`.
+
+### Chore
+
+- Version bump to 0.0.70 and dependency updates: add `Pillow` and `pillow-heif`; update `requirements.txt`, `pyproject.toml`, and internal version strings.
+
+Thank you Jiamin Cai for your amazing contributions!
 
 ## v0.0.69 (2025-11-12)
 
