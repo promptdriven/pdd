@@ -31,17 +31,60 @@ custom_theme = Theme({
 })
 console = Console(theme=custom_theme)
 
-def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False) -> Tuple[str, str]:
+def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_dir: Optional[str] = None) -> Tuple[str, str]:
     """
     Derives the corresponding prompt file path from a code file path.
-    If the prompt file does not exist, it creates an empty one.
+    Searches for and creates prompts only in the specified output directory or 'prompts' directory.
+    If the prompt file does not exist, it creates an empty one in the target directory.
+
+    Args:
+        code_file_path: Path to the code file
+        quiet: Whether to suppress output messages
+        output_dir: Custom output directory (overrides default 'prompts' directory)
     """
     language = get_language(os.path.splitext(code_file_path)[1])
     language = language.lower() if language else "unknown"
-    
-    base_path, _ = os.path.splitext(code_file_path)
-    prompt_path_str = f"{base_path}_{language}.prompt"
+
+    # Extract the filename without extension and directory
+    code_filename = os.path.basename(code_file_path)
+    base_name, _ = os.path.splitext(code_filename)
+
+    # Determine the output directory
+    if output_dir:
+        # Use the custom output directory (absolute path)
+        prompts_dir = os.path.abspath(output_dir)
+    else:
+        # Find the repository root (where the code file is located)
+        code_file_abs_path = os.path.abspath(code_file_path)
+        code_dir = os.path.dirname(code_file_abs_path)
+
+        # For repository mode, find the actual repo root
+        repo_root = code_dir
+        try:
+            import git
+            repo = git.Repo(code_dir, search_parent_directories=True)
+            repo_root = repo.working_tree_dir
+        except:
+            # If not a git repo, use the directory containing the code file
+            pass
+
+        # Use the default prompts directory at repo root
+        prompts_dir = os.path.join(repo_root, "prompts")
+
+    # Construct the prompt filename in the determined directory
+    prompt_filename = f"{base_name}_{language}.prompt"
+    prompt_path_str = os.path.join(prompts_dir, prompt_filename)
     prompt_path = Path(prompt_path_str)
+
+    # Ensure prompts directory exists
+    prompts_path = Path(prompts_dir)
+    if not prompts_path.exists():
+        try:
+            prompts_path.mkdir(parents=True, exist_ok=True)
+            if not quiet:
+                console.print(f"[success]Created prompts directory:[/success] [path]{prompts_dir}[/path]")
+        except OSError as e:
+            console.print(f"[error]Failed to create prompts directory {prompts_dir}: {e}[/error]")
 
     if not prompt_path.exists():
         try:
@@ -51,10 +94,10 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False) -> Tuple[
         except OSError as e:
             console.print(f"[error]Failed to create file {prompt_path_str}: {e}[/error]")
             # Even if creation fails, return the intended path
-    
+
     return prompt_path_str, code_file_path
 
-def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: Optional[str] = None) -> List[Tuple[str, str]]:
+def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: Optional[str] = None, output_dir: Optional[str] = None) -> List[Tuple[str, str]]:
     """
     Scans the repo for code files, resolves their prompt pairs, and returns all pairs.
     """
@@ -94,7 +137,7 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
         ]
     
     for file_path in code_files:
-        prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet)
+        prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet, output_dir)
         pairs.append((prompt_path, code_path))
         
     return pairs
@@ -207,7 +250,7 @@ def update_main(
             rprint("[bold red]Error:[/bold red] Repository-wide mode requires the current directory to be within a Git repository.")
             sys.exit(1)
 
-        pairs = find_and_resolve_all_pairs(repo_root, quiet, extensions)
+        pairs = find_and_resolve_all_pairs(repo_root, quiet, extensions, output)
         
         if not pairs:
             rprint("[info]No scannable code files found in the repository.[/info]")
@@ -285,9 +328,21 @@ def update_main(
         if is_regeneration_mode:
             if not quiet:
                 rprint("[bold yellow]Regeneration mode: Creating or overwriting prompt from code file.[/bold yellow]")
-            
-            # This will derive the path and create the file if it doesn't exist.
-            prompt_path, _ = resolve_prompt_code_pair(modified_code_file, quiet)
+
+            # Determine output path based on --output flag
+            if output:
+                # Check if output is a directory or file path
+                if os.path.isdir(output) or output.endswith('/'):
+                    # Output is a directory, pass as output_dir to resolve_prompt_code_pair
+                    prompt_path, _ = resolve_prompt_code_pair(modified_code_file, quiet, output)
+                else:
+                    # Output is a specific file path, use it directly
+                    prompt_path = os.path.abspath(output)
+                    # Ensure the directory exists
+                    os.makedirs(os.path.dirname(prompt_path), exist_ok=True)
+            else:
+                # No output specified, use default behavior
+                prompt_path, _ = resolve_prompt_code_pair(modified_code_file, quiet)
 
             with open(modified_code_file, 'r') as f:
                 modified_code_content = f.read()
@@ -302,7 +357,7 @@ def update_main(
                 verbose=ctx.obj.get("verbose", False),
                 time=ctx.obj.get('time', DEFAULT_TIME)
             )
-            
+
             # Write the result to the derived/correct prompt path.
             with open(prompt_path, "w") as f:
                 f.write(modified_prompt)
