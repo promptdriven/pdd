@@ -1438,6 +1438,62 @@ pdd [GLOBAL OPTIONS] fix --output-test tests/test_factorial_calculator_fixed.py 
 ```
 In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
 
+
+#### Agentic Fallback Mode
+
+(This feature is also available for the `crash` and `verify` command.)
+
+For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
+
+**How it Works:**
+If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
+
+**How to Use:**
+
+This feature only takes effect when `--loop` is set.
+
+When the `--loop` flag is set, agentic fallback is enabled by default:
+```bash
+pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+Or you may want to enable it explicitly
+
+```bash
+pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+To disable this feature while using `--loop`, add `--no-agentic-fallback` to turn it off.
+
+```bash
+pdd [GLOBAL OPTIONS] fix --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+**Prerequisites:**
+For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed and the corresponding API key configured in your environment. The agents are tried in the following order of preference:
+
+1.  **Anthropic Claude:**
+    *   Requires the `claude` CLI to be installed and in your `PATH`.
+    *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
+2.  **Google Gemini:**
+    *   Requires the `gemini` CLI to be installed and in your `PATH`.
+    *   Requires the `GOOGLE_API_KEY` environment variable to be set.
+3.  **OpenAI Codex/GPT:**
+    *   Requires the `codex` CLI to be installed and in your `PATH`.
+    *   Requires the `OPENAI_API_KEY` environment variable to be set.
+
+You can configure these keys using `pdd setup` or by setting them in your shell's environment.
+
+Example (save to different location):
+```
+pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+```
+
+Example using the `--git` option:
+```
+pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
+# This overwrites factorial_calculator_python.prompt in place using git history
+```
 ### 7. split
 
 Split large complex prompt files into smaller, more manageable prompt files.
@@ -1550,61 +1606,7 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 # This overwrites factorial_calculator_python.prompt in place
 ```
 
-#### Agentic Fallback Mode
 
-(This feature is also available for the `crash` command.)
-
-For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
-
-**How it Works:**
-If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
-
-**How to Use:**
-
-This feature only takes effect when `--loop` is set.
-
-When the `--loop` flag is set, agentic fallback is enabled by default:
-```bash
-pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
-```
-
-Or you may want to enable it explicitly
-
-```bash
-pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
-```
-
-To disable this feature while using `--loop`, add `--no-agentic-fallback` to turn it off.
-
-```bash
-pdd [GLOBAL OPTIONS] fix --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
-```
-
-**Prerequisites:**
-For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed and the corresponding API key configured in your environment. The agents are tried in the following order of preference:
-
-1.  **Anthropic Claude:**
-    *   Requires the `claude` CLI to be installed and in your `PATH`.
-    *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
-2.  **Google Gemini:**
-    *   Requires the `gemini` CLI to be installed and in your `PATH`.
-    *   Requires the `GOOGLE_API_KEY` environment variable to be set.
-3.  **OpenAI Codex/GPT:**
-    *   Requires the `codex` CLI to be installed and in your `PATH`.
-    *   Requires the `OPENAI_API_KEY` environment variable to be set.
-
-You can configure these keys using `pdd setup` or by setting them in your shell's environment.
-
-Example (save to different location):
-```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-```
-
-Example using the `--git` option:
-```
-pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place using git history
-```
 
 
 ### 10. detect
