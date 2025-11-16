@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.69-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.70-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.69
+Current version: 0.0.70
 
 To check your installed version, run:
 ```
@@ -481,29 +481,8 @@ These options can be used with any command:
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
-- `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
-
-### Core Dump Debug Bundles
-
-If something goes wrong and you want the PDD team to be able to reproduce it, you can run any command with a core dump enabled:
-
-```bash
-pdd --core-dump sync factorial_calculator
-pdd --core-dump crash prompts/calc_python.prompt src/calc.py examples/run_calc.py crash_errors.log
-```
-
-When `--core-dump` is set, PDD:
-
-- Captures the full CLI command and arguments
-- Records relevant logs and internal trace information for that run
-- Bundles the prompt(s), generated code, and key metadata needed to replay the issue
-
-At the end of the run, PDD prints the path to the core dump bundle.  
-Attach that bundle when you open a GitHub issue or send a bug report so maintainers can quickly reproduce and diagnose your problem.
-
----
 
 ### Context Selection Flags
 
@@ -1459,6 +1438,62 @@ pdd [GLOBAL OPTIONS] fix --output-test tests/test_factorial_calculator_fixed.py 
 ```
 In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
 
+
+#### Agentic Fallback Mode
+
+(This feature is also available for the `crash` and `verify` command.)
+
+For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
+
+**How it Works:**
+If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
+
+**How to Use:**
+
+This feature only takes effect when `--loop` is set.
+
+When the `--loop` flag is set, agentic fallback is enabled by default:
+```bash
+pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+Or you may want to enable it explicitly
+
+```bash
+pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+To disable this feature while using `--loop`, add `--no-agentic-fallback` to turn it off.
+
+```bash
+pdd [GLOBAL OPTIONS] fix --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+**Prerequisites:**
+For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed and the corresponding API key configured in your environment. The agents are tried in the following order of preference:
+
+1.  **Anthropic Claude:**
+    *   Requires the `claude` CLI to be installed and in your `PATH`.
+    *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
+2.  **Google Gemini:**
+    *   Requires the `gemini` CLI to be installed and in your `PATH`.
+    *   Requires the `GOOGLE_API_KEY` environment variable to be set.
+3.  **OpenAI Codex/GPT:**
+    *   Requires the `codex` CLI to be installed and in your `PATH`.
+    *   Requires the `OPENAI_API_KEY` environment variable to be set.
+
+You can configure these keys using `pdd setup` or by setting them in your shell's environment.
+
+Example (save to different location):
+```
+pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+```
+
+Example using the `--git` option:
+```
+pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
+# This overwrites factorial_calculator_python.prompt in place using git history
+```
 ### 7. split
 
 Split large complex prompt files into smaller, more manageable prompt files.
@@ -1571,61 +1606,7 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 # This overwrites factorial_calculator_python.prompt in place
 ```
 
-#### Agentic Fallback Mode
 
-(This feature is also available for the `crash` command.)
-
-For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
-
-**How it Works:**
-If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
-
-**How to Use:**
-
-This feature only takes effect when `--loop` is set.
-
-When the `--loop` flag is set, agentic fallback is enabled by default:
-```bash
-pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
-```
-
-Or you may want to enable it explicitly
-
-```bash
-pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
-```
-
-To disable this feature while using `--loop`, add `--no-agentic-fallback` to turn it off.
-
-```bash
-pdd [GLOBAL OPTIONS] fix --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
-```
-
-**Prerequisites:**
-For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed and the corresponding API key configured in your environment. The agents are tried in the following order of preference:
-
-1.  **Anthropic Claude:**
-    *   Requires the `claude` CLI to be installed and in your `PATH`.
-    *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
-2.  **Google Gemini:**
-    *   Requires the `gemini` CLI to be installed and in your `PATH`.
-    *   Requires the `GOOGLE_API_KEY` environment variable to be set.
-3.  **OpenAI Codex/GPT:**
-    *   Requires the `codex` CLI to be installed and in your `PATH`.
-    *   Requires the `OPENAI_API_KEY` environment variable to be set.
-
-You can configure these keys using `pdd setup` or by setting them in your shell's environment.
-
-Example (save to different location):
-```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-```
-
-Example using the `--git` option:
-```
-pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place using git history
-```
 
 
 ### 10. detect
