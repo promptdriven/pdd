@@ -10,10 +10,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import json
-import platform
-import datetime
-import traceback
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path # Import Path
 
@@ -69,25 +65,9 @@ custom_theme = Theme({
 })
 console = Console(theme=custom_theme)
 
-# Buffer to collect errors for optional core dumps
-_core_dump_errors: List[Dict[str, Any]] = []
-
-
 # --- Helper Function for Error Handling ---
 def handle_error(exception: Exception, command_name: str, quiet: bool):
     """Prints error messages using Rich console.""" # Modified docstring
-    # Record error details for potential core dump
-    _core_dump_errors.append(
-        {
-            "command": command_name,
-            "type": type(exception).__name__,
-            "message": str(exception),
-            "traceback": "".join(
-                traceback.format_exception(type(exception), exception, exception.__traceback__)
-            ),
-        }
-    )
-
     if not quiet:
         console.print(f"[error]Error during '{command_name}' command:[/error]", style="error")
         if isinstance(exception, FileNotFoundError):
@@ -183,95 +163,6 @@ def _run_setup_utility() -> None:
         raise RuntimeError(f"Setup utility exited with status {result.returncode}")
 
 
-def _write_core_dump(
-    ctx: click.Context,
-    normalized_results: List[Any],
-    invoked_subcommands: List[str],
-    total_cost: float,
-) -> None:
-    """Write a JSON core dump for this run if --core-dump is enabled."""
-    if not ctx.obj.get("core_dump"):
-        return
-
-    try:
-        core_dump_dir = Path.cwd() / ".pdd" / "core_dumps"
-        core_dump_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        dump_path = core_dump_dir / f"pdd-core-{timestamp}.json"
-
-        steps: List[Dict[str, Any]] = []
-        for i, result_tuple in enumerate(normalized_results):
-            command_name = (
-                invoked_subcommands[i] if i < len(invoked_subcommands) else f"Unknown Command {i+1}"
-            )
-
-            cost = None
-            model_name = None
-            if isinstance(result_tuple, tuple) and len(result_tuple) == 3:
-                _result_data, cost, model_name = result_tuple
-
-            steps.append(
-                {
-                    "step": i + 1,
-                    "command": command_name,
-                    "cost": cost,
-                    "model": model_name,
-                }
-            )
-
-        # Only capture a limited subset of env vars to avoid leaking API keys
-        interesting_env = {
-            k: v
-            for k, v in os.environ.items()
-            if k.startswith("PDD_")
-            or k in ("PDD_PATH", "VIRTUAL_ENV", "PYTHONPATH", "PATH")
-        }
-
-        payload: Dict[str, Any] = {
-            "schema_version": 1,
-            "pdd_version": __version__,
-            "timestamp_utc": timestamp,
-            "argv": sys.argv[1:],  # without the 'pdd' binary name
-            "cwd": str(Path.cwd()),
-            "platform": {
-                "system": platform.system(),
-                "release": platform.release(),
-                "version": platform.version(),
-                "python": sys.version,
-            },
-            "global_options": {
-                "force": ctx.obj.get("force"),
-                "strength": ctx.obj.get("strength"),
-                "temperature": ctx.obj.get("temperature"),
-                "time": ctx.obj.get("time"),
-                "verbose": ctx.obj.get("verbose"),
-                "quiet": ctx.obj.get("quiet"),
-                "local": ctx.obj.get("local"),
-                "context": ctx.obj.get("context"),
-                "output_cost": ctx.obj.get("output_cost"),
-                "review_examples": ctx.obj.get("review_examples"),
-            },
-            "invoked_subcommands": invoked_subcommands,
-            "total_cost": total_cost,
-            "steps": steps,
-            "errors": _core_dump_errors,
-            "environment": interesting_env,
-        }
-
-        dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-        if not ctx.obj.get("quiet"):
-            console.print(
-                f"[info]Core dump written to [path]{dump_path}[/path]. "
-                "You can attach this file when reporting a bug.[/info]"
-            )
-    except Exception as exc:
-        # Never let core dumping itself crash the CLI
-        if not ctx.obj.get("quiet"):
-            console.print(f"[warning]Failed to write core dump: {exc}[/warning]", style="warning")
-
-
 # --- Main CLI Group ---
 @click.group(invoke_without_command=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
 @click.option(
@@ -345,13 +236,6 @@ def _write_core_dump(
     default=False,
     help="List available contexts from .pddrc and exit.",
 )
-@click.option(
-    "--core-dump",
-    "core_dump",
-    is_flag=True,
-    default=False,
-    help="Write a JSON core dump for this run into .pdd/core_dumps (for bug reports).",
-)
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
 def cli(
@@ -367,17 +251,13 @@ def cli(
     time: Optional[float], # Type hint is Optional[float]
     context_override: Optional[str],
     list_contexts: bool,
-    core_dump: bool,
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
-
-    # Reset per-run error buffer and store core_dump flag
-    _core_dump_errors.clear()
-
+    
     ctx.ensure_object(dict)
     ctx.obj["force"] = force
     ctx.obj["strength"] = strength
@@ -391,7 +271,6 @@ def cli(
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
-    ctx.obj["core_dump"] = core_dump
 
     # Suppress verbose if quiet is enabled
     if quiet:
@@ -537,9 +416,6 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         if num_results < num_commands and not all(res is None for res in results): # Avoid printing if all failed
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
-
-    # Finally, write a core dump if requested
-    _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
 
 
 # --- Templates Command Group ---
@@ -1265,7 +1141,7 @@ def change(
     "--output",
     type=click.Path(writable=True),
     default=None,
-    help="Specify where to save the updated prompt file. If not specified, overwrites the original prompt file to maintain it as the source of truth.",
+    help="Specify where to save the updated prompt file(s). For single files: saves to this specific path or directory. For repository mode: saves all prompts to this directory. If not specified, uses the original prompt location (single file) or 'prompts' directory (repository mode).",
 )
 @click.option(
     "--git",
@@ -1319,9 +1195,9 @@ def update(
         is_repo_mode = not actual_input_prompt_file and not actual_modified_code_file
 
         if is_repo_mode:
-            if any([input_code_file, output, use_git]):
+            if any([input_code_file, use_git]):
                 raise click.UsageError(
-                    "Cannot use file-specific arguments or flags like --git or --output in repository-wide mode (when no files are provided)."
+                    "Cannot use file-specific arguments or flags like --git or --input-code in repository-wide mode (when no files are provided)."
                 )
         elif extensions:
             raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")
