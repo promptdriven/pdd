@@ -2,7 +2,7 @@ provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_toke
 OpenAI,gpt-5-nano,0.05,0.4,1249,,OPENAI_API_KEY,0,True,none
 Google,vertex_ai/gemini-2.5-flash,0.15,0.6,1290,,VERTEX_CREDENTIALS,0,True,effort
 Google,gemini/gemini-2.5-pro,1.25,10.0,1360,,GEMINI_API_KEY,0,True,none
-Google,vertex_ai/claude-sonnet-4,3.0,15.0,1359,,VERTEX_CREDENTIALS,64000,True,budget
+Google,vertex_ai/claude-sonnet-4-5,3.0,15.0,1359,,VERTEX_CREDENTIALS,64000,True,budget
 Google,vertex_ai/gemini-2.5-pro,1.25,10.0,1405,,VERTEX_CREDENTIALS,0,True,none
 OpenAI,gpt-5-mini,0.25,2.0,1325,,OPENAI_API_KEY,0,True,effort
 OpenAI,gpt-5,1.25,10.0,1482,,OPENAI_API_KEY,0,True,effort
@@ -15,6 +15,7 @@ OpenAI,openai/mlx-community/Qwen3-30B-A3B-4bit,0,0,1040,http://localhost:8080,,0
 OpenAI,lm_studio/openai-gpt-oss-120b-mlx-6,0.0001,0,1082,http://localhost:1234/v1,,0,True,none
 Fireworks,fireworks_ai/accounts/fireworks/models/glm-4p5,3.0,8.0,1364,,FIREWORKS_API_KEY,0,False,none
 OpenAI,groq/moonshotai/kimi-k2-instruct,1.0,3.0,1330,,GROQ_API_KEY,0,True,none
-Anthropic,anthropic/claude-sonnet-4-20250514,3.0,15.0,1356,,ANTHROPIC_API_KEY,64000,True,budget
+Anthropic,anthropic/claude-sonnet-4-5-20250929,3.0,15.0,1356,,ANTHROPIC_API_KEY,64000,True,budget
 Anthropic,anthropic/claude-opus-4-1-20250805,3.0,15.0,1474,,ANTHROPIC_API_KEY,32000,True,budget
 Anthropic,anthropic/claude-3-5-haiku-20241022,3.0,15.0,1133,,ANTHROPIC_API_KEY,8192,True,budget
+OpenAI,openai/claude-sonnet-4-5,0,0,1354,https://DRUGBEY-DU61012.snowflakecomputing.com/api/v2/cortex/openai,SNOWFLAKE_PAT,64000,True,budget

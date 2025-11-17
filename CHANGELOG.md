@@ -1,3 +1,84 @@
+## v0.0.65 (2025-10-24)
+
+### Feat
+
+- **data**: add OpenAI model entry and ensure newline consistency in llm_model.csv
+- add architecture JSON to HTML visualization pipeline
+- **viz**: add Architecture JSON → Mermaid diagram tooling, examples, and tests
+- expand language format support in CSV data
+
+## v0.0.64 (2025-10-12)
+
+### Data & Formats
+
+- Added Lean and Agda entries to `data/language_format.csv`, expanding supported language metadata with the correct comment markers and extensions for theorem-proving workflows.
+
+Thanks to Rudi Cilibrasi for your contributions!
+
+## v0.0.63 (2025-10-12)
+
+### Prompt Templates
+
+- architecture JSON template now requires a `filepath` alongside each filename and enforces typed `params` objects for page routes, clarifying how generators should emit file locations.
+
+Thanks to James Levine for your contributions!
+
+## v0.0.62 (2025-10-02)
+
+### CLI & Templates
+
+- `pdd templates show` now renders summary, variables, and examples with Rich tables for clearer output.
+- Hardened `pdd/templates/generic/generate_prompt.prompt`: responses must return `<prompt>...</prompt>`, `ARCHITECTURE_FILE` is now required, and optional variables are normalized to avoid brace issues.
+
+### Prompt Validation & Regression
+
+- Regression harnesses wrap prompts with the required tags, validate architecture `dataSources`, and surface schema errors earlier in `tests/regression.sh`. Thanks James Levine and Sai Vathsavayi for your debugging efforts!
+- Expanded coverage in `tests/test_preprocess.py` and `tests/test_code_generator_main.py` to exercise brace protection, optional template variables, and architecture generation workflows.
+
+### Docs
+
+- Added `docs/prompting_guide.md`, refreshed onboarding/tutorial guides, and introduced `AGENTS.md` as a quick-reference to repository conventions.
+- Documented the `dataSources` contract in the README and architecture template, highlighting required fields and schema expectations.
+
+### Data & Model Metadata
+
+- Added Prisma, Verilog, and SystemVerilog entries to `data/language_format.csv` to expand supported formats. Thanks Dan Barrowman for the Contributions!
+- Renamed Anthropic and Google entries in `data/llm_model.csv` for consistent model naming. Sonnet 4.5 is now the default model for Anthropic.
+
+### Tooling
+
+- Improved double-curly brace handling in `pdd/preprocess.py` to preserve `${IDENT}` placeholders and added targeted regression coverage.
+- VS Code prompt-highlighter extension 0.0.2 ships with Open VSX metadata/docs plus Makefile targets to publish and verify releases.
+
+## v0.0.61 (2025-09-23)
+
+### VS Code Extension
+
+- Improve compatibility across OpenVSX‑compatible IDEs (VS Code, Cursor, VSCodium, Gitpod, Kiro, Windsurf). Update extension metadata, keywords, and docs to reflect broader support.
+
+### CLI
+
+- Normalize command result handling in `process_commands`: treat a single 3‑tuple as one step in the execution summary; wrap unexpected scalar results and warn once; keep total‑cost calculation correct. Add tests for these cases.
+
+### Prompts & Templates
+
+- Add `pdd/templates/generic/generate_prompt.prompt` with detailed variable descriptions and usage examples for generating module prompts.
+
+Thanks Sai Vathsavayi for altering me that this was missing!
+
+### Tests
+
+- CLI: expand `tests/test_cli.py` with coverage for single‑tuple normalization and non‑tuple result warnings.
+- Template registry: clarify behavior so packaged templates still list while project files with missing/malformed front matter are ignored.
+
+### Docs
+
+- README: note that the extension supports all OpenVSX‑compatible IDEs.
+- VS Code extension quickstart: add installation guidance for VSCodium, Kiro, Windsurf, and other OpenVSX‑compatible IDEs.
+
+Thanks Shrenya Mathur for your contributions on OpenVSX compatibility!
+
+
 ## v0.0.60 (2025-09-23)
 
 ### Setup Tool

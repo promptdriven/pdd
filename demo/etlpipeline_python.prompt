@@ -1,0 +1,55 @@
+name: ETL Pipeline - Clean User CSV
+language: python
+description: >
+  Build a modular, documented Python script named 'etlpipeline.py' that ingests an input CSV file called 'input.csv', cleans and transforms the data, and writes results to 'output.csv'. Include robust error handling and automated unit tests.
+
+# Requirements:
+- Input: 'input.csv' must be provided manually by the user and must be located in the same working directory. Columns: id, date, amount, category
+- For each row:
+    - Convert 'amount' column to float (error if not parsable)
+    - Parse 'date' column as datetime in YYYY-MM-DD format (error if invalid)
+    - Set 'category' to lowercase, strip leading/trailing whitespace
+    - Only retain rows where 'amount' > 0 and 'category' is non-empty after cleaning
+- When writing the 'amount' field to 'output.csv', always format it as a string with two decimal places (e.g., 250.00, 19.99), even for whole numbers.
+- Output: Write cleaned data to 'output.csv', preserving original column order
+- Handle missing, malformed, and invalid data gracefully (skip bad rows, print helpful warnings)
+- Script and all examples must exclusively use 'input.csv' for input, 'output.csv' for output. **No sample files should be auto-generated in the code or examples.**
+
+# Tests:
+- Provide a test file 'test_etlpipeline.py' that creates its own temporary files for validation
+- Must verify all transformations (float for amount, correct datetime parsing, lowercase category)
+- Must verify filtering (exclude rows where amount <= 0 or category is empty after cleaning)
+- Must handle invalid rows (bad dates, non-numeric amounts, empty categories)
+- Use at least 5 sample rows in tests: valid, negative amount, empty category, invalid date, non-numeric amount
+- Assert that output file matches expected results after transformation/filtering
+
+# Example Usage:
+- (A) Command-line:
+    Assumes 'input.csv' is already provided by the user. To run:
+    python etlpipeline.py input.csv output.csv
+- (B) Python module usage:
+    Assumes 'input.csv' is present. Example:
+    import etlpipeline
+    raw_data, headers = etlpipeline.extract_data('input.csv')
+    cleaned_data = etlpipeline.transform_and_filter_data(raw_data)
+    etlpipeline.load_data(cleaned_data, 'output.csv', headers)
+- No sample input, output, or demo data is auto-created; the user must provide 'input.csv' for all runs.
+
+# Example Input:
+id,date,amount,category
+1,2023-12-10,100.25,Books
+2,2023-11-01,-80.00,Electronics
+3,2023-10-05,50.00,
+4,2023-09-15,120.75,Groceries
+5,202X-09-15,abc,Other
+
+# Expected Output (for the above input):
+id,date,amount,category
+1,2023-12-10,100.25,books
+4,2023-09-15,120.75,groceries
+
+# Submission Instructions:
+- Generated code must be in 'etlpipeline.py'
+- All example and test files must refer only to 'input.csv' and 'output.csv'—never auto-create or seed these files as part of demonstration logic.
+- All output and test assertions may print the contents of 'output.csv' for review.
+- Do not use, reference, or generate any other input/output filenames in code, examples, or tests.
