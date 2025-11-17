@@ -57,8 +57,9 @@ def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
     # Short-circuit harvest path to succeed — NOTE: correct symbol (no leading underscore)
     monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
 
-    ok, msg, cost, model = run_agentic_fix(p_prompt, p_code, p_test, p_err)
+    ok, msg, cost, model, changed_files = run_agentic_fix(p_prompt, p_code, p_test, p_err)
     assert ok is True
+    assert isinstance(changed_files, list)
     assert "successful" in msg.lower()
     assert cost > 0.0
     assert model.startswith("agentic-")
@@ -75,12 +76,13 @@ def test_run_agentic_fix_handles_no_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    ok, msg, cost, model = run_agentic_fix(
+    ok, msg, cost, model, changed_files = run_agentic_fix(
         prompt_file=str(p_prompt),
         code_file=str(p_code),
         unit_test_file=str(p_test),
         error_log_file=str(p_err),
     )
+    assert isinstance(changed_files, list)
     assert ok is False
     assert "No configured agent API keys" in msg
 
@@ -141,12 +143,13 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
 
     p_prompt, p_code, p_test, p_err = _mk_files(tmp_path)
 
-    ok, msg, cost, model = run_agentic_fix(
+    ok, msg, cost, model, changed_files = run_agentic_fix(
         prompt_file=str(p_prompt),
         code_file=str(p_code),
         unit_test_file=str(p_test),
         error_log_file=str(p_err),
     )
+    assert isinstance(changed_files, list)
 
     # Don’t require success; just verify the chosen agent tag
     assert model.startswith(f"agentic-{provider}")

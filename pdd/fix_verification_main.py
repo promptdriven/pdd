@@ -3,6 +3,7 @@ import os
 import subprocess
 import click
 import logging
+from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
 # Use Rich for pretty printing to the console
@@ -411,7 +412,9 @@ def fix_verification_main(
         try:
             if verbose:
                 rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write code to: {output_code_path!r}")
-            with open(output_code_path, "w") as f:
+            output_code_path_obj = Path(output_code_path)
+            output_code_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_code_path_obj, "w") as f:
                 f.write(final_code)
             saved_code_path = output_code_path
             if not quiet:
@@ -431,7 +434,9 @@ def fix_verification_main(
         try:
             if verbose:
                 rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write program to: {output_program_path!r}")
-            with open(output_program_path, "w") as f:
+            output_program_path_obj = Path(output_program_path)
+            output_program_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_program_path_obj, "w") as f:
                 f.write(final_program)
             saved_program_path = output_program_path
             if not quiet:
@@ -441,7 +446,9 @@ def fix_verification_main(
 
     if not loop and output_results_path:
         try:
-            with open(output_results_path, "w") as f:
+            output_results_path_obj = Path(output_results_path)
+            output_results_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_results_path_obj, "w") as f:
                 f.write(results_log_content)
             saved_results_path = output_results_path
             if not quiet:

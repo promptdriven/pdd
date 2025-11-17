@@ -54,10 +54,21 @@ def test_fix_main_without_loop(
     and saves the outputs correctly.
     """
     # Arrange
-    # Configure the mock Path object's exists method
-    # Ensure Path('errors.log').exists() returns True
-    mock_path_instance = mock_path.return_value
-    mock_path_instance.exists.return_value = True
+    # Configure the mock Path to return real Path objects for output paths,
+    # but allow controlling exists() for error.log
+    from pathlib import Path as RealPath
+
+    def path_side_effect(path_str):
+        real_path = RealPath(path_str)
+        # For error.log, return a mock with controlled exists()
+        if 'errors.log' in str(path_str):
+            mock_error_path = MagicMock(spec=RealPath)
+            mock_error_path.exists.return_value = True
+            return mock_error_path
+        # For other paths, return real Path objects
+        return real_path
+
+    mock_path.side_effect = path_side_effect
 
     mock_construct_paths.return_value = (
         {},  # resolved_config
@@ -135,8 +146,9 @@ def test_fix_main_without_loop(
     assert total_cost == 0.75
     assert model_name == "gpt-4"
 
-    # Assert file writing
-    m_open.assert_any_call('output/test_code_fixed.py', 'w')
+    # Assert file writing - fix_main now uses Path objects
+    from pathlib import Path as PathLib
+    m_open.assert_called_once_with(PathLib('output/test_code_fixed.py'), 'w')
     handle = m_open()
     handle.write.assert_called_once_with("Fixed unit test content")
 
@@ -232,17 +244,17 @@ def test_fix_main_with_loop(
     assert total_cost == 1.25
     assert model_name == "gpt-4-loop"
 
-    # Assert file writing calls
+    # Assert file writing calls - fix_main now uses Path objects
+    from pathlib import Path as PathLib
     expected_calls = [
-        call('output/test_code_fixed.py', 'w'),
-        call('output/code_fixed.py', 'w')
+        call(PathLib('output/test_code_fixed.py'), 'w'),
+        call(PathLib('output/code_fixed.py'), 'w')
     ]
     m_open.assert_has_calls(expected_calls, any_order=True)
-    handle_test = m_open()
-    handle_code = m_open()
+    handle = m_open()
     # Check write calls - order might vary depending on dict iteration
     write_calls = [call("Iteratively fixed test"), call("Iteratively fixed code")]
-    handle_test.write.assert_has_calls(write_calls, any_order=True)
+    handle.write.assert_has_calls(write_calls, any_order=True)
 
 
 def test_fix_main_loop_requires_verification_program(mock_ctx):

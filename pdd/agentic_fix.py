@@ -569,6 +569,7 @@ def _try_harvest_then_verify(
     *,
     verify_cmd: Optional[str],
     verify_enabled: bool,
+    changed_files: List[str],
 ) -> bool:
     """
     Strict, fast path:
@@ -624,7 +625,8 @@ def _try_harvest_then_verify(
     multi = _extract_files_from_output(res.stdout or "", res.stderr or "")
     if multi:
         _info("[cyan]Applying multi-file harvest from agent output...[/cyan]")
-        _apply_file_map(multi, cwd, code_path, allow_new)
+        applied = _apply_file_map(multi, cwd, code_path, allow_new)
+        changed_files.extend([str(p) for p in applied])
         ok = _post_apply_verify_or_testcmd(
             provider, unit_test_file, cwd,
             verify_cmd=verify_cmd, verify_enabled=verify_enabled,
@@ -644,6 +646,7 @@ def _try_harvest_then_verify(
                 _info("[cyan]No markers found, but detected a Python code block from Google. Applying it...[/cyan]")
                 body_to_write = _normalize_code_text(code_block)
                 code_path.write_text(body_to_write, encoding="utf-8")
+                changed_files.append(str(code_path))
                 newest = code_path.read_text(encoding="utf-8")
                 _print_diff(code_snapshot, newest, code_path)
                 ok = _post_apply_verify_or_testcmd(
@@ -666,6 +669,7 @@ def _try_harvest_then_verify(
     _info("[cyan]Applying harvested corrected file (single)...[/cyan]")
     body_to_write = _normalize_code_text(harvested_single)
     code_path.write_text(body_to_write, encoding="utf-8")
+    changed_files.append(str(code_path))
     newest = code_path.read_text(encoding="utf-8")
     _print_diff(code_snapshot, newest, code_path)
 
@@ -685,20 +689,21 @@ def run_agentic_fix(
     code_file: str,
     unit_test_file: str,
     error_log_file: str,
-) -> Tuple[bool, str, float, str]:
+) -> Tuple[bool, str, float, str, List[str]]:
     """
     Main entrypoint for agentic fallback:
     - Prepares inputs and prompt (with code/tests/error log)
     - Optionally preflight-populates error log if empty (so agent sees failures)
     - Tries providers in preference order: harvest-first, then primary attempt
     - Applies changes locally and verifies locally
-    - Returns (success, message, est_cost, used_model)
+    - Returns (success, message, est_cost, used_model, changed_files)
     """
     _always("[bold yellow]Standard fix failed. Initiating agentic fallback (AGENT-ONLY)...[/bold yellow]")
 
     instruction_file: Optional[Path] = None
     est_cost: float = 0.0
     used_model: str = "agentic-cli"
+    changed_files: List[str] = []  # Track all files changed by agents
 
     try:
         cwd = Path.cwd()
@@ -727,7 +732,7 @@ def run_agentic_fix(
 
         _info(f"[cyan]Env API keys present (names only): {', '.join([k for k in present_keys if k]) or 'none'}[/cyan]")
         if not available_agents:
-            return False, "No configured agent API keys found in environment.", est_cost, used_model
+            return False, "No configured agent API keys found in environment.", est_cost, used_model, changed_files
 
         _info(f"[cyan]Available agents found: {', '.join(available_agents)}[/cyan]")
 
@@ -736,7 +741,10 @@ def run_agentic_fix(
         code_path = Path(code_file).resolve()
         orig_code = code_path.read_text(encoding="utf-8")
         test_content = Path(unit_test_file).read_text(encoding="utf-8")
-        error_content = Path(error_log_file).read_text(encoding="utf-8")
+
+        # Read error log if it exists, otherwise we'll populate it via preflight
+        error_log_path = Path(error_log_file)
+        error_content = error_log_path.read_text(encoding="utf-8") if error_log_path.exists() else ""
 
         # --- Preflight: populate error_content if empty so the agent sees fresh failures ---
         # This makes run_agentic_fix self-sufficient even if the caller forgot to write the error log.
@@ -786,7 +794,7 @@ def run_agentic_fix(
         # Load primary prompt template
         primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
         if not primary_prompt_template:
-            return False, "Failed to load primary agent prompt template.", est_cost, used_model
+            return False, "Failed to load primary agent prompt template.", est_cost, used_model, changed_files
 
         # Fill primary instruction (includes code/tests/error/markers/verify_cmd hint)
         primary_instr = primary_prompt_template.format(
@@ -854,12 +862,13 @@ def run_agentic_fix(
                         cwd,
                         verify_cmd=verify_cmd,
                         verify_enabled=verify_enabled,
+                        changed_files=changed_files,
                     ):
                         try:
                             instruction_file.unlink()
                         except Exception:
                             pass
-                        return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model
+                        return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
                 except subprocess.TimeoutExpired:
                     _info(f"[yellow]{provider.capitalize()} harvest attempt timed out, moving on...[/yellow]")
                 _info("[yellow]Harvest-first attempt did not pass; trying primary instruction path...[/yellow]")
@@ -886,7 +895,8 @@ def run_agentic_fix(
             multi = _extract_files_from_output(res.stdout or "", res.stderr or "")
             if multi:
                 _info("[cyan]Detected multi-file corrected content (primary attempt). Applying...[/cyan]")
-                _apply_file_map(multi, cwd, code_path, allow_new)
+                applied = _apply_file_map(multi, cwd, code_path, allow_new)
+                changed_files.extend([str(p) for p in applied])
             else:
                 # Single-file fallback or Gemini code fence
                 harvested = _extract_corrected_from_output(res.stdout or "", res.stderr or "", code_path.resolve())
@@ -894,12 +904,14 @@ def run_agentic_fix(
                     _info("[cyan]Detected corrected file content in agent output (primary attempt). Applying patch...[/cyan]")
                     body_to_write = _normalize_code_text(harvested)
                     code_path.write_text(body_to_write, encoding="utf-8")
+                    changed_files.append(str(code_path))
                 elif provider == "google":
                     code_block = _extract_python_code_block(res.stdout or "", res.stderr or "")
                     if code_block:
                         _info("[cyan]Detected a Python code block from Google (no markers). Applying patch...[/cyan]")
                         body_to_write = _normalize_code_text(code_block)
                         code_path.write_text(body_to_write, encoding="utf-8")
+                        changed_files.append(str(code_path))
 
             # Show diff (verbose) and decide whether to verify
             new_code = code_path.read_text(encoding="utf-8")
@@ -918,7 +930,7 @@ def run_agentic_fix(
                         instruction_file.unlink()
                     except Exception:
                         pass
-                    return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model
+                    return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
 
             # Prepare for next iteration/provider: update baseline code snapshot
             orig_code = new_code
@@ -930,7 +942,7 @@ def run_agentic_fix(
                 instruction_file.unlink()
         except Exception:
             pass
-        return False, "All agents failed to produce a passing fix (no local fallback).", est_cost, used_model
+        return False, "All agents failed to produce a passing fix (no local fallback).", est_cost, used_model, changed_files
 
     except FileNotFoundError as e:
         # Common failure: provider CLI not installed/in PATH, or missing input files
@@ -941,7 +953,7 @@ def run_agentic_fix(
                 instruction_file.unlink()
         except Exception:
             pass
-        return False, msg, 0.0, "agentic-cli"
+        return False, msg, 0.0, "agentic-cli", changed_files
     except Exception as e:
         # Safety net for any unexpected runtime error
         _always(f"[bold red]An unexpected error occurred during agentic fix:[/bold red] {e}")
@@ -950,7 +962,7 @@ def run_agentic_fix(
                 instruction_file.unlink()
         except Exception:
             pass
-        return False, str(e), 0.0, "agentic-cli"
+        return False, str(e), 0.0, "agentic-cli", changed_files
 
 # Back-compat public alias for tests/consumers
 # Expose the harvest function under a stable name used by earlier code/tests.

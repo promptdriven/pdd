@@ -28,21 +28,24 @@ def escape_brackets(text: str) -> str:
 # ---------- Normalize any agentic return shape to a 4-tuple ----------
 def _normalize_agentic_result(result):
     """
-    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str)
-    Handles older 2/3-tuple shapes used by tests/monkeypatches.
+    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
     """
     if isinstance(result, tuple):
+        if len(result) == 5:
+            ok, msg, cost, model, changed_files = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), list(changed_files or [])
         if len(result) == 4:
             ok, msg, cost, model = result
-            return bool(ok), str(msg), float(cost), str(model or "agentic-cli")
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), []
         if len(result) == 3:
             ok, msg, cost = result
-            return bool(ok), str(msg), float(cost), "agentic-cli"
+            return bool(ok), str(msg), float(cost), "agentic-cli", []
         if len(result) == 2:
             ok, msg = result
-            return bool(ok), str(msg), 0.0, "agentic-cli"
+            return bool(ok), str(msg), 0.0, "agentic-cli", []
     # Fallback (shouldn't happen)
-    return False, "Invalid agentic result shape", 0.0, "agentic-cli"
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
 def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
     """
@@ -243,15 +246,21 @@ def fix_error_loop(unit_test_file: str,
     if not is_python:
         if initial_fails > 0 or initial_errors > 0:
             rprint("[cyan]Non-Python target failed initial verification. Triggering agentic fallback...[/cyan]")
-            with open(error_log_file, "w") as f:
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as f:
                 f.write(pytest_output)
             
-            success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
                 prompt_file=prompt_file,
                 code_file=code_file,
                 unit_test_file=unit_test_file,
                 error_log_file=error_log_file,
             )
+            if agent_changed_files:
+                rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+                for f in agent_changed_files:
+                    rprint(f"  • {f}")
             final_unit_test = ""
             final_code = ""
             try:
@@ -318,9 +327,11 @@ def fix_error_loop(unit_test_file: str,
             
             # Update structured log
             log_structure["iterations"][-1]["post_test_output"] = pytest_output
-            
+
             # Write formatted log to file
-            with open(error_log_file, "w") as elog:
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as elog:
                 elog.write(format_log_for_output(log_structure))
             
             # Set success to True (already determined)
@@ -496,9 +507,11 @@ def fix_error_loop(unit_test_file: str,
             
             # Update post-test output in structured log
             log_structure["iterations"][-1]["post_test_output"] = pytest_output
-            
+
             # Write updated structured log to file after each iteration
-            with open(error_log_file, "w") as elog:
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as elog:
                 elog.write(format_log_for_output(log_structure))
             
             # Update iteration stats with post-fix results
@@ -601,13 +614,34 @@ def fix_error_loop(unit_test_file: str,
 
     # Agentic fallback at end adds cost & model (normalized)
     if not success and agentic_fallback and total_cost < budget:
-        agent_success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+        # Ensure error_log_file exists before calling agentic fix
+        # Write the current log structure if it hasn't been written yet
+        try:
+            if not os.path.exists(error_log_file) or os.path.getsize(error_log_file) == 0:
+                error_log_path = Path(error_log_file)
+                error_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(error_log_path, "w") as elog:
+                    if log_structure["iterations"]:
+                        elog.write(format_log_for_output(log_structure))
+                    else:
+                        # No iterations ran, write initial state info
+                        elog.write(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings\n")
+                        if 'pytest_output' in locals():
+                            elog.write(f"\n<pytest_output>\n{pytest_output}\n</pytest_output>\n")
+        except Exception as e:
+            rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
+
+        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=unit_test_file,
             error_log_file=error_log_file,
         )
         total_cost += agent_cost
+        if agent_changed_files:
+            rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+            for f in agent_changed_files:
+                rprint(f"  • {f}")
         if agent_success:
             model_name = agent_model or model_name
             try:
