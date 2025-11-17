@@ -687,6 +687,19 @@ def construct_paths(
         if k.startswith("output") and v is not None # Ensure value is not None
     }
 
+    # Determine input file directory for default output path generation
+    # Only apply for commands that generate/update files based on specific input files
+    # Commands like sync, generate, test, example have their own directory management
+    commands_using_input_dir = {'fix', 'crash', 'verify', 'split', 'change', 'update'}
+    input_file_dir: Optional[str] = None
+    if input_paths and command in commands_using_input_dir:
+        try:
+            first_input_path = next(iter(input_paths.values()))
+            input_file_dir = str(first_input_path.parent)
+        except (StopIteration, AttributeError):
+            # If no input paths or path doesn't have parent, use None (falls back to CWD)
+            pass
+
     try:
         # generate_output_paths might return Dict[str, str] or Dict[str, Path]
         # Let's assume it returns Dict[str, str] based on verification error,
@@ -698,6 +711,7 @@ def construct_paths(
             language=language,
             file_extension=file_extension,
             context_config=context_config,
+            input_file_dir=input_file_dir,
         )
 
         # For sync, explicitly honor .pddrc generate_output_path even if generator logged as 'default'
