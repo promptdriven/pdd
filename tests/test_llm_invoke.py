@@ -251,7 +251,7 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
     def _mock_models_df():
         rows = [{
             "provider": "OpenAI",
-            "model": "gpt-5-mini",
+            "model": "gpt-5.1-codex-mini",
             "input": 0.01,
             "output": 0.02,
             "coding_arena_elo": 1500,
@@ -267,7 +267,7 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
         df["avg_cost"] = (df["input"] + df["output"]) / 2
         return df
 
-    def _mock_litellm_response(content="console.log('ok');", model_name="gpt-5-mini"):
+    def _mock_litellm_response(content="console.log('ok');", model_name="gpt-5.1-codex-mini"):
         mock_response = MagicMock()
         mock_choice = MagicMock()
         mock_message = MagicMock()
