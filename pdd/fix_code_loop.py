@@ -11,28 +11,31 @@ from .agentic_langtest import default_verify_cmd_for
 
 def _normalize_agentic_result(result):
     """
-    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str)
-    Handles older 2/3-tuple shapes used by tests/monkeypatches.
+    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
     """
     if isinstance(result, tuple):
+        if len(result) == 5:
+            ok, msg, cost, model, changed_files = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), list(changed_files or [])
         if len(result) == 4:
             ok, msg, cost, model = result
-            return bool(ok), str(msg), float(cost), str(model or "agentic-cli")
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), []
         if len(result) == 3:
             ok, msg, cost = result
-            return bool(ok), str(msg), float(cost), "agentic-cli"
+            return bool(ok), str(msg), float(cost), "agentic-cli", []
         if len(result) == 2:
             ok, msg = result
-            return bool(ok), str(msg), 0.0, "agentic-cli"
+            return bool(ok), str(msg), 0.0, "agentic-cli", []
     # Fallback (shouldn't happen)
-    return False, "Invalid agentic result shape", 0.0, "agentic-cli"
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
 def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
     """
     Call (possibly monkeypatched) run_agentic_fix and normalize its return.
     """
     if not prompt_file:
-        return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli"
+        return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli", []
     res = run_agentic_fix(
         prompt_file=prompt_file,
         code_file=code_file,
@@ -125,15 +128,21 @@ def fix_code_loop(
         pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
         if verify_result.returncode != 0:
             rprint("[cyan]Non-Python target failed initial verification. Triggering agentic fallback...[/cyan]")
-            with open(error_log_file, "w") as f:
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as f:
                 f.write(pytest_output)
             
-            success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
                 prompt_file=prompt_file,
                 code_file=code_file,
                 unit_test_file=verification_program,
                 error_log_file=error_log_file,
             )
+            if agent_changed_files:
+                rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+                for f in agent_changed_files:
+                    rprint(f"  • {f}")
             final_program = ""
             final_code = ""
             try:
@@ -474,13 +483,35 @@ def fix_code_loop(
                  final_attempts_reported += 1
 
     if not success and agentic_fallback:
-        agent_success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+        # Ensure error_log_file exists before calling agentic fix
+        try:
+            if not os.path.exists(error_log_file) or os.path.getsize(error_log_file) == 0:
+                # Write minimal error log for agentic fix
+                error_log_path = Path(error_log_file)
+                error_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(error_log_path, "w") as elog:
+                    if process:
+                        elog.write(f"Verification failed with return code: {process.returncode}\n")
+                        if process.stdout:
+                            elog.write(f"\nStdout:\n{process.stdout}\n")
+                        if process.stderr:
+                            elog.write(f"\nStderr:\n{process.stderr}\n")
+                    else:
+                        elog.write("No error information available\n")
+        except Exception as e:
+            rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
+
+        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=verification_program,
             error_log_file=error_log_file,
         )
         total_cost += agent_cost
+        if agent_changed_files:
+            rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+            for f in agent_changed_files:
+                rprint(f"  • {f}")
         if agent_success:
             model_name = agent_model or model_name
             try:
