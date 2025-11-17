@@ -164,14 +164,10 @@ def _run_setup_utility() -> None:
 
 
 class PDDCLI(click.Group):
-    """Custom Click Group that appends a Generate Suite section to top-level help."""
+    """Custom Click Group that adds a Generate Suite section to root help."""
 
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        # Render the default Click help first (usage, description, options, commands)
-        super().format_help(ctx, formatter)
-
-        # Append a concise "Generate Suite" section at the end of the help output
-        formatter.write("\n")
+        self.format_usage(ctx, formatter)
         with formatter.section("Generate Suite (related commands)"):
             formatter.write_dl([
                 ("generate", "Create runnable code from a prompt file."),
@@ -179,8 +175,10 @@ class PDDCLI(click.Group):
                 ("example",  "Generate example code from a prompt and implementation."),
             ])
         formatter.write(
-            "\nUse `pdd generate --help` for details on this suite and common global flags.\n"
+            "Use `pdd generate --help` for details on this suite and common global flags.\n"
         )
+
+        self.format_options(ctx, formatter)
 
 
 # --- Main CLI Group ---
