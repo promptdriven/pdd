@@ -80,7 +80,7 @@
         - `generate` options:
             - `--output LOCATION`: Where to save the generated code (file or directory). Defaults follow `construct_paths`.
             - `--original-prompt FILENAME`: Original prompt for incremental generation; if omitted, auto-detect from git.
-            - `--incremental`: Force incremental patching even if the analyzer suggests full regeneration. Requires that `--output` points to an existing file; if the CLI sees the file is missing or not a file, it must (unless `--quiet`) warn the user, drop back to full regeneration, and call `code_generator_main` without incremental mode.
+            - `--incremental`: Force incremental patching even if the analyzer suggests full regeneration. Pass this flag to `code_generator_main` to handle validation and fallback logic.
             - `-e/--env KEY=VALUE | -e KEY`: Provide template variables as described below.
             - If `--output` is omitted, write to the derived default path from `construct_paths` (respecting `PDD_GENERATE_OUTPUT_PATH`); do not print the artifact to stdout.
 
@@ -196,7 +196,7 @@
         - For `generate`, implement `@click.option("-e", "--env", "env_kv", multiple=True, help="Set template variable (KEY=VALUE) or read KEY from env")` and parse it into `env_vars: Dict[str, str]` as described above, then pass `env_vars` into `code_generator_main`.
         - Add `@click.option("--template", "template_name", type=str, default=None, help="Use a packaged/project template by name (e.g., architecture/architecture_json)")`. If provided, resolve the prompt file via `pdd.template_registry.load_template(template_name)` and pass the resolved absolute path to `code_generator_main`. Disallow passing both `--template` and a positional `prompt_file` simultaneously.
         - Add a `templates` command group with subcommands:
-            * `templates list [--json] [--filter TAG | --filter tag=TAG]`: call `pdd.template_registry.list_templates(filter_tag)`; render a compact list or a simple table; when `--json` is set, print JSON. Normalize the CLI argument by stripping an optional `tag=` prefix before forwarding it to the registry helper.
+            * `templates list [--json] [--filter TAG | --filter tag=TAG]`: call `pdd.template_registry.list_templates(filter_tag)`; render a compact list or a simple table; when `--json` is set, print JSON. Pass the filter argument directly to the registry helper.
             * `templates show NAME`: call `pdd.template_registry.show_template(name)` and render each section with Rich tables for readability. Use compact key/value tables for the summary (name, description, version, tags, language, output, path) and discover settings, and a multi-column table for variables (`Name | Required | Type | Description | Default/Examples`). Usage examples should render with a two-column table (`Name | Command`). Fall back to plain text only when a section is missing or not tabular (e.g., free-form notes).
             * `templates copy NAME --to DIR`: call `pdd.template_registry.copy_template(name, dest_dir)` and print the destination.
         - All template subcommands must honor `ctx.obj['quiet']`, suppressing Rich/verbose output when quiet mode is enabled and routing errors through `handle_error(..., quiet=ctx.obj['quiet'])`.
