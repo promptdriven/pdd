@@ -316,8 +316,7 @@ def test_construct_paths_basename_extraction(tmpdir):
                     language=determined_lang, # Use the language determined for mocking
                     file_extension=mock_ext, # Use the extension determined for mocking
                     context_config={},
-                    input_file_dir=ANY,
-                    input_file_dirs={}
+                    input_file_dir=ANY
                 )
         # Clean up dummy code file
         if dummy_code and dummy_code.exists():
@@ -754,8 +753,7 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
             language='python',
             file_extension='.py',
             context_config={},
-            input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dir=ANY
         )
 
 
@@ -1201,8 +1199,7 @@ def test_construct_paths_conflicting_language_specification(tmpdir):
             language='javascript', # Correct language passed
             file_extension='.js',   # Correct extension passed
             context_config={},
-            input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dir=ANY
         )
         assert output_file_paths['output'] == str(mock_output_path)
 
@@ -1378,8 +1375,7 @@ def test_construct_paths_symbolic_links(tmpdir):
             language='python',
             file_extension='.py',
             context_config={},
-            input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dir=ANY
         )
 
 # --- Fixture and tests below seem to use tmp_path_factory correctly ---
@@ -1476,8 +1472,7 @@ def test_construct_paths_generate_command(setup_test_files):
         language='prompt',
         file_extension='.prompt',
         context_config={},
-        input_file_dir=ANY,
-        input_file_dirs={}
+        input_file_dir=ANY
     )
 
 
@@ -1939,8 +1934,7 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
             language='makefile',
             file_extension='',  # Makefiles have no extension
             context_config={},
-            input_file_dir=ANY,
-                        input_file_dirs=ANY
+            input_file_dir=ANY
         )
 
 

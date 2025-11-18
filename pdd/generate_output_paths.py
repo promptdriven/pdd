@@ -182,8 +182,7 @@ def generate_output_paths(
     language: str,
     file_extension: str,
     context_config: Optional[Dict[str, str]] = None,
-    input_file_dir: Optional[str] = None,
-    input_file_dirs: Optional[Dict[str, str]] = None
+    input_file_dir: Optional[str] = None
 ) -> Dict[str, str]:
     """
     Generates the full, absolute output paths for a given PDD command.
@@ -208,9 +207,6 @@ def generate_output_paths(
         input_file_dir: Optional path to the input file's directory. When provided,
                        default output files will be placed in this directory instead
                        of the current working directory.
-        input_file_dirs: Optional dictionary mapping output keys to specific input
-                        file directories. When provided, each output will use its
-                        corresponding input file directory (e.g., {'output_code': 'src/main/java'}).
 
     Returns:
         A dictionary where keys are the standardized output identifiers
@@ -221,11 +217,9 @@ def generate_output_paths(
     logger.debug(f"Generating output paths for command: {command}")
     logger.debug(f"User output locations: {output_locations}")
     logger.debug(f"Context config: {context_config}")
-    logger.debug(f"Input file dirs: {input_file_dirs}")
     logger.debug(f"Basename: {basename}, Language: {language}, Extension: {file_extension}")
 
     context_config = context_config or {}
-    input_file_dirs = input_file_dirs or {}
     result_paths: Dict[str, str] = {}
 
     if not basename:
@@ -356,13 +350,8 @@ def generate_output_paths(
                 final_path = os.path.join(examples_dir, default_filename)
                 logger.debug(f"Using default filename '{default_filename}' in examples directory.")
             else:
-                # First check if there's a specific directory for this output key
-                specific_dir = input_file_dirs.get(output_key)
-                if specific_dir:
-                    final_path = os.path.join(specific_dir, default_filename)
-                    logger.debug(f"Using default filename '{default_filename}' in specific input file directory: {specific_dir}")
-                # Otherwise use the general input file directory if provided
-                elif input_file_dir:
+                # Use input file directory if provided, otherwise use CWD
+                if input_file_dir:
                     final_path = os.path.join(input_file_dir, default_filename)
                     logger.debug(f"Using default filename '{default_filename}' in input file directory: {input_file_dir}")
                 else:
