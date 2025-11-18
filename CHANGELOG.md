@@ -1,3 +1,13 @@
+## v0.0.71 (2025-11-18)
+
+### Feat
+
+- enhance image processing and multimodal generation capabilities
+
+### Refactor
+
+- update LLM model references and prompt instructions
+
 ## v0.0.70 (2025-11-13)
 
 ### Feat
