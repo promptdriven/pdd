@@ -14,6 +14,7 @@ import json
 import platform
 import datetime
 import traceback
+import shlex
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path # Import Path
 
@@ -24,6 +25,7 @@ from rich.markup import MarkupError, escape
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
+import requests
 
 # --- Relative Imports for Internal Modules ---
 from . import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
@@ -270,6 +272,158 @@ def _write_core_dump(
         # Never let core dumping itself crash the CLI
         if not ctx.obj.get("quiet"):
             console.print(f"[warning]Failed to write core dump: {exc}[/warning]", style="warning")
+
+
+def _github_config() -> Optional[Tuple[str, str]]:
+    """Return (token, repo) if GitHub issue posting is configured, otherwise None."""
+    token = os.getenv("PDD_GITHUB_TOKEN")
+    repo = os.getenv("PDD_GITHUB_REPO")
+    if not token or not repo:
+        return None
+    return token, repo
+
+
+def _post_issue_to_github(token: str, repo: str, title: str, body: str) -> Optional[str]:
+    """Post an issue to GitHub, returning the issue URL on success, otherwise None."""
+    try:
+        url = f"https://api.github.com/repos/{repo}/issues"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        }
+        resp = requests.post(url, headers=headers, json={"title": title, "body": body}, timeout=10)
+        if 200 <= resp.status_code < 300:
+            data = resp.json()
+            return data.get("html_url")
+    except Exception:
+        return None
+    return None
+
+
+def _write_replay_script(core_path: Path, payload: Dict[str, Any]) -> Optional[Path]:
+    """Create a small shell script to replay the original core-dumped command."""
+    cwd = payload.get("cwd")
+    argv = payload.get("argv", [])
+    env = payload.get("environment", {})
+
+    if not cwd or not argv:
+        return None
+
+    script_path = core_path.with_suffix(".replay.sh")
+
+    lines: List[str] = []
+    lines.append("#!/usr/bin/env bash")
+    lines.append("set -euo pipefail")
+    lines.append("")
+    lines.append(f"cd {shlex.quote(str(cwd))}")
+    lines.append("")
+
+    for key, value in env.items():
+        lines.append(f"export {key}={shlex.quote(str(value))}")
+
+    lines.append("")
+    arg_str = " ".join(shlex.quote(str(a)) for a in argv)
+    lines.append(f"pdd {arg_str}")
+    lines.append("")
+
+    script_path.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        mode = script_path.stat().st_mode
+        script_path.chmod(mode | 0o111)
+    except OSError:
+        pass
+
+    return script_path
+
+
+def _build_issue_markdown(
+    payload: Dict[str, Any],
+    description: str,
+    core_path: Path,
+    replay_path: Optional[Path],
+    attachments: List[str],
+) -> Tuple[str, str]:
+    """Build a GitHub issue title and markdown body from a core dump payload."""
+    platform_info = payload.get("platform", {})
+    system = platform_info.get("system", "unknown")
+    release = platform_info.get("release", "")
+    invoked = payload.get("invoked_subcommands") or []
+    cmd_summary = " ".join(invoked) if invoked else "command"
+
+    title = f"[core-dump] {cmd_summary} failed on {system}"
+
+    argv_str = " ".join(str(a) for a in payload.get("argv", []))
+    cwd = payload.get("cwd", "")
+    total_cost = payload.get("total_cost", None)
+    errors = payload.get("errors") or []
+    pyver = platform_info.get("python")
+    pdd_ver = payload.get("pdd_version")
+
+    lines: List[str] = []
+
+    lines.append(f"Core dump file: `{core_path}`")
+    lines.append("")
+    lines.append("## What happened")
+    lines.append("")
+    desc = (description or "").strip()
+    if desc:
+        lines.append(desc)
+    else:
+        lines.append("_(no additional description provided by user)_")
+    lines.append("")
+    lines.append("## Environment")
+    lines.append("")
+    if cwd:
+        lines.append(f"- Working directory: `{cwd}`")
+    if argv_str:
+        lines.append(f"- CLI arguments: `{argv_str}`")
+    if system or release:
+        lines.append(f"- Platform: `{system} {release}`".strip())
+    if pyver:
+        lines.append(f"- Python: `{pyver}`")
+    if pdd_ver:
+        lines.append(f"- PDD version: `{pdd_ver}`")
+    if total_cost is not None:
+        try:
+            lines.append(f"- Total estimated cost: `${float(total_cost):.6f}`")
+        except (TypeError, ValueError):
+            lines.append(f"- Total estimated cost: `{total_cost}`")
+    lines.append("")
+    lines.append("## Reproduction")
+    lines.append("")
+    if replay_path is not None:
+        lines.append(f"A replay script was generated at `{replay_path}`.")
+        lines.append("Run this script in a similar environment to reproduce the issue:")
+        lines.append("")
+        lines.append("```bash")
+        lines.append(f"bash {replay_path}")
+        lines.append("```")
+    else:
+        lines.append("Re-run the original command in the same repository with `--core-dump` enabled.")
+    lines.append("")
+    if errors:
+        lines.append("## Errors")
+        lines.append("")
+        for err in errors:
+            cmd = err.get("command", "unknown")
+            etype = err.get("type", "Error")
+            lines.append(f"### {cmd} ({etype})")
+            lines.append("")
+            tb = err.get("traceback") or err.get("message") or ""
+            lines.append("```text")
+            lines.append(tb)
+            lines.append("```")
+            lines.append("")
+    if attachments:
+        lines.append("## Attachments (local paths)")
+        lines.append("")
+        for p in attachments:
+            lines.append(f"- `{p}`")
+        lines.append("")
+    lines.append("<!-- Generated by `pdd report-core` -->")
+
+    body = "\n".join(lines)
+    return title, body
 
 
 # --- Main CLI Group ---
@@ -687,7 +841,7 @@ def templates_show(name: str):
 
         if data.get("usage"):
             console.print("\n[info]Usage:[/info]")
-            usage = data["usage"]
+            usage = data.get("usage")
             if isinstance(usage, dict):
                 for group_name, entries in usage.items():
                     console.print(f"[bold]{escape(str(group_name))}[/bold]")
@@ -716,7 +870,7 @@ def templates_show(name: str):
 
         if data.get("discover"):
             console.print("\n[info]Discover:[/info]")
-            discover = data["discover"]
+            discover = data.get("discover")
             if isinstance(discover, dict):
                 discover_items = [(str(key), value) for key, value in discover.items()]
                 _render_key_value_table(None, discover_items)
@@ -1850,6 +2004,123 @@ def pytest_output_cmd(ctx: click.Context, test_file: str, json_only: bool) -> No
         handle_error(e, command_name, quiet_mode)
 
 
+@cli.command("report-core")
+@click.argument("core_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--latest",
+    is_flag=True,
+    default=False,
+    help="Use the most recent core dump in .pdd/core_dumps.",
+)
+@click.option(
+    "--describe",
+    type=str,
+    default=None,
+    help="Short description of what went wrong (will prompt if omitted in interactive mode).",
+)
+@click.option(
+    "--github",
+    "post_to_github",
+    is_flag=True,
+    default=False,
+    help="If configured, automatically create a GitHub issue using this core dump.",
+)
+@click.option(
+    "--attach",
+    "attachments",
+    type=click.Path(exists=True),
+    multiple=True,
+    help="File(s) to mention as relevant inputs/outputs in the issue body.",
+)
+@click.pass_context
+def report_core(
+    ctx: click.Context,
+    core_file: Optional[str],
+    latest: bool,
+    describe: Optional[str],
+    post_to_github: bool,
+    attachments: Tuple[str, ...],
+) -> None:
+    """Generate an issue report from a core dump (and optionally post to GitHub)."""
+    quiet_mode = ctx.obj.get("quiet", False)
+    command_name = "report-core"
+
+    try:
+        core_dump_dir = Path.cwd() / ".pdd" / "core_dumps"
+        selected_path: Optional[Path] = None
+
+        if core_file:
+            selected_path = Path(core_file)
+        elif latest:
+            if not core_dump_dir.exists():
+                raise click.UsageError("No core dump directory .pdd/core_dumps found in current working directory.")
+            candidates = sorted(core_dump_dir.glob("pdd-core-*.json"))
+            if not candidates:
+                raise click.UsageError("No core dump files found in .pdd/core_dumps.")
+            selected_path = candidates[-1]
+        else:
+            raise click.UsageError("Either CORE_FILE must be provided or --latest must be used.")
+
+        try:
+            payload = json.loads(selected_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise click.UsageError(f"Failed to read core dump file: {exc}")
+
+        # Normalize description
+        if describe is None and sys.stdin.isatty():
+            describe = click.prompt(
+                "Briefly describe what went wrong (this will go into the issue body)",
+                default="",
+                show_default=False,
+            )
+        if describe is None:
+            describe = ""
+
+        replay_path = _write_replay_script(selected_path, payload)
+        attachment_paths = [str(Path(p)) for p in attachments] if attachments else []
+
+        title, body = _build_issue_markdown(
+            payload=payload,
+            description=describe,
+            core_path=selected_path,
+            replay_path=replay_path,
+            attachments=attachment_paths,
+        )
+
+        issue_md_path = selected_path.with_suffix(".issue.md")
+        issue_md_path.write_text(body, encoding="utf-8")
+
+        if not quiet_mode:
+            console.print(
+                f"[info]Issue template written to [path]{issue_md_path}[/path]. "
+                "You can paste this into a new GitHub issue.[/info]"
+            )
+
+        if post_to_github:
+            cfg = _github_config()
+            if not cfg:
+                if not quiet_mode:
+                    console.print(
+                        "[warning]GitHub posting requested but PDD_GITHUB_TOKEN and "
+                        "PDD_GITHUB_REPO are not both set.[/warning]",
+                        style="warning",
+                    )
+            else:
+                token, repo = cfg
+                issue_url = _post_issue_to_github(token, repo, title, body)
+                if issue_url and not quiet_mode:
+                    console.print(f"[success]Created GitHub issue:[/success] {issue_url}")
+                elif not issue_url and not quiet_mode:
+                    console.print(
+                        "[warning]Failed to create GitHub issue automatically. "
+                        "Use the generated issue template instead.[/warning]",
+                        style="warning",
+                    )
+
+    except Exception as e:
+        handle_error(e, command_name, quiet_mode)
+
+
 @cli.command("install_completion")
 @click.pass_context
 # No @track_cost
@@ -1882,7 +2153,7 @@ def setup_cmd(ctx: click.Context) -> None:
         install_completion(quiet=quiet_mode)
         _run_setup_utility()
         if not quiet_mode:
-            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[/success]")
+            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[success]")
     except Exception as exc:
         handle_error(exc, command_name, quiet_mode)
 

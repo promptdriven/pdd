@@ -157,6 +157,12 @@ def test_cli_help(runner):
     assert "fix" in result.output
     assert "install_completion" in result.output
 
+def test_cli_help_shows_core_dump_flag(runner):
+    """Global --core-dump option should be visible in top-level help."""
+    result = runner.invoke(cli.cli, ["--help"])
+    assert result.exit_code == 0
+    assert "--core-dump" in result.output
+
 def test_cli_command_help(runner):
     """Test `pdd [COMMAND] --help`."""
     result = runner.invoke(cli.cli, ["generate", "--help"])
