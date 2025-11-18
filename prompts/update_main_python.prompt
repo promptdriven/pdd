@@ -8,7 +8,7 @@
         - `input_prompt_file` - A string containing the path to the original prompt file.
         - `modified_code_file` - A string containing the path to the modified code file.
         - `input_code_file` - An optional string containing the path to the original code file. If not provided, you must set `use_git=True` to retrieve the original code from Git; otherwise, this is an error for true update mode.
-        - `output` - An optional string containing the path where to save the updated prompt. If None, the original prompt file is overwritten in place.
+        - `output` - An optional string containing the path (file or directory) where to save the updated prompt. If a directory is provided, the filename is derived. If None, the original prompt file is overwritten in place.
         - `use_git` - A boolean that is True if Git history should be used to retrieve the original code. Default is False. If `use_git=True`, do not provide `input_code_file`. If `use_git=False`, `input_code_file` is required (for true update).
         - `repo` - A boolean flag. When True (and no file args are provided), operate in repository‑wide mode: scan for code/prompt pairs and update all of them.
         - `extensions` - An optional comma‑separated list of file extensions to filter by in repository‑wide mode (e.g., "py,js,ts").
@@ -22,15 +22,15 @@
 % - On invalid inputs or unexpected errors, the function prints a Rich-formatted error message (unless `--quiet`) and exits the process with status code 1 using `sys.exit(1)`.
 
 % Modes the function must support:
-% 1) True update (single file): `input_prompt_file` + `modified_code_file`, and either `use_git=True` or provide `input_code_file`. If `--output` is not provided, overwrite `input_prompt_file`.
-% 2) Regeneration (single file): only `modified_code_file` provided. Derive the prompt path as `<base>_<language>.prompt` using `get_language`, create it if missing, and generate a prompt by calling `update_prompt` with `input_prompt="no prompt exists yet, create a new one"` and `input_code=""`.
+% 1) True update (single file): `input_prompt_file` + `modified_code_file`, and either `use_git=True` or provide `input_code_file`. If `input_prompt_file` is empty, treat as Generation mode. If `--output` is not provided, overwrite `input_prompt_file`.
+% 2) Regeneration (single file): only `modified_code_file` provided. Derive the prompt path as `<base>_<language>.prompt` inside a `prompts/` directory at the repo root (or inside the `output` dir if provided). Create the directory/file if missing, and generate a prompt by calling `update_prompt` with `input_prompt="no prompt exists yet, create a new one"` and `input_code=""`.
 % 3) Repository‑wide mode: when no file arguments are provided (the CLI determines this and passes `repo=True`). Recursively scan the repo, create missing prompt files, and update every prompt/code pair. Show a progress bar and summary table of results. Return a summary tuple.
 
 % Repository‑wide specifics:
 % - Ignore directories: `.git`, `.idea`, `.vscode`, `__pycache__`, `node_modules`, `.venv`, `venv`, `dist`, `build`.
 % - Exclude files that end with `.prompt`, start with `test_`, or end with `_example` (by basename).
 % - If `extensions` is provided, only include files whose extension is in that set (case‑insensitive; accepts with or without leading dot).
-% - For each code file, compute the prompt path as `<base>_<language>.prompt` using `get_language`; if the prompt file doesn’t exist, create an empty file.
+% - For each code file, compute the prompt path as `<base>_<language>.prompt` inside the `prompts/` directory at the repo root; if the prompt file doesn’t exist, create an empty file.
 % - Update strategy per pair: if the code file is untracked in Git OR the prompt file is empty → call `update_prompt` (generation). Otherwise → call `git_update` (update from git history).
 % - Return value for repo mode: `("Repository update complete.", <total_cost>, "<comma-separated models>")`. If no scannable files are found, return `None`.
 % - File‑specific flags like `--output` and `--git` do not apply in repo mode (the CLI enforces this).
