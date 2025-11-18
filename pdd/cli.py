@@ -1141,7 +1141,7 @@ def change(
     "--output",
     type=click.Path(writable=True),
     default=None,
-    help="Specify where to save the updated prompt file. If not specified, overwrites the original prompt file to maintain it as the source of truth.",
+    help="Specify where to save the updated prompt file(s). For single files: saves to this specific path or directory. For repository mode: saves all prompts to this directory. If not specified, uses the original prompt location (single file) or 'prompts' directory (repository mode).",
 )
 @click.option(
     "--git",
@@ -1195,9 +1195,9 @@ def update(
         is_repo_mode = not actual_input_prompt_file and not actual_modified_code_file
 
         if is_repo_mode:
-            if any([input_code_file, output, use_git]):
+            if any([input_code_file, use_git]):
                 raise click.UsageError(
-                    "Cannot use file-specific arguments or flags like --git or --output in repository-wide mode (when no files are provided)."
+                    "Cannot use file-specific arguments or flags like --git or --input-code in repository-wide mode (when no files are provided)."
                 )
         elif extensions:
             raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")

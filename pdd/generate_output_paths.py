@@ -181,14 +181,16 @@ def generate_output_paths(
     basename: str,
     language: str,
     file_extension: str,
-    context_config: Optional[Dict[str, str]] = None
+    context_config: Optional[Dict[str, str]] = None,
+    input_file_dir: Optional[str] = None
 ) -> Dict[str, str]:
     """
     Generates the full, absolute output paths for a given PDD command.
 
-    It prioritizes user-specified paths (--output options), then context 
-    configuration from .pddrc, then environment variables, and finally 
-    falls back to default naming conventions in the current working directory.
+    It prioritizes user-specified paths (--output options), then context
+    configuration from .pddrc, then environment variables, and finally
+    falls back to default naming conventions in the input file's directory
+    (or current working directory if input_file_dir is not provided).
 
     Args:
         command: The PDD command being executed (e.g., 'generate', 'fix').
@@ -202,6 +204,9 @@ def generate_output_paths(
                         used when default patterns require it.
         context_config: Optional dictionary with context-specific paths from .pddrc
                        configuration (e.g., {'generate_output_path': 'src/'}).
+        input_file_dir: Optional path to the input file's directory. When provided,
+                       default output files will be placed in this directory instead
+                       of the current working directory.
 
     Returns:
         A dictionary where keys are the standardized output identifiers
@@ -281,6 +286,13 @@ def generate_output_paths(
         # 2. Check Context Configuration Path (.pddrc)
         elif context_path:
             source = "context"
+
+            # For relative context paths and commands that use input_file_dir,
+            # resolve the context path relative to the input file directory
+            if input_file_dir and not os.path.isabs(context_path):
+                context_path = os.path.join(input_file_dir, context_path)
+                logger.debug(f"Resolved relative context path to: {context_path}")
+
             # Check if the context path is a directory
             is_dir = context_path.endswith(os.path.sep) or context_path.endswith('/')
             if not is_dir:
@@ -300,6 +312,13 @@ def generate_output_paths(
         # 3. Check Environment Variable Path
         elif env_path:
             source = "environment"
+
+            # For relative env paths and commands that use input_file_dir,
+            # resolve the env path relative to the input file directory
+            if input_file_dir and not os.path.isabs(env_path):
+                env_path = os.path.join(input_file_dir, env_path)
+                logger.debug(f"Resolved relative env path to: {env_path}")
+
             # Check if the environment variable points to a directory
             is_dir = env_path.endswith(os.path.sep)
             if not is_dir:
@@ -331,8 +350,13 @@ def generate_output_paths(
                 final_path = os.path.join(examples_dir, default_filename)
                 logger.debug(f"Using default filename '{default_filename}' in examples directory.")
             else:
-                final_path = default_filename # Relative to CWD initially
-                logger.debug(f"Using default filename '{default_filename}' in current directory.")
+                # Use input file directory if provided, otherwise use CWD
+                if input_file_dir:
+                    final_path = os.path.join(input_file_dir, default_filename)
+                    logger.debug(f"Using default filename '{default_filename}' in input file directory: {input_file_dir}")
+                else:
+                    final_path = default_filename # Relative to CWD initially
+                    logger.debug(f"Using default filename '{default_filename}' in current directory.")
 
         # Resolve to absolute path
         if final_path:
