@@ -868,14 +868,14 @@ def test_cli_result_callback_single_tuple_normalization():
     lines = _capture_summary(
         ['generate'],
         # Simulate Click delivering a single 3-tuple rather than a list
-        ('generated code', 0.0040675, 'gpt-5-mini'),
+        ('generated code', 0.0040675, 'gpt-5.1-codex-mini'),
     )
 
     summary = "\n".join(lines)
     assert "Command Execution Summary" in summary
     # Should show exactly one step associated with 'generate'
     expected_cost = f"{0.0040675:.6f}"
-    assert f"Step 1 (generate):[/info] Cost: ${expected_cost}, Model: gpt-5-mini" in summary
+    assert f"Step 1 (generate):[/info] Cost: ${expected_cost}, Model: gpt-5.1-codex-mini" in summary
     # Should NOT emit Unknown Command 2/3 lines from mis-iterating over tuple elements
     assert "Unknown Command 2" not in summary
     assert "Unknown Command 3" not in summary
