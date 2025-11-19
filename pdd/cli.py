@@ -2133,17 +2133,23 @@ def report_core(
             )
 
         if post_to_github:
-            cfg = _github_config()
-            if not cfg:
+            # New: default repo + guided token setup
+            github_token = os.environ.get("PDD_GITHUB_TOKEN")
+            github_repo = os.environ.get("PDD_GITHUB_REPO") or "promptdriven/pdd"
+
+            if not github_token:
                 if not quiet_mode:
                     console.print(
-                        "[warning]GitHub posting requested but PDD_GITHUB_TOKEN and "
-                        "PDD_GITHUB_REPO are not both set.[/warning]",
+                        "[warning]GitHub posting requested, but PDD_GITHUB_TOKEN is not set.\n"
+                        "To enable automatic issue creation, set a GitHub personal access token, e.g.:\n"
+                        "  export PDD_GITHUB_TOKEN=ghp_your_token_here\n\n"
+                        "By default, issues will be opened against [bold]promptdriven/pdd[/bold]. "
+                        "To use a different repository, set:\n"
+                        "  export PDD_GITHUB_REPO=owner/repo[/warning]",
                         style="warning",
                     )
             else:
-                token, repo = cfg
-                issue_url = _post_issue_to_github(token, repo, title, body)
+                issue_url = _post_issue_to_github(github_token, github_repo, title, body)
                 if issue_url and not quiet_mode:
                     console.print(f"[success]Created GitHub issue:[/success] {issue_url}")
                 elif not issue_url and not quiet_mode:
@@ -2155,6 +2161,7 @@ def report_core(
 
     except Exception as e:
         handle_error(e, command_name, quiet_mode)
+
 
 
 @cli.command("install_completion")
