@@ -6,6 +6,30 @@ References: pdd/docs/whitepaper.md, pdd/docs/prompt-driven-development-doctrine.
 
 ---
 
+## Quickstart: PDD in 5 Minutes
+
+If you are new to Prompt-Driven Development (PDD), follow this recipe:
+
+1.  **Think "One Prompt = One Module":** Don't try to generate the whole app at once. Focus on one file (e.g., `user_service.py`).
+2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies, Instructions.
+3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML.
+4.  **Regenerate, Don't Patch:** If the code is wrong, fix the prompt and run the generator again.
+5.  **Verify:** Run the generated code/tests.
+
+*Tip: Treat your prompt like source code. It is the single source of truth.*
+
+---
+
+## Glossary
+
+- **Context Engineering:** The art of curating exactly what information (code, docs, examples) fits into the LLM's limited "working memory" (context window) to get the best result.
+- **Shared Preamble:** A standard text file (e.g., `project_preamble.prompt`) included in every prompt to enforce common rules like coding style, forbidden libraries, and formatting.
+- **PDD Directive:** Special tags like `<include>` or `<shell>` that the PDD tool processes *before* sending the text to the AI. The AI sees the *result* (the file content), not the tag.
+- **Source of Truth:** The definitive record. In PDD, the **Prompt** is the source of truth; the code is just a temporary artifact generated from it.
+- **Drift:** When the generated code slowly diverges from the prompt's intent over time, or when manual edits to code make it inconsistent with the prompt.
+
+---
+
 ## Why PDD Prompts (Not Patches)
 
 - Prompts are the source of truth; code is a generated artifact. Update the prompt and regenerate instead of patching code piecemeal.
@@ -66,7 +90,7 @@ These patterns are used across prompts in this repo:
 
 - Preamble and role: start with a concise, authoritative description of the task and audience (e.g., “You are an expert Python engineer…”).
 - Includes for context: bring only what the model needs.
-  - Single include: `<include>path/to/file</include>` (handles both text and images based on file extension)
+  - Single include: `<include>path/to/file</include>`. **Note:** This is a PDD directive, not standard XML. The PDD tool replaces this tag with the actual file content *before* the LLM sees it. (Handles both text and images).
   - Multiple: `<include-many>path1, path2, …</include-many>`
   - Grouping: wrap includes in a semantic tag to name the dependency or file they represent, for example:
     ```xml
