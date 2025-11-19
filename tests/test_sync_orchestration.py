@@ -1039,3 +1039,281 @@ def test_verify_skipped_when_example_missing_after_crash_skip(orchestration_fixt
 
     # And there should be no orchestrator errors if verify was correctly skipped
     assert not result.get('errors'), f"Unexpected errors: {result.get('errors')}"
+
+
+# --- Tests for output capture feature (Issue #65) ---
+
+def test_display_operation_output_basic_functionality():
+    """
+    Test _display_operation_output function displays stdout and stderr correctly.
+    This tests the core functionality added for issue #65.
+    """
+    from pdd.sync_orchestration import _display_operation_output
+    import threading
+    from unittest.mock import patch
+
+    stop_event = threading.Event()
+    stop_event.clear()  # Start with animation running
+
+    stdout_content = "This is stdout output\nLine 2 of stdout"
+    stderr_content = "This is stderr output\nWarning message"
+
+    # Mock the console output to verify it's called
+    with patch('pdd.sync_orchestration.Console') as mock_console_class:
+        mock_console = MagicMock()
+        mock_console_class.return_value = mock_console
+
+        # Also patch time.sleep to avoid delays in tests
+        with patch('pdd.sync_orchestration.time.sleep'):
+            _display_operation_output(
+                operation='generate',
+                stdout_content=stdout_content,
+                stderr_content=stderr_content,
+                stop_event=stop_event,
+                quiet=False
+            )
+
+        # After function completes, stop event should be clear (animation resumed)
+        assert not stop_event.is_set()
+
+        # Verify console was created
+        assert mock_console_class.called
+
+        # Verify print methods were called for the output
+        assert mock_console.print.call_count > 0
+
+
+def test_display_operation_output_respects_quiet_flag():
+    """
+    Test that _display_operation_output respects the quiet flag.
+    When quiet=True, no output should be displayed.
+    """
+    from pdd.sync_orchestration import _display_operation_output
+    import threading
+    from unittest.mock import patch
+
+    stop_event = threading.Event()
+    stop_event.clear()
+
+    with patch('pdd.sync_orchestration.Console') as mock_console_class:
+        _display_operation_output(
+            operation='test',
+            stdout_content="Some output",
+            stderr_content="Some error",
+            stop_event=stop_event,
+            quiet=True  # Quiet mode enabled
+        )
+
+        # Verify Console was not created when quiet=True
+        mock_console_class.assert_not_called()
+
+        # Verify stop event was NOT set (no pause needed)
+        assert not stop_event.is_set()
+
+
+def test_display_operation_output_handles_empty_output():
+    """
+    Test that _display_operation_output handles empty stdout/stderr gracefully.
+    """
+    from pdd.sync_orchestration import _display_operation_output
+    import threading
+    from unittest.mock import patch
+
+    stop_event = threading.Event()
+
+    with patch('pdd.sync_orchestration.Console') as mock_console_class:
+        mock_console = MagicMock()
+        mock_console_class.return_value = mock_console
+
+        with patch('pdd.sync_orchestration.time.sleep'):
+            _display_operation_output(
+                operation='example',
+                stdout_content="",  # Empty stdout
+                stderr_content="",  # Empty stderr
+                stop_event=stop_event,
+                quiet=False
+            )
+
+        # Should still create console and show "No output captured" message
+        assert mock_console_class.called
+        # After function completes, stop event should be clear (animation resumed)
+        assert not stop_event.is_set()
+
+
+def test_output_capture_in_generate_operation(orchestration_fixture):
+    """
+    Integration test: verify that generate operation captures and displays output.
+    This tests that the output capture wrapper is properly integrated.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_code_gen = mocks['code_generator_main']
+
+    # Set up simple workflow: generate -> all_synced
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Mock code_generator_main to produce some output when called
+    def mock_gen_with_output(*args, **kwargs):
+        # Simulate printing during operation
+        print("Generating code...")
+        print("Code generation complete")
+        return {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+    mock_code_gen.side_effect = mock_gen_with_output
+
+    # Patch _display_operation_output to verify it's called
+    with patch('pdd.sync_orchestration._display_operation_output') as mock_display:
+        result = sync_orchestration(basename="calculator", language="python", quiet=False)
+
+        # Verify sync completed successfully
+        assert result['success'] is True
+        assert 'generate' in result['operations_completed']
+
+        # Verify _display_operation_output was called for the generate operation
+        assert mock_display.call_count >= 1
+
+        # Verify it was called with the correct operation name
+        display_calls = mock_display.call_args_list
+        operation_names = [call[1]['operation'] for call in display_calls if 'operation' in call[1]]
+        assert 'generate' in operation_names
+
+
+def test_output_capture_preserves_operation_success():
+    """
+    Test that output capture doesn't interfere with operation success detection.
+    This is a regression test to ensure the wrapper doesn't break existing functionality.
+    """
+    from pdd.sync_orchestration import sync_orchestration
+    import threading
+    from unittest.mock import patch, MagicMock
+    from pathlib import Path
+
+    # Create minimal test environment
+    tmp_path = Path.cwd()
+    (tmp_path / "prompts").mkdir(exist_ok=True)
+    (tmp_path / "prompts" / "test_python.prompt").write_text("test prompt")
+
+    with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+         patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+         patch('pdd.sync_orchestration.sync_animation'), \
+         patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
+         patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+         patch('pdd.sync_orchestration._display_operation_output'), \
+         patch('pdd.sync_orchestration._save_operation_fingerprint'):
+
+        # Configure mocks
+        mock_lock.return_value.__enter__.return_value = mock_lock
+        mock_lock.return_value.__exit__.return_value = None
+
+        mock_get_paths.return_value = {
+            'prompt': tmp_path / 'prompts' / 'test_python.prompt',
+            'code': tmp_path / 'src' / 'test.py',
+            'example': tmp_path / 'examples' / 'test_example.py',
+            'test': tmp_path / 'tests' / 'test_test.py'
+        }
+
+        # Set up workflow
+        mock_determine.side_effect = [
+            SyncDecision(operation='generate', reason='New unit'),
+            SyncDecision(operation='all_synced', reason='Done'),
+        ]
+
+        # Mock successful code generation with output
+        def gen_with_output(*args, **kwargs):
+            print("Generating code with output capture")
+            return {'success': True, 'cost': 0.05, 'model': 'mock'}
+
+        mock_code_gen.side_effect = gen_with_output
+
+        # Run sync
+        result = sync_orchestration(basename="test", language="python")
+
+        # Verify operation was marked as successful despite output capture
+        assert result['success'] is True
+        assert 'generate' in result['operations_completed']
+        assert result['total_cost'] > 0  # Cost was tracked correctly
+
+
+def test_output_capture_quiet_mode_integration(orchestration_fixture):
+    """
+    Integration test: verify quiet mode suppresses output display throughout workflow.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+
+    # Set up multi-operation workflow
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='example', reason='Generate example'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Patch _display_operation_output to verify it respects quiet mode
+    with patch('pdd.sync_orchestration._display_operation_output') as mock_display:
+        result = sync_orchestration(
+            basename="calculator",
+            language="python",
+            quiet=True  # Quiet mode enabled
+        )
+
+        # Verify sync completed
+        assert result['success'] is True
+
+        # Verify _display_operation_output was called with quiet=True
+        for call in mock_display.call_args_list:
+            assert call[1]['quiet'] is True
+
+
+def test_output_capture_with_operation_failure():
+    """
+    Test that output capture works correctly when an operation fails.
+    The output should still be displayed before the failure is handled.
+    """
+    from pdd.sync_orchestration import sync_orchestration
+    from unittest.mock import patch, MagicMock
+    from pathlib import Path
+
+    tmp_path = Path.cwd()
+    (tmp_path / "prompts").mkdir(exist_ok=True)
+    (tmp_path / "prompts" / "fail_python.prompt").write_text("test")
+
+    with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+         patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+         patch('pdd.sync_orchestration.sync_animation'), \
+         patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
+         patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+         patch('pdd.sync_orchestration._display_operation_output') as mock_display, \
+         patch('pdd.sync_orchestration._save_operation_fingerprint'):
+
+        mock_lock.return_value.__enter__.return_value = mock_lock
+        mock_lock.return_value.__exit__.return_value = None
+
+        mock_get_paths.return_value = {
+            'prompt': tmp_path / 'prompts' / 'fail_python.prompt',
+            'code': tmp_path / 'src' / 'fail.py',
+            'example': tmp_path / 'examples' / 'fail_example.py',
+            'test': tmp_path / 'tests' / 'test_fail.py'
+        }
+
+        mock_determine.side_effect = [
+            SyncDecision(operation='generate', reason='New unit'),
+        ]
+
+        # Mock failed operation with error output
+        def gen_with_error(*args, **kwargs):
+            print("Starting code generation...")
+            print("ERROR: Generation failed!", file=__import__('sys').stderr)
+            return {'success': False, 'cost': 0.01, 'model': 'mock', 'error': 'Generation failed'}
+
+        mock_code_gen.side_effect = gen_with_error
+
+        result = sync_orchestration(basename="fail", language="python")
+
+        # Verify operation failed
+        assert result['success'] is False
+
+        # Verify _display_operation_output was still called (output shown before failure)
+        assert mock_display.call_count >= 1
