@@ -1,3 +1,9 @@
+## v0.0.72 (2025-11-18)
+
+### Feat
+
+- enhance agentic fallback and path handling
+
 ## v0.0.71 (2025-11-18)
 
 ### Feat
