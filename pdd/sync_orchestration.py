@@ -174,7 +174,7 @@ def _display_operation_output(operation: str, stdout_content: str, stderr_conten
             stdout_content.strip(),
             title="[bold green]STDOUT[/bold green]",
             border_style="green",
-            expand=False
+            expand=True  # Changed to True for better wrapping
         ))
         console.print()  # Add spacing
 
@@ -184,7 +184,7 @@ def _display_operation_output(operation: str, stdout_content: str, stderr_conten
             stderr_content.strip(),
             title="[bold red]STDERR[/bold red]",
             border_style="red",
-            expand=False
+            expand=True  # Changed to True for better wrapping
         ))
         console.print()  # Add spacing
 
