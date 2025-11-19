@@ -11,11 +11,16 @@ import datetime
 import subprocess
 import re
 import os
+import sys
+import io
+from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
 
 import click
+from rich.console import Console
+from rich.panel import Panel
 
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
@@ -134,6 +139,70 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         json.dump(asdict(fingerprint), f, indent=2, default=str)
 
 # SyncLock class now imported from sync_determine_operation module
+
+def _display_operation_output(operation: str, stdout_content: str, stderr_content: str,
+                               stop_event: threading.Event, quiet: bool = False):
+    """Display captured stdout/stderr after an operation completes.
+
+    Temporarily pauses the animation to show output, then resumes.
+
+    Args:
+        operation: Name of the operation that was executed
+        stdout_content: Captured stdout from the operation
+        stderr_content: Captured stderr from the operation
+        stop_event: Threading event to pause/resume animation
+        quiet: If True, suppress output display
+    """
+    if quiet:
+        return
+
+    # Signal animation to pause
+    stop_event.set()
+    time.sleep(0.3)  # Give animation time to clean up
+
+    # Create console for output display
+    console = Console()
+
+    # Display operation header
+    console.print(f"\n{'='*80}")
+    console.print(f"[bold cyan]Operation: {operation.upper()}[/bold cyan]")
+    console.print(f"{'='*80}\n")
+
+    # Display STDOUT if present
+    if stdout_content and stdout_content.strip():
+        console.print(Panel(
+            stdout_content.strip(),
+            title="[bold green]STDOUT[/bold green]",
+            border_style="green",
+            expand=False
+        ))
+        console.print()  # Add spacing
+
+    # Display STDERR if present
+    if stderr_content and stderr_content.strip():
+        console.print(Panel(
+            stderr_content.strip(),
+            title="[bold red]STDERR[/bold red]",
+            border_style="red",
+            expand=False
+        ))
+        console.print()  # Add spacing
+
+    # If both are empty, show a message
+    if not (stdout_content and stdout_content.strip()) and not (stderr_content and stderr_content.strip()):
+        console.print("[dim]No output captured[/dim]\n")
+
+    # Display footer
+    console.print(f"{'='*80}")
+    console.print(f"[bold cyan]End of {operation.upper()} output[/bold cyan]")
+    console.print(f"{'='*80}\n")
+
+    # Small pause so user can see the output
+    time.sleep(1.0)
+
+    # Resume animation
+    stop_event.clear()
+
 
 def _execute_tests_and_create_run_report(test_file: Path, basename: str, language: str, target_coverage: float = 90.0) -> RunReport:
     """Execute tests and create a RunReport with actual results."""
@@ -667,48 +736,90 @@ def sync_orchestration(
                 # --- Execute Operation ---
                 try:
                     if operation == 'auto-deps':
-                        # Save the modified prompt to a temporary location
-                        temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
-                        
-                        # Read original prompt content to compare later
-                        original_content = pdd_files['prompt'].read_text(encoding='utf-8')
-                        
-                        result = auto_deps_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            directory_path=f"{examples_dir}/*",
-                            auto_deps_csv_path="project_dependencies.csv",
-                            output=temp_output,
-                            force_scan=False  # Don't force scan every time
+                        # Capture stdout/stderr
+                        stdout_capture = io.StringIO()
+                        stderr_capture = io.StringIO()
+
+                        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                            # Save the modified prompt to a temporary location
+                            temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
+
+                            # Read original prompt content to compare later
+                            original_content = pdd_files['prompt'].read_text(encoding='utf-8')
+
+                            result = auto_deps_main(
+                                ctx,
+                                prompt_file=str(pdd_files['prompt']),
+                                directory_path=f"{examples_dir}/*",
+                                auto_deps_csv_path="project_dependencies.csv",
+                                output=temp_output,
+                                force_scan=False  # Don't force scan every time
+                            )
+
+                            # Only move the temp file back if content actually changed
+                            if Path(temp_output).exists():
+                                import shutil
+                                new_content = Path(temp_output).read_text(encoding='utf-8')
+                                if new_content != original_content:
+                                    shutil.move(temp_output, str(pdd_files['prompt']))
+                                else:
+                                    # No changes needed, remove temp file
+                                    Path(temp_output).unlink()
+                                    # Mark as successful with no changes
+                                    result = (new_content, 0.0, 'no-changes')
+
+                        # Display captured output
+                        _display_operation_output(
+                            operation='auto-deps',
+                            stdout_content=stdout_capture.getvalue(),
+                            stderr_content=stderr_capture.getvalue(),
+                            stop_event=stop_event,
+                            quiet=quiet
                         )
-                        
-                        # Only move the temp file back if content actually changed
-                        if Path(temp_output).exists():
-                            import shutil
-                            new_content = Path(temp_output).read_text(encoding='utf-8')
-                            if new_content != original_content:
-                                shutil.move(temp_output, str(pdd_files['prompt']))
-                            else:
-                                # No changes needed, remove temp file
-                                Path(temp_output).unlink()
-                                # Mark as successful with no changes
-                                result = (new_content, 0.0, 'no-changes')
                     elif operation == 'generate':
-                        result = code_generator_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            output=str(pdd_files['code']),
-                            original_prompt_file_path=None,
-                            force_incremental_flag=False
+                        # Capture stdout/stderr
+                        stdout_capture = io.StringIO()
+                        stderr_capture = io.StringIO()
+
+                        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                            result = code_generator_main(
+                                ctx,
+                                prompt_file=str(pdd_files['prompt']),
+                                output=str(pdd_files['code']),
+                                original_prompt_file_path=None,
+                                force_incremental_flag=False
+                            )
+
+                        # Display captured output
+                        _display_operation_output(
+                            operation='generate',
+                            stdout_content=stdout_capture.getvalue(),
+                            stderr_content=stderr_capture.getvalue(),
+                            stop_event=stop_event,
+                            quiet=quiet
                         )
                     elif operation == 'example':
-                        print(f"DEBUG SYNC: pdd_files['example'] = {pdd_files['example']}")
-                        print(f"DEBUG SYNC: str(pdd_files['example']) = {str(pdd_files['example'])}")
-                        result = context_generator_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
-                            output=str(pdd_files['example'])
+                        # Capture stdout/stderr
+                        stdout_capture = io.StringIO()
+                        stderr_capture = io.StringIO()
+
+                        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                            print(f"DEBUG SYNC: pdd_files['example'] = {pdd_files['example']}")
+                            print(f"DEBUG SYNC: str(pdd_files['example']) = {str(pdd_files['example'])}")
+                            result = context_generator_main(
+                                ctx,
+                                prompt_file=str(pdd_files['prompt']),
+                                code_file=str(pdd_files['code']),
+                                output=str(pdd_files['example'])
+                            )
+
+                        # Display captured output
+                        _display_operation_output(
+                            operation='example',
+                            stdout_content=stdout_capture.getvalue(),
+                            stderr_content=stderr_capture.getvalue(),
+                            stop_event=stop_event,
+                            quiet=quiet
                         )
                     elif operation == 'crash':
                         # Validate required files exist before attempting crash operation
@@ -875,17 +986,31 @@ def sync_orchestration(
                                 Path("crash.log").write_text(crash_log_content)
                             
                             try:
-                                result = crash_main(
-                                    ctx, 
-                                    prompt_file=str(pdd_files['prompt']), 
-                                    code_file=str(pdd_files['code']), 
-                                    program_file=str(pdd_files['example']), 
-                                    error_file="crash.log",
-                                    output=str(pdd_files['code']),
-                                    output_program=str(pdd_files['example']),
-                                    loop=True,
-                                    max_attempts=max_attempts,
-                                    budget=budget - current_cost_ref[0]
+                                # Capture stdout/stderr
+                                stdout_capture = io.StringIO()
+                                stderr_capture = io.StringIO()
+
+                                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                                    result = crash_main(
+                                        ctx,
+                                        prompt_file=str(pdd_files['prompt']),
+                                        code_file=str(pdd_files['code']),
+                                        program_file=str(pdd_files['example']),
+                                        error_file="crash.log",
+                                        output=str(pdd_files['code']),
+                                        output_program=str(pdd_files['example']),
+                                        loop=True,
+                                        max_attempts=max_attempts,
+                                        budget=budget - current_cost_ref[0]
+                                    )
+
+                                # Display captured output
+                                _display_operation_output(
+                                    operation='crash',
+                                    stdout_content=stdout_capture.getvalue(),
+                                    stderr_content=stderr_capture.getvalue(),
+                                    stop_event=stop_event,
+                                    quiet=quiet
                                 )
                             except (RuntimeError, Exception) as e:
                                 error_str = str(e)
@@ -931,124 +1056,181 @@ def sync_orchestration(
                             append_sync_log(basename, language, log_entry)
                             # Intentionally avoid writing run report/fingerprint here
                             continue
-                        result = fix_verification_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
-                            program_file=str(pdd_files['example']),
-                            output_results=f"{basename}_verify_results.log",
-                            output_code=str(pdd_files['code']),
-                            output_program=str(pdd_files['example']),
-                            loop=True,
-                            verification_program=str(pdd_files['example']),
-                            max_attempts=max_attempts,
-                            budget=budget - current_cost_ref[0]
+
+                        # Capture stdout/stderr
+                        stdout_capture = io.StringIO()
+                        stderr_capture = io.StringIO()
+
+                        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                            result = fix_verification_main(
+                                ctx,
+                                prompt_file=str(pdd_files['prompt']),
+                                code_file=str(pdd_files['code']),
+                                program_file=str(pdd_files['example']),
+                                output_results=f"{basename}_verify_results.log",
+                                output_code=str(pdd_files['code']),
+                                output_program=str(pdd_files['example']),
+                                loop=True,
+                                verification_program=str(pdd_files['example']),
+                                max_attempts=max_attempts,
+                                budget=budget - current_cost_ref[0]
+                            )
+
+                        # Display captured output
+                        _display_operation_output(
+                            operation='verify',
+                            stdout_content=stdout_capture.getvalue(),
+                            stderr_content=stderr_capture.getvalue(),
+                            stop_event=stop_event,
+                            quiet=quiet
                         )
                     elif operation == 'test':
-                        # First, generate the test file
-                        # Ensure the test directory exists
-                        test_path = pdd_files['test']
-                        if isinstance(test_path, Path):
-                            # Debug logging
-                            if not quiet:
-                                print(f"Creating test directory: {test_path.parent}")
-                            test_path.parent.mkdir(parents=True, exist_ok=True)
-                        
-                        result = cmd_test_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
-                            output=str(pdd_files['test']),
-                            language=language,
-                            coverage_report=None,
-                            existing_tests=None,
-                            target_coverage=target_coverage,
-                            merge=False
-                        )
-                        
-                        # After test generation, check if the test file was actually created
-                        test_file = pdd_files['test']
-                        test_generation_successful = False
-                        
-                        if isinstance(result, dict) and result.get('success', False):
-                            test_generation_successful = True
-                        elif isinstance(result, tuple) and len(result) >= 3:
-                            # For tuple format, check if the test file actually exists rather than assuming success
-                            test_generation_successful = test_file.exists()
-                        
-                        if test_generation_successful and test_file.exists():
-                            try:
-                                _execute_tests_and_create_run_report(
-                                    test_file, basename, language, target_coverage
-                                )
-                            except Exception as e:
-                                # Don't fail the entire operation if test execution fails
-                                # Just log it - the test file generation was successful
-                                print(f"Warning: Test execution failed: {e}")
-                        else:
-                            # Test generation failed or test file was not created
-                            error_msg = f"Test generation failed - test file not created: {test_file}"
-                            print(f"Error: {error_msg}")
-                            update_sync_log_entry(log_entry, {
-                                'success': False,
-                                'cost': 0.0,
-                                'model': 'N/A',
-                                'error': error_msg
-                            }, 0.0)
-                            append_sync_log(basename, language, log_entry)
-                            errors.append(error_msg)
-                            break
-                    elif operation == 'fix':
-                        # Create error file with actual test failure information
-                        error_file_path = Path("fix_errors.log")
-                        
-                        # Try to get actual test failure details from latest run
-                        try:
-                            run_report = read_run_report(basename, language)
-                            test_file = pdd_files.get('test')
-                            if run_report and run_report.tests_failed > 0 and test_file and test_file.exists():
-                                # Run the tests again to capture actual error output
-                                # Use environment-aware Python executable for pytest execution
-                                python_executable = detect_host_python_executable()
-                                test_result = subprocess.run([
-                                    python_executable, '-m', 'pytest', 
-                                    str(pdd_files['test']), 
-                                    '-v', '--tb=short'
-                                ], capture_output=True, text=True, timeout=300)
-                                
-                                error_content = f"Test failures detected ({run_report.tests_failed} failed tests):\n\n"
-                                error_content += "STDOUT:\n" + test_result.stdout + "\n\n"
-                                error_content += "STDERR:\n" + test_result.stderr
+                        # Capture stdout/stderr
+                        stdout_capture = io.StringIO()
+                        stderr_capture = io.StringIO()
+
+                        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                            # First, generate the test file
+                            # Ensure the test directory exists
+                            test_path = pdd_files['test']
+                            if isinstance(test_path, Path):
+                                # Debug logging
+                                if not quiet:
+                                    print(f"Creating test directory: {test_path.parent}")
+                                test_path.parent.mkdir(parents=True, exist_ok=True)
+
+                            result = cmd_test_main(
+                                ctx,
+                                prompt_file=str(pdd_files['prompt']),
+                                code_file=str(pdd_files['code']),
+                                output=str(pdd_files['test']),
+                                language=language,
+                                coverage_report=None,
+                                existing_tests=None,
+                                target_coverage=target_coverage,
+                                merge=False
+                            )
+
+                            # After test generation, check if the test file was actually created
+                            test_file = pdd_files['test']
+                            test_generation_successful = False
+
+                            if isinstance(result, dict) and result.get('success', False):
+                                test_generation_successful = True
+                            elif isinstance(result, tuple) and len(result) >= 3:
+                                # For tuple format, check if the test file actually exists rather than assuming success
+                                test_generation_successful = test_file.exists()
+
+                            if test_generation_successful and test_file.exists():
+                                try:
+                                    _execute_tests_and_create_run_report(
+                                        test_file, basename, language, target_coverage
+                                    )
+                                except Exception as e:
+                                    # Don't fail the entire operation if test execution fails
+                                    # Just log it - the test file generation was successful
+                                    print(f"Warning: Test execution failed: {e}")
                             else:
-                                error_content = "Simulated test failures"
-                        except Exception as e:
-                            error_content = f"Could not capture test failures: {e}\nUsing simulated test failures"
-                        
-                        error_file_path.write_text(error_content)
-                        
-                        result = fix_main(
-                            ctx, 
-                            prompt_file=str(pdd_files['prompt']), 
-                            code_file=str(pdd_files['code']), 
-                            unit_test_file=str(pdd_files['test']), 
-                            error_file=str(error_file_path),
-                            output_test=str(pdd_files['test']),
-                            output_code=str(pdd_files['code']),
-                            output_results=f"{basename}_fix_results.log",
-                            loop=True,
-                            verification_program=str(pdd_files['example']),
-                            max_attempts=max_attempts,
-                            budget=budget - current_cost_ref[0],
-                            auto_submit=True
+                                # Test generation failed or test file was not created
+                                error_msg = f"Test generation failed - test file not created: {test_file}"
+                                print(f"Error: {error_msg}")
+                                update_sync_log_entry(log_entry, {
+                                    'success': False,
+                                    'cost': 0.0,
+                                    'model': 'N/A',
+                                    'error': error_msg
+                                }, 0.0)
+                                append_sync_log(basename, language, log_entry)
+                                errors.append(error_msg)
+                                break
+
+                        # Display captured output
+                        _display_operation_output(
+                            operation='test',
+                            stdout_content=stdout_capture.getvalue(),
+                            stderr_content=stderr_capture.getvalue(),
+                            stop_event=stop_event,
+                            quiet=quiet
+                        )
+                    elif operation == 'fix':
+                        # Capture stdout/stderr
+                        stdout_capture = io.StringIO()
+                        stderr_capture = io.StringIO()
+
+                        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                            # Create error file with actual test failure information
+                            error_file_path = Path("fix_errors.log")
+
+                            # Try to get actual test failure details from latest run
+                            try:
+                                run_report = read_run_report(basename, language)
+                                test_file = pdd_files.get('test')
+                                if run_report and run_report.tests_failed > 0 and test_file and test_file.exists():
+                                    # Run the tests again to capture actual error output
+                                    # Use environment-aware Python executable for pytest execution
+                                    python_executable = detect_host_python_executable()
+                                    test_result = subprocess.run([
+                                        python_executable, '-m', 'pytest',
+                                        str(pdd_files['test']),
+                                        '-v', '--tb=short'
+                                    ], capture_output=True, text=True, timeout=300)
+
+                                    error_content = f"Test failures detected ({run_report.tests_failed} failed tests):\n\n"
+                                    error_content += "STDOUT:\n" + test_result.stdout + "\n\n"
+                                    error_content += "STDERR:\n" + test_result.stderr
+                                else:
+                                    error_content = "Simulated test failures"
+                            except Exception as e:
+                                error_content = f"Could not capture test failures: {e}\nUsing simulated test failures"
+
+                            error_file_path.write_text(error_content)
+
+                            result = fix_main(
+                                ctx,
+                                prompt_file=str(pdd_files['prompt']),
+                                code_file=str(pdd_files['code']),
+                                unit_test_file=str(pdd_files['test']),
+                                error_file=str(error_file_path),
+                                output_test=str(pdd_files['test']),
+                                output_code=str(pdd_files['code']),
+                                output_results=f"{basename}_fix_results.log",
+                                loop=True,
+                                verification_program=str(pdd_files['example']),
+                                max_attempts=max_attempts,
+                                budget=budget - current_cost_ref[0],
+                                auto_submit=True
+                            )
+
+                        # Display captured output
+                        _display_operation_output(
+                            operation='fix',
+                            stdout_content=stdout_capture.getvalue(),
+                            stderr_content=stderr_capture.getvalue(),
+                            stop_event=stop_event,
+                            quiet=quiet
                         )
                     elif operation == 'update':
-                        result = update_main(
-                            ctx, 
-                            input_prompt_file=str(pdd_files['prompt']), 
-                            modified_code_file=str(pdd_files['code']),
-                            input_code_file=None,
-                            output=str(pdd_files['prompt']),
-                            git=True
+                        # Capture stdout/stderr
+                        stdout_capture = io.StringIO()
+                        stderr_capture = io.StringIO()
+
+                        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                            result = update_main(
+                                ctx,
+                                input_prompt_file=str(pdd_files['prompt']),
+                                modified_code_file=str(pdd_files['code']),
+                                input_code_file=None,
+                                output=str(pdd_files['prompt']),
+                                git=True
+                            )
+
+                        # Display captured output
+                        _display_operation_output(
+                            operation='update',
+                            stdout_content=stdout_capture.getvalue(),
+                            stderr_content=stderr_capture.getvalue(),
+                            stop_event=stop_event,
+                            quiet=quiet
                         )
                     else:
                         errors.append(f"Unknown operation '{operation}' requested.")
