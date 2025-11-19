@@ -2,11 +2,23 @@
 
 ### Feat
 
-- enhance image processing and multimodal generation capabilities
+- `pdd update` repository mode now walks the Git root, creates/updates prompts inside the shared `prompts/` directory, honors `--output` directories during regeneration, and blocks file-only switches (`--input-code`, `--git`, etc.) so repo-wide refreshes can be scripted safely.
+- Default output derivation for file-scoped commands (`fix`, `crash`, `verify`, `split`, `change`, `update`) now anchors to the input file’s directory (including relative `.pddrc` or env overrides), so regenerated prompts/tests land beside their sources instead of the current working directory.
 
-### Refactor
+### Docs
 
-- update LLM model references and prompt instructions
+- README and PyPI description bumped to 0.0.71, moved the agentic fallback guide next to the `fix` command docs (noting `crash`/`verify` support), and clarified the `update` examples/options.
+
+### Data
+
+- Refreshed the LLM catalog and defaults: replaced Gemini 2.5 entries with Gemini 3 previews, switched the CLI default to `gpt-5.1-codex-mini`, and added the latest GPT‑5.1 SKUs.
+
+### Tests
+
+- Added coverage for repo-wide prompt regeneration, prompt-directory summaries, construct-path defaults that follow input directories, CLI summary rendering with the new default model, and LLM invocation to lock in the catalog updates.
+
+Many thanks to Jiamin Cai for your contributions around fixing the directory issues!
+
 
 ## v0.0.70 (2025-11-13)
 

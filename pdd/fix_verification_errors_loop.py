@@ -33,28 +33,31 @@ from .agentic_fix import run_agentic_fix
 
 def _normalize_agentic_result(result):
     """
-    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str)
-    Handles older 2/3-tuple shapes used by tests/monkeypatches.
+    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
     """
     if isinstance(result, tuple):
+        if len(result) == 5:
+            ok, msg, cost, model, changed_files = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), list(changed_files or [])
         if len(result) == 4:
             ok, msg, cost, model = result
-            return bool(ok), str(msg), float(cost), str(model or "agentic-cli")
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), []
         if len(result) == 3:
             ok, msg, cost = result
-            return bool(ok), str(msg), float(cost), "agentic-cli"
+            return bool(ok), str(msg), float(cost), "agentic-cli", []
         if len(result) == 2:
             ok, msg = result
-            return bool(ok), str(msg), 0.0, "agentic-cli"
+            return bool(ok), str(msg), 0.0, "agentic-cli", []
     # Fallback (shouldn't happen)
-    return False, "Invalid agentic result shape", 0.0, "agentic-cli"
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
 def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
     """
     Call (possibly monkeypatched) run_agentic_fix and normalize its return.
     """
     if not prompt_file:
-        return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli"
+        return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli", []
     res = run_agentic_fix(
         prompt_file=prompt_file,
         code_file=code_file,
@@ -188,15 +191,21 @@ def fix_verification_errors_loop(
         verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
         pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
         console.print("[cyan]Non-Python target detected. Triggering agentic fallback...[/cyan]")
-        with open(verification_log_file, "w") as f:
+        verification_log_path = Path(verification_log_file)
+        verification_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(verification_log_path, "w") as f:
             f.write(pytest_output)
         
-        success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+        success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=verification_program,
             error_log_file=verification_log_file,
         )
+        if agent_changed_files:
+            console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+            for f in agent_changed_files:
+                console.print(f"  • {f}")
         final_program = ""
         final_code = ""
         try:
@@ -948,13 +957,31 @@ def fix_verification_errors_loop(
 
     if not overall_success and agentic_fallback:
         console.print("[bold yellow]Initiating agentic fallback...[/bold yellow]")
-        agent_success, _msg, agent_cost, agent_model = _safe_run_agentic_fix(
+        # Ensure verification_log_file exists before calling agentic fix
+        try:
+            if not os.path.exists(verification_log_file) or os.path.getsize(verification_log_file) == 0:
+                verification_log_path = Path(verification_log_file)
+                verification_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(verification_log_path, "w") as vlog:
+                    if log_structure["iterations"]:
+                        vlog.write(format_log_for_output(log_structure))
+                    else:
+                        # No iterations ran, write initial state info
+                        vlog.write(f"Initial verification issues: {stats.get('initial_issues', 0)}\n")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not write verification log before agentic fallback: {e}[/yellow]")
+
+        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=verification_program,
             error_log_file=verification_log_file,
         )
         total_cost += agent_cost
+        if agent_changed_files:
+            console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+            for f in agent_changed_files:
+                console.print(f"  • {f}")
         if agent_success:
             console.print("[bold green]Agentic fallback successful.[/bold green]")
             overall_success = True

@@ -692,10 +692,32 @@ def construct_paths(
     # Commands like sync, generate, test, example have their own directory management
     commands_using_input_dir = {'fix', 'crash', 'verify', 'split', 'change', 'update'}
     input_file_dir: Optional[str] = None
+    input_file_dirs: Dict[str, Optional[str]] = {}
     if input_paths and command in commands_using_input_dir:
         try:
-            first_input_path = next(iter(input_paths.values()))
-            input_file_dir = str(first_input_path.parent)
+            # For fix/crash/verify commands, use specific file directories for each output
+            if command in {'fix', 'crash', 'verify'}:
+                # Map output keys to their corresponding input file keys
+                input_key_map = {
+                    'fix': {'output_code': 'code_file', 'output_test': 'unit_test_file', 'output_results': 'code_file'},
+                    'crash': {'output': 'code_file', 'output_program': 'program_file'},
+                    'verify': {'output_code': 'code_file', 'output_program': 'verification_program', 'output_results': 'code_file'},
+                }
+
+                for output_key, input_key in input_key_map.get(command, {}).items():
+                    if input_key in input_paths:
+                        input_file_dirs[output_key] = str(input_paths[input_key].parent)
+
+                # Set default input_file_dir to code_file directory as fallback
+                if 'code_file' in input_paths:
+                    input_file_dir = str(input_paths['code_file'].parent)
+                else:
+                    first_input_path = next(iter(input_paths.values()))
+                    input_file_dir = str(first_input_path.parent)
+            else:
+                # For other commands, use first input path
+                first_input_path = next(iter(input_paths.values()))
+                input_file_dir = str(first_input_path.parent)
         except (StopIteration, AttributeError):
             # If no input paths or path doesn't have parent, use None (falls back to CWD)
             pass
@@ -712,6 +734,7 @@ def construct_paths(
             file_extension=file_extension,
             context_config=context_config,
             input_file_dir=input_file_dir,
+            input_file_dirs=input_file_dirs,
         )
 
         # For sync, explicitly honor .pddrc generate_output_path even if generator logged as 'default'
