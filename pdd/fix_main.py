@@ -143,11 +143,15 @@ def fix_main(
 
         # Save fixed files
         if fixed_unit_test:
-            with open(output_file_paths["output_test"], 'w') as f:
+            output_test_path = Path(output_file_paths["output_test"])
+            output_test_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_test_path, 'w') as f:
                 f.write(fixed_unit_test)
 
         if fixed_code:
-            with open(output_file_paths["output_code"], 'w') as f:
+            output_code_path = Path(output_file_paths["output_code"])
+            output_code_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_code_path, 'w') as f:
                 f.write(fixed_code)
 
         # Provide user feedback
