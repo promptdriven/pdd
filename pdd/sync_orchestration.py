@@ -20,7 +20,6 @@ from dataclasses import asdict
 
 import click
 from rich.console import Console
-from rich.panel import Panel
 
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
@@ -170,22 +169,16 @@ def _display_operation_output(operation: str, stdout_content: str, stderr_conten
 
     # Display STDOUT if present
     if stdout_content and stdout_content.strip():
-        console.print(Panel(
-            stdout_content.strip(),
-            title="[bold green]STDOUT[/bold green]",
-            border_style="green",
-            expand=True  # Changed to True for better wrapping
-        ))
+        console.print("[bold green]STDOUT:[/bold green]")
+        # Print raw content without panel to avoid nested formatting issues
+        print(stdout_content.strip())
         console.print()  # Add spacing
 
     # Display STDERR if present
     if stderr_content and stderr_content.strip():
-        console.print(Panel(
-            stderr_content.strip(),
-            title="[bold red]STDERR[/bold red]",
-            border_style="red",
-            expand=True  # Changed to True for better wrapping
-        ))
+        console.print("[bold red]STDERR:[/bold red]")
+        # Print raw content without panel to avoid nested formatting issues
+        print(stderr_content.strip())
         console.print()  # Add spacing
 
     # If both are empty, show a message
@@ -198,7 +191,7 @@ def _display_operation_output(operation: str, stdout_content: str, stderr_conten
     console.print(f"{'='*80}\n")
 
     # Small pause so user can see the output
-    time.sleep(1.0)
+    time.sleep(0.5)  # Reduced from 1.0s
 
     # Resume animation
     stop_event.clear()
