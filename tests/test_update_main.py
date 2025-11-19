@@ -320,22 +320,25 @@ def temp_git_repo(tmp_path, mock_get_language_for_repo):
     repo_path = tmp_path / "test_repo"
     repo_path.mkdir()
     repo = git.Repo.init(repo_path)
-    
+
     (repo_path / "src").mkdir()
     (repo_path / "src" / "module1.py").write_text("def func1(): pass")
     (repo_path / "src" / "module2.js").write_text("function func2() {}")
     (repo_path / "src" / "existing_module.py").write_text("def existing(): pass")
-    (repo_path / "src" / "existing_module_python.prompt").write_text("Existing prompt.")
-    
+
+    # Create prompts directory with existing prompt file
+    (repo_path / "prompts").mkdir()
+    (repo_path / "prompts" / "existing_module_python.prompt").write_text("Existing prompt.")
+
     # Add all files to be tracked by git
     repo.index.add([
         str(repo_path / "src" / "module1.py"),
         str(repo_path / "src" / "module2.js"),
         str(repo_path / "src" / "existing_module.py"),
-        str(repo_path / "src" / "existing_module_python.prompt")
+        str(repo_path / "prompts" / "existing_module_python.prompt")
     ])
     repo.index.commit("Initial commit")
-    
+
     # Change directory into the repo for the test
     original_cwd = os.getcwd()
     os.chdir(repo_path)
@@ -347,25 +350,28 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     Test that the helper function correctly finds code files and creates missing prompts.
     """
     repo_path_str = str(temp_git_repo)
-    
-    # Prompts for module1 and module2 should not exist yet
-    module1_prompt_path = temp_git_repo / "src" / "module1_python.prompt"
-    module2_prompt_path = temp_git_repo / "src" / "module2_javascript.prompt"
+
+    # Prompts for module1 and module2 should not exist yet in the prompts directory
+    module1_prompt_path = temp_git_repo / "prompts" / "module1_python.prompt"
+    module2_prompt_path = temp_git_repo / "prompts" / "module2_javascript.prompt"
+    existing_prompt_path = temp_git_repo / "prompts" / "existing_module_python.prompt"
     assert not module1_prompt_path.exists()
     assert not module2_prompt_path.exists()
 
     # Run the function
     pairs = find_and_resolve_all_pairs(repo_path_str)
 
-    # Assert that missing prompts were created
+    # Assert that missing prompts were created in the prompts directory
     assert module1_prompt_path.exists()
     assert module1_prompt_path.read_text() == ""
     assert module2_prompt_path.exists()
     assert module2_prompt_path.read_text() == ""
+    assert existing_prompt_path.exists()
+    assert existing_prompt_path.read_text() == "Existing prompt."
 
     # Assert that the returned pairs are correct
     expected_pairs = [
-        (str(temp_git_repo / "src" / "existing_module_python.prompt"), str(temp_git_repo / "src" / "existing_module.py")),
+        (str(existing_prompt_path), str(temp_git_repo / "src" / "existing_module.py")),
         (str(module1_prompt_path), str(temp_git_repo / "src" / "module1.py")),
         (str(module2_prompt_path), str(temp_git_repo / "src" / "module2.js")),
     ]
@@ -400,9 +406,9 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_rep
     # Check the console output for the summary table
     captured = capsys.readouterr()
     assert "Repository Update Summary" in captured.out
-    assert "src/module1_python.prompt" in captured.out
-    assert "src/module2_javascript.prompt" in captured.out
-    assert "src/existing_module_python.prompt" in captured.out
+    assert "prompts/module1_python.prompt" in captured.out
+    assert "prompts/module2_javascript.prompt" in captured.out
+    assert "prompts/existing_module_python.prompt" in captured.out
     assert "Total Estimated Cost" in captured.out
     
     assert result is not None

@@ -558,11 +558,13 @@ def test_output_code_write_error(
     # Define a simpler side_effect for mock_open_func
     def open_side_effect(filename_arg, mode_arg="r", *args, **kwargs):
         # nonlocal output_code_path # Not strictly needed due to closure
-        if filename_arg == output_code_path and "w" in mode_arg:
+        # Convert Path objects to strings for comparison
+        filename_str = str(filename_arg)
+        if filename_str == output_code_path and "w" in mode_arg:
             raise IOError("Disk full simulation")
-        
+
         # For other files, return a functional mock file handle
-        mock_file_handle = MagicMock() 
+        mock_file_handle = MagicMock()
         mock_file_handle.write = MagicMock()
         # mock_file_handle.read = MagicMock(return_value="Simulated read content") # Only if reads are expected
         mock_file_handle.__enter__.return_value = mock_file_handle
@@ -589,8 +591,10 @@ def test_output_code_write_error(
     expected_error_msg = f"[bold red]Error:[/bold red] Failed to write code file '{output_code_path}': OSError - Disk full simulation"
     mock_rich_print.assert_any_call(expected_error_msg)
 
-    mock_open_func.assert_any_call(output_results_path, "w")
-    mock_open_func.assert_any_call(output_program_path, "w")
+    # fix_verification_main now uses Path objects for file operations
+    from pathlib import Path
+    mock_open_func.assert_any_call(Path(output_results_path), "w")
+    mock_open_func.assert_any_call(Path(output_program_path), "w")
 
 
 @patch('pdd.fix_verification_main.fix_verification_errors_loop')

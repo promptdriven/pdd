@@ -426,8 +426,30 @@ def _build_issue_markdown(
     return title, body
 
 
+class PDDCLI(click.Group):
+    """Custom Click Group that adds a Generate Suite section to root help."""
+
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        self.format_usage(ctx, formatter)
+        with formatter.section("Generate Suite (related commands)"):
+            formatter.write_dl([
+                ("generate", "Create runnable code from a prompt file."),
+                ("test",     "Generate or enhance unit tests for a code file."),
+                ("example",  "Generate example code from a prompt and implementation."),
+            ])
+        formatter.write(
+            "Use `pdd generate --help` for details on this suite and common global flags.\n"
+        )
+
+        self.format_options(ctx, formatter)
+
+
 # --- Main CLI Group ---
-@click.group(invoke_without_command=True, help="PDD (Prompt-Driven Development) Command Line Interface.")
+@click.group(
+    cls=PDDCLI,
+    invoke_without_command=True,
+    help="PDD (Prompt-Driven Development) Command Line Interface.",
+)
 @click.option(
     "--force",
     is_flag=True,
@@ -967,7 +989,21 @@ def generate(
     env_kv: Tuple[str, ...],
     template_name: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
-    """Generate code from a prompt file."""
+    """
+    Generate code from a prompt file.
+
+       \b
+    Related commands:
+      test      Generate unit tests for a prompt.
+      example   Generate example code for a prompt.
+
+    \b
+    Note:
+      Global options (for example ``--force``, ``--temperature``, ``--time``)
+      can be placed either before or after the subcommand. For example:
+
+        pdd generate my.prompt --force --temperature 0.5
+    """
     try:
         # Resolve template to a prompt path when requested
         if template_name and prompt_file:
@@ -1419,7 +1455,7 @@ def change(
     "--output",
     type=click.Path(writable=True),
     default=None,
-    help="Specify where to save the updated prompt file. If not specified, overwrites the original prompt file to maintain it as the source of truth.",
+    help="Specify where to save the updated prompt file(s). For single files: saves to this specific path or directory. For repository mode: saves all prompts to this directory. If not specified, uses the original prompt location (single file) or 'prompts' directory (repository mode).",
 )
 @click.option(
     "--git",
@@ -1473,9 +1509,9 @@ def update(
         is_repo_mode = not actual_input_prompt_file and not actual_modified_code_file
 
         if is_repo_mode:
-            if any([input_code_file, output, use_git]):
+            if any([input_code_file, use_git]):
                 raise click.UsageError(
-                    "Cannot use file-specific arguments or flags like --git or --output in repository-wide mode (when no files are provided)."
+                    "Cannot use file-specific arguments or flags like --git or --input-code in repository-wide mode (when no files are provided)."
                 )
         elif extensions:
             raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")
