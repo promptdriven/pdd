@@ -571,6 +571,8 @@ publish-public:
 	@echo "Copying doctrine doc to public repo"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs
 	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_REPO_DIR)/docs/
+	@echo "Copying prompting guide to public repo"
+	@cp docs/prompting_guide.md $(PUBLIC_PDD_REPO_DIR)/docs/
 	@echo "Copying demo video to public repo"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/videos
 	@cp docs/videos/handpaint_demo.gif $(PUBLIC_PDD_REPO_DIR)/docs/videos/
@@ -685,6 +687,8 @@ publish-public-cap:
 	@echo "Copying doctrine doc to CAP public repo"
 	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs
 	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
+	@echo "Copying prompting guide to CAP public repo"
+	@cp docs/prompting_guide.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
 	@echo "Copying demo video to CAP public repo"
 	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs/videos
 	@cp docs/videos/handpaint_demo.gif $(PUBLIC_PDD_CAP_REPO_DIR)/docs/videos/

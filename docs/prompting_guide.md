@@ -2,7 +2,31 @@
 
 This guide shows how to write effective prompts for Prompt‑Driven Development (PDD). It distills best practices from the PDD whitepaper, the PDD doctrine, and working patterns in this repo. It also contrasts PDD prompts with interactive agentic coding tools (e.g., Claude Code, Cursor) where prompts act as ad‑hoc patches instead of the source of truth.
 
-References: pdd/docs/whitepaper.md, pdd/docs/prompt-driven-development-doctrine.md, README.md (repo structure, conventions).
+References: pdd/docs/whitepaper.md, pdd/docs/prompt-driven-development-doctrine.md, README.md (repo structure, conventions), [Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents), [Anthropic Prompt Engineering Overview](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview).
+
+---
+
+## Quickstart: PDD in 5 Minutes
+
+If you are new to Prompt-Driven Development (PDD), follow this recipe:
+
+1.  **Think "One Prompt = One Module":** Don't try to generate the whole app at once. Focus on one file (e.g., `user_service.py`).
+2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies, Instructions.
+3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML.
+4.  **Regenerate, Don't Patch:** If the code is wrong, fix the prompt and run the generator again.
+5.  **Verify:** Run the generated code/tests.
+
+*Tip: Treat your prompt like source code. It is the single source of truth.*
+
+---
+
+## Glossary
+
+- **Context Engineering:** The art of curating exactly what information (code, docs, examples) fits into the LLM's limited "working memory" (context window) to get the best result.
+- **Shared Preamble:** A standard text file (e.g., `project_preamble.prompt`) included in every prompt to enforce common rules like coding style, forbidden libraries, and formatting.
+- **PDD Directive:** Special tags like `<include>` or `<shell>` that the PDD tool processes *before* sending the text to the AI. The AI sees the *result* (the file content), not the tag.
+- **Source of Truth:** The definitive record. In PDD, the **Prompt** is the source of truth; the code is just a temporary artifact generated from it.
+- **Drift:** When the generated code slowly diverges from the prompt's intent over time, or when manual edits to code make it inconsistent with the prompt.
 
 ---
 
@@ -66,7 +90,7 @@ These patterns are used across prompts in this repo:
 
 - Preamble and role: start with a concise, authoritative description of the task and audience (e.g., “You are an expert Python engineer…”).
 - Includes for context: bring only what the model needs.
-  - Single include: `<include>path/to/file</include>` (handles both text and images based on file extension)
+  - Single include: `<include>path/to/file</include>`. **Note:** This is a PDD directive, not standard XML. The PDD tool replaces this tag with the actual file content *before* the LLM sees it. (Handles both text and images).
   - Multiple: `<include-many>path1, path2, …</include-many>`
   - Grouping: wrap includes in a semantic tag to name the dependency or file they represent, for example:
     ```xml
@@ -76,7 +100,7 @@ These patterns are used across prompts in this repo:
     ```
   - When including larger files inline for clarity, wrap with opening/closing tags named after the file, e.g. `<render.js>…</render.js>`.
 - Inputs/outputs: state them explicitly (names, types, shapes). Prompts should define Inputs/Outputs and steps clearly.
-- Steps: outline a short, deterministic plan the model should follow.
+- Steps & Chain of Thought: Outline a short, deterministic plan. For complex logical tasks, explicitly instruct the model to "Analyze the requirements and think step-by-step before writing code." This improves accuracy on difficult reasoning problems.
 - Constraints: specify style, performance targets, security, and error handling.
 - Environment: reference required env vars (e.g., `PDD_PATH`) when reading data files.
 
@@ -102,6 +126,26 @@ The PDD preprocessor supports additional XML‑style tags to keep prompts clean,
   - Example: `<web>https://docs.litellm.ai/docs/completion/json_mode</web>`
 
 Guidance: Use these tags sparingly to keep prompts deterministic. Prefer stable inputs and short outputs (e.g., `head -n 20` in `<shell>`) so that regenerated prompts remain consistent across runs.
+
+---
+
+## Advanced Tips
+
+### Shared Preamble for Consistency
+
+Use a shared include (e.g., `<include>context/project_preamble.prompt</include>`) at the top of every prompt. You should create this file in your project's `context/` directory to define your "Constitution": consistent coding style (e.g., indentation, naming conventions), preferred linting rules, and forbidden libraries. This ensures all generated code speaks the same language without cluttering individual prompts.
+
+### Positive over Negative Constraints
+
+Models often struggle with negative constraints ("Do not use X"). Instead, phrase requirements positively: instead of "Do not use unassigned variables," prefer "Initialize all variables with default values." This greatly improves reliability.
+
+### Positioning Critical Instructions (Hierarchy of Attention)
+
+LLMs exhibit "middle-loss" – they pay more attention to the **beginning** (role, preamble) and the **end** (steps, deliverables) of the prompt context. If a critical constraint (e.g., security, output format) is ignored, ensure it's placed in your shared preamble, explicitly reiterated in the final "Instructions" or "Steps" section, or even pre-filled in the expected output format if applicable.
+
+### Command-Specific Context Files
+
+Some PDD commands (e.g., `pdd test`, `pdd example`) can automatically include project-specific context files like `context/test.prompt` or `context/example.prompt` during their internal preprocessing. Use these to provide instructions tailored to your project, such as preferred testing frameworks or specific import statements, without modifying the main prompt.
 
 ---
 
@@ -186,13 +230,27 @@ Focus on clarity, measurable outcomes, and determinism:
 
 ---
 
+## Level of Abstraction (The "Goldilocks" Zone)
+
+Write prompts at the level of *architecture, contract, and intent*, not line-by-line *implementation details*.
+
+- **Too Vague:** "Create a user page." (Model guesses the requirements; unrepeatable).
+- **Too Detailed:** "Create a class User with a private field _id. In the constructor, set _id. Write a getter..." (Brittle; turns the model into a glorified typist and makes the prompt harder to read/maintain than the code).
+- **Just Right:** "Implement a UserProfile component that displays user details and handles the 'update' action via the API. It must handle loading/error states and match the existing design system."
+
+**Rule of Thumb:** If you are dictating control flow (loops, variable names) for standard logic, you are too deep. If you are omitting error handling or data types for public interfaces, you are too shallow. Focus on **Interfaces**, **Invariants**, and **Outcomes**.
+
+---
+
 ## Dependencies & Composability (Token‑Efficient Examples)
 
 - Include only relevant dependencies; more context is not always better.
-- Prefer curated few‑shot examples over raw source. Examples are typically a small fraction of full code size, which makes them far more token‑efficient while still conveying interfaces and intent.
-- Examples are the composition mechanism: modules “use” each other by consuming their examples rather than importing full source. This stabilizes generation and keeps the context focused.
+- **Examples as Compressed Interfaces:** Real source code is heavy. A 500-line module might have a 50-line usage example. By including only the example, you save ~90% of the tokens while still teaching the model *how* to use the module. This "token compression" is the key to scaling PDD to large, multi-module systems.
+- **Examples as Interfaces:** The minimal runnable example generated by `pdd example` *acts* as the module's interface. Other prompts consume this example (not the full source) to understand how to interact with the module. This stabilizes generation and keeps the context focused.
 - Use XML tags to label each dependency block and `<include>` real files.
 - If a dependency is defined by another prompt, list it under a "Prompt Dependencies" subsection and, where possible, pair it with a corresponding example file from `context/`.
+
+**Tip:** Use `pdd auto-deps` to scan your `examples/` directory and automatically populate relevant dependencies into your prompt.
 
 Example dependency block that composes another module via its example:
 
@@ -225,14 +283,23 @@ flowchart LR
 
 The PDD workflow (see pdd/docs/whitepaper.md):
 
-1) generate: produce the code for the module
-2) example: create a minimal runnable example
-3) crash → verify: fix runtime errors; ensure behavior matches intent
-4) test: generate/augment tests
-5) fix: iterate until tests pass
-6) update: back‑propagate learnings into the prompt and parent specs
+1) **Generate:** Fully regenerate (overwrite) the code module and its example.
+2) **Crash → Verify:** Run the example. Fix immediate runtime errors.
+3) **Test (Accumulate):** Run existing tests. If fixing a bug, **write a new failing test case first** and append it to the test file. *Never overwrite the test file; tests must accumulate to prevent regressions.*
+4) **Fix via Prompt:** If the code is wrong, **do not patch the code**. Update the prompt to clarify the requirement or constraint that was missed, then **go to step 1**.
+5) **Drift Check (Optional):** Occasionally regenerate the module *without* changing the prompt (e.g., after upgrading LLM versions or before major releases). If the output differs significantly or fails tests, your prompt has "drifted" (it relied on lucky seeds or implicit context). Tighten the prompt until the output is stable.
+6) **Update:** Once tests pass, back-propagate any final learnings into the prompt.
 
-Key practice: never discard passing tests after regeneration; they accumulate as a regression safety net.
+Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts are permanent assets (accumulated and versioned).
+
+### Workflow Cheatsheet: Features vs. Bugs
+
+| Task Type | Where to Start | The Workflow |
+| :--- | :--- | :--- |
+| **New Feature** | **The Prompt** | 1. Add/Update Requirements in Prompt.<br>2. Regenerate Code.<br>3. Write new Tests to verify. |
+| **Bug Fix** | **The Test File** | 1. Write a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case.<br>3. Regenerate Code to pass the test. |
+
+**Why?** Features represent *new intent* (Prompt). Bugs represent *missed intent* which must first be captured as a constraint (Test) before refining the definition (Prompt).
 
 ---
 
