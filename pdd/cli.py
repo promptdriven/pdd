@@ -2305,7 +2305,7 @@ def setup_cmd(ctx: click.Context) -> None:
         install_completion(quiet=quiet_mode)
         _run_setup_utility()
         if not quiet_mode:
-            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[\success]")
+            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[/success]")
     except Exception as exc:
         handle_error(exc, command_name, quiet_mode)
 
