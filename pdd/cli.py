@@ -227,7 +227,7 @@ def _write_core_dump(
             k: v
             for k, v in os.environ.items()
             if k.startswith("PDD_")
-            or k in ("PDD_PATH", "VIRTUAL_ENV", "PYTHONPATH", "PATH")
+            or k in ( "VIRTUAL_ENV", "PYTHONPATH", "PATH")
         }
 
         payload: Dict[str, Any] = {
@@ -967,7 +967,7 @@ def templates_show(name: str):
 
         if data.get("usage"):
             console.print("\n[info]Usage:[/info]")
-            usage = data.get("usage")
+            usage = data["usage"]
             if isinstance(usage, dict):
                 for group_name, entries in usage.items():
                     console.print(f"[bold]{escape(str(group_name))}[/bold]")
@@ -996,7 +996,7 @@ def templates_show(name: str):
 
         if data.get("discover"):
             console.print("\n[info]Discover:[/info]")
-            discover = data.get("discover")
+            discover = data["discover"]
             if isinstance(discover, dict):
                 discover_items = [(str(key), value) for key, value in discover.items()]
                 _render_key_value_table(None, discover_items)
@@ -2300,7 +2300,7 @@ def setup_cmd(ctx: click.Context) -> None:
         install_completion(quiet=quiet_mode)
         _run_setup_utility()
         if not quiet_mode:
-            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[success]")
+            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[/success]")
     except Exception as exc:
         handle_error(exc, command_name, quiet_mode)
 
