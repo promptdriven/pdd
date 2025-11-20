@@ -485,45 +485,62 @@ class PDDCLI(click.Group):
         self.format_options(ctx, formatter)
 
     def invoke(self, ctx):
+        exception_to_handle = None
         try:
             result = super().invoke(ctx)
-        except (SystemExit, click.exceptions.Exit):
-            # Let SystemExit and Click's Exit exceptions pass through unchanged
-            raise
+        except SystemExit as e:
+            # Let successful exits (code 0) pass through, but handle error exits
+            if e.code == 0 or e.code is None:
+                raise
+            # Convert error exit to exception for proper error handling
+            error_msg = f"Process exited with code {e.code}"
+            exception_to_handle = RuntimeError(error_msg)
+        except click.exceptions.Exit as e:
+            # Let successful Click exits pass through, but handle error exits
+            if e.exit_code == 0:
+                raise
+            # Convert error exit to exception
+            error_msg = f"Command exited with code {e.exit_code}"
+            exception_to_handle = RuntimeError(error_msg)
         except Exception as e:
-            # Figure out quiet mode if possible
-            quiet = False
-            try:
-                if isinstance(ctx.obj, dict):
-                    quiet = ctx.obj.get("quiet", False)
-            except Exception:
-                pass
+            # Handle all other exceptions
+            exception_to_handle = e
+        else:
+            # No exception, return normally
+            return result
 
-            # Centralized error reporting
-            handle_error(e, _first_pending_command(ctx) or "unknown", quiet)
+        # Exception handling for all non-success cases
+        # Figure out quiet mode if possible
+        quiet = False
+        try:
+            if isinstance(ctx.obj, dict):
+                quiet = ctx.obj.get("quiet", False)
+        except Exception:
+            pass
 
-            # Make sure ctx.obj exists so _write_core_dump can read flags
-            if ctx.obj is None:
-                ctx.obj = {}
+        # Centralized error reporting
+        handle_error(exception_to_handle, _first_pending_command(ctx) or "unknown", quiet)
 
-            # Force a core dump even though result_callback won't run
-            try:
-                normalized_results: List[Any] = []
-                # Try to get invoked_subcommands from multiple sources
-                invoked_subcommands = getattr(ctx, "invoked_subcommands", []) or []
-                if not invoked_subcommands and isinstance(ctx.obj, dict):
-                    invoked_subcommands = ctx.obj.get("invoked_subcommands", []) or []
-                total_cost = 0.0
-                _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
-            except Exception:
-                # Never let core-dump logic itself crash the CLI
-                pass
+        # Make sure ctx.obj exists so _write_core_dump can read flags
+        if ctx.obj is None:
+            ctx.obj = {}
 
-            # Exit with appropriate code: 2 for usage errors, 1 for other errors
-            exit_code = 2 if isinstance(e, click.UsageError) else 1
-            ctx.exit(exit_code)
+        # Force a core dump even though result_callback won't run
+        try:
+            normalized_results: List[Any] = []
+            # Try to get invoked_subcommands from multiple sources
+            invoked_subcommands = getattr(ctx, "invoked_subcommands", []) or []
+            if not invoked_subcommands and isinstance(ctx.obj, dict):
+                invoked_subcommands = ctx.obj.get("invoked_subcommands", []) or []
+            total_cost = 0.0
+            _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
+        except Exception:
+            # Never let core-dump logic itself crash the CLI
+            pass
 
-        return result
+        # Exit with appropriate code: 2 for usage errors, 1 for other errors
+        exit_code = 2 if isinstance(exception_to_handle, click.UsageError) else 1
+        ctx.exit(exit_code)
 
 
 
