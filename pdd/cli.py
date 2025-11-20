@@ -226,7 +226,7 @@ def _write_core_dump(
         interesting_env = {
             k: v
             for k, v in os.environ.items()
-            if k.startswith("PDD_")
+            if (k.startswith("PDD_") and k not in ("PDD_GITHUB_TOKEN", "PDD_GITHUB_REPO"))
             or k in ( "VIRTUAL_ENV", "PYTHONPATH", "PATH")
         }
 
