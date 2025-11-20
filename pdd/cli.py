@@ -223,12 +223,17 @@ def _write_core_dump(
             )
 
         # Only capture a limited subset of env vars to avoid leaking API keys
-        interesting_env = {
-            k: v
-            for k, v in os.environ.items()
-            if (k.startswith("PDD_") and k not in ("PDD_GITHUB_TOKEN", "PDD_GITHUB_REPO"))
-            or k in ( "VIRTUAL_ENV", "PYTHONPATH", "PATH")
-        }
+        sensitive_markers = ("KEY", "TOKEN", "SECRET", "PASSWORD")
+
+        interesting_env = {}
+        for k, v in os.environ.items():
+            if k.startswith("PDD_") or k in ("VIRTUAL_ENV", "PYTHONPATH", "PATH"):
+                # Redact obviously sensitive vars
+                if any(m in k.upper() for m in sensitive_markers):
+                    interesting_env[k] = "<redacted>"
+                else:
+                    interesting_env[k] = v
+
 
         payload: Dict[str, Any] = {
             "schema_version": 1,
@@ -2300,7 +2305,7 @@ def setup_cmd(ctx: click.Context) -> None:
         install_completion(quiet=quiet_mode)
         _run_setup_utility()
         if not quiet_mode:
-            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[/success]")
+            console.print("[success]Setup completed. Restart your shell or source your RC file to apply changes.[\success]")
     except Exception as exc:
         handle_error(exc, command_name, quiet_mode)
 
