@@ -10,11 +10,6 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import json
-import platform
-import datetime
-import traceback
-import shlex
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path # Import Path
 
@@ -25,7 +20,6 @@ from rich.markup import MarkupError, escape
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
-import requests
 
 # --- Relative Imports for Internal Modules ---
 from . import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
@@ -71,25 +65,9 @@ custom_theme = Theme({
 })
 console = Console(theme=custom_theme)
 
-# Buffer to collect errors for optional core dumps
-_core_dump_errors: List[Dict[str, Any]] = []
-
-
 # --- Helper Function for Error Handling ---
 def handle_error(exception: Exception, command_name: str, quiet: bool):
     """Prints error messages using Rich console.""" # Modified docstring
-    # Record error details for potential core dump
-    _core_dump_errors.append(
-        {
-            "command": command_name,
-            "type": type(exception).__name__,
-            "message": str(exception),
-            "traceback": "".join(
-                traceback.format_exception(type(exception), exception, exception.__traceback__)
-            ),
-        }
-    )
-
     if not quiet:
         console.print(f"[error]Error during '{command_name}' command:[/error]", style="error")
         if isinstance(exception, FileNotFoundError):
@@ -185,293 +163,6 @@ def _run_setup_utility() -> None:
         raise RuntimeError(f"Setup utility exited with status {result.returncode}")
 
 
-def _write_core_dump(
-    ctx: click.Context,
-    normalized_results: List[Any],
-    invoked_subcommands: List[str],
-    total_cost: float,
-) -> None:
-    """Write a JSON core dump for this run if --core-dump is enabled."""
-    if not ctx.obj.get("core_dump"):
-        return
-
-    try:
-        core_dump_dir = Path.cwd() / ".pdd" / "core_dumps"
-        core_dump_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        dump_path = core_dump_dir / f"pdd-core-{timestamp}.json"
-
-        steps: List[Dict[str, Any]] = []
-        for i, result_tuple in enumerate(normalized_results):
-            command_name = (
-                invoked_subcommands[i] if i < len(invoked_subcommands) else f"Unknown Command {i+1}"
-            )
-
-            cost = None
-            model_name = None
-            if isinstance(result_tuple, tuple) and len(result_tuple) == 3:
-                _result_data, cost, model_name = result_tuple
-
-            steps.append(
-                {
-                    "step": i + 1,
-                    "command": command_name,
-                    "cost": cost,
-                    "model": model_name,
-                }
-            )
-
-        # Only capture a limited subset of env vars to avoid leaking API keys
-        sensitive_markers = ("KEY", "TOKEN", "SECRET", "PASSWORD")
-
-        interesting_env = {}
-        for k, v in os.environ.items():
-            if k.startswith("PDD_") or k in ("VIRTUAL_ENV", "PYTHONPATH", "PATH"):
-                # Redact obviously sensitive vars
-                if any(m in k.upper() for m in sensitive_markers):
-                    interesting_env[k] = "<redacted>"
-                else:
-                    interesting_env[k] = v
-
-
-        payload: Dict[str, Any] = {
-            "schema_version": 1,
-            "pdd_version": __version__,
-            "timestamp_utc": timestamp,
-            "argv": sys.argv[1:],  # without the 'pdd' binary name
-            "cwd": str(Path.cwd()),
-            "platform": {
-                "system": platform.system(),
-                "release": platform.release(),
-                "version": platform.version(),
-                "python": sys.version,
-            },
-            "global_options": {
-                "force": ctx.obj.get("force"),
-                "strength": ctx.obj.get("strength"),
-                "temperature": ctx.obj.get("temperature"),
-                "time": ctx.obj.get("time"),
-                "verbose": ctx.obj.get("verbose"),
-                "quiet": ctx.obj.get("quiet"),
-                "local": ctx.obj.get("local"),
-                "context": ctx.obj.get("context"),
-                "output_cost": ctx.obj.get("output_cost"),
-                "review_examples": ctx.obj.get("review_examples"),
-            },
-            "invoked_subcommands": invoked_subcommands,
-            "total_cost": total_cost,
-            "steps": steps,
-            "errors": _core_dump_errors,
-            "environment": interesting_env,
-        }
-
-        dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-        if not ctx.obj.get("quiet"):
-            console.print(
-                f"[info]Core dump written to [path]{dump_path}[/path]. "
-                "You can attach this file when reporting a bug.[/info]"
-            )
-    except Exception as exc:
-        # Never let core dumping itself crash the CLI
-        if not ctx.obj.get("quiet"):
-            console.print(f"[warning]Failed to write core dump: {exc}[/warning]", style="warning")
-
-
-def _github_config() -> Optional[Tuple[str, str]]:
-    """Return (token, repo) if GitHub issue posting is configured, otherwise None."""
-    token = os.getenv("PDD_GITHUB_TOKEN")
-    repo = os.getenv("PDD_GITHUB_REPO")
-    if not token or not repo:
-        return None
-    return token, repo
-
-
-def _post_issue_to_github(token: str, repo: str, title: str, body: str) -> Optional[str]:
-    """Post an issue to GitHub, returning the issue URL on success, otherwise None."""
-    try:
-        url = f"https://api.github.com/repos/{repo}/issues"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-        }
-        resp = requests.post(url, headers=headers, json={"title": title, "body": body}, timeout=10)
-        if 200 <= resp.status_code < 300:
-            data = resp.json()
-            return data.get("html_url")
-    except Exception:
-        return None
-    return None
-
-
-def _write_replay_script(core_path: Path, payload: Dict[str, Any]) -> Optional[Path]:
-    """Create a small shell script to replay the original core-dumped command."""
-    cwd = payload.get("cwd")
-    argv = payload.get("argv", [])
-    env = payload.get("environment", {})
-
-    if not cwd or not argv:
-        return None
-
-    script_path = core_path.with_suffix(".replay.sh")
-
-    lines: List[str] = []
-    lines.append("#!/usr/bin/env bash")
-    lines.append("set -euo pipefail")
-    lines.append("")
-    lines.append(f"cd {shlex.quote(str(cwd))}")
-    lines.append("")
-
-    for key, value in env.items():
-        lines.append(f"export {key}={shlex.quote(str(value))}")
-
-    lines.append("")
-    arg_str = " ".join(shlex.quote(str(a)) for a in argv)
-    lines.append(f"pdd {arg_str}")
-    lines.append("")
-
-    script_path.write_text("\n".join(lines), encoding="utf-8")
-    try:
-        mode = script_path.stat().st_mode
-        script_path.chmod(mode | 0o111)
-    except OSError:
-        pass
-
-    return script_path
-
-def _build_issue_markdown(
-    payload: Dict[str, Any],
-    description: str,
-    core_path: Path,
-    replay_path: Optional[Path],
-    attachments: List[str],
-) -> Tuple[str, str]:
-    """Build a GitHub issue title and markdown body from a core dump payload."""
-    platform_info = payload.get("platform", {})
-    system = platform_info.get("system", "unknown")
-    release = platform_info.get("release", "")
-    invoked = payload.get("invoked_subcommands") or []
-    cmd_summary = " ".join(invoked) if invoked else "command"
-
-    title = f"[core-dump] {cmd_summary} failed on {system}"
-
-    argv = payload.get("argv", [])
-    argv_str = " ".join(str(a) for a in argv)
-    cwd = payload.get("cwd", "")
-    total_cost = payload.get("total_cost", None)
-    errors = payload.get("errors") or []
-    pyver = platform_info.get("python")
-    pdd_ver = payload.get("pdd_version")
-
-    lines: List[str] = []
-
-    lines.append(f"Core dump file: `{core_path}`")
-    lines.append("")
-    lines.append("## What happened")
-    lines.append("")
-    desc = (description or "").strip()
-    if desc:
-        lines.append(desc)
-    else:
-        lines.append("_(no additional description provided by user)_")
-    lines.append("")
-    lines.append("## Environment")
-    lines.append("")
-    if cwd:
-        lines.append(f"- Working directory: `{cwd}`")
-    if argv_str:
-        lines.append(f"- CLI arguments: `{argv_str}`")
-    if system or release:
-        lines.append(f"- Platform: `{system} {release}`".strip())
-    if pyver:
-        lines.append(f"- Python: `{pyver}`")
-    if pdd_ver:
-        lines.append(f"- PDD version: `{pdd_ver}`")
-    if total_cost is not None:
-        try:
-            lines.append(f"- Total estimated cost: `${float(total_cost):.6f}`")
-        except (TypeError, ValueError):
-            lines.append(f"- Total estimated cost: `{total_cost}`")
-    lines.append("")
-    lines.append("## Reproduction")
-    lines.append("")
-
-    # No more replay script mention – just show how to rerun the original command
-    if cwd or argv:
-        lines.append("To reproduce this issue in a similar environment, run:")
-        lines.append("")
-        lines.append("```bash")
-        if cwd:
-            lines.append(f"cd {shlex.quote(str(cwd))}")
-        if argv:
-            cmd_line = "pdd " + " ".join(shlex.quote(str(a)) for a in argv)
-            lines.append(cmd_line)
-        lines.append("```")
-    else:
-        lines.append(
-            "Re-run the original PDD command in the same repository with `--core-dump` enabled."
-        )
-    lines.append("")
-
-    if errors:
-        lines.append("## Errors")
-        lines.append("")
-        for err in errors:
-            cmd = err.get("command", "unknown")
-            etype = err.get("type", "Error")
-            lines.append(f"### {cmd} ({etype})")
-            lines.append("")
-            tb = err.get("traceback") or err.get("message") or ""
-            lines.append("```text")
-            lines.append(tb)
-            lines.append("```")
-            lines.append("")
-    if attachments:
-        lines.append("## Attachments (local paths)")
-        lines.append("")
-        for p in attachments:
-            lines.append(f"- `{p}`")
-        lines.append("")
-
-    # --- Raw core dump JSON at the bottom ---
-    try:
-        raw_json = json.dumps(payload, indent=2, sort_keys=True)
-    except TypeError:
-        # Fallback: make values JSON-safe by stringifying non-serializable objects
-        def _safe(obj: Any) -> Any:
-            try:
-                json.dumps(obj)
-                return obj
-            except TypeError:
-                return str(obj)
-
-        safe_payload = {k: _safe(v) for k, v in payload.items()}
-        raw_json = json.dumps(safe_payload, indent=2, sort_keys=True)
-
-    MAX_JSON_CHARS = 8000  # guard so huge dumps don't blow up the issue body
-    if len(raw_json) > MAX_JSON_CHARS:
-        raw_display = raw_json[:MAX_JSON_CHARS] + (
-            "\n... (truncated; see core file on disk for full dump)\n"
-        )
-    else:
-        raw_display = raw_json
-
-    lines.append("## Raw core dump (JSON)")
-    lines.append("")
-    lines.append("```json")
-    lines.append(raw_display)
-    lines.append("```")
-    lines.append("")
-    # ----------------------------------------
-
-    lines.append("<!-- Generated by `pdd report-core` -->")
-
-    body = "\n".join(lines)
-    return title, body
-
-
-
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
@@ -488,65 +179,6 @@ class PDDCLI(click.Group):
         )
 
         self.format_options(ctx, formatter)
-
-    def invoke(self, ctx):
-        exception_to_handle = None
-        try:
-            result = super().invoke(ctx)
-        except SystemExit as e:
-            # Let successful exits (code 0) pass through, but handle error exits
-            if e.code == 0 or e.code is None:
-                raise
-            # Convert error exit to exception for proper error handling
-            error_msg = f"Process exited with code {e.code}"
-            exception_to_handle = RuntimeError(error_msg)
-        except click.exceptions.Exit as e:
-            # Let successful Click exits pass through, but handle error exits
-            if e.exit_code == 0:
-                raise
-            # Convert error exit to exception
-            error_msg = f"Command exited with code {e.exit_code}"
-            exception_to_handle = RuntimeError(error_msg)
-        except Exception as e:
-            # Handle all other exceptions
-            exception_to_handle = e
-        else:
-            # No exception, return normally
-            return result
-
-        # Exception handling for all non-success cases
-        # Figure out quiet mode if possible
-        quiet = False
-        try:
-            if isinstance(ctx.obj, dict):
-                quiet = ctx.obj.get("quiet", False)
-        except Exception:
-            pass
-
-        # Centralized error reporting
-        handle_error(exception_to_handle, _first_pending_command(ctx) or "unknown", quiet)
-
-        # Make sure ctx.obj exists so _write_core_dump can read flags
-        if ctx.obj is None:
-            ctx.obj = {}
-
-        # Force a core dump even though result_callback won't run
-        try:
-            normalized_results: List[Any] = []
-            # Try to get invoked_subcommands from multiple sources
-            invoked_subcommands = getattr(ctx, "invoked_subcommands", []) or []
-            if not invoked_subcommands and isinstance(ctx.obj, dict):
-                invoked_subcommands = ctx.obj.get("invoked_subcommands", []) or []
-            total_cost = 0.0
-            _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
-        except Exception:
-            # Never let core-dump logic itself crash the CLI
-            pass
-
-        # Exit with appropriate code: 2 for usage errors, 1 for other errors
-        exit_code = 2 if isinstance(exception_to_handle, click.UsageError) else 1
-        ctx.exit(exit_code)
-
 
 
 # --- Main CLI Group ---
@@ -626,13 +258,6 @@ class PDDCLI(click.Group):
     default=False,
     help="List available contexts from .pddrc and exit.",
 )
-@click.option(
-    "--core-dump",
-    "core_dump",
-    is_flag=True,
-    default=False,
-    help="Write a JSON core dump for this run into .pdd/core_dumps (for bug reports).",
-)
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
 def cli(
@@ -648,17 +273,13 @@ def cli(
     time: Optional[float], # Type hint is Optional[float]
     context_override: Optional[str],
     list_contexts: bool,
-    core_dump: bool,
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
-
-    # Reset per-run error buffer and store core_dump flag
-    _core_dump_errors.clear()
-
+    
     ctx.ensure_object(dict)
     ctx.obj["force"] = force
     ctx.obj["strength"] = strength
@@ -672,7 +293,6 @@ def cli(
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
-    ctx.obj["core_dump"] = core_dump
 
     # Suppress verbose if quiet is enabled
     if quiet:
@@ -818,13 +438,6 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         if num_results < num_commands and not all(res is None for res in results): # Avoid printing if all failed
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
-
-    # Finally, write a core dump if requested
-    _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
-    fatal = ctx.obj.get("_fatal_exception") if isinstance(ctx.obj, dict) else None
-    if fatal:
-        ctx.exit(1)
-
 
 
 # --- Templates Command Group ---
@@ -2147,130 +1760,6 @@ def pytest_output_cmd(ctx: click.Context, test_file: str, json_only: bool) -> No
                 
     except Exception as e:
         handle_error(e, command_name, quiet_mode)
-
-
-@cli.command("report-core")
-@click.argument("core_file", required=False, type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "--latest",
-    is_flag=True,
-    default=False,
-    help="Use the most recent core dump in .pdd/core_dumps.",
-)
-@click.option(
-    "--describe",
-    type=str,
-    default=None,
-    help="Short description of what went wrong (will prompt if omitted in interactive mode).",
-)
-@click.option(
-    "--github",
-    "post_to_github",
-    is_flag=True,
-    default=False,
-    help="If configured, automatically create a GitHub issue using this core dump.",
-)
-@click.option(
-    "--attach",
-    "attachments",
-    type=click.Path(exists=True),
-    multiple=True,
-    help="File(s) to mention as relevant inputs/outputs in the issue body.",
-)
-@click.pass_context
-def report_core(
-    ctx: click.Context,
-    core_file: Optional[str],
-    latest: bool,
-    describe: Optional[str],
-    post_to_github: bool,
-    attachments: Tuple[str, ...],
-) -> None:
-    """Generate an issue report from a core dump (and optionally post to GitHub)."""
-    quiet_mode = ctx.obj.get("quiet", False)
-    command_name = "report-core"
-
-    try:
-        core_dump_dir = Path.cwd() / ".pdd" / "core_dumps"
-        selected_path: Optional[Path] = None
-
-        if core_file:
-            selected_path = Path(core_file)
-        elif latest:
-            if not core_dump_dir.exists():
-                raise click.UsageError("No core dump directory .pdd/core_dumps found in current working directory.")
-            candidates = sorted(core_dump_dir.glob("pdd-core-*.json"))
-            if not candidates:
-                raise click.UsageError("No core dump files found in .pdd/core_dumps.")
-            selected_path = candidates[-1]
-        else:
-            raise click.UsageError("Either CORE_FILE must be provided or --latest must be used.")
-
-        try:
-            payload = json.loads(selected_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise click.UsageError(f"Failed to read core dump file: {exc}")
-
-        # Normalize description
-        if describe is None and sys.stdin.isatty():
-            describe = click.prompt(
-                "Briefly describe what went wrong (this will go into the issue body)",
-                default="",
-                show_default=False,
-            )
-        if describe is None:
-            describe = ""
-
-        replay_path = _write_replay_script(selected_path, payload)
-        attachment_paths = [str(Path(p)) for p in attachments] if attachments else []
-
-        title, body = _build_issue_markdown(
-            payload=payload,
-            description=describe,
-            core_path=selected_path,
-            replay_path=replay_path,
-            attachments=attachment_paths,
-        )
-
-        issue_md_path = selected_path.with_suffix(".issue.md")
-        issue_md_path.write_text(body, encoding="utf-8")
-
-        if not quiet_mode:
-            console.print(
-                f"[info]Issue template written to [path]{issue_md_path}[/path]. "
-                "You can paste this into a new GitHub issue.[/info]"
-            )
-
-        if post_to_github:
-            # New: default repo + guided token setup
-            github_token = os.environ.get("PDD_GITHUB_TOKEN")
-            github_repo = os.environ.get("PDD_GITHUB_REPO") or "promptdriven/pdd"
-
-            if not github_token:
-                if not quiet_mode:
-                    console.print(
-                        "[warning]GitHub posting requested, but PDD_GITHUB_TOKEN is not set.\n"
-                        "To enable automatic issue creation, set a GitHub personal access token, e.g.:\n"
-                        "  export PDD_GITHUB_TOKEN=ghp_your_token_here\n\n"
-                        "By default, issues will be opened against [bold]promptdriven/pdd[/bold]. "
-                        "To use a different repository, set:\n"
-                        "  export PDD_GITHUB_REPO=owner/repo[/warning]",
-                        style="warning",
-                    )
-            else:
-                issue_url = _post_issue_to_github(github_token, github_repo, title, body)
-                if issue_url and not quiet_mode:
-                    console.print(f"[success]Created GitHub issue:[/success] {issue_url}")
-                elif not issue_url and not quiet_mode:
-                    console.print(
-                        "[warning]Failed to create GitHub issue automatically. "
-                        "Use the generated issue template instead.[/warning]",
-                        style="warning",
-                    )
-
-    except Exception as e:
-        handle_error(e, command_name, quiet_mode)
-
 
 
 @cli.command("install_completion")
