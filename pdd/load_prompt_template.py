@@ -42,12 +42,7 @@ def load_prompt_template(prompt_name: str) -> Optional[str]:
     candidate_paths.append(Path.cwd())
 
     # Build candidate prompt paths to try in order
-    prompt_candidates = []
-    for cp in candidate_paths:
-        # Check both <path>/prompts/ and <path>/pdd/prompts/
-        # The latter handles installed package case where prompts are in pdd/prompts/
-        prompt_candidates.append(cp / 'prompts' / f"{prompt_name}.prompt")
-        prompt_candidates.append(cp / 'pdd' / 'prompts' / f"{prompt_name}.prompt")
+    prompt_candidates = [cp / 'prompts' / f"{prompt_name}.prompt" for cp in candidate_paths]
 
     # Step 2: Load and return the prompt template
     prompt_path: Optional[Path] = None
