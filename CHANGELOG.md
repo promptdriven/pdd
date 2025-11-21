@@ -1,3 +1,9 @@
+## v0.0.73 (2025-11-21)
+
+### Fix
+
+- enhance prompt loading to support installed package structure
+
 ## v0.0.72 (2025-11-18)
 
 ### Feat
