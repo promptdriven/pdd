@@ -232,6 +232,8 @@ Focus on clarity, measurable outcomes, and determinism:
 
 ## Level of Abstraction (The "Goldilocks" Zone)
 
+![Goldilocks Prompt](goldilocks_prompt.jpeg)
+
 Write prompts at the level of *architecture, contract, and intent*, not line-by-line *implementation details*.
 
 - **Too Vague:** "Create a user page." (Model guesses the requirements; unrepeatable).
