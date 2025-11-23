@@ -261,6 +261,7 @@ def test_full_gen_local_no_output_file(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
     assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == DEFAULT_MOCK_GENERATED_CODE
 
@@ -322,6 +323,7 @@ def test_full_gen_local_output_exists_no_incremental_possible(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     assert output_file_path.read_text() == DEFAULT_MOCK_GENERATED_CODE
 
 
@@ -390,6 +392,7 @@ def test_full_gen_local_output_to_console(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     printed_to_console = False
     for call_args in mock_rich_console_fixture.call_args_list:
         args, _ = call_args
@@ -520,6 +523,7 @@ def test_full_gen_cloud_fallback_scenarios(
         assert called_kwargs["time"] == mock_ctx.obj['time']
         assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
         assert called_kwargs["preprocess_prompt"] is False
+        assert called_kwargs["output_schema"] is None
         assert code == DEFAULT_MOCK_GENERATED_CODE
         assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
     else: 
@@ -570,6 +574,7 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
     assert called_kwargs["preprocess_prompt"] is False
+    assert called_kwargs["output_schema"] is None
     assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
 
 
@@ -1200,26 +1205,18 @@ Return JSON for the spec.
         monkeypatch.setitem(sys.modules, "jsonschema", types.SimpleNamespace(validate=_failing_validate))
     mock_local_generator_fixture.return_value = ("{\"age\": 1}", DEFAULT_MOCK_COST, DEFAULT_MOCK_MODEL_NAME)
 
-    code, incremental, cost, model = code_generator_main(
-        mock_ctx,
-        str(prompt_file_path),
-        None,
-        None,
-        False,
-        env_vars={},
-    )
+    with pytest.raises(click.UsageError, match="Generated JSON does not match output_schema: schema mismatch"):
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            None,
+            None,
+            False,
+            env_vars={},
+        )
 
     assert calls["count"] == 1
-    assert code == ""
-    assert not incremental
-    assert cost == DEFAULT_MOCK_COST
-    assert model == "error"
     assert not schema_output_path.exists()
-    assert any(
-        "output_schema" in str(call_args[0][0]).lower()
-        for call_args in mock_rich_console_fixture.call_args_list
-        if call_args[0]
-    )
 
 
 def test_architecture_template_datasource_object_passes_schema(
