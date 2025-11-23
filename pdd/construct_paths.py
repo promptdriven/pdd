@@ -193,6 +193,11 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
     for p in input_files.values():
         if p.suffix == ".prompt":
             return p
+    
+    # Final fallback: Return the first file path available (e.g. for pdd update <code_file>)
+    if input_files:
+        return next(iter(input_files.values()))
+        
     return None
 
 
