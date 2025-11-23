@@ -719,6 +719,10 @@ def code_generator_main(
                 local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 # Language already resolved (front matter overrides detection if present)
                 gen_language = language
+                
+                # Extract output schema from front matter if available
+                output_schema = fm_meta.get("output_schema") if fm_meta else None
+                
                 generated_code_content, total_cost, model_name = local_code_generator_func(
                     prompt=local_prompt,
                     language=gen_language,
@@ -726,7 +730,8 @@ def code_generator_main(
                     temperature=temperature,
                     time=time_budget,
                     verbose=verbose,
-                    preprocess_prompt=False
+                    preprocess_prompt=False,
+                    output_schema=output_schema,
                 )
                 was_incremental_operation = False
                 if verbose:
@@ -884,9 +889,13 @@ def code_generator_main(
                         elif output_path and str(output_path).lower().endswith(".json"):
                             is_json_output = True
                         if is_json_output:
+                            # Check if the generated content is an error message from llm_invoke
+                            if generated_code_content.strip().startswith("ERROR:"):
+                                raise click.UsageError(f"LLM generation failed: {generated_code_content}")
+                                
                             parsed = json.loads(generated_code_content)
                             try:
-                                import jsonschema  # type: ignore
+                                import jsonschema
                                 jsonschema.validate(instance=parsed, schema=fm_meta.get("output_schema"))
                             except ModuleNotFoundError:
                                 if verbose and not quiet:
@@ -950,6 +959,8 @@ def code_generator_main(
                 return "", was_incremental_operation, total_cost, model_name or "error"
 
     except Exception as e:
+        if isinstance(e, click.UsageError):
+            raise
         console.print(f"[red]An unexpected error occurred: {e}[/red]")
         import traceback
         if verbose: console.print(traceback.format_exc())
