@@ -7,7 +7,7 @@ set -u
 
 # Global settings
 VERBOSE=${VERBOSE:-1} # Default to 1 if not set
-STRENGTH=${STRENGTH:-0.75} # Default strength - prefer high-ELO models like Vertex AI
+STRENGTH=${STRENGTH:-0.3} # Default strength
 TEMPERATURE=${TEMPERATURE:-0.0} # Default temperature
 TEST_LOCAL=${TEST_LOCAL:-false} # Default to cloud execution
 CLEANUP_ON_EXIT=false # Set to false to keep files for debugging
@@ -72,6 +72,12 @@ export PDD_AUTO_UPDATE=false
 
 # Force local execution by unsetting GitHub client ID
 unset GITHUB_CLIENT_ID
+
+# Ensure OPENAI_API_KEY is set since we are forcing local execution fallback
+if [ -z "${OPENAI_API_KEY:-}" ]; then
+    log "WARNING: GITHUB_CLIENT_ID is unset to force local fallback, but OPENAI_API_KEY is missing."
+    log "Sync regression tests may fail if no valid API key is available for local models."
+fi
 
 # Define base variables
 # Set PDD base directory as the script's location (two directories up from this script)
@@ -433,6 +439,17 @@ log "Strength: $STRENGTH"
 log "Temperature: $TEMPERATURE"
 log "Local Execution: $TEST_LOCAL"
 log "----------------------------------------"
+
+# Create a local .pdd directory for regression-specific config
+mkdir -p .pdd
+
+# Create a filtered llm_model.csv that excludes local/unreachable models for CI stability
+if [ -f "$PDD_BASE_DIR/pdd/data/llm_model.csv" ]; then
+    log "Creating CI-safe llm_model.csv (excluding 'localhost' and 'lm_studio')"
+    grep -vE "localhost|lm_studio" "$PDD_BASE_DIR/pdd/data/llm_model.csv" > .pdd/llm_model.csv
+else
+    log "Warning: Source llm_model.csv not found at $PDD_BASE_DIR/pdd/data/llm_model.csv"
+fi
 
 # Create a local .pddrc with explicit sync test contexts
 cat > ./.pddrc << 'EOF'
