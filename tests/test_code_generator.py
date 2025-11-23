@@ -75,7 +75,8 @@ def test_code_generator_valid_input_complete(
         strength=0.8,
         temperature=0.5,
         time=None,
-        verbose=True
+        verbose=True,
+        output_schema=None
     )
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
@@ -127,7 +128,8 @@ def test_code_generator_valid_input_incomplete(
         strength=DEFAULT_STRENGTH,
         temperature=0.7,
         time=None,
-        verbose=False
+        verbose=False,
+        output_schema=None
     )
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],

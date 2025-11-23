@@ -903,6 +903,7 @@ def llm_invoke(
     temperature: float = 0.1,
     verbose: bool = False,
     output_pydantic: Optional[Type[BaseModel]] = None,
+    output_schema: Optional[Dict[str, Any]] = None,
     time: float = 0.25,
     use_batch_mode: bool = False,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
@@ -919,6 +920,7 @@ def llm_invoke(
         temperature: LLM temperature.
         verbose: Print detailed logs.
         output_pydantic: Optional Pydantic model for structured output.
+        output_schema: Optional raw JSON schema dictionary for structured output (alternative to output_pydantic).
         time: Relative thinking time (0-1, default 0.25).
         use_batch_mode: Use batch completion if True.
         messages: Pre-formatted list of messages (or list of lists for batch). If provided, ignores prompt and input_json.
@@ -1170,8 +1172,8 @@ def llm_invoke(
                     if verbose:
                         logger.info("[INFO] Using LM Studio api_key placeholder (set LM_STUDIO_API_KEY to customize).")
 
-            # Handle Structured Output (JSON Mode / Pydantic)
-            if output_pydantic:
+            # Handle Structured Output (JSON Mode / Pydantic / JSON Schema)
+            if output_pydantic or output_schema:
                 # Check if model supports structured output based on CSV flag or LiteLLM check
                 supports_structured = model_info.get('structured_output', False)
                 # Optional: Add litellm.supports_response_schema check if CSV flag is unreliable
@@ -1180,19 +1182,36 @@ def llm_invoke(
                 #     except: pass # Ignore errors in supports_response_schema check
 
                 if supports_structured:
-                    if verbose:
-                        logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
-                    # Pass the Pydantic model directly if supported, else use json_object
-                    # LiteLLM handles passing Pydantic models for supported providers
-                    response_format = output_pydantic
+                    if output_pydantic:
+                        if verbose:
+                            logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
+                        response_format = output_pydantic
+                    else: # output_schema is set
+                        if verbose:
+                            logger.info(f"[INFO] Requesting structured output (JSON Schema) for {model_name_litellm}")
+                        # LiteLLM expects {"type": "json_schema", "json_schema": {"name": "response", "schema": schema_dict, "strict": true}}
+                        # OR for some providers just the schema dict if type is json_object.
+                        # Best practice for broad compatibility via LiteLLM is usually the dict directly or wrapped.
+                        # For now, let's assume we pass the schema dict as 'response_format' which LiteLLM handles for many providers
+                        # or wrap it if needed. LiteLLM 1.40+ supports passing the dict directly for many.
+                        response_format = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "response",
+                                "schema": output_schema,
+                                "strict": True
+                            }
+                        }
+                    
                     litellm_kwargs["response_format"] = response_format
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
                     # And potentially enable client-side validation:
                     # litellm.enable_json_schema_validation = True # Enable globally if needed
                 else:
+                    schema_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
                     if verbose:
-                        logger.warning(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {output_pydantic.__name__}.")
+                        logger.warning(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {schema_name}.")
                     # Proceed without forcing JSON mode, parsing will be attempted later
 
             # --- NEW REASONING LOGIC ---
@@ -1321,14 +1340,20 @@ def llm_invoke(
                         if reasoning_param is not None:
                             responses_kwargs["reasoning"] = reasoning_param
 
-                        if output_pydantic:
+                        if output_pydantic or output_schema:
                             try:
-                                schema = output_pydantic.model_json_schema()
+                                if output_pydantic:
+                                    schema = output_pydantic.model_json_schema()
+                                    name = output_pydantic.__name__
+                                else:
+                                    schema = output_schema
+                                    name = "response"
+
                                 if _openai_responses_supports_response_format():
                                     responses_kwargs["response_format"] = {
                                         "type": "json_schema",
                                         "json_schema": {
-                                            "name": output_pydantic.__name__,
+                                            "name": name,
                                             "schema": schema,
                                             "strict": True,
                                         },
@@ -1337,9 +1362,9 @@ def llm_invoke(
                                     responses_kwargs.pop("text", None)
                                 else:
                                     if verbose:
-                                        logger.info("[INFO] OpenAI SDK lacks Responses.response_format; will validate JSON client-side with Pydantic.")
+                                        logger.info("[INFO] OpenAI SDK lacks Responses.response_format; will validate JSON client-side.")
                             except Exception as schema_e:
-                                logger.warning(f"[WARN] Failed to derive JSON schema from Pydantic: {schema_e}. Proceeding without structured response_format.")
+                                logger.warning(f"[WARN] Failed to derive JSON schema: {schema_e}. Proceeding without structured response_format.")
 
                         # Initialize OpenAI client with explicit key if provided
                         try:
@@ -1518,20 +1543,31 @@ def llm_invoke(
                                 results.append("ERROR: LLM returned None content and cannot retry")
                                 continue
                         
-                        if output_pydantic:
+                        if output_pydantic or output_schema:
                             parsed_result = None
                             json_string_to_parse = None
 
                             try:
-                                # Attempt 1: Check if LiteLLM already parsed it
-                                if isinstance(raw_result, output_pydantic):
+                                # Attempt 1: Check if LiteLLM already parsed it (only for Pydantic)
+                                if output_pydantic and isinstance(raw_result, output_pydantic):
                                     parsed_result = raw_result
                                     if verbose:
                                         logger.debug("[DEBUG] Pydantic object received directly from LiteLLM.")
 
                                 # Attempt 2: Check if raw_result is dict-like and validate
                                 elif isinstance(raw_result, dict):
-                                    parsed_result = output_pydantic.model_validate(raw_result)
+                                    if output_pydantic:
+                                        parsed_result = output_pydantic.model_validate(raw_result)
+                                    else:
+                                        # Validate against JSON schema
+                                        try:
+                                            import jsonschema
+                                            jsonschema.validate(instance=raw_result, schema=output_schema)
+                                            parsed_result = json.dumps(raw_result) # Return as JSON string for consistency
+                                        except ImportError:
+                                            logger.warning("jsonschema not installed, skipping validation")
+                                            parsed_result = json.dumps(raw_result)
+                                    
                                     if verbose:
                                         logger.debug("[DEBUG] Validated dictionary-like object directly.")
 
@@ -1556,19 +1592,39 @@ def llm_invoke(
                                             try:
                                                 if verbose:
                                                     logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
-                                                parsed_result = output_pydantic.model_validate_json(cand)
+                                                
+                                                if output_pydantic:
+                                                    parsed_result = output_pydantic.model_validate_json(cand)
+                                                else:
+                                                    # Parse JSON and validate against schema
+                                                    loaded = json.loads(cand)
+                                                    try:
+                                                        import jsonschema
+                                                        jsonschema.validate(instance=loaded, schema=output_schema)
+                                                    except ImportError:
+                                                        pass # Skip validation if lib missing
+                                                    parsed_result = cand # Return string if valid
+
                                                 json_string_to_parse = cand
                                                 parse_err = None
                                                 break
                                             except (json.JSONDecodeError, ValidationError, ValueError) as pe:
+                                                # Also catch jsonschema.ValidationError if imported
                                                 parse_err = pe
+                                                try:
+                                                    import jsonschema
+                                                    if isinstance(pe, jsonschema.ValidationError):
+                                                        parse_err = pe
+                                                except ImportError:
+                                                    pass
 
                                         if parsed_result is None:
                                             # If none of the candidates parsed, raise last error
                                             if parse_err is not None:
                                                 raise parse_err
                                             raise ValueError("Unable to parse any JSON candidates")
-                                    except (json.JSONDecodeError, ValidationError, ValueError) as extraction_error:
+                                    except (json.JSONDecodeError, ValidationError, ValueError, Exception) as extraction_error:
+                                        # Catch generic Exception to handle jsonschema errors without explicit import here
                                         if verbose:
                                             logger.debug(f"[DEBUG] JSON extraction/validation failed ('{extraction_error}'). Trying fence cleaning.")
                                         # Last resort: strip any leading/trailing code fences and retry
@@ -1584,29 +1640,41 @@ def llm_invoke(
                                             if verbose:
                                                 logger.debug(f"[DEBUG] Attempting parse after generic fence cleaning. Cleaned string: '{cleaned_result_str}'")
                                             json_string_to_parse = cleaned_result_str
-                                            parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
+                                            
+                                            if output_pydantic:
+                                                parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
+                                            else:
+                                                loaded = json.loads(json_string_to_parse)
+                                                try:
+                                                    import jsonschema
+                                                    jsonschema.validate(instance=loaded, schema=output_schema)
+                                                except ImportError:
+                                                    pass
+                                                parsed_result = json_string_to_parse
                                         else:
                                             raise ValueError("Content after cleaning doesn't look like JSON")
 
 
                                 # Check if any parsing attempt succeeded
                                 if parsed_result is None:
+                                    target_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
                                     # This case should ideally be caught by exceptions above, but as a safeguard:
-                                    raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {output_pydantic.__name__}.")
+                                    raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {target_name}.")
 
-                            except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as parse_error:
-                                logger.error(f"[ERROR] Failed to parse response into Pydantic model {output_pydantic.__name__} for item {i}: {parse_error}")
+                            except (ValidationError, json.JSONDecodeError, TypeError, ValueError, Exception) as parse_error:
+                                target_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
+                                logger.error(f"[ERROR] Failed to parse response into {target_name} for item {i}: {parse_error}")
                                 # Use the string that was last attempted for parsing in the error message
                                 error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
                                 logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content)) # CORRECTED (or use f-string)
-                                results.append(f"ERROR: Failed to parse Pydantic. Raw: {repr(raw_result)}")
+                                results.append(f"ERROR: Failed to parse structured output. Raw: {repr(raw_result)}")
                                 continue # Skip appending result below if parsing failed
 
                             # If parsing succeeded, append the parsed_result
                             results.append(parsed_result)
 
                         else:
-                            # If output_pydantic was not requested, append the raw result
+                            # If output_pydantic/schema was not requested, append the raw result
                             results.append(raw_result)
 
                     except (AttributeError, IndexError) as e:
