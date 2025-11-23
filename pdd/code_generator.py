@@ -18,6 +18,7 @@ def code_generator(
     time: Optional[float] = None,
     verbose: bool = False,
     preprocess_prompt: bool = True,
+    output_schema: Optional[dict] = None,
 ) -> Tuple[str, float, str]:
     """
     Generate code from a prompt using a language model.
@@ -29,6 +30,8 @@ def code_generator(
         temperature (float, optional): The temperature for the LLM model. Defaults to 0.0
         time (Optional[float], optional): The time for the LLM model. Defaults to None
         verbose (bool, optional): Whether to print detailed information. Defaults to False
+        preprocess_prompt (bool, optional): Whether to preprocess the prompt. Defaults to True
+        output_schema (Optional[dict], optional): JSON schema to enforce structured output. Defaults to None
 
     Returns:
         Tuple[str, float, str]: Tuple containing (runnable_code, total_cost, model_name)
@@ -81,7 +84,8 @@ def code_generator(
                 strength=strength,
                 temperature=temperature,
                 time=time,
-                verbose=verbose
+                verbose=verbose,
+                output_schema=output_schema
             )
         else:
             response = llm_invoke(
@@ -90,7 +94,8 @@ def code_generator(
                 strength=strength,
                 temperature=temperature,
                 time=time,
-                verbose=verbose
+                verbose=verbose,
+                output_schema=output_schema
             )
         initial_output = response['result']
         total_cost += response['cost']

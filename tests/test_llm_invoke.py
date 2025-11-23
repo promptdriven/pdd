@@ -357,8 +357,9 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
                 assert call_kwargs['model'] == 'gemini-pro'
-                assert call_kwargs['response_format'] == SampleOutputModel
-
+                # The actual logic now might adapt based on availability of response_format param
+                # If it was passed:
+                assert call_kwargs.get('response_format') == SampleOutputModel
 def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mock_set_llm_cache):
     model_key_name = "GOOGLE_API_KEY"
     with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
@@ -375,7 +376,7 @@ def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mo
                     output_pydantic=SampleOutputModel
                 )
                 assert isinstance(response['result'], str)
-                assert "ERROR: Failed to parse Pydantic" in response['result']
+                assert "ERROR: Failed to parse structured output" in response['result']
                 assert repr(invalid_json_str) in response['result']
                 assert response['model_name'] == 'gemini-pro'
                 assert response['cost'] == mock_cost
