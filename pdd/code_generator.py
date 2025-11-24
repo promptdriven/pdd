@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Tuple, Optional
 from rich.console import Console
@@ -136,15 +137,25 @@ def code_generator(
         # Step 4: Postprocess the output
         if verbose:
             console.print("[bold blue]Step 4: Postprocessing output[/bold blue]")
-        runnable_code, postprocess_cost, model_name_post = postprocess(
-            llm_output=final_output,
-            language=language,
-            strength=EXTRACTION_STRENGTH,
-            temperature=0.0,
-            time=time,
-            verbose=verbose
-        )
-        total_cost += postprocess_cost
+
+        # For structured JSON targets, skip extract_code to avoid losing or altering schema-constrained payloads.
+        if (isinstance(language, str) and language.strip().lower() == "json") or output_schema:
+            if isinstance(final_output, str):
+                runnable_code = final_output
+            else:
+                runnable_code = json.dumps(final_output)
+            postprocess_cost = 0.0
+            model_name_post = model_name
+        else:
+            runnable_code, postprocess_cost, model_name_post = postprocess(
+                llm_output=final_output,
+                language=language,
+                strength=EXTRACTION_STRENGTH,
+                temperature=0.0,
+                time=time,
+                verbose=verbose
+            )
+            total_cost += postprocess_cost
 
         return runnable_code, total_cost, model_name
 
