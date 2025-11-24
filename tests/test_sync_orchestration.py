@@ -1039,3 +1039,111 @@ def test_verify_skipped_when_example_missing_after_crash_skip(orchestration_fixt
 
     # And there should be no orchestrator errors if verify was correctly skipped
     assert not result.get('errors'), f"Unexpected errors: {result.get('errors')}"
+
+
+def test_sync_orchestration_detects_test_fix_loop(orchestration_fixture):
+    """
+    Tests that the orchestrator detects and breaks infinite loops of alternating 'test' and 'fix' operations.
+    Sequence: test, fix, test, fix, test, fix -> Break
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    
+    # Sequence: test, fix, test, fix, test, fix
+    # The detector looks for 2 repeats of (test, fix) or (fix, test)
+    decisions = [
+        SyncDecision(operation='test', reason='Initial test', confidence=1.0),
+        SyncDecision(operation='fix', reason='Fixing test', confidence=1.0),
+        SyncDecision(operation='test', reason='Retesting', confidence=1.0),
+        SyncDecision(operation='fix', reason='Fixing again', confidence=1.0),
+        # Should break before executing the next operation
+        SyncDecision(operation='test', reason='Retesting again', confidence=1.0), 
+        SyncDecision(operation='all_synced', reason='Done', confidence=1.0)
+    ]
+    
+    mock_determine.side_effect = decisions
+    
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=10.0,
+        quiet=True
+    )
+    
+    assert result['success'] is False
+    assert "Detected test-fix cycle" in str(result['errors'])
+    # It should have completed: test, fix, test (3 operations)
+    # The 4th operation (fix) would trigger the loop detection before execution
+    assert len(result['operations_completed']) == 3
+
+
+def test_sync_orchestration_detects_fix_test_loop(orchestration_fixture):
+    """
+    Tests that the orchestrator detects and breaks infinite loops of alternating 'fix' and 'test' operations.
+    Sequence: fix, test, fix, test -> Break
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    
+    # Sequence: fix, test, fix, test
+    decisions = [
+        SyncDecision(operation='fix', reason='Initial fix', confidence=1.0),
+        SyncDecision(operation='test', reason='Testing fix', confidence=1.0),
+        SyncDecision(operation='fix', reason='Fixing again', confidence=1.0),
+        # Should break before executing this test
+        SyncDecision(operation='test', reason='Testing again', confidence=1.0),
+        SyncDecision(operation='fix', reason='Fixing again', confidence=1.0),
+        SyncDecision(operation='all_synced', reason='Done', confidence=1.0)
+    ]
+    
+    mock_determine.side_effect = decisions
+    
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=10.0,
+        quiet=True
+    )
+    
+    assert result['success'] is False
+    assert "Detected test-fix cycle" in str(result['errors'])
+    # It should have completed: fix, test, fix (3 operations)
+    # The 4th operation (test) completes the second (fix, test) pair pattern check?
+    # Let's trace:
+    # 1. fix (history: [fix])
+    # 2. test (history: [fix, test])
+    # 3. fix (history: [fix, test, fix])
+    # 4. decision=test. history check before exec: [fix, test, fix]. 
+    #    We need 4 items in history to check for pattern.
+    #    So execution proceeds. 
+    #    ... wait, the check is:
+    #    if len(operation_history) >= 4: ...
+    #
+    # So:
+    # 1. Op: fix. Executed. History: [fix]
+    # 2. Op: test. Executed. History: [fix, test]
+    # 3. Op: fix. Executed. History: [fix, test, fix]
+    # 4. Op: test. Executed. History: [fix, test, fix, test]
+    # 5. Op: fix. Check history [fix, test, fix, test]. Pattern match! Break.
+    
+    # So we need enough decisions to fill history to 4, then trigger the 5th decision.
+    
+    # Let's adjust the decisions list to ensure we hit the condition.
+    # Decisions provided to side_effect must cover the calls made.
+    
+    # Actually, looking at the implementation:
+    # operation = decision.operation
+    # operation_history.append(operation)
+    # ... check history ...
+    
+    # 1. Decision: fix. History: [fix]. Check (len < 4). Exec fix.
+    # 2. Decision: test. History: [fix, test]. Check (len < 4). Exec test.
+    # 3. Decision: fix. History: [fix, test, fix]. Check (len < 4). Exec fix.
+    # 4. Decision: test. History: [fix, test, fix, test]. Check (len >= 4).
+    #    Pattern: [fix, test, fix, test] matches. Cycle count = 2. Break.
+    
+    # So the loop breaks BEFORE executing the 4th operation (test).
+    # Wait, "if len(operation_history) >= 4" is checked immediately after appending the *current* decision operation.
+    # So if current decision is 'test', and history becomes [fix, test, fix, test], it breaks *before* executing 'test'.
+    
+    # So operations completed should be: fix, test, fix.
+    
+    assert len(result['operations_completed']) == 3
