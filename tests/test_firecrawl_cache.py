@@ -28,7 +28,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "pdd"))
 
 from pdd.firecrawl_cache import FirecrawlCache, get_firecrawl_cache, clear_firecrawl_cache
 from pdd.preprocess import process_web_tags
-
+from pdd.firecrawl_cache import get_firecrawl_cache_stats
+from pdd.firecrawl_cache_cli import firecrawl_cache
+from click.testing import CliRunner
+from unittest.mock import patch, MagicMock
 
 class TestFirecrawlCache:
     """Test class for FirecrawlCache functionality."""
@@ -120,7 +123,8 @@ class TestFirecrawlCache:
         assert self.cache.get(url) == content
         
         # Wait for expiration
-        time.sleep(0.005)  # 5ms should be enough
+        #time.sleep(0.005)  # 5ms should be enough; <not enough>
+        time.sleep(4)
         
         # Should now be expired
         assert self.cache.get(url) is None
@@ -178,7 +182,7 @@ class TestFirecrawlCache:
         self.cache.set(url2, content, ttl_hours=24)     # Long TTL
         
         # Wait for first to expire
-        time.sleep(0.005)
+        time.sleep(4.5)
         
         # Trigger cleanup
         self.cache._cleanup_expired()
@@ -402,7 +406,6 @@ class TestCacheCLI:
     @patch('pdd.firecrawl_cache_cli.get_firecrawl_cache_stats')
     def test_cli_stats_command(self, mock_get_stats):
         """Test CLI stats command."""
-        from pdd.firecrawl_cache_cli import stats
         
         mock_stats = {
             'total_entries': 5,
@@ -417,13 +420,13 @@ class TestCacheCLI:
         }
         mock_get_stats.return_value = mock_stats
         
-        # Should not raise exception
-        stats()
+        runner = CliRunner()
+        result = runner.invoke(firecrawl_cache, ['stats'])
+        assert result.exit_code == 0
 
     @patch('pdd.firecrawl_cache_cli.get_firecrawl_cache')
     def test_cli_clear_command(self, mock_get_cache):
         """Test CLI clear command."""
-        from pdd.firecrawl_cache_cli import clear
         
         mock_cache = MagicMock()
         mock_cache.get_stats.return_value = {'total_entries': 3}
@@ -431,39 +434,40 @@ class TestCacheCLI:
         
         # Mock click.confirm to return True
         with patch('click.confirm', return_value=True):
-            clear()
+            runner = CliRunner()
+            result = runner.invoke(firecrawl_cache, ['clear'])
+            assert result.exit_code == 0
             mock_cache.clear.assert_called_once()
 
     def test_cli_info_command(self):
         """Test CLI info command."""
-        from pdd.firecrawl_cache_cli import info
-        
-        # Should not raise exception
-        info()
+        runner = CliRunner()
+        result = runner.invoke(firecrawl_cache, ['info'])
+        assert result.exit_code == 0
 
     @patch('pdd.firecrawl_cache_cli.get_firecrawl_cache')
     def test_cli_check_command_cached(self, mock_get_cache):
         """Test CLI check command with cached URL."""
-        from pdd.firecrawl_cache_cli import check
         
         mock_cache = MagicMock()
         mock_cache.get.return_value = "Cached content"
         mock_get_cache.return_value = mock_cache
         
-        # Should not raise exception
-        check("https://example.com")
+        runner = CliRunner()
+        result = runner.invoke(firecrawl_cache, ['check', 'https://example.com'])
+        assert result.exit_code == 0
 
     @patch('pdd.firecrawl_cache_cli.get_firecrawl_cache')
     def test_cli_check_command_not_cached(self, mock_get_cache):
         """Test CLI check command with non-cached URL."""
-        from pdd.firecrawl_cache_cli import check
         
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
         mock_get_cache.return_value = mock_cache
         
-        # Should not raise exception
-        check("https://example.com")
+        runner = CliRunner()
+        result = runner.invoke(firecrawl_cache, ['check', 'https://example.com'])
+        assert result.exit_code == 0
 
 
 def test_integration_full_workflow():

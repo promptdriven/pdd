@@ -9,6 +9,8 @@ from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
 from .firecrawl_cache import get_firecrawl_cache
+from firecrawl import FirecrawlApp
+FirecrawlApp = FirecrawlApp
 
 install()
 console = Console()
@@ -244,11 +246,6 @@ def process_web_tags(text: str, recursive: bool) -> str:
         console.print(f"Scraping web content from: [cyan]{url}[/cyan]")
         _dbg(f"Web tag URL: {url}")
         try:
-            try:
-                from firecrawl import FirecrawlApp
-            except ImportError:
-                _dbg("firecrawl import failed; package not installed")
-                return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
             api_key = os.environ.get('FIRECRAWL_API_KEY')
             if not api_key:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
@@ -278,6 +275,8 @@ def process_web_tags(text: str, recursive: bool) -> str:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 _dbg("Web scrape returned no markdown content")
                 return f"[No content available for {url}]"
+        except ImportError:
+            return "Web scraping error: firecrawl-py package not installed"
         except Exception as e:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")

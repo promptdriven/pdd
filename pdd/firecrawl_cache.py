@@ -170,54 +170,56 @@ class FirecrawlCache:
     def get(self, url: str) -> Optional[str]:
         """
         Retrieve cached content for a URL.
-        
-        Args:
-            url: The URL to retrieve from cache
-            
-        Returns:
-            Cached content if available and not expired, None otherwise
+        Returns None if entry is expired (and removes it).
         """
         if not self.enable_cache:
             return None
-            
+
         url_hash = self._get_url_hash(url)
         current_time = time.time()
-        
+
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.execute('''
                     SELECT content, expires_at, content_hash, metadata
                     FROM cache_entries 
-                    WHERE url_hash = ? AND expires_at > ?
-                ''', (url_hash, current_time))
-                
+                    WHERE url_hash = ?
+                ''', (url_hash,))
                 row = cursor.fetchone()
+
                 if row:
                     content, expires_at, content_hash, metadata_json = row
-                    
-                    # Update access statistics
+                    if expires_at <= current_time:
+                        # Expired: delete from cache and return None
+                        conn.execute('DELETE FROM cache_entries WHERE url_hash = ?', (url_hash,))
+                        conn.commit()
+                        logger.debug(f"Cache expired for {url}, entry deleted.")
+                        return None
+
+                    # Not expired: update stats and return content
                     conn.execute('''
                         UPDATE cache_entries 
                         SET access_count = access_count + 1, last_accessed = ?
                         WHERE url_hash = ?
                     ''', (current_time, url_hash))
                     conn.commit()
-                    
+
                     # Parse metadata
                     try:
                         metadata = json.loads(metadata_json) if metadata_json else {}
                     except json.JSONDecodeError:
                         metadata = {}
-                    
+
                     logger.debug(f"Cache hit for {url} (expires in {expires_at - current_time:.0f}s)")
                     return content
                 else:
                     logger.debug(f"Cache miss for {url}")
                     return None
-                    
+
         except Exception as e:
             logger.error(f"Error retrieving from cache for {url}: {e}")
             return None
+
     
     def set(self, url: str, content: str, ttl_hours: Optional[int] = None, 
             metadata: Optional[Dict[str, Any]] = None) -> bool:
@@ -382,4 +384,8 @@ def clear_firecrawl_cache():
 def get_firecrawl_cache_stats() -> Dict[str, Any]:
     """Get statistics for the global Firecrawl cache."""
     cache = get_firecrawl_cache()
+    return cache.get_stats()
+
+def get_firecrawl_cache_stats():
+    cache = get_firecrawl_cache()  # your singleton/getter
     return cache.get_stats()
