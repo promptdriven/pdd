@@ -123,7 +123,6 @@ class TestFirecrawlCache:
         assert self.cache.get(url) == content
         
         # Wait for expiration
-        #time.sleep(0.005)  # 5ms should be enough; <not enough>
         time.sleep(4)
         
         # Should now be expired
