@@ -276,7 +276,7 @@ def process_web_tags(text: str, recursive: bool) -> str:
                 _dbg("Web scrape returned no markdown content")
                 return f"[No content available for {url}]"
         except ImportError:
-            return "Web scraping error: firecrawl-py package not installed"
+            return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
         except Exception as e:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")
