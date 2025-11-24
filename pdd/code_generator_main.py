@@ -114,6 +114,62 @@ def _parse_front_matter(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
         return None, text
 
 
+def _is_architecture_template(meta: Optional[Dict[str, Any]]) -> bool:
+    """Detect the packaged architecture JSON template via its front matter name."""
+    return isinstance(meta, dict) and meta.get("name") == "architecture/architecture_json"
+
+
+def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
+    """
+    Patch common LLM slip-ups for the architecture template where interface.type
+    occasionally returns an unsupported value like "object". Only normalizes the
+    interface.type field and leaves other schema issues untouched so validation
+    still fails for genuinely malformed outputs.
+    """
+    allowed_types = {
+        "component",
+        "page",
+        "module",
+        "api",
+        "graphql",
+        "cli",
+        "job",
+        "message",
+        "config",
+    }
+    changed = False
+    if not isinstance(payload, list):
+        return payload, changed
+
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        interface = entry.get("interface")
+        if not isinstance(interface, dict):
+            continue
+        raw_type = interface.get("type")
+        normalized = raw_type.lower() if isinstance(raw_type, str) else None
+        if normalized in allowed_types:
+            if normalized != raw_type:
+                interface["type"] = normalized
+                changed = True
+            continue
+
+        inferred_type = None
+        for key in ("page", "component", "module", "api", "graphql", "cli", "job", "message", "config"):
+            if isinstance(interface.get(key), dict):
+                inferred_type = key
+                break
+        if inferred_type is None:
+            inferred_type = "module"
+
+        if raw_type != inferred_type:
+            interface["type"] = inferred_type
+            changed = True
+
+    return payload, changed
+
+
 def get_git_content_at_ref(file_path: str, git_ref: str = "HEAD") -> Optional[str]:
     """Gets the content of the file as it was at the specified git_ref."""
     abs_file_path = pathlib.Path(file_path).resolve()
@@ -894,6 +950,10 @@ def code_generator_main(
                                 raise click.UsageError(f"LLM generation failed: {generated_code_content}")
                                 
                             parsed = json.loads(generated_code_content)
+                            if _is_architecture_template(fm_meta):
+                                parsed, repaired = _repair_architecture_interface_types(parsed)
+                                if repaired:
+                                    generated_code_content = json.dumps(parsed, indent=2)
                             try:
                                 import jsonschema
                                 jsonschema.validate(instance=parsed, schema=fm_meta.get("output_schema"))
@@ -961,9 +1021,13 @@ def code_generator_main(
     except Exception as e:
         if isinstance(e, click.UsageError):
             raise
-        console.print(f"[red]An unexpected error occurred: {e}[/red]")
-        import traceback
-        if verbose: console.print(traceback.format_exc())
-        return "", was_incremental_operation, total_cost, "error"
+        
+        # For any other unexpected error, we should fail hard so the CLI exits non-zero
+        # Log the detailed traceback first if verbose
+        if verbose:
+            import traceback
+            console.print(traceback.format_exc())
+            
+        raise click.UsageError(f"An unexpected error occurred: {e}")
         
     return generated_code_content or "", was_incremental_operation, total_cost, model_name

@@ -83,9 +83,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             with open(final_output_path, 'w') as f:
                 f.write(example_code)
         elif final_output_path and example_code is None:
-            # Log the error but don't crash
-            if not ctx.obj.get('quiet', False):
-                rprint("[bold red]Warning:[/bold red] Example generation failed, skipping file write")
+            # Raise error instead of just warning
+            raise click.UsageError("Example generation failed, no code produced.")
 
         # Provide user feedback
         if not ctx.obj.get('quiet', False):

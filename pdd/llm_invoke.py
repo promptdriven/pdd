@@ -1199,7 +1199,7 @@ def llm_invoke(
                             "json_schema": {
                                 "name": "response",
                                 "schema": output_schema,
-                                "strict": True
+                                "strict": False
                             }
                         }
                     
