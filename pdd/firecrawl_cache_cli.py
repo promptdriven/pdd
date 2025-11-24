@@ -132,12 +132,7 @@ def info():
 @firecrawl_cache.command()
 @click.argument('url')
 def check(url):
-    """
-    #Check if a specific URL is cached.
-    if not url:
-        console.print("[bold red]Error:[/bold red] URL is required. Use --url option.")
-        return
-    """
+    """Check if a specific URL is cached."""
     try:
         cache = get_firecrawl_cache()
         cached_content = cache.get(url)
