@@ -10,7 +10,6 @@ from rich.markup import escape
 from rich.traceback import install
 from .firecrawl_cache import get_firecrawl_cache
 from firecrawl import FirecrawlApp
-FirecrawlApp = FirecrawlApp
 
 install()
 console = Console()
