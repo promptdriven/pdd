@@ -1701,7 +1701,7 @@ def install_completion_cmd(ctx: click.Context) -> None: # Return type remains No
 ###    from .firecrawl_cache_cli import check
 ###    check(url)
 
-#Adding firecrwal functionality
+#Adding firecrawl functionality
 from .firecrawl_cache_cli import firecrawl_cache
 cli.add_command(firecrawl_cache)
 
