@@ -19,6 +19,15 @@
 
 - **Model Catalog Update:** Updated the LLM catalog to support the latest Claude 4.5 family. Replaced Claude Opus 4.1 with **Claude Opus 4.5** (via Anthropic and Vertex AI) and introduced **Claude Haiku 4.5**, including updated pricing and context window configurations.
 
+### Docs
+
+- **Prompting Guide Visuals:** Added and updated the "Goldilocks" zone diagram to visually illustrate the optimal level of abstraction for prompts.
+
+### Tests
+
+- **Schema Validation Coverage:** Expanded tests in `test_code_generator_main.py` to validate `output_schema` parameter handling across local and cloud fallback scenarios.
+- **CI Stability:** Enhanced regression scripts (`regression.sh`, `sync_regression.sh`) to filter out specific models (e.g., Anthropic) for more reliable CI execution.
+
 ## v0.0.73 (2025-11-21)
 
 ### Feat
