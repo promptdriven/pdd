@@ -26,6 +26,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PddInstaller = void 0;
 const vscode = __importStar(require("vscode"));
 const cp = __importStar(require("child_process"));
+const fs = __importStar(require("fs"));
 const util_1 = require("util");
 const exec = (0, util_1.promisify)(cp.exec);
 class PddInstaller {
@@ -132,21 +133,9 @@ class PddInstaller {
             catch (eUv) {
                 console.warn('PDD: uv install via PATH failed. Trying full path.', eUv);
                 const uvFullPath = this.getUvFullPath();
-                try {
-                    await this.runWithShellLogging(`"${uvFullPath}" tool install pdd-cli`, 'uv fullpath tool install pdd-cli');
-                    if (installMethod !== 'uv-installed')
-                        installMethod = 'uv';
-                }
-                catch (installError) {
-                    // Check for Windows build tools error
-                    const errorMsg = installError?.stderr || installError?.message || String(installError);
-                    if (errorMsg.includes('Microsoft Visual C++') || errorMsg.includes('Build Tools')) {
-                        throw new Error('PDD CLI installation requires Microsoft C++ Build Tools on Windows. ' +
-                            'Please install them from https://visualstudio.microsoft.com/visual-cpp-build-tools/ ' +
-                            'and try again, or install PDD CLI manually with: pip install pdd-cli');
-                    }
-                    throw installError;
-                }
+                await this.runWithShellLogging(`"${uvFullPath}" tool install pdd-cli`, 'uv fullpath tool install pdd-cli');
+                if (installMethod !== 'uv-installed')
+                    installMethod = 'uv';
             }
             report(100, 'PDD CLI installed successfully!');
         });
@@ -339,13 +328,33 @@ class PddInstaller {
     }
     getUvFullPath() {
         const isWin = process.platform === 'win32';
+        const home = isWin ? (process.env.USERPROFILE || '') : (process.env.HOME || '');
         if (isWin) {
-            // On Windows, uv installs to %USERPROFILE%\.local\bin\uv.exe
-            const userProfile = process.env.USERPROFILE || '';
-            return `${userProfile}\\.local\\bin\\uv.exe`;
+            // On Windows, uv installs to %USERPROFILE%\.local\bin\uv.exe (default standalone)
+            // or %USERPROFILE%\.cargo\bin\uv.exe (if installed via cargo).
+            const winLocalPath = `${home}\\.local\\bin\\uv.exe`;
+            const winCargoPath = `${home}\\.cargo\\bin\\uv.exe`;
+            if (fs.existsSync(winLocalPath)) {
+                return winLocalPath;
+            }
+            if (fs.existsSync(winCargoPath)) {
+                return winCargoPath;
+            }
+            // Default to local path as most likely for standalone, even if not found
+            return winLocalPath;
         }
-        const home = process.env.HOME || '';
-        return `${home}/.cargo/bin/uv`;
+        // On Unix-like systems, uv typically installs to ~/.local/bin/uv (standalone)
+        // or ~/.cargo/bin/uv (if installed via cargo).
+        const localBinPath = `${home}/.local/bin/uv`;
+        const cargoBinPath = `${home}/.cargo/bin/uv`;
+        if (fs.existsSync(localBinPath)) {
+            return localBinPath;
+        }
+        if (fs.existsSync(cargoBinPath)) {
+            return cargoBinPath;
+        }
+        // Default to localBinPath if neither found, as it's the most common for the install script.
+        return localBinPath;
     }
     getUvToolPddPath() {
         const isWin = process.platform === 'win32';
