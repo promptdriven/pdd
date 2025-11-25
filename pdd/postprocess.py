@@ -99,7 +99,14 @@ def postprocess(
         if not response or 'result' not in response:
             raise ValueError("Failed to get valid response from LLM")
 
-        extracted_code_obj: ExtractedCode = response['result'] # Renamed for clarity
+        result_obj = response['result']
+        if not isinstance(result_obj, ExtractedCode):
+            # If we got a string (likely an error message from llm_invoke), fallback to simple extraction
+            if verbose:
+                print(f"[yellow]Structured extraction failed ({result_obj}). Falling back to simple extraction.[/yellow]")
+            return (postprocess_0(llm_output), response.get('cost', 0.0), response.get('model_name', 'fallback'))
+
+        extracted_code_obj: ExtractedCode = result_obj
         code_text = extracted_code_obj.extracted_code
 
         # Step 3c: Remove triple backticks and language identifier if present

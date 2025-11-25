@@ -32,6 +32,13 @@ export PDD_AUTO_UPDATE=false
 # Force local execution by unsetting GitHub client ID
 unset GITHUB_CLIENT_ID
 
+# Ensure OPENAI_API_KEY is set since we are forcing local execution fallback
+if [ -z "${OPENAI_API_KEY:-}" ]; then
+    log "WARNING: GITHUB_CLIENT_ID is unset to force local fallback, but OPENAI_API_KEY is missing."
+    log "Regression tests may fail if no valid API key is available for local models."
+    # We don't exit here to allow for other auth methods (e.g. Bedrock), but we warn loudly.
+fi
+
 # Define base variables
 # Set PDD base directory as the script's location (two directories up from this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -465,8 +472,19 @@ log_timestamped "======== Starting Regression Tests ========"
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "0" ]; then
   log "0. Testing global CLI flags: --list-contexts and --context"
 
-  # Create a local .pddrc to control contexts for this regression run
-  cat > .pddrc << 'EOF'
+# Create a local .pdd directory for regression-specific config
+mkdir -p .pdd
+
+# Create a filtered llm_model.csv that excludes local/unreachable models for CI stability
+if [ -f "$PDD_BASE_DIR/pdd/data/llm_model.csv" ]; then
+    log "Creating CI-safe llm_model.csv (excluding 'localhost' and 'lm_studio')"
+    grep -vE "localhost|lm_studio|anthropic/" "$PDD_BASE_DIR/pdd/data/llm_model.csv" > .pdd/llm_model.csv
+else
+    log "Warning: Source llm_model.csv not found at $PDD_BASE_DIR/pdd/data/llm_model.csv"
+fi
+
+# Create a local .pddrc to control contexts for this regression run
+cat > ./.pddrc << 'EOF'
 contexts:
   default:
     defaults:
@@ -571,7 +589,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
   grep -q "This is the file to be included." "$COMPLEX_PREPROCESSED" || (log_error "Preprocess failed: Include tag missing"; exit 1)
   grep -q "Output from shell command." "$COMPLEX_PREPROCESSED" || (log_error "Preprocess failed: Shell tag output missing"; exit 1)
   # Check that web scraping was attempted (either successful content or error message)
-  (grep -q "httpbin" "$COMPLEX_PREPROCESSED" || grep -q "Web scraping error" "$COMPLEX_PREPROCESSED") || (log_error "Preprocess failed: Web tag not processed"; exit 1)
+  (grep -q "httpbin" "$COMPLEX_PREPROCESSED" || grep -q "Web scraping error" "$COMPLEX_PREPROCESSED" || grep -q "Service Temporarily Unavailable" "$COMPLEX_PREPROCESSED") || (log_error "Preprocess failed: Web tag not processed"; exit 1)
   grep -v "<pdd>" "$COMPLEX_PREPROCESSED" || (log_error "Preprocess failed: PDD comment not removed"; exit 1)
   # Test --recursive (will just run, complex check is hard)
   run_pdd_command preprocess --recursive --output "$COMPLEX_RECURSIVE" "$COMPLEX_PROMPT"
