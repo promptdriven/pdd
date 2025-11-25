@@ -478,7 +478,7 @@ mkdir -p .pdd
 # Create a filtered llm_model.csv that excludes local/unreachable models for CI stability
 if [ -f "$PDD_BASE_DIR/pdd/data/llm_model.csv" ]; then
     log "Creating CI-safe llm_model.csv (excluding 'localhost' and 'lm_studio')"
-    grep -vE "localhost|lm_studio" "$PDD_BASE_DIR/pdd/data/llm_model.csv" > .pdd/llm_model.csv
+    grep -vE "localhost|lm_studio|anthropic/" "$PDD_BASE_DIR/pdd/data/llm_model.csv" > .pdd/llm_model.csv
 else
     log "Warning: Source llm_model.csv not found at $PDD_BASE_DIR/pdd/data/llm_model.csv"
 fi
