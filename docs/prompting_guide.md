@@ -400,6 +400,7 @@ Key differences:
 - Too much context: prune includes; prefer targeted examples over entire files.
 - Vague requirements: convert to explicit contracts, budgets, and behaviors.
 - Mega‑prompts: split into smaller prompts (one per file/module) and compose.
+- Prompt outweighs the code: if the prompt is larger than the generated file, it’s usually over‑specifying control flow. Aim for prompts to be a fraction of the target code size; keep them at the interface/behavior level and let the model fill in routine implementation.
 - Patching code directly: make the change in the prompt and regenerate; then `update` with learnings.
 - Throwing away tests: keep and expand; they are your long‑term leverage.
 
