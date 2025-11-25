@@ -5,7 +5,7 @@ All notable changes to the "prompt-highlighter" extension are documented here.
 This project follows the guidelines from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and aims to use [Semantic Versioning](https://semver.org/).
 
 
-## [0.0.3] - 2025-10-11
+## [0.0.3] - 2025-10-24
 
 ### Added
 - **PDD CLI Installation System**
