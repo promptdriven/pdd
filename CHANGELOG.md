@@ -1,3 +1,22 @@
+## v0.0.74 (2025-11-24)
+
+### Feat
+
+- enhance PDD CLI integration and installation process
+- enhance orchestration with test-fix cycle detection
+- implement architecture template interface type normalization
+- add output schema support for structured responses
+- enhance local execution fallback and regression test stability
+- add core dump reporting and Windows setup documentation
+
+### Fix
+
+- enhance web scraping error handling in regression tests
+
+### Refactor
+
+- simplify command usage in sync regression tests
+
 ## v0.0.73 (2025-11-21)
 
 ### Feat
