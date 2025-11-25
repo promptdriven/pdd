@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import { promisify } from 'util';
 
 const exec = promisify(cp.exec);
@@ -377,13 +378,38 @@ export class PddInstaller {
 
   private getUvFullPath(): string {
     const isWin = process.platform === 'win32';
+    const home = isWin ? (process.env.USERPROFILE || '') : (process.env.HOME || '');
+
     if (isWin) {
-      // On Windows, uv installs to %USERPROFILE%\.local\bin\uv.exe
-      const userProfile = process.env.USERPROFILE || '';
-      return `${userProfile}\\.local\\bin\\uv.exe`;
+      // On Windows, uv installs to %USERPROFILE%\.local\bin\uv.exe (default standalone)
+      // or %USERPROFILE%\.cargo\bin\uv.exe (if installed via cargo).
+      const winLocalPath = `${home}\\.local\\bin\\uv.exe`;
+      const winCargoPath = `${home}\\.cargo\\bin\\uv.exe`;
+
+      if (fs.existsSync(winLocalPath)) {
+        return winLocalPath;
+      }
+      if (fs.existsSync(winCargoPath)) {
+        return winCargoPath;
+      }
+      // Default to local path as most likely for standalone, even if not found
+      return winLocalPath;
     }
-    const home = process.env.HOME || '';
-    return `${home}/.cargo/bin/uv`;
+
+    // On Unix-like systems, uv typically installs to ~/.local/bin/uv (standalone)
+    // or ~/.cargo/bin/uv (if installed via cargo).
+    const localBinPath = `${home}/.local/bin/uv`;
+    const cargoBinPath = `${home}/.cargo/bin/uv`;
+
+    if (fs.existsSync(localBinPath)) {
+      return localBinPath;
+    }
+    if (fs.existsSync(cargoBinPath)) {
+      return cargoBinPath;
+    }
+
+    // Default to localBinPath if neither found, as it's the most common for the install script.
+    return localBinPath;
   }
 
   private getUvToolPddPath(): string {

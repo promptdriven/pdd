@@ -261,6 +261,7 @@ def test_full_gen_local_no_output_file(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
     assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == DEFAULT_MOCK_GENERATED_CODE
 
@@ -322,6 +323,7 @@ def test_full_gen_local_output_exists_no_incremental_possible(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     assert output_file_path.read_text() == DEFAULT_MOCK_GENERATED_CODE
 
 
@@ -390,6 +392,7 @@ def test_full_gen_local_output_to_console(
     assert called_kwargs["temperature"] == mock_ctx.obj['temperature']
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
+    assert called_kwargs["output_schema"] is None
     printed_to_console = False
     for call_args in mock_rich_console_fixture.call_args_list:
         args, _ = call_args
@@ -520,6 +523,7 @@ def test_full_gen_cloud_fallback_scenarios(
         assert called_kwargs["time"] == mock_ctx.obj['time']
         assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
         assert called_kwargs["preprocess_prompt"] is False
+        assert called_kwargs["output_schema"] is None
         assert code == DEFAULT_MOCK_GENERATED_CODE
         assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
     else: 
@@ -570,6 +574,7 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     assert called_kwargs["time"] == mock_ctx.obj['time']
     assert called_kwargs["verbose"] == mock_ctx.obj['verbose']
     assert called_kwargs["preprocess_prompt"] is False
+    assert called_kwargs["output_schema"] is None
     assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
 
 
@@ -879,24 +884,10 @@ def test_unexpected_exception_during_generation(
     )
     mock_local_generator_fixture.side_effect = Exception("Unexpected LLM error")
 
-    code, incremental, cost, model = code_generator_main(mock_ctx, str(prompt_file_path), output_path_str, None, False)
+    with pytest.raises(click.UsageError, match="An unexpected error occurred: Unexpected LLM error"):
+        code_generator_main(mock_ctx, str(prompt_file_path), output_path_str, None, False)
 
-    assert code == ""
-    assert not incremental 
-    assert model == "error"
-    
-    printed_error = False
-    printed_traceback = False
-    for call_args in mock_rich_console_fixture.call_args_list:
-        args, _ = call_args
-        if args:
-            arg_str = str(args[0])
-            if "unexpected error occurred: unexpected llm error" in arg_str.lower():
-                printed_error = True
-            if "traceback (most recent call last)" in arg_str.lower():
-                printed_traceback = True
-    assert printed_error
-    assert printed_traceback
+    # Since it raises, we don't check return values or printed output here anymore
     mock_local_generator_fixture.side_effect = None 
 
 
@@ -1200,26 +1191,18 @@ Return JSON for the spec.
         monkeypatch.setitem(sys.modules, "jsonschema", types.SimpleNamespace(validate=_failing_validate))
     mock_local_generator_fixture.return_value = ("{\"age\": 1}", DEFAULT_MOCK_COST, DEFAULT_MOCK_MODEL_NAME)
 
-    code, incremental, cost, model = code_generator_main(
-        mock_ctx,
-        str(prompt_file_path),
-        None,
-        None,
-        False,
-        env_vars={},
-    )
+    with pytest.raises(click.UsageError, match="Generated JSON does not match output_schema: schema mismatch"):
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            None,
+            None,
+            False,
+            env_vars={},
+        )
 
     assert calls["count"] == 1
-    assert code == ""
-    assert not incremental
-    assert cost == DEFAULT_MOCK_COST
-    assert model == "error"
     assert not schema_output_path.exists()
-    assert any(
-        "output_schema" in str(call_args[0][0]).lower()
-        for call_args in mock_rich_console_fixture.call_args_list
-        if call_args[0]
-    )
 
 
 def test_architecture_template_datasource_object_passes_schema(
@@ -1348,30 +1331,91 @@ def test_architecture_template_datasource_string_rejected(
         DEFAULT_MOCK_MODEL_NAME,
     )
 
+    with pytest.raises(click.UsageError, match="Generated JSON does not match output_schema"):
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            str(output_path),
+            None,
+            False,
+            env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+        )
+
+    assert not output_path.exists()
+
+
+def test_architecture_template_repairs_invalid_interface_type(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+    mock_rich_console_fixture,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["output_dir"] / "architecture_type.prompt"
+    prd_path = temp_dir_setup["tmp_path"] / "docs" / "specs.md"
+    create_file(prd_path, "Spec content for interface type repair")
+
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt")
+    template_content = template_path.read_text(encoding="utf-8")
+    create_file(prompt_file_path, template_content)
+    output_path = temp_dir_setup["output_dir"] / "architecture_type.json"
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": template_content},
+        {"output": str(output_path)},
+        "json",
+    )
+
+    invalid_type_json = json.dumps(
+        [
+            {
+                "reason": "Fix invalid type",
+                "description": "LLM occasionally emits unsupported interface types",
+                "dependencies": [],
+                "priority": 1,
+                "filename": "orders_page.prompt",
+                "filepath": "app/orders/page.tsx",
+                "interface": {
+                    "type": "object",
+                    "page": {
+                        "route": "/orders",
+                        "dataSources": [
+                            {
+                                "kind": "api",
+                                "source": "/api/orders",
+                            }
+                        ],
+                    },
+                },
+            }
+        ],
+        indent=2,
+    )
+
+    mock_local_generator_fixture.return_value = (
+        invalid_type_json,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
     code, incremental, cost, model = code_generator_main(
         mock_ctx,
         str(prompt_file_path),
         str(output_path),
         None,
         False,
-        env_vars={"PRD_FILE": str(prd_path), "llm": "true"},
+        env_vars={"PRD_FILE": str(prd_path)},
     )
 
-    observed = [
-        str(call_args[0][0])
-        for call_args in mock_rich_console_fixture.call_args_list
-        if call_args and call_args[0]
-    ]
-
-    assert code == ""
     assert not incremental
     assert cost == DEFAULT_MOCK_COST
-    assert model == "error"
-    assert not output_path.exists()
-    assert any(
-        "Generated JSON does not match output_schema" in message and "/api/inventory" in message
-        for message in observed
-    )
+    assert model == DEFAULT_MOCK_MODEL_NAME
+    assert output_path.exists()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved[0]["interface"]["type"] == "page"
 
 
 def test_postprocess_uses_output_path_as_input_when_llm_enabled(

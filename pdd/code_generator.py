@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Tuple, Optional
 from rich.console import Console
@@ -18,6 +19,7 @@ def code_generator(
     time: Optional[float] = None,
     verbose: bool = False,
     preprocess_prompt: bool = True,
+    output_schema: Optional[dict] = None,
 ) -> Tuple[str, float, str]:
     """
     Generate code from a prompt using a language model.
@@ -29,6 +31,8 @@ def code_generator(
         temperature (float, optional): The temperature for the LLM model. Defaults to 0.0
         time (Optional[float], optional): The time for the LLM model. Defaults to None
         verbose (bool, optional): Whether to print detailed information. Defaults to False
+        preprocess_prompt (bool, optional): Whether to preprocess the prompt. Defaults to True
+        output_schema (Optional[dict], optional): JSON schema to enforce structured output. Defaults to None
 
     Returns:
         Tuple[str, float, str]: Tuple containing (runnable_code, total_cost, model_name)
@@ -81,7 +85,8 @@ def code_generator(
                 strength=strength,
                 temperature=temperature,
                 time=time,
-                verbose=verbose
+                verbose=verbose,
+                output_schema=output_schema
             )
         else:
             response = llm_invoke(
@@ -90,7 +95,8 @@ def code_generator(
                 strength=strength,
                 temperature=temperature,
                 time=time,
-                verbose=verbose
+                verbose=verbose,
+                output_schema=output_schema
             )
         initial_output = response['result']
         total_cost += response['cost']
@@ -131,15 +137,25 @@ def code_generator(
         # Step 4: Postprocess the output
         if verbose:
             console.print("[bold blue]Step 4: Postprocessing output[/bold blue]")
-        runnable_code, postprocess_cost, model_name_post = postprocess(
-            llm_output=final_output,
-            language=language,
-            strength=EXTRACTION_STRENGTH,
-            temperature=0.0,
-            time=time,
-            verbose=verbose
-        )
-        total_cost += postprocess_cost
+
+        # For structured JSON targets, skip extract_code to avoid losing or altering schema-constrained payloads.
+        if (isinstance(language, str) and language.strip().lower() == "json") or output_schema:
+            if isinstance(final_output, str):
+                runnable_code = final_output
+            else:
+                runnable_code = json.dumps(final_output)
+            postprocess_cost = 0.0
+            model_name_post = model_name
+        else:
+            runnable_code, postprocess_cost, model_name_post = postprocess(
+                llm_output=final_output,
+                language=language,
+                strength=EXTRACTION_STRENGTH,
+                temperature=0.0,
+                time=time,
+                verbose=verbose
+            )
+            total_cost += postprocess_cost
 
         return runnable_code, total_cost, model_name
 

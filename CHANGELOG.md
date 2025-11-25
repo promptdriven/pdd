@@ -1,8 +1,36 @@
-## v0.0.73 (2025-11-21)
+## v0.0.74 (2025-11-24)
+
+### Feat
+
+- enhance PDD CLI integration and installation process
+- enhance orchestration with test-fix cycle detection
+- implement architecture template interface type normalization
+- add output schema support for structured responses
+- enhance local execution fallback and regression test stability
+- add core dump reporting and Windows setup documentation
 
 ### Fix
 
-- enhance prompt loading to support installed package structure
+- enhance web scraping error handling in regression tests
+
+### Refactor
+
+- simplify command usage in sync regression tests
+
+## v0.0.73 (2025-11-21)
+
+### Feat
+
+- **Core Dump & Issue Reporting:** Added global `--core-dump` flag to capture detailed execution state, environment variables, and error traces into JSON files on failure. Introduced `pdd report-core` command to parse these dumps into markdown issue reports or automatically post them to GitHub. Thank you Jiamin Cai for your contributions!
+- **Windows Support:** Added comprehensive `SETUP_WITH_WINDOWS.md` guide covering environment variable configuration for PowerShell, CMD, and Git Bash. Thank you Grant Petersen for your contributions!
+
+### Fix
+
+- **Prompt Loading:** Enhanced `load_prompt_template` to search `pdd/prompts/` subdirectories, ensuring packaged prompt templates are correctly discovered when PDD is installed via tools like `uv` or `pip`. Thank you Danial Toktarbayev for your contributions!
+
+### Docs
+
+- **Prompting Guide:** Added a "Quickstart: PDD in 5 Minutes" recipe and a "Glossary" of key terms. Clarified that `<include>` tags are PDD pre-processing directives rather than standard XML.
 
 ## v0.0.72 (2025-11-18)
 
