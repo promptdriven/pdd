@@ -2,20 +2,19 @@
 
 ### Feat
 
-- enhance PDD CLI integration and installation process
-- enhance orchestration with test-fix cycle detection
-- implement architecture template interface type normalization
-- add output schema support for structured responses
-- enhance local execution fallback and regression test stability
-- add core dump reporting and Windows setup documentation
+- **Intelligent CLI Installation:** Introduced a smart installation system for the PDD CLI that supports automatic detection and installation via the `uv` package manager. The extension now provides clear user prompts for setup and status checks, ensuring a smoother onboarding experience.
+- **Orchestration Cycle Detection:** Implemented logic to detect and break infinite loops of alternating `test` and `fix` operations in the sync orchestration process, preventing wasted compute cycles.
+- **Structured Output Schemas:** Added `output_schema` support in code generation and LLM invocation, enabling strict JSON schema validation for structured responses.
+- **Architecture Template Normalization:** Added automatic detection and repair of unsupported interface types in generated architecture JSON templates.
+- **Robust Local Fallback:** Enhanced the local execution fallback strategy to default to the first available input file if no prompt files are found, and improved `OPENAI_API_KEY` handling for regression tests.
 
 ### Fix
 
-- enhance web scraping error handling in regression tests
+- **Web Scraping Resilience:** Enhanced error handling in web scraping modules to improve stability during regression tests.
 
 ### Refactor
 
-- simplify command usage in sync regression tests
+- **Regression Test Simplification:** Simplified command usage patterns in synchronization regression tests for better maintainability.
 
 ## v0.0.73 (2025-11-21)
 
