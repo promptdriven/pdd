@@ -2,7 +2,6 @@
 
 ### Feat
 
-- **Intelligent CLI Installation:** Introduced a smart installation system for the PDD CLI that supports automatic detection and installation via the `uv` package manager. The extension now provides clear user prompts for setup and status checks, ensuring a smoother onboarding experience.
 - **Orchestration Cycle Detection:** Implemented logic to detect and break infinite loops of alternating `test` and `fix` operations in the sync orchestration process, preventing wasted compute cycles.
 - **Structured Output Schemas:** Added `output_schema` support in code generation and LLM invocation, enabling strict JSON schema validation for structured responses.
 - **Architecture Template Normalization:** Added automatic detection and repair of unsupported interface types in generated architecture JSON templates.
@@ -22,12 +21,11 @@
 
 ### Docs
 
-- **Prompting Guide Visuals:** Added and updated the "Goldilocks" zone diagram to visually illustrate the optimal level of abstraction for prompts.
+- **Prompting Guide Visuals:** Added and updated the "Goldilocks" zone diagram to visually illustrate the optimal level of abstraction for prompts. Thanks Rudi Cilibrasi for your feedback!
 
 ### Tests
 
 - **Schema Validation Coverage:** Expanded tests in `test_code_generator_main.py` to validate `output_schema` parameter handling across local and cloud fallback scenarios.
-- **CI Stability:** Enhanced regression scripts (`regression.sh`, `sync_regression.sh`) to filter out specific models (e.g., Anthropic) for more reliable CI execution.
 
 ## v0.0.73 (2025-11-21)
 
