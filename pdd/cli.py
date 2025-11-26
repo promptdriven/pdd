@@ -700,6 +700,13 @@ class GenerateCommand(click.Command):
     default=None,
     help="Use a packaged/project template by name (e.g., architecture/architecture_json)",
 )
+@click.option(
+    "--unit-test",
+    "unit_test_file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to a unit test file to include in the prompt.",
+)
 @click.pass_context
 @track_cost
 def generate(
@@ -710,6 +717,7 @@ def generate(
     incremental_flag: bool,
     env_kv: Tuple[str, ...],
     template_name: Optional[str],
+    unit_test_file: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Generate code from a prompt file.
@@ -766,6 +774,7 @@ def generate(
             original_prompt_file_path=original_prompt_file_path,
             force_incremental_flag=incremental_flag,
             env_vars=env_vars or None,
+            unit_test_file=unit_test_file,
         )
         return generated_code, total_cost, model_name
     except Exception as exception:

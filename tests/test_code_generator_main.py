@@ -1563,3 +1563,41 @@ def test_architecture_postprocess_rewrites_json_pretty(
     expected = json.dumps(unformatted_entries, indent=2) + "\n"
     actual = output_path.read_text(encoding="utf-8")
     assert actual == expected
+
+
+def test_full_gen_local_with_unit_test(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "unit_test_prompt.prompt"
+    prompt_content = "Generate code that passes the test."
+    create_file(prompt_file_path, prompt_content)
+    
+    unit_test_file_path = temp_dir_setup["tmp_path"] / "test_something.py"
+    unit_test_content = "def test_hello(): assert True"
+    create_file(unit_test_file_path, unit_test_content)
+    
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "output_with_test.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {}, 
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str}, 
+        "python"
+    )
+
+    code_generator_main(
+        mock_ctx, 
+        str(prompt_file_path), 
+        output_file_path_str, 
+        None, 
+        False, 
+        unit_test_file=str(unit_test_file_path)
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    called_prompt = called_kwargs["prompt"]
+    
+    assert prompt_content in called_prompt
+    assert "<!-- UNIT TEST CONTENT -->" in called_prompt
+    assert unit_test_content in called_prompt

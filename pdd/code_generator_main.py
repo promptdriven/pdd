@@ -187,6 +187,7 @@ def code_generator_main(
     original_prompt_file_path: Optional[str],
     force_incremental_flag: bool,
     env_vars: Optional[Dict[str, str]] = None,
+    unit_test_file: Optional[str] = None,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -216,6 +217,20 @@ def code_generator_main(
         # Read prompt content once to determine LLM state and for construct_paths
         with open(prompt_file, 'r', encoding='utf-8') as f:
             raw_prompt_content = f.read()
+
+        if unit_test_file:
+            try:
+                with open(unit_test_file, 'r', encoding='utf-8') as f:
+                    unit_test_content = f.read()
+                
+                raw_prompt_content += "\n\n<!-- UNIT TEST CONTENT -->\n"
+                raw_prompt_content += "The following is the unit test content that the generated code must pass:\n"
+                raw_prompt_content += "```\n" 
+                raw_prompt_content += unit_test_content
+                raw_prompt_content += "\n```\n"
+                raw_prompt_content += "<!-- END UNIT TEST CONTENT -->\n"
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not read unit test file {unit_test_file}: {e}[/yellow]")
         
         # Phase-2 templates: parse front matter metadata
         fm_meta, body = _parse_front_matter(raw_prompt_content)
