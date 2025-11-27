@@ -1573,9 +1573,9 @@ def test_full_gen_local_with_unit_test(
     prompt_content = "Generate code that passes the test."
     create_file(prompt_file_path, prompt_content)
     
-    unit_test_file_path = temp_dir_setup["tmp_path"] / "test_something.py"
+    unit_test_file = temp_dir_setup["tmp_path"] / "test_something.py"
     unit_test_content = "def test_hello(): assert True"
-    create_file(unit_test_file_path, unit_test_content)
+    create_file(unit_test_file, unit_test_content)
     
     output_file_path_str = str(temp_dir_setup["output_dir"] / "output_with_test.py")
 
@@ -1592,7 +1592,7 @@ def test_full_gen_local_with_unit_test(
         output_file_path_str, 
         None, 
         False, 
-        unit_test_file=str(unit_test_file_path)
+        unit_test_file=str(unit_test_file)
     )
 
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
@@ -1625,14 +1625,14 @@ language: json
     create_file(prompt_file_path, prompt_content)
     
     # Unit test file that looks like it has front matter
-    unit_test_file_path = temp_dir_setup["tmp_path"] / "test_conflict.py"
+    unit_test_file = temp_dir_setup["tmp_path"] / "test_conflict.py"
     unit_test_content = """---
 this: looks
 like: frontmatter
 ---
 def test_conflict(): pass
 """
-    create_file(unit_test_file_path, unit_test_content)
+    create_file(unit_test_file, unit_test_content)
     
     output_file_path_str = str(temp_dir_setup["output_dir"] / "conflict_output.json")
 
@@ -1649,7 +1649,7 @@ def test_conflict(): pass
         output_file_path_str, 
         None, 
         False, 
-        unit_test_file=str(unit_test_file_path)
+        unit_test_file=str(unit_test_file)
     )
 
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
