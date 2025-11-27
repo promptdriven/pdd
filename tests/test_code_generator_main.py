@@ -1599,5 +1599,69 @@ def test_full_gen_local_with_unit_test(
     called_prompt = called_kwargs["prompt"]
     
     assert prompt_content in called_prompt
-    assert "<!-- UNIT TEST CONTENT -->" in called_prompt
+    # Unit test content should now be wrapped in <unit_test_content> tags
+    assert "<unit_test_content>" in called_prompt
     assert unit_test_content in called_prompt
+    assert "</unit_test_content>" in called_prompt
+
+
+def test_full_gen_local_with_unit_test_and_front_matter_conflict(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """
+    Ensure that a unit test file starting with '---' does not interfere with 
+    the prompt's front matter parsing, and that injection happens after parsing.
+    """
+    mock_ctx.obj['local'] = True
+    
+    # Prompt with front matter
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "conflict_prompt.prompt"
+    prompt_body = "This is the main prompt body."
+    prompt_content = f"""---
+language: json
+---
+{prompt_body}
+"""
+    create_file(prompt_file_path, prompt_content)
+    
+    # Unit test file that looks like it has front matter
+    unit_test_file_path = temp_dir_setup["tmp_path"] / "test_conflict.py"
+    unit_test_content = """---
+this: looks
+like: frontmatter
+---
+def test_conflict(): pass
+"""
+    create_file(unit_test_file_path, unit_test_content)
+    
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "conflict_output.json")
+
+    mock_construct_paths_fixture.return_value = (
+        {}, 
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str}, 
+        "json"
+    )
+
+    code_generator_main(
+        mock_ctx, 
+        str(prompt_file_path), 
+        output_file_path_str, 
+        None, 
+        False, 
+        unit_test_file=str(unit_test_file_path)
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    
+    # Verify metadata from front matter was respected
+    assert called_kwargs["language"] == "json"
+    
+    # Verify prompt content
+    called_prompt = called_kwargs["prompt"]
+    assert prompt_body in called_prompt
+    assert "<unit_test_content>" in called_prompt
+    assert unit_test_content in called_prompt
+    assert "</unit_test_content>" in called_prompt
+    # Ensure the prompt's front matter is NOT in the final prompt passed to generator
+    assert "language: json" not in called_prompt
