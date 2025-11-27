@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.74-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.71-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.74
+Current version: 0.0.71
 
 To check your installed version, run:
 ```
@@ -481,50 +481,8 @@ These options can be used with any command:
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
-- `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
-- `report-core`: Report a bug by creating a GitHub issue with the core dump file.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
-
-### Core Dump Debug Bundles
-
-If something goes wrong and you want the PDD team to be able to reproduce it, you can run any command with a core dump enabled:
-
-```bash
-pdd --core-dump sync factorial_calculator
-pdd --core-dump crash prompts/calc_python.prompt src/calc.py examples/run_calc.py crash_errors.log
-```
-
-When `--core-dump` is set, PDD:
-
-- Captures the full CLI command and arguments
-- Records relevant logs and internal trace information for that run
-- Bundles the prompt(s), generated code, and key metadata needed to replay the issue
-
-At the end of the run, PDD prints the path to the core dump bundle.  
-Attach that bundle when you open a GitHub issue or send a bug report so maintainers can quickly reproduce and diagnose your problem.
-
-#### `report-core` Command
-
-The `report-core` command helps you report a bug by creating a GitHub issue with the core dump file.
-
-**Usage:**
-```bash
-pdd report-core [OPTIONS] [CORE_FILE]
-```
-
-**Arguments:**
-- `CORE_FILE`: The path to the core dump file (e.g., `.pdd/core_dumps/pdd-core-....json`). If omitted, `--latest` must be used.
-
-**Options:**
-- `--latest`: Use the most recent core dump in `.pdd/core_dumps`.
-- `--describe TEXT`: Short description of what went wrong (will prompt if omitted in interactive mode).
-- `--github`: If configured, automatically create a GitHub issue using this core dump.
-- `--attach PATH`: File(s) to mention as relevant inputs/outputs in the issue body. Can be used multiple times.
-
-To use this command with the `--github` option, you need to set the `PDD_GITHUB_TOKEN` and `PDD_GITHUB_REPO` environment variables. The `PDD_GITHUB_TOKEN` is a personal access token with `repo` scope, and `PDD_GITHUB_REPO` is the name of the repository where you want to create the issue (e.g., `promptdriven/pdd`).
-
----
 
 ### Context Selection Flags
 
@@ -788,6 +746,7 @@ Options:
 - `--output LOCATION`: Specify where to save the generated code. Supports `${VAR}`/`$VAR` expansion from `-e/--env`. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--original-prompt FILENAME`: The original prompt file used to generate the existing code. If not specified, the command automatically uses the last committed version of the prompt file from git.
 - `--incremental`: Force incremental patching even if changes are significant. This option is only valid when an output location is specified and the file exists.
+- `--unit-test FILENAME`: Path to a unit test file. If provided, the content of this file is appended to the prompt, instructing the model to generate code that passes the specified tests.
 
 **Parameter Variables (-e/--env)**:
 Pass key=value pairs to parameterize a prompt so one prompt can generate multiple variants (e.g., multiple files) by invoking `generate` repeatedly with different values.
