@@ -2,20 +2,30 @@
 
 ### Feat
 
-- enhance PDD CLI integration and installation process
-- enhance orchestration with test-fix cycle detection
-- implement architecture template interface type normalization
-- add output schema support for structured responses
-- enhance local execution fallback and regression test stability
-- add core dump reporting and Windows setup documentation
+- **Orchestration Cycle Detection:** Implemented logic to detect and break infinite loops of alternating `test` and `fix` operations in the sync orchestration process, preventing wasted compute cycles.
+- **Structured Output Schemas:** Added `output_schema` support in code generation and LLM invocation, enabling strict JSON schema validation for structured responses.
+- **Architecture Template Normalization:** Added automatic detection and repair of unsupported interface types in generated architecture JSON templates.
+- **Robust Local Fallback:** Enhanced the local execution fallback strategy to default to the first available input file if no prompt files are found, and improved `OPENAI_API_KEY` handling for regression tests.
 
 ### Fix
 
-- enhance web scraping error handling in regression tests
+- **Web Scraping Resilience:** Enhanced error handling in web scraping modules to improve stability during regression tests.
 
 ### Refactor
 
-- simplify command usage in sync regression tests
+- **Regression Test Simplification:** Simplified command usage patterns in synchronization regression tests for better maintainability.
+
+### Data
+
+- **Model Catalog Update:** Updated the LLM catalog to support the latest Claude 4.5 family. Replaced Claude Opus 4.1 with **Claude Opus 4.5** (via Anthropic and Vertex AI) and introduced **Claude Haiku 4.5**, including updated pricing and context window configurations.
+
+### Docs
+
+- **Prompting Guide Visuals:** Added and updated the "Goldilocks" zone diagram to visually illustrate the optimal level of abstraction for prompts. Thanks Rudi Cilibrasi for your feedback!
+
+### Tests
+
+- **Schema Validation Coverage:** Expanded tests in `test_code_generator_main.py` to validate `output_schema` parameter handling across local and cloud fallback scenarios.
 
 ## v0.0.73 (2025-11-21)
 
