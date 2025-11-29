@@ -1,29 +1,32 @@
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-from typing import Optional, Tuple, Any
-
+"""
+Modify commands (change, split, update).
+"""
 import click
-from rich.console import Console
+from pathlib import Path
+from typing import Dict, Optional, Tuple, Union
 
-# Relative imports from parent package
 from ..split_main import split_main
 from ..change_main import change_main
-from ..agentic_change import run_agentic_change
 from ..update_main import update_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error
-from ..operation_log import log_operation
 
-console = Console()
-
-@click.command()
-@click.argument("input_prompt", type=click.Path(exists=True))
-@click.argument("input_code", type=click.Path(exists=True))
-@click.argument("example_code", type=click.Path(exists=True))
-@click.option("--output-sub", help="Optional path for saving the sub-prompt.")
-@click.option("--output-modified", help="Optional path for saving the modified prompt.")
+@click.command("split")
+@click.argument("input_prompt", type=click.Path(exists=True, dir_okay=False))
+@click.argument("input_code", type=click.Path(exists=True, dir_okay=False))
+@click.argument("example_code", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--output-sub",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the generated sub-prompt file (file or directory).",
+)
+@click.option(
+    "--output-modified",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the modified prompt file (file or directory).",
+)
 @click.pass_context
 @track_cost
 def split(
@@ -33,15 +36,13 @@ def split(
     example_code: str,
     output_sub: Optional[str],
     output_modified: Optional[str],
-) -> Optional[Tuple[Any, float, str]]:
-    """
-    Split large complex prompt files into smaller, more manageable prompt files.
-    """
-    ctx.ensure_object(dict)
+) -> Optional[Tuple[Dict[str, str], float, str]]:
+    """Split large complex prompt files into smaller ones."""
+    quiet = ctx.obj.get("quiet", False)
+    command_name = "split"
     try:
-        # Call split_main with required arguments
         result_data, total_cost, model_name = split_main(
-            ctx,
+            ctx=ctx,
             input_prompt_file=input_prompt,
             input_code_file=input_code,
             example_code_file=example_code,
@@ -49,247 +50,140 @@ def split(
             output_modified=output_modified,
         )
         return result_data, total_cost, model_name
-
-    except click.Abort:
-        raise
     except Exception as e:
-        handle_error(e, "split", ctx.obj.get("quiet", False))
+        handle_error(e, command_name, quiet)
         return None
 
 
-@click.command()
-@click.argument("args", nargs=-1)
-@click.option("--manual", is_flag=True, default=False, help="Use legacy manual mode.")
-@click.option("--budget", type=float, default=5.0, help="Budget for the operation.")
-@click.option("--output", help="Output path.")
-@click.option("--csv", is_flag=True, help="Use CSV input for batch processing.")
-@click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds to add to each step's timeout (agentic mode only).")
-@click.option("--no-github-state", is_flag=True, default=False, help="Disable GitHub state persistence (agentic mode only).")
+@click.command("change")
+@click.argument("change_prompt_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("input_code", type=click.Path(exists=True)) # Can be file or dir
+@click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.option(
+    "--budget",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Maximum cost allowed for the change process.",
+)
+@click.option(
+    "--output",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the modified prompt file (file or directory).",
+)
+@click.option(
+    "--csv",
+    "use_csv",
+    is_flag=True,
+    default=False,
+    help="Use a CSV file for batch change prompts.",
+)
 @click.pass_context
 @track_cost
 def change(
     ctx: click.Context,
-    args: Tuple[str, ...],
-    manual: bool,
-    budget: float,
+    change_prompt_file: str,
+    input_code: str,
+    input_prompt_file: Optional[str],
     output: Optional[str],
-    csv: bool,
-    timeout_adder: float,
-    no_github_state: bool,
-) -> Optional[Tuple[Any, float, str]]:
-    """
-    Modify an input prompt file based on a change prompt or issue.
-
-    Agentic Mode (default):
-        pdd change ISSUE_URL
-
-    Manual Mode (--manual):
-        pdd change --manual CHANGE_PROMPT_FILE INPUT_CODE_FILE [INPUT_PROMPT_FILE]
-    """
-    ctx.ensure_object(dict)
-    
+    use_csv: bool,
+    budget: float,
+) -> Optional[Tuple[Union[str, Dict], float, str]]:
+    """Modify prompt(s) based on change instructions."""
+    quiet = ctx.obj.get("quiet", False)
+    command_name = "change"
     try:
-        # Set budget in context for manual mode usage
-        ctx.obj["budget"] = budget
-        
-        quiet = ctx.obj.get("quiet", False)
-        verbose = ctx.obj.get("verbose", False)
+        # --- ADD VALIDATION LOGIC HERE ---
+        input_code_path = Path(input_code) # Convert to Path object
+        if use_csv:
+            if not input_code_path.is_dir():
+                raise click.UsageError("INPUT_CODE must be a directory when using --csv.")
+            if input_prompt_file:
+                raise click.UsageError("Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously.")
+        else: # Not using CSV
+            if not input_prompt_file:
+                 # This check might be better inside change_main, but can be here too
+                 raise click.UsageError("INPUT_PROMPT_FILE is required when not using --csv.")
+            if not input_code_path.is_file():
+                 # This check might be better inside change_main, but can be here too
+                 raise click.UsageError("INPUT_CODE must be a file when not using --csv.")
+        # --- END VALIDATION LOGIC ---
 
-        if manual:
-            # Manual Mode Validation and Execution
-            if csv:
-                # CSV Mode: Expecting CSV_FILE and CODE_DIRECTORY (no input_prompt)
-                if len(args) == 3:
-                    raise click.UsageError("Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously.")
-                if len(args) != 2:
-                    raise click.UsageError("CSV mode requires 2 arguments: CSV_FILE CODE_DIRECTORY")
-
-                change_file, input_code = args
-                input_prompt = None
-
-                # CSV mode requires input_code to be a directory
-                if not Path(input_code).is_dir():
-                    raise click.UsageError("INPUT_CODE must be a directory when using --csv")
-            else:
-                # Standard Manual Mode: Expecting 2 or 3 arguments
-                if len(args) == 3:
-                    change_file, input_code, input_prompt = args
-                    # Non-CSV mode requires input_code to be a file, not a directory
-                    if Path(input_code).is_dir():
-                        raise click.UsageError("INPUT_CODE must be a file when not using --csv")
-                elif len(args) == 2:
-                    change_file, input_code = args
-                    input_prompt = None
-                    # Without CSV mode, input_prompt_file is required
-                    raise click.UsageError("INPUT_PROMPT_FILE is required when not using --csv")
-                else:
-                    raise click.UsageError(
-                        "Manual mode requires 3 arguments: CHANGE_PROMPT INPUT_CODE INPUT_PROMPT"
-                    )
-
-            # Validate file existence
-            if not Path(change_file).exists():
-                raise click.UsageError(f"Change file not found: {change_file}")
-            if not Path(input_code).exists():
-                raise click.UsageError(f"Input code path not found: {input_code}")
-            if input_prompt and not Path(input_prompt).exists():
-                raise click.UsageError(f"Input prompt file not found: {input_prompt}")
-
-            # Call change_main
-            result, cost, model = change_main(
-                ctx=ctx,
-                change_prompt_file=change_file,
-                input_code=input_code,
-                input_prompt_file=input_prompt,
-                output=output,
-                use_csv=csv,
-                budget=budget
-            )
-            return result, cost, model
-
-        else:
-            # Agentic Mode Validation and Execution
-            if len(args) != 1:
-                raise click.UsageError("Agentic mode requires exactly 1 argument: ISSUE_URL")
-            
-            issue_url = args[0]
-            
-            # Call run_agentic_change
-            success, message, cost, model, changed_files = run_agentic_change(
-                issue_url=issue_url,
-                verbose=verbose,
-                quiet=quiet,
-                timeout_adder=timeout_adder,
-                use_github_state=not no_github_state
-            )
-
-            # Display results using click.echo as requested
-            if not quiet:
-                status = "Success" if success else "Failed"
-                click.echo(f"Status: {status}")
-                click.echo(f"Message: {message}")
-                click.echo(f"Cost: ${cost:.4f}")
-                click.echo(f"Model: {model}")
-                if changed_files:
-                    click.echo("Changed files:")
-                    for f in changed_files:
-                        click.echo(f"  - {f}")
-            
-            if not success:
-                raise click.exceptions.Exit(1)
-
-            return message, cost, model
-
-    except (click.Abort, click.exceptions.Exit):
-        raise
-    except Exception as e:
-        handle_error(e, "change", ctx.obj.get("quiet", False))
+        result_data, total_cost, model_name = change_main(
+            ctx=ctx,
+            change_prompt_file=change_prompt_file,
+            input_code=input_code,
+            input_prompt_file=input_prompt_file,
+            output=output,
+            use_csv=use_csv,
+            budget=budget,
+        )
+        return result_data, total_cost, model_name
+    except (click.UsageError, Exception) as e: # Catch specific and general exceptions
+        handle_error(e, command_name, quiet)
         return None
 
 
-@click.command()
-@click.argument("files", nargs=-1)
-@click.option("--extensions", help="Comma-separated extensions for repo mode.")
-@click.option("--directory", help="Directory to scan for repo mode.")
-@click.option("--git", is_flag=True, help="Use git history for original code.")
-@click.option("--output", help="Output path for the updated prompt.")
-@click.option("--simple", is_flag=True, default=False, help="Use legacy simple update.")
+@click.command("update")
+@click.argument("input_prompt_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.argument("modified_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.argument("input_code_file", type=click.Path(exists=True, dir_okay=False), required=False)
+@click.option(
+    "--output",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the updated prompt file(s). For single files: saves to this specific path or directory. For repository mode: saves all prompts to this directory. If not specified, uses the original prompt location (single file) or 'prompts' directory (repository mode).",
+)
+@click.option(
+    "--git",
+    "use_git",
+    is_flag=True,
+    default=False,
+    help="Use git history to find the original code file.",
+)
+@click.option(
+    "--extensions",
+    type=str,
+    default=None,
+    help="Comma-separated list of file extensions to update in repo mode (e.g., 'py,js,ts').",
+)
 @click.pass_context
-@log_operation(operation="update", clears_run_report=True)
 @track_cost
 def update(
     ctx: click.Context,
-    files: Tuple[str, ...],
-    extensions: Optional[str],
-    directory: Optional[str],
-    git: bool,
+    input_prompt_file: Optional[str],
+    modified_code_file: Optional[str],
+    input_code_file: Optional[str],
     output: Optional[str],
-    simple: bool,
-) -> Optional[Tuple[Any, float, str]]:
+    use_git: bool,
+    extensions: Optional[str],
+) -> Optional[Tuple[str, float, str]]:
     """
-    Update the original prompt file based on code changes.
+    Update prompts based on code changes.
 
-    Repo-wide mode (no args): Scan entire repo.
-    Single-file mode (1 arg): Update prompt for specific code file.
+    This command operates in two modes:
+
+    1.  **Single-File Mode:** When you provide at least a code file, it updates
+        or generates a single prompt.
+        - `pdd update [PROMPT_FILE] <CODE_FILE>`: Updates prompt based on code.
+        - `pdd update [PROMPT_FILE] <CODE_FILE> <ORIGINAL_CODE_FILE>`: Updates prompt using explicit original code.
+
+    2.  **Repository Mode:** When no arguments are provided, it scans the repository
+        for modified files and updates corresponding prompts.
+        - `pdd update`: Updates all prompts for modified files in the repo.
     """
-    ctx.ensure_object(dict)
     try:
-        # Handle argument counts per modify_python.prompt spec (aligned with README)
-        if len(files) == 0:
-            # Repo-wide mode
-            is_repo_mode = True
-            input_prompt_file = None
-            modified_code_file = None
-            input_code_file = None
-        elif len(files) == 1:
-            # Regeneration mode: just the code file
-            is_repo_mode = False
-            input_prompt_file = None
-            modified_code_file = files[0]
-            input_code_file = None
-        elif len(files) == 2:
-            # Git-based update: prompt + modified_code (requires --git)
-            if not git:
-                raise click.UsageError(
-                    "Two arguments require --git flag: pdd update --git <prompt> <modified_code>"
-                )
-            is_repo_mode = False
-            input_prompt_file = files[0]
-            modified_code_file = files[1]
-            input_code_file = None
-        elif len(files) == 3:
-            # Manual update: prompt + modified_code + original_code
-            if git:
-                raise click.UsageError(
-                    "Cannot use --git with 3 arguments (--git and original_code are mutually exclusive)"
-                )
-            is_repo_mode = False
-            input_prompt_file = files[0]
-            modified_code_file = files[1]
-            input_code_file = files[2]
-        else:
-            raise click.UsageError("Too many arguments. Max 3: <prompt> <modified_code> <original_code>")
-
-        # Validate mode-specific options
-        if is_repo_mode:
-            # Repo-wide mode: --git and --output are not allowed
-            if git:
-                raise click.UsageError(
-                    "Cannot use --git in repository-wide mode"
-                )
-            if output:
-                raise click.UsageError(
-                    "Cannot use --output in repository-wide mode"
-                )
-        else:
-            # File modes: --extensions and --directory are not allowed
-            if extensions:
-                raise click.UsageError(
-                    "--extensions can only be used in repository-wide mode"
-                )
-            if directory:
-                raise click.UsageError(
-                    "--directory can only be used in repository-wide mode"
-                )
-
-        # Call update_main with correct parameters
-        result, cost, model = update_main(
+        result, total_cost, model_name = update_main(
             ctx=ctx,
             input_prompt_file=input_prompt_file,
             modified_code_file=modified_code_file,
             input_code_file=input_code_file,
             output=output,
-            use_git=git,
-            repo=is_repo_mode,
+            use_git=use_git,
             extensions=extensions,
-            directory=directory,
-            simple=simple
         )
-
-        return result, cost, model
-
-    except click.Abort:
-        raise
-    except Exception as e:
-        handle_error(e, "update", ctx.obj.get("quiet", False))
+        return result, total_cost, model_name
+    except Exception as exception:
+        handle_error(exception, "update", ctx.obj.get("quiet", False))
         return None
