@@ -2293,6 +2293,9 @@ def install_completion_cmd(ctx: click.Context) -> None: # Return type remains No
         handle_error(e, command_name, quiet_mode)
         # Do not return anything, as the callback expects None or a tuple
 
+#Adding firecrawl functionality
+from .firecrawl_cache_cli import firecrawl_cache
+cli.add_command(firecrawl_cache)
 
 @cli.command("setup")
 @click.pass_context

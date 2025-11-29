@@ -2,12 +2,15 @@ import os
 import re
 import base64
 import subprocess
+import time
 from typing import List, Optional, Tuple
 import traceback
 from rich.console import Console
 from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
+from .firecrawl_cache import get_firecrawl_cache
+from firecrawl import FirecrawlApp
 
 install()
 console = Console()
@@ -271,28 +274,50 @@ def process_web_tags(text: str, recursive: bool) -> str:
         if recursive:
             # Defer network operations until after env var expansion
             return match.group(0)
+        
+        # Get cache instance
+        cache = get_firecrawl_cache()
+        
+        # Check cache first
+        cached_content = cache.get(url)
+        if cached_content is not None:
+            console.print(f"Using cached content for: [cyan]{url}[/cyan]")
+            return cached_content
+        
         console.print(f"Scraping web content from: [cyan]{url}[/cyan]")
         _dbg(f"Web tag URL: {url}")
         try:
-            try:
-                from firecrawl import FirecrawlApp
-            except ImportError:
-                _dbg("firecrawl import failed; package not installed")
-                return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
             api_key = os.environ.get('FIRECRAWL_API_KEY')
             if not api_key:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
                 _dbg("FIRECRAWL_API_KEY not set")
                 return f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
+            
             app = FirecrawlApp(api_key=api_key)
-            response = app.scrape_url(url, formats=['markdown'])
+            
+            # Get cache TTL from environment or use default
+            cache_ttl_hours = int(os.environ.get('FIRECRAWL_CACHE_TTL_HOURS', 24))
+            
+            # Use Firecrawl's built-in caching with maxAge parameter
+            # Convert hours to milliseconds for Firecrawl API
+            max_age_ms = cache_ttl_hours * 3600 * 1000
+            
+            response = app.scrape_url(url, formats=['markdown'], maxAge=max_age_ms)
+            
             if hasattr(response, 'markdown'):
+                content = response.markdown
                 _dbg(f"Web scrape returned markdown (len={len(response.markdown)})")
-                return response.markdown
+                # Cache the result for future use
+                cache.set(url, content, ttl_hours=cache_ttl_hours, 
+                         metadata={'scraped_at': time.time(), 'url': url})
+                
+                return content
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 _dbg("Web scrape returned no markdown content")
                 return f"[No content available for {url}]"
+        except ImportError:
+            return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
         except Exception as e:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")
