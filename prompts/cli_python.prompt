@@ -211,8 +211,6 @@
     % Utility command:
         - `pytest-output` command: Run pytest on a given test file and emit structured output. Option `--json-only` prints only JSON to stdout. This command is not cost-tracked and is intended for internal debugging/support.
 
-    % Additional CLI options supported:
-        - `sync` options: `--max-attempts N`, `--budget FLOAT`, `--skip-verify`, `--skip-tests`, `--target-coverage PERCENT`, `--log`.
 
     % Ensure consistency across commands, following shared coding standards and documentation practices.
 </instructions>
