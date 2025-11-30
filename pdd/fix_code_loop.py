@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Tuple, Optional, Union
 from . import DEFAULT_TIME # Added DEFAULT_TIME
@@ -63,6 +64,78 @@ except ImportError:
     # import sys
     # sys.path.append(str(Path(__file__).parent.parent)) # Adjust based on structure
     from fix_code_module_errors import fix_code_module_errors
+
+
+class ProcessResult:
+    def __init__(self, returncode, stdout, stderr):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+def run_process_with_output(cmd_args, timeout=300):
+    """
+    Runs a process, streaming stdout/stderr to the console while capturing them.
+    Allows interaction via stdin.
+    """
+    try:
+        proc = subprocess.Popen(
+            cmd_args,
+            stdin=sys.stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0 # Unbuffered
+        )
+    except Exception as e:
+        return -1, "", str(e)
+
+    captured_stdout = []
+    captured_stderr = []
+
+    def stream_pipe(pipe, sink, capture_list):
+        while True:
+            try:
+                chunk = pipe.read(1)
+                if not chunk:
+                    break
+                
+                # Write to sink (real stdout/stderr)
+                if hasattr(sink, 'buffer'):
+                    try:
+                        sink.buffer.write(chunk)
+                        sink.buffer.flush()
+                    except ValueError: 
+                        pass
+                else:
+                    try:
+                        sink.write(chunk.decode('utf-8', errors='replace'))
+                        sink.flush()
+                    except ValueError:
+                        pass
+                
+                capture_list.append(chunk)
+            except (ValueError, IOError):
+                break
+
+    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout))
+    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr))
+
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        captured_stderr.append(b"\n[Timeout]\n")
+    
+    t_out.join()
+    t_err.join()
+    
+    stdout_str = b"".join(captured_stdout).decode('utf-8', errors='replace')
+    stderr_str = b"".join(captured_stderr).decode('utf-8', errors='replace')
+    
+    return proc.returncode, stdout_str, stderr_str
 
 
 def fix_code_loop(
@@ -217,21 +290,20 @@ def fix_code_loop(
             rprint(f"Running verification: {sys.executable} {verification_program}")
 
         try:
-            process = subprocess.run(
+            returncode, stdout, stderr = run_process_with_output(
                 [sys.executable, verification_program],
-                capture_output=True,
-                text=True,
-                encoding='utf-8', # Ensure consistent encoding
-                timeout=300 # 5 minute timeout to prevent hangs
+                timeout=300
             )
+            process = ProcessResult(returncode, stdout, stderr)
+
             verification_status = f"Success (Return Code: {process.returncode})" if process.returncode == 0 else f"Failure (Return Code: {process.returncode})"
             verification_output = process.stdout or "[No standard output]"
             verification_error = process.stderr or "[No standard error]"
-        except subprocess.TimeoutExpired as e:
-            verification_status = "Failure (Timeout)"
-            verification_output = e.stdout or "[No standard output captured before timeout]"
-            verification_error = (e.stderr or "") + "\n[Error] Verification timed out after 300 seconds."
-            process = None # Indicator that process failed to complete
+        except Exception as e:
+            verification_status = f"Failure (Exception: {e})"
+            verification_output = "[Exception occurred]"
+            verification_error = str(e)
+            process = ProcessResult(-1, "", str(e))
 
 
         # Add verification results to the attempt log entry
