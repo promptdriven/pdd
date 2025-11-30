@@ -90,6 +90,18 @@ def sync(
     default=None,
     help="Specify where to save the modified prompt (file or directory).",
 )
+@click.option(
+    "--csv",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify the CSV file that contains or will contain dependency information.",
+)
+@click.option(
+    "--force-scan",
+    is_flag=True,
+    default=False,
+    help="Force rescanning of all potential dependency files even if they exist in the CSV file.",
+)
 @click.pass_context
 @track_cost
 def auto_deps(
@@ -97,6 +109,8 @@ def auto_deps(
     prompt_file: str,
     directory_path: str,
     output: Optional[str],
+    csv: Optional[str],
+    force_scan: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """Analyze project dependencies and update the prompt file."""
     try:
@@ -109,9 +123,9 @@ def auto_deps(
             ctx=ctx,
             prompt_file=prompt_file,
             directory_path=directory_path,
-            auto_deps_csv_path=None,
+            auto_deps_csv_path=csv,
             output=output,
-            force_scan=False
+            force_scan=force_scan
         )
         return result, total_cost, model_name
     except Exception as exception:
