@@ -86,8 +86,6 @@ SKIP_MAKEFILE_REGEN ?= 0
 CSV_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_csv.prompt")
 CSV_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_csv.prompt,$(DATA_DIR)/%.csv,$(CSV_PROMPTS))
 
-# Example files
-EXAMPLE_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(CONTEXT_DIR)/%_example.py,$(PY_OUTPUTS))
 
 # Test files
 TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
@@ -100,6 +98,22 @@ EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
 example:
+ifdef MODULE
+	@echo "Generating example for module: $(MODULE)"
+	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
+	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
+	# Flatten example file path
+	$(eval EXAMPLE_FILE := $(CONTEXT_DIR)/$(notdir $(basename $(MODULE)))_example.py)
+
+	@# Generate example file
+	@echo "Generating $(EXAMPLE_FILE)"
+	@mkdir -p $(dir $(EXAMPLE_FILE))
+	-@PYTHONPATH=$(STAGING_DIR) pdd --strength .9 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
+else
+	# Code for generating all examples (flattened)
+	@echo "Generating all example files (flattened to $(CONTEXT_DIR))"
+	@$(foreach prompt_file,$(PY_PROMPTS),\n\t\t$(eval module_path := $(patsubst $(PROMPTS_DIR)/%_python.prompt,%,$(prompt_file)))\n\t\t$(eval py_file := $(PDD_DIR)/$(module_path).py)\n\t\t$(eval example_name := $(notdir $(basename $(module_path))))\n\t\t$(eval example_file := $(CONTEXT_DIR)/$(example_name)_example.py)\n\t\techo "Generating example for $(module_path) -> $(example_file)";\n\t\tmkdir -p $(dir $(example_file));\n\t\tPYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $(example_file) $(prompt_file) $(py_file) || true;\n\t)
+endif
 ifdef MODULE
 	@echo "Generating example for module: $(MODULE)"
 	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
@@ -137,12 +151,6 @@ $(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
 	@echo "Generating $@"
 	@mkdir -p $(dir $@)
 	@PYTHONPATH=$(STAGING_DIR) pdd generate --output $@ $<
-
-# Generate example files
-$(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
-	@echo "Generating example for $<"
-	@mkdir -p $(dir $@)
-	@PYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $@ $(word 2,$^) $< || touch $@
 
 # Generate test files
 $(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
