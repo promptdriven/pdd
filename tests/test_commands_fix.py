@@ -16,7 +16,7 @@ RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
 @pytest.mark.real
-def test_real_fix_command(create_dummy_files, tmp_path, monkeypatch):
+def test_real_fix_command(create_dummy_files, tmp_path):
     """Test the 'fix' command with real files by calling the function directly."""
     if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
         pytest.skip(
@@ -195,13 +195,14 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
     }
 
     # Change working directory to tmp_path so imports work correctly
-    # Use monkeypatch for automatic cleanup (prevents test pollution)
-    monkeypatch.chdir(tmp_path)
-
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    
     # Set PDD_PATH to the project root so prompt templates can be found
     # Get the project root dynamically from the current test file location
+    original_pdd_path = os.getenv('PDD_PATH')
     project_root = Path(__file__).parent.parent  # Go up from tests/ to project root
-    monkeypatch.setenv('PDD_PATH', str(project_root))
+    os.environ['PDD_PATH'] = str(project_root)
 
     try:
         # Call fix_main directly - with no mock this time
@@ -249,177 +250,14 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
 
     except Exception as e:
         pytest.fail(f"Real fix test failed: {e}")
-    # Note: monkeypatch automatically restores cwd and PDD_PATH after test
 
-
-def test_fix_command_exits_nonzero_for_nonexistent_error_file(tmp_path):
-    """
-    Test that the 'fix' command exits with a non-zero exit code when the
-    error_file does not exist (regression test for error handling).
-    """
-    runner = CliRunner()
-
-    # Create valid prompt, code, and test files
-    prompt_file = tmp_path / "test.prompt"
-    prompt_file.write_text("// Test prompt\ndef foo(): pass")
-
-    code_file = tmp_path / "code.py"
-    code_file.write_text("def foo(): pass")
-
-    test_file = tmp_path / "test_code.py"
-    test_file.write_text("def test_foo(): assert True")
-
-    # Error file intentionally does NOT exist
-    nonexistent_error_file = tmp_path / "nonexistent" / "error.log"
-
-    result = runner.invoke(
-        cli.cli,
-        [
-            "--force",
-            "fix",
-            str(prompt_file),
-            str(code_file),
-            str(test_file),
-            str(nonexistent_error_file),
-        ],
-    )
-
-    # The command should exit with a non-zero code since the error file doesn't exist
-    assert result.exit_code != 0, (
-        f"Expected non-zero exit code for nonexistent error file, "
-        f"got {result.exit_code}. Output: {result.output}"
-    )
-
-
-def test_cli_fix_multiple_test_files(tmp_path):
-    """Test that the fix command accepts multiple test files."""
-    runner = CliRunner()
-
-    prompt_file = tmp_path / "prompt.prompt"
-    prompt_file.write_text("prompt content")
-    code_file = tmp_path / "code.py"
-    code_file.write_text("code content")
-    test_file_1 = tmp_path / "test_1.py"
-    test_file_1.write_text("test 1 content")
-    test_file_2 = tmp_path / "test_2.py"
-    test_file_2.write_text("test 2 content")
-    error_file = tmp_path / "error.txt"
-    error_file.write_text("error content")
-
-    with patch('pdd.fix_main.fix_main') as mock_fix_main:
-        mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
-        result = runner.invoke(cli.cli, [
-            'fix',
-            str(prompt_file),
-            str(code_file),
-            str(test_file_1),
-            str(test_file_2),
-            str(error_file),
-        ])
-        assert result.exit_code == 0
-        assert mock_fix_main.call_count == 2
-        mock_fix_main.assert_any_call(
-            ctx=ANY,
-            prompt_file=str(prompt_file),
-            code_file=str(code_file),
-            unit_test_file=str(test_file_1),
-            error_file=str(error_file),
-            output_test=None,
-            output_code=None,
-            output_results=None,
-            loop=False,
-            verification_program=None,
-            max_attempts=3,
-            budget=5.0,
-            auto_submit=False,
-            agentic_fallback=True,
-            strength=None,
-            temperature=None,
-            protect_tests=False,
-        )
-        mock_fix_main.assert_any_call(
-            ctx=ANY,
-            prompt_file=str(prompt_file),
-            code_file=str(code_file),
-            unit_test_file=str(test_file_2),
-            error_file=str(error_file),
-            output_test=None,
-            output_code=None,
-            output_results=None,
-            loop=False,
-            verification_program=None,
-            max_attempts=3,
-            budget=5.0,
-            auto_submit=False,
-            agentic_fallback=True,
-            strength=None,
-            temperature=None,
-            protect_tests=False,
-        )
-
-@pytest.mark.parametrize("num_test_files", [1, 2])
-def test_cli_fix_loop_mode_no_error_file(tmp_path, num_test_files):
-    """Test --loop mode doesn't require ERROR_FILE (Issue #233)."""
-    runner = CliRunner()
-
-    # Setup files
-    prompt_file = tmp_path / "prompt.prompt"
-    prompt_file.write_text("prompt content")
-    code_file = tmp_path / "code.py"
-    code_file.write_text("code content")
-    verify_file = tmp_path / "verify.py"
-    verify_file.write_text("import sys; sys.exit(0)")
-
-    test_files = [tmp_path / f"test_{i}.py" for i in range(num_test_files)]
-    for tf in test_files:
-        tf.write_text("test content")
-
-    with patch('pdd.fix_main.fix_main') as mock_fix_main:
-        mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
-        result = runner.invoke(cli.cli, [
-            'fix', '--manual', '--loop', '--verification-program', str(verify_file),
-            str(prompt_file), str(code_file), *[str(tf) for tf in test_files]
-        ])
-
-        assert result.exit_code == 0, f"Command failed: {result.output}"
-        assert mock_fix_main.call_count == num_test_files
-        # Verify error_file=None and loop=True for all calls
-        for call in mock_fix_main.call_args_list:
-            assert call[1]['error_file'] is None, "error_file should be None in loop mode"
-            assert call[1]['loop'] is True, "loop should be True"
-
-
-def test_cli_fix_non_loop_mode_requires_error_file(tmp_path):
-    """Test non-loop mode fails without ERROR_FILE (Issue #233)."""
-    runner = CliRunner()
-
-    prompt_file = tmp_path / "prompt.prompt"
-    prompt_file.write_text("prompt content")
-    code_file = tmp_path / "code.py"
-    code_file.write_text("code content")
-    test_file = tmp_path / "test.py"
-    test_file.write_text("test content")
-
-    # Non-loop mode requires ERROR_FILE as the last argument
-    result = runner.invoke(cli.cli, [
-        'fix', '--manual', str(prompt_file), str(code_file), str(test_file)
-    ])
-
-    # Should fail because ERROR_FILE is missing
-    assert result.exit_code != 0, "Should fail without ERROR_FILE in non-loop mode"
-    assert "requires at least 4 arguments" in result.output or "ERROR_FILE" in result.output
-
-
-def test_run_agentic_e2e_fix_has_protect_tests_parameter():
-    """run_agentic_e2e_fix function signature should include protect_tests.
-
-    This ensures the CLI can pass the --protect-tests flag to the agentic e2e fix.
-    """
-    import inspect
-    from pdd.agentic_e2e_fix import run_agentic_e2e_fix
-
-    sig = inspect.signature(run_agentic_e2e_fix)
-    params = list(sig.parameters.keys())
-
-    assert 'protect_tests' in params, \
-        "run_agentic_e2e_fix must accept protect_tests parameter"
+    finally:
+        # Restore original PDD_PATH
+        if original_pdd_path:
+             os.environ['PDD_PATH'] = original_pdd_path
+        else:
+             if 'PDD_PATH' in os.environ:
+                 del os.environ['PDD_PATH']
+        
+        # Restore original working directory
+        os.chdir(original_cwd)

@@ -2,7 +2,7 @@
 Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
 import click
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from ..detect_change_main import detect_change_main
 from ..conflicts_main import conflicts_main
@@ -13,18 +13,29 @@ from ..track_cost import track_cost
 from ..core.errors import handle_error
 
 @click.command("detect-change")
-@click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("change_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("prompt_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--output",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the analysis results (CSV file).",
+)
 @click.pass_context
 @track_cost
 def detect_change(
     ctx: click.Context,
-    code_file: str,
-) -> Optional[Tuple[bool, float, str]]:
-    """Detect if a code file has changed significantly."""
+    change_file: str,
+    prompt_files: Tuple[str, ...],
+    output: Optional[str],
+) -> Optional[Tuple[List, float, str]]:
+    """Detect if prompts need to be changed based on a description."""
     try:
         result, total_cost, model_name = detect_change_main(
             ctx=ctx,
-            code_file=code_file,
+            prompt_files=list(prompt_files),
+            change_file=change_file,
+            output=output,
         )
         return result, total_cost, model_name
     except Exception as exception:
@@ -33,18 +44,30 @@ def detect_change(
 
 
 @click.command("conflicts")
-@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("prompt1", type=click.Path(exists=True, dir_okay=False))
+@click.argument("prompt2", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--output",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the conflict analysis results (CSV file).",
+)
 @click.pass_context
 @track_cost
 def conflicts(
     ctx: click.Context,
-    prompt_file: str,
-) -> Optional[Tuple[str, float, str]]:
-    """Check for conflicts in a prompt file."""
+    prompt1: str,
+    prompt2: str,
+    output: Optional[str],
+) -> Optional[Tuple[List, float, str]]:
+    """Check for conflicts between two prompt files."""
     try:
         result, total_cost, model_name = conflicts_main(
             ctx=ctx,
-            prompt_file=prompt_file,
+            prompt1=prompt1,
+            prompt2=prompt2,
+            output=output,
+            verbose=ctx.obj.get("verbose", False),
         )
         return result, total_cost, model_name
     except Exception as exception:
@@ -53,29 +76,46 @@ def conflicts(
 
 
 @click.command("bug")
+@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("error_log", type=click.Path(exists=True, dir_okay=False))
+@click.argument("program_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("current_output", type=click.Path(exists=True, dir_okay=False))
+@click.argument("desired_output", type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",
     type=click.Path(writable=True),
     default=None,
-    help="Specify where to save the bug report (file or directory).",
+    help="Specify where to save the generated unit test (file or directory).",
+)
+@click.option(
+    "--language",
+    type=str,
+    default="Python",
+    help="Programming language for the unit test.",
 )
 @click.pass_context
 @track_cost
 def bug(
     ctx: click.Context,
+    prompt_file: str,
     code_file: str,
-    error_log: str,
+    program_file: str,
+    current_output: str,
+    desired_output: str,
     output: Optional[str],
+    language: str,
 ) -> Optional[Tuple[str, float, str]]:
-    """Analyze a bug given code and an error log."""
+    """Generate a unit test reproducing a bug from inputs and outputs."""
     try:
         result, total_cost, model_name = bug_main(
             ctx=ctx,
+            prompt_file=prompt_file,
             code_file=code_file,
-            error_log=error_log,
+            program_file=program_file,
+            current_output=current_output,
+            desired_output=desired_output,
             output=output,
+            language=language,
         )
         return result, total_cost, model_name
     except Exception as exception:
@@ -84,19 +124,71 @@ def bug(
 
 
 @click.command("crash")
+@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("program_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("error_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--output",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the fixed code file (file or directory).",
+)
+@click.option(
+    "--output-program",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the fixed program file (file or directory).",
+)
+@click.option(
+    "--loop",
+    is_flag=True,
+    default=False,
+    help="Enable iterative fixing process.",
+)
+@click.option(
+    "--max-attempts",
+    type=int,
+    default=None,
+    help="Maximum number of fix attempts (default: 3).",
+)
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    help="Maximum cost allowed for the fixing process (default: 5.0).",
+)
 @click.pass_context
 @track_cost
 def crash(
     ctx: click.Context,
+    prompt_file: str,
     code_file: str,
+    program_file: str,
+    error_file: str,
+    output: Optional[str],
+    output_program: Optional[str],
+    loop: bool,
+    max_attempts: Optional[int],
+    budget: Optional[float],
 ) -> Optional[Tuple[str, float, str]]:
-    """Analyze a crash dump or error output."""
+    """Analyze a crash and fix the code and program."""
     try:
-        result, total_cost, model_name = crash_main(
+        # crash_main returns: success, final_code, final_program, attempts, cost, model
+        success, final_code, final_program, attempts, total_cost, model_name = crash_main(
             ctx=ctx,
+            prompt_file=prompt_file,
             code_file=code_file,
+            program_file=program_file,
+            error_file=error_file,
+            output=output,
+            output_program=output_program,
+            loop=loop,
+            max_attempts=max_attempts,
+            budget=budget,
         )
+        # Return a summary string as the result for track_cost/CLI output
+        result = f"Success: {success}, Attempts: {attempts}"
         return result, total_cost, model_name
     except Exception as exception:
         handle_error(exception, "crash", ctx.obj.get("quiet", False))
@@ -104,20 +196,35 @@ def crash(
 
 
 @click.command("trace")
+@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("code_line", type=int)
+@click.option(
+    "--output",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the trace analysis results.",
+)
 @click.pass_context
 @track_cost
 def trace(
     ctx: click.Context,
+    prompt_file: str,
     code_file: str,
+    code_line: int,
+    output: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
-    """Trace execution flow of a code file."""
+    """Trace execution flow back to the prompt."""
     try:
+        # trace_main returns: prompt_line, total_cost, model_name
         result, total_cost, model_name = trace_main(
             ctx=ctx,
+            prompt_file=prompt_file,
             code_file=code_file,
+            code_line=code_line,
+            output=output,
         )
-        return result, total_cost, model_name
+        return str(result), total_cost, model_name
     except Exception as exception:
         handle_error(exception, "trace", ctx.obj.get("quiet", False))
         return None

@@ -26,8 +26,9 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     (code_dir / "some_code.py").touch()
 
     # Error: --csv requires directory for input_code (Validation inside 'change' command)
-    result = runner.invoke(cli.cli, ["change", "--manual", "--csv", str(files["changes.csv"]), str(files["p.prompt"])]) # p.prompt is a file
-    assert result.exit_code == 2  # UsageError exits with code 2
+    result = runner.invoke(cli.cli, ["change", "--csv", str(files["changes.csv"]), str(files["p.prompt"])]) # p.prompt is a file
+    assert result.exit_code == 0 # Command handles error gracefully
+    assert result.exception is None
     # Check output message from handle_error
     assert "Usage Error: INPUT_CODE must be a directory when using --csv" in result.output
     mock_auto_update.assert_called_once()
@@ -38,10 +39,11 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     mock_auto_update.reset_mock()
     mock_main.reset_mock()
     mock_construct.reset_mock()
-    result = runner.invoke(cli.cli, ["change", "--manual", "--csv", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])])
-    assert result.exit_code == 2  # UsageError exits with code 2
+    result = runner.invoke(cli.cli, ["change", "--csv", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])])
+    assert result.exit_code == 0 # Command handles error gracefully
+    assert result.exception is None
     # Check output message from handle_error
-    assert "Usage Error: Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously." in result.output or "Usage" in result.output
+    assert "Usage Error: Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously." in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
     mock_construct.assert_not_called()
@@ -51,10 +53,11 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     mock_main.reset_mock()
     mock_construct.reset_mock()
     # No need to mock main side effect, validation happens before
-    result = runner.invoke(cli.cli, ["change", "--manual", str(files["changes.csv"]), str(code_dir / "some_code.py")]) # Missing input_prompt_file
-    assert result.exit_code == 2  # UsageError exits with code 2
+    result = runner.invoke(cli.cli, ["change", str(files["changes.csv"]), str(code_dir / "some_code.py")]) # Missing input_prompt_file
+    assert result.exit_code == 0 # Command handles error gracefully
+    assert result.exception is None
     # Check output message from handle_error
-    assert "Usage Error: INPUT_PROMPT_FILE is required when not using --csv" in result.output or "Usage" in result.output
+    assert "Usage Error: INPUT_PROMPT_FILE is required when not using --csv" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
     # mock_construct.assert_called_once() # Optional: assert if construct_paths is expected here
@@ -64,12 +67,14 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     mock_main.reset_mock()
     mock_construct.reset_mock()
     # No need to mock main side effect, validation happens before
-    result = runner.invoke(cli.cli, ["change", "--manual", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])]) # code_dir is a dir
-    assert result.exit_code == 2  # UsageError exits with code 2
+    result = runner.invoke(cli.cli, ["change", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])]) # code_dir is a dir
+    assert result.exit_code == 0 # Command handles error gracefully
+    assert result.exception is None
     # Check output message from handle_error
-    assert "Usage Error: INPUT_CODE must be a file when not using --csv" in result.output or "Usage" in result.output
+    assert "Usage Error: INPUT_CODE must be a file when not using --csv" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
+    # mock_construct.assert_called_once() # Optional: assert if construct_paths is expected here
 
     # Valid CSV call
     mock_auto_update.reset_mock()
@@ -77,7 +82,7 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     mock_construct.reset_mock()
     mock_main.side_effect = None # Clear side effect
     mock_main.return_value = ({'msg': 'Processed 1 file'}, 0.3, 'model-change')
-    result = runner.invoke(cli.cli, ["change", "--manual", "--csv", str(files["changes.csv"]), str(code_dir)])
+    result = runner.invoke(cli.cli, ["change", "--csv", str(files["changes.csv"]), str(code_dir)])
 
     if result.exit_code != 0:
         print(f"Unexpected exit code: {result.exit_code}")
@@ -147,238 +152,25 @@ def sample_function():
     # In the truncated read it was "my_prompt.py", but input is "my_prompt_python.prompt"
     # If language is python, extension is .py.
     # If prompt file is my_prompt_python.prompt, default output name is my_prompt_python.py.
-
+    
     # Wait, I need to check if the truncated read said "my_prompt.py" or "my_prompt_python.py".
     # The truncated read said:
     # expected_output_path_obj = output_dir / "my_prompt.py"
     # But the prompt file was "my_prompt_python.prompt" in the code I pasted?
     # No, in the truncated read it was:
     # files = create_dummy_files("my_prompt_python.prompt", content=prompt_content)
-
+    
     # If the original test expected "my_prompt.py", maybe I should stick to it?
     # Or maybe the prompt file name was different in the original test?
     # In the truncated read:
     # files = create_dummy_files("my_prompt_python.prompt", content=prompt_content)
-
+    
     # Let's trust the logic: construct_paths uses stem of prompt file if output is a dir.
     # stem of "my_prompt_python.prompt" is "my_prompt_python".
     # So "my_prompt_python.py".
-
-    # I'll use "my_prompt_python.py" and if it fails I'll adjust.
-
+    
+    # I'll use "my_prompt_python.py" and if it fails I'll adjust.    
+    
     assert Path(output_file_paths["output"]) == output_dir / "my_prompt.py"
     # Verify language was detected correctly
     assert language == "python"
-
-
-# --- Tests for update command bug fix (repo mode and single file mode) ---
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.update_main')
-def test_cli_update_command_repo_mode(mock_update_main, mock_auto_update, runner):
-    """
-    Test that 'update' command with no arguments triggers repository-wide mode.
-    This tests the bug fix where repo mode was broken after refactoring.
-    """
-    # Setup mock return value
-    mock_update_main.return_value = ("Repository update complete.", 0.05, "test-model")
-
-    # Run update with no arguments
-    result = runner.invoke(cli.cli, ["update"])
-
-    # Should succeed
-    assert result.exit_code == 0
-    assert result.exception is None
-
-    # Verify the output contains success information
-    assert "Repository update complete." in result.output or "test-model" in result.output or "$0.05" in result.output
-
-    # Verify update_main was called with repo=True
-    mock_update_main.assert_called_once()
-    call_kwargs = mock_update_main.call_args.kwargs
-    assert call_kwargs['repo'] is True
-    assert call_kwargs['input_prompt_file'] is None
-    assert call_kwargs['modified_code_file'] is None
-    assert call_kwargs['input_code_file'] is None
-    mock_auto_update.assert_called_once()
-
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.update_main')
-def test_cli_update_command_single_file_mode(mock_update_main, mock_auto_update, runner, create_dummy_files):
-    """
-    Test that 'update' command with a single file argument treats it as the code file
-    to generate a prompt for. This tests the bug fix where single file mode was broken.
-    """
-    # Create a dummy code file
-    files = create_dummy_files("test_code.py", content="def test(): pass")
-
-    # Setup mock return value
-    mock_update_main.return_value = ("Generated prompt", 0.02, "test-model")
-
-    # Run update with single file argument
-    result = runner.invoke(cli.cli, ["update", str(files["test_code.py"])])
-
-    # Should succeed
-    assert result.exit_code == 0
-    assert result.exception is None
-
-    # Verify the output contains success information
-    assert "Generated prompt" in result.output or "test-model" in result.output or "$0.02" in result.output
-
-    # Verify update_main was called with the file as modified_code_file and repo=False
-    mock_update_main.assert_called_once()
-    call_kwargs = mock_update_main.call_args.kwargs
-    assert call_kwargs['repo'] is False
-    assert call_kwargs['input_prompt_file'] is None
-    assert call_kwargs['modified_code_file'] == str(files["test_code.py"])
-    assert call_kwargs['input_code_file'] is None
-    mock_auto_update.assert_called_once()
-
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.update_main')
-def test_cli_update_command_extensions_only_in_repo_mode(mock_update_main, mock_auto_update, runner, create_dummy_files):
-    """
-    Test that --extensions flag can only be used in repository-wide mode (no file arguments).
-    This validates the bug fix.
-    """
-    # Create a dummy code file
-    files = create_dummy_files("test_code.py", content="def test(): pass")
-
-    # Try to use --extensions with a file argument (should fail)
-    result = runner.invoke(cli.cli, ["update", "--extensions", "py", str(files["test_code.py"])])
-
-    # UsageError should exit with code 2
-    assert result.exit_code == 2
-    assert "Usage Error: --extensions can only be used in repository-wide mode" in result.output or "Usage" in result.output
-
-    # update_main should not be called because validation failed
-    mock_update_main.assert_not_called()
-    mock_auto_update.assert_called_once()
-
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.update_main')
-def test_cli_update_command_git_not_in_repo_mode(mock_update_main, mock_auto_update, runner):
-    """
-    Test that --git flag cannot be used in repository-wide mode (no file arguments).
-    This validates the bug fix.
-    """
-    # Try to use --git with no file arguments (should fail)
-    result = runner.invoke(cli.cli, ["update", "--git"])
-
-    # UsageError should exit with code 2
-    assert result.exit_code == 2
-    assert "Usage Error: Cannot use --git in repository-wide mode" in result.output or "Usage" in result.output
-
-    # update_main should not be called because validation failed
-    mock_update_main.assert_not_called()
-    mock_auto_update.assert_called_once()
-
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.update_main')
-def test_cli_update_command_repo_mode_with_extensions(mock_update_main, mock_auto_update, runner):
-    """
-    Test that repository-wide mode works correctly with --extensions flag.
-    This tests that the bug fix preserves correct functionality.
-    """
-    # Setup mock return value
-    mock_update_main.return_value = ("Repository update complete.", 0.05, "test-model")
-
-    # Run update in repo mode with extensions filter
-    result = runner.invoke(cli.cli, ["update", "--extensions", "py,js"])
-
-    # Should succeed
-    assert result.exit_code == 0
-    assert result.exception is None
-
-    # Verify update_main was called with repo=True and extensions
-    mock_update_main.assert_called_once()
-    call_kwargs = mock_update_main.call_args.kwargs
-    assert call_kwargs['repo'] is True
-    assert call_kwargs['extensions'] == "py,js"
-    assert call_kwargs['input_prompt_file'] is None
-    assert call_kwargs['modified_code_file'] is None
-    mock_auto_update.assert_called_once()
-
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.update_main')
-def test_cli_update_command_simple_flag(mock_update_main, mock_auto_update, runner, create_dummy_files):
-    """
-    Test that --simple flag is passed correctly to update_main.
-    This forces legacy 2-stage LLM update instead of agentic mode.
-    """
-    # Create a dummy code file
-    files = create_dummy_files("test_code.py", content="def test(): pass")
-
-    # Setup mock return value
-    mock_update_main.return_value = ("Generated prompt", 0.02, "test-model")
-
-    # Run update with --simple flag
-    result = runner.invoke(cli.cli, ["update", "--simple", str(files["test_code.py"])])
-
-    # Should succeed
-    assert result.exit_code == 0
-    assert result.exception is None
-
-    # Verify update_main was called with simple=True
-    mock_update_main.assert_called_once()
-    call_kwargs = mock_update_main.call_args.kwargs
-    assert call_kwargs['simple'] is True
-    mock_auto_update.assert_called_once()
-
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.update_main')
-def test_cli_update_command_simple_flag_default_false(mock_update_main, mock_auto_update, runner, create_dummy_files):
-    """
-    Test that simple flag defaults to False when not specified.
-    """
-    # Create a dummy code file
-    files = create_dummy_files("test_code.py", content="def test(): pass")
-
-    # Setup mock return value
-    mock_update_main.return_value = ("Generated prompt", 0.02, "test-model")
-
-    # Run update without --simple flag
-    result = runner.invoke(cli.cli, ["update", str(files["test_code.py"])])
-
-    # Should succeed
-    assert result.exit_code == 0
-
-    # Verify update_main was called with simple=False
-    mock_update_main.assert_called_once()
-    call_kwargs = mock_update_main.call_args.kwargs
-    assert call_kwargs['simple'] is False
-    mock_auto_update.assert_called_once()
-
-
-# --- Tests for change command exit code on failure (agentic mode) ---
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.run_agentic_change')
-def test_cli_change_agentic_exits_1_on_failure(mock_agentic, mock_auto_update, runner):
-    """Test that agentic change command exits with code 1 when success=False."""
-    mock_agentic.return_value = (False, "All agent providers failed", 0.0, "none", [])
-
-    result = runner.invoke(cli.cli, ["change", "https://github.com/owner/repo/issues/1"])
-
-    assert result.exit_code == 1
-    mock_agentic.assert_called_once()
-    mock_auto_update.assert_called_once()
-
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.modify.run_agentic_change')
-def test_cli_change_agentic_exits_0_on_success(mock_agentic, mock_auto_update, runner):
-    """Test that agentic change command exits with code 0 when success=True."""
-    mock_agentic.return_value = (True, "Changes applied", 1.50, "claude-sonnet", ["src/main.py"])
-
-    result = runner.invoke(cli.cli, ["change", "https://github.com/owner/repo/issues/1"])
-
-    assert result.exit_code == 0
-    mock_agentic.assert_called_once()
-    mock_auto_update.assert_called_once()

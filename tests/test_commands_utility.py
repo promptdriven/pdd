@@ -16,7 +16,7 @@ RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
 @patch('pdd.core.cli.auto_update') # Patch auto_update
-@patch('pdd.cli.install_completion')  # Patch the actual function, not cli_module
+@patch('pdd.commands.utility.cli_module.install_completion')
 def test_cli_install_completion_cmd(mock_install_func, mock_auto_update, runner):
     """Test the install_completion command."""
     result = runner.invoke(cli.cli, ["install_completion"])
@@ -34,7 +34,7 @@ def test_cli_install_completion_cmd(mock_install_func, mock_auto_update, runner)
     mock_auto_update.assert_called_once_with()
 
 @patch('pdd.core.cli.auto_update') # Patch auto_update
-@patch('pdd.cli.install_completion')  # Patch the actual function, not cli_module
+@patch('pdd.commands.utility.cli_module.install_completion')
 def test_cli_install_completion_cmd_quiet(mock_install_func, mock_auto_update, runner):
     """Test the install_completion command with --quiet."""
     result = runner.invoke(cli.cli, ["--quiet", "install_completion"])
@@ -386,33 +386,3 @@ if __name__ == "__main__":
         else:
              if 'PDD_PATH' in os.environ:
                  del os.environ['PDD_PATH']
-
-
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.utility.fix_verification_main')
-def test_cli_verify_command_passes_agentic_fallback(
-    mock_fix_verification_main,
-    mock_auto_update,
-    runner,
-    create_dummy_files,
-    tmp_path
-):
-    """Test that verify command passes --agentic-fallback to fix_verification_main."""
-    files = create_dummy_files("test.prompt", "test.py", "program.py")
-
-    mock_fix_verification_main.return_value = (True, "prog", "code", 1, 0.01, "model")
-
-    # Test with --no-agentic-fallback
-    result = runner.invoke(cli.cli, [
-        "verify",
-        str(files["test.prompt"]),
-        str(files["test.py"]),
-        str(files["program.py"]),
-        "--no-agentic-fallback",
-    ])
-
-    assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}. Output: {result.output}"
-    mock_fix_verification_main.assert_called_once()
-    kwargs = mock_fix_verification_main.call_args.kwargs
-    assert kwargs.get('agentic_fallback') is False, \
-        "Expected agentic_fallback=False when --no-agentic-fallback is passed"

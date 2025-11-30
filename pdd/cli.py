@@ -36,6 +36,7 @@ from .fix_verification_main import fix_verification_main
 from .core.errors import console
 from .install_completion import install_completion
 from .core.utils import _should_show_onboarding_reminder
+from .core.cli import process_commands
 import subprocess
 
 if __name__ == "__main__":
