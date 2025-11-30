@@ -15,6 +15,7 @@ help:
 	@echo ""
 	@echo "Generation Commands:"
 	@echo "  make generate [MODULE=name]  - Generate specific module or all files"
+	@echo "  make example [MODULE=name]   - Generate specific example or all example files"
 	@echo "  make run-examples            - Run all example files"
 	@echo ""
 	@echo "Testing Commands:"
@@ -73,7 +74,7 @@ PUBLIC_CONTEXT_EXCLUDE ?= context/**/__pycache__ context/**/*.log context/**/*.c
 PUBLIC_REGRESSION_SCRIPTS ?= $(wildcard tests/*regression*.sh)
 
 # Python files
-PY_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_python.prompt)
+PY_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_python.prompt")
 PY_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_python.prompt,$(PDD_DIR)/%.py,$(PY_PROMPTS))
 
 # Makefile
@@ -82,7 +83,7 @@ MAKEFILE_OUTPUT := $(STAGING_DIR)/Makefile
 SKIP_MAKEFILE_REGEN ?= 0
 
 # CSV files
-CSV_PROMPTS := $(wildcard $(PROMPTS_DIR)/*_csv.prompt)
+CSV_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_csv.prompt")
 CSV_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_csv.prompt,$(DATA_DIR)/%.csv,$(CSV_PROMPTS))
 
 # Example files
@@ -98,11 +99,27 @@ EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
+example:
+ifdef MODULE
+	@echo "Generating example for module: $(MODULE)"
+	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
+	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
+	$(eval EXAMPLE_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
+
+	@# Generate example file
+	@echo "Generating $(EXAMPLE_FILE)"
+	@mkdir -p $(dir $(EXAMPLE_FILE))
+	-@PYTHONPATH=$(STAGING_DIR) pdd --strength .9 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
+else
+	@echo "Generating all example files"
+	@$(MAKE) $(EXAMPLE_OUTPUTS)
+endif
+
 # Generate Python files
 $(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating $@"
-	@mkdir -p $(PDD_DIR)
-	@PYTHONPATH=$(PROD_DIR) pdd --strength 1 generate --output $@ $< || touch $@
+	@mkdir -p $(dir $@)
+	@PYTHONPATH=$(STAGING_DIR) pdd --strength 1 generate --output $@ $< || touch $@
 
 # Generate Makefile
 ifeq ($(SKIP_MAKEFILE_REGEN),1)
@@ -112,26 +129,26 @@ else
 $(MAKEFILE_OUTPUT): $(MAKEFILE_PROMPT)
 	@echo "Generating $@"
 	@mkdir -p $(STAGING_DIR)
-	@PYTHONPATH=$(PROD_DIR) pdd generate --output $@ $<
+	@PYTHONPATH=$(STAGING_DIR) pdd generate --output $@ $<
 endif
 
 # Generate CSV files
 $(DATA_DIR)/%.csv: $(PROMPTS_DIR)/%_csv.prompt
 	@echo "Generating $@"
-	@mkdir -p $(DATA_DIR)
-	@PYTHONPATH=$(PROD_DIR) pdd generate --output $@ $<
+	@mkdir -p $(dir $@)
+	@PYTHONPATH=$(STAGING_DIR) pdd generate --output $@ $<
 
 # Generate example files
 $(CONTEXT_DIR)/%_example.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating example for $<"
-	@mkdir -p $(CONTEXT_DIR)
-	@PYTHONPATH=$(PROD_DIR) pdd --strength .8 example --output $@ $(word 2,$^) $< || touch $@
+	@mkdir -p $(dir $@)
+	@PYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $@ $(word 2,$^) $< || touch $@
 
 # Generate test files
 $(TESTS_DIR)/test_%.py: $(PDD_DIR)/%.py $(PROMPTS_DIR)/%_python.prompt
 	@echo "Generating test for $<"
-	@mkdir -p $(TESTS_DIR)
-	@PYTHONPATH=$(PROD_DIR) pdd --strength 1 test --output $@ $^
+	@mkdir -p $(dir $@)
+	@PYTHONPATH=$(STAGING_DIR) pdd --strength 1 test --output $@ $^
 
 # Generate specific module or all files
 generate:
@@ -146,17 +163,17 @@ ifdef MODULE
 	@# Generate Python file
 	@echo "Generating $(PY_FILE)"
 	@mkdir -p $(PDD_DIR)
-	-@PYTHONPATH=$(PROD_DIR) pdd --strength .9 --time 1 --temperature .7 --local generate --output $(PY_FILE) $(PY_PROMPT)
+	-@PYTHONPATH=$(STAGING_DIR) pdd --strength .9 --time 1 --temperature .7 --local generate --output $(PY_FILE) $(PY_PROMPT)
 
 	@# Generate example file
 	@echo "Generating example for $(PY_FILE)"
 	@mkdir -p $(CONTEXT_DIR)
-	-@PYTHONPATH=$(PROD_DIR) pdd  --strength .9 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
+	-@PYTHONPATH=$(STAGING_DIR) pdd  --strength .9 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
 
 	@# Generate test file
 	@echo "Generating test for $(PY_FILE)"
 	@mkdir -p $(TESTS_DIR)
-	-@PYTHONPATH=$(PROD_DIR) pdd --strength .9 test --output $(TEST_FILE) $(PY_PROMPT) $(PY_FILE)
+	-@PYTHONPATH=$(STAGING_DIR) pdd --strength .9 test --output $(TEST_FILE) $(PY_PROMPT) $(PY_FILE)
 else
 	@echo "Generating all Python files, examples, and tests"
 	@$(MAKE) $(PY_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
@@ -365,8 +382,8 @@ endif
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
-	@PYTHONPATH=$(PROD_DIR) pipreqs ./pdd --force --savepath ./requirements.txt
-	@PYTHONPATH=$(PROD_DIR) pipreqs ./tests --force --savepath ./tmp_requirements.txt
+	@PYTHONPATH=$(STAGING_DIR) pipreqs ./pdd --force --savepath ./requirements.txt
+	@PYTHONPATH=$(STAGING_DIR) pipreqs ./tests --force --savepath ./tmp_requirements.txt
 	@cat ./tmp_requirements.txt ./requirements.txt | sort | uniq > ./final_requirements.txt
 	@mv ./final_requirements.txt ./requirements.txt
 	@rm ./tmp_requirements.txt
