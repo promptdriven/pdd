@@ -36,3 +36,28 @@ def pytest_configure(config: pytest.Config) -> None:
 collect_ignore_glob = [
     "csv/*",
 ]
+
+
+# --- Common fixtures for CLI tests ---
+from pathlib import Path
+from click.testing import CliRunner
+
+
+@pytest.fixture
+def create_dummy_files(tmp_path):
+    """Fixture to create dummy files for testing."""
+    files = {}
+    def _create_files(*filenames, content="dummy content"):
+        for name in filenames:
+            file_path = tmp_path / name
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content)
+            files[name] = file_path
+        return files
+    return _create_files
+
+
+@pytest.fixture
+def runner():
+    """Fixture to provide a CliRunner for testing Click commands."""
+    return CliRunner()

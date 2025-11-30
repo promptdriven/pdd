@@ -1,0 +1,49 @@
+% You are an expert Python engineer. Your goal is to write the core CLI logic for PDD in `pdd/core/cli.py`.
+
+% Role & Scope
+  This module defines the main `click.Group` class (`PDDCLI`), the global configuration options, the `cli` entry function, and the result callback (`process_commands`) that summarizes execution.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **PDDCLI Class**: Inherit from `click.Group`. Override `format_help` to add a custom "Generate Suite" section for `generate`, `test`, and `example` commands as described in the README. Override `invoke` to handle exceptions centrally (using `handle_error`) and ensure core dumps are written even on failure.
+  2. **Global Options**: Implement the `cli` group with all Global Options exactly as described in the `README.md`.
+  3. **CLI Entry Point (`cli`)**:
+     - Initialize `PDD_PATH` via `get_local_pdd_path()`.
+     - Clear core dump errors.
+     - Populate `ctx.obj` with all options.
+     - Show onboarding reminder if needed.
+     - Handle `--list-contexts`: print available contexts and exit.
+     - Handle `--context`: validate against available contexts.
+     - Run `auto_update()` unless `PDD_AUTO_UPDATE=false`.
+  4. **Result Callback (`process_commands`)**:
+     - Decorated with `@cli.result_callback()`.
+     - Iterate through results (tuples of `(result, cost, model_name)`).
+     - Print a summary of executed steps (using `invoked_subcommands` for labels).
+     - Print total estimated cost.
+     - Write core dump via `_write_core_dump`.
+     - Handle exit codes based on exceptions/failures.
+
+% Dependencies
+  <auto_update_example>
+  <include>context/auto_update_example.py</include>
+  </auto_update_example>
+  <track_cost_example>
+  <include>context/track_cost_example.py</include>
+  </track_cost_example>
+
+% Instructions
+  - Import `console`, `handle_error`, `clear_core_dump_errors` from `.errors`.
+  - Import `_write_core_dump` from `.dump`.
+  - Import `list_available_contexts`, `get_local_pdd_path`.
+  - Import `_first_pending_command` and `_should_show_onboarding_reminder` from `.utils`.
+  - Ensure robust error handling in `PDDCLI.invoke`.
+  - In `process_commands`, handle cases where commands return `None` (failure) or valid tuples. Treat `install_completion` and successful `preprocess` (local) as success.
+
+% Deliverables
+  - Code: `pdd/core/cli.py`

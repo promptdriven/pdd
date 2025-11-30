@@ -1,0 +1,43 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/modify.py`.
+
+% Role & Scope
+  This module contains commands that modify prompts: `split`, `change`, and `update`.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **split**:
+     - Interface: Match the `split` command specification in `README.md`.
+     - Logic: Call `split_main`.
+  2. **change**:
+     - Interface: Match the `change` command specification in `README.md`.
+     - Logic: Validate inputs (csv vs file). Call `change_main`.
+  3. **update**:
+     - Interface: Match the `update` command specification in `README.md` (handling single-file and repo-wide modes).
+     - Logic: Call `update_main`.
+
+% Dependencies
+  <split_main_example>
+  <include>context/split_main_example.py</include>
+  </split_main_example>
+  <change_main_example>
+  <include>context/change_main_example.py</include>
+  </change_main_example>
+  <update_main_example>
+  <include>context/update_main_example.py</include>
+  </update_main_example>
+  <track_cost_example>
+  <include>context/track_cost_example.py</include>
+  </track_cost_example>
+
+% Instructions
+  - Add input validation logic for `change` (CSV vs single file modes).
+  - Use `handle_error`.
+
+% Deliverables
+  - Code: `pdd/commands/modify.py`

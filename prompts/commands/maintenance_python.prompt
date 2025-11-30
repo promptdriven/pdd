@@ -1,0 +1,40 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/maintenance.py`.
+
+% Role & Scope
+  This module contains maintenance and setup commands: `sync`, `auto-deps`, and `setup`.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **sync**:
+     - Interface: Match the `sync` command specification in `README.md` (including all flags for budget, coverage, etc.).
+     - Logic: Call `sync_main`.
+  2. **auto-deps**:
+     - Interface: Match the `auto-deps` command specification in `README.md`.
+     - Logic: Clean `directory_path` quotes. Call `auto_deps_main`.
+  3. **setup**:
+     - Interface: Match the `setup` command specification in `README.md`.
+     - Logic: Import `install_completion` from `pdd.cli` (to allow mocking/patching) and `_run_setup_utility` from `core.utils`.
+     - Run install then setup utility.
+
+% Dependencies
+  <sync_main_example>
+  <include>context/sync_main_example.py</include>
+  </sync_main_example>
+  <auto_deps_main_example>
+  <include>context/auto_deps_main_example.py</include>
+  </auto_deps_main_example>
+  <track_cost_example>
+  <include>context/track_cost_example.py</include>
+  </track_cost_example>
+
+% Instructions
+  - Use `handle_error`.
+
+% Deliverables
+  - Code: `pdd/commands/maintenance.py`
