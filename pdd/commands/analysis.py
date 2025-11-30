@@ -12,9 +12,8 @@ from ..trace_main import trace_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 
-@click.command("detect-change")
-@click.argument("change_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("prompt_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
+@click.command("detect")
+@click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",
     type=click.Path(writable=True),
@@ -25,21 +24,30 @@ from ..core.errors import handle_error
 @track_cost
 def detect_change(
     ctx: click.Context,
-    change_file: str,
-    prompt_files: Tuple[str, ...],
+    files: Tuple[str, ...],
     output: Optional[str],
 ) -> Optional[Tuple[List, float, str]]:
-    """Detect if prompts need to be changed based on a description."""
+    """Detect if prompts need to be changed based on a description.
+    
+    Usage: pdd detect [PROMPT_FILES...] CHANGE_FILE
+    """
     try:
+        if len(files) < 2:
+             raise click.UsageError("Requires at least one PROMPT_FILE and one CHANGE_FILE.")
+        
+        # According to usage conventions (and README), the last file is the change file
+        change_file = files[-1]
+        prompt_files = list(files[:-1])
+
         result, total_cost, model_name = detect_change_main(
             ctx=ctx,
-            prompt_files=list(prompt_files),
+            prompt_files=prompt_files,
             change_file=change_file,
             output=output,
         )
         return result, total_cost, model_name
     except Exception as exception:
-        handle_error(exception, "detect-change", ctx.obj.get("quiet", False))
+        handle_error(exception, "detect", ctx.obj.get("quiet", False))
         return None
 
 
