@@ -10,6 +10,7 @@ from typing import Tuple, List, Optional, Dict
 from rich.console import Console
 
 from .get_language import get_language            # Detects language from file extension (e.g., ".py" -> "python")
+from .get_run_command import get_run_command_for_file  # Gets run command for a file based on extension
 from .llm_invoke import _load_model_data          # Loads provider/model metadata from llm_model.csv
 from .load_prompt_template import load_prompt_template  # Loads prompt templates by name
 from .agentic_langtest import default_verify_cmd_for    # Provides a default verify command (per language)
@@ -415,7 +416,7 @@ def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str]
     Standard local verification gate:
     - If disabled, return True immediately (skip verification).
     - If verify_cmd exists: format placeholders and run it via _run_testcmd.
-    - Else: run pytest for the given test file.
+    - Else: run the file directly using the appropriate interpreter for its language.
     Returns True iff the executed command exits 0.
     """
     if not enabled:
@@ -423,8 +424,13 @@ def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str]
     if verify_cmd:
         cmd = verify_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(cwd))
         return _run_testcmd(cmd, cwd)
+    # Get language-appropriate run command from language_format.csv
+    run_cmd = get_run_command_for_file(str(Path(unit_test_file).resolve()))
+    if run_cmd:
+        return _run_testcmd(run_cmd, cwd)
+    # Fallback: try running with Python if no run command found
     verify = subprocess.run(
-        [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
+        [os.sys.executable, str(Path(unit_test_file).resolve())],
         capture_output=True,
         text=True,
         check=False,
@@ -763,15 +769,27 @@ def run_agentic_fix(
                         cwd=str(cwd),
                     )
                 else:
-                    # Fallback to pytest if we have no language-specific verify command
-                    pre = subprocess.run(
-                        [os.sys.executable, "-m", "pytest", unit_test_file, "-q"],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                        timeout=_VERIFY_TIMEOUT,
-                        cwd=str(cwd),
-                    )
+                    # Use language-appropriate run command from language_format.csv
+                    run_cmd = get_run_command_for_file(str(Path(unit_test_file).resolve()))
+                    if run_cmd:
+                        pre = subprocess.run(
+                            ["bash", "-lc", run_cmd],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=_VERIFY_TIMEOUT,
+                            cwd=str(cwd),
+                        )
+                    else:
+                        # Fallback: run directly with Python interpreter
+                        pre = subprocess.run(
+                            [os.sys.executable, str(Path(unit_test_file).resolve())],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=_VERIFY_TIMEOUT,
+                            cwd=str(cwd),
+                        )
                 error_content = (pre.stdout or "") + "\n" + (pre.stderr or "")
                 try:
                     Path(error_log_file).write_text(error_content, encoding="utf-8")

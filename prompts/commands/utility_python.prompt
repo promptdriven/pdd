@@ -1,0 +1,36 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/utility.py`.
+
+% Role & Scope
+  This module contains utility commands: `install_completion` and `verify`.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **install_completion**:
+     - Interface: Match the `install_completion` command specification in `README.md`.
+     - Logic: Call `pdd.cli.install_completion` (via module patch if needed, or direct).
+  2. **verify**:
+     - Interface: Match the `verify` command specification in `README.md`.
+     - Logic: Call `fix_verification_main` with loop enabled.
+
+% Dependencies
+  <install_completion_example>
+  <include>context/install_completion_example.py</include>
+  </install_completion_example>
+  <fix_verification_main_example>
+  <include>context/fix_verification_main_example.py</include>
+  </fix_verification_main_example>
+  <track_cost_example>
+  <include>context/track_cost_example.py</include>
+  </track_cost_example>
+
+% Instructions
+  - Use `handle_error`.
+
+% Deliverables
+  - Code: `pdd/commands/utility.py`

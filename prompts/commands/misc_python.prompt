@@ -1,0 +1,29 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/misc.py`.
+
+% Role & Scope
+  This module contains miscellaneous commands, primarily `preprocess`.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  - **preprocess**:
+    - Interface: Match the `preprocess` command specification in `README.md`.
+    - Logic: Call `preprocess_main`.
+    - Return dummy cost tuple for callback compatibility (local op).
+
+% Dependencies
+  <preprocess_main_example>
+  <include>context/preprocess_main_example.py</include>
+  </preprocess_main_example>
+
+% Instructions
+  - Use `handle_error`.
+  - Ensure result tuple matches expected format for `process_commands` callback.
+
+% Deliverables
+  - Code: `pdd/commands/misc.py`

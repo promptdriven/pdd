@@ -1,0 +1,40 @@
+# prompts/core/errors_python.prompt
+% You are an expert Python engineer. Your goal is to write the error handling logic for the PDD CLI in `pdd/core/errors.py`.
+
+% Role & Scope
+  This module provides centralized error handling, rich console output for errors, and collects error details for core dumps.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **Rich Console Initialization**:
+     - Define a `custom_theme` for `rich.console.Theme` with styles for `info`, `warning`, `error`, `success`, `path`, `command`.
+     - Initialize a global `console = Console(theme=custom_theme)`.
+  2. **Error Buffer**:
+     - Maintain a global buffer `_core_dump_errors: List[Dict[str, Any]]` to collect error details.
+     - Implement `get_core_dump_errors() -> List[Dict[str, Any]]` to return the buffer.
+     - Implement `clear_core_dump_errors() -> None` to clear the buffer.
+  3. **`handle_error` function**:
+     - Signature: `handle_error(exception: Exception, command_name: str, quiet: bool)`
+     - Logic: Records error details (command name, type, message, traceback) to `_core_dump_errors`.
+     - If `quiet` is `False`, prints error messages to the Rich console using the `error` style.
+     - Provides specific messages for `FileNotFoundError`, `ValueError`, `IOError`, `click.UsageError`, and `MarkupError`.
+     - Catches and safely escapes `MarkupError` messages before printing.
+     - Does *not* re-raise the exception; simply handles printing and recording.
+
+% Dependencies
+  - Imports `traceback`.
+  - Imports `click`.
+  - Imports `Console`, `MarkupError`, `escape`, `Theme` from `rich.console`.
+
+% Instructions
+  - Ensure robust error reporting without crashing the CLI itself.
+  - Use `traceback.format_exception` to capture full traceback.
+
+% Deliverables
+  - Code: `pdd/core/errors.py`

@@ -1,0 +1,34 @@
+% You are an expert Python software engineer. Your task is to create a module `get_run_command` that retrieves the command line instruction needed to execute a file based on its extension.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  A utility module responsible for looking up run commands (e.g., "python {file}") for different programming languages by reading a configuration CSV.
+
+% Requirements
+  1) Function `get_run_command(extension: str) -> str`:
+     - Accepts an extension (e.g., ".py", "js", ".JS").
+     - Returns the run command template (e.g., "python {file}") or an empty string if not found.
+     - Must normalize the extension: ensure it starts with '.' and is lowercase.
+     - Must read from `$PDD_PATH/data/language_format.csv`.
+     - Raises `ValueError` if `PDD_PATH` environment variable is not set.
+     - Handles `FileNotFoundError` or `csv.Error` by printing an error message and returning an empty string.
+
+  2) Function `get_run_command_for_file(file_path: str) -> str`:
+     - Accepts a file path.
+     - Extracts the extension.
+     - Calls `get_run_command` to get the template.
+     - Replaces the `{file}` placeholder in the template with the actual `file_path`.
+     - Returns the executable command string or empty string if no command found.
+
+% Data Source
+  The file at `$PDD_PATH/data/language_format.csv` is a CSV with columns:
+  - `extension` (e.g., .py)
+  - `run_command` (e.g., python {file})
+  - (Other columns like `comment` may exist but are ignored for this task)
+
+% Instructions
+  - Use the `csv` module to read the data file safely.
+  - Ensure robust path handling using `os.path.join`.
+  - Include docstrings for all functions.
+  - Do not hardcode commands; strictly look them up in the CSV.

@@ -1,0 +1,52 @@
+# prompts/core/utils_python.prompt
+% You are an expert Python engineer. Your goal is to write helper functions for the PDD CLI in `pdd/core/utils.py`.
+
+% Role & Scope
+  This module provides various utility functions, including logic for determining whether the onboarding reminder should be shown, detecting the first pending command, and running the setup utility.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **`_first_pending_command` function**:
+     - Signature: `_first_pending_command(ctx: click.Context) -> Optional[str]`
+     - Logic: Iterates through `ctx.protected_args` to find the first argument that is not an option (i.e., the first subcommand).
+     - Returns the subcommand name or `None`.
+  2. **`_api_env_exists` function**:
+     - Signature: `_api_env_exists() -> bool`
+     - Logic: Checks if the file `~/.pdd/api-env` exists.
+  3. **`_completion_installed` function**:
+     - Signature: `_completion_installed() -> bool`
+     - Logic: Determines if PDD shell completion is installed by checking if the shell's RC file (e.g., `.zshrc`, `.bashrc`) contains specific PDD completion strings.
+     - Uses `get_current_shell()` and `get_shell_rc_path()` from `..install_completion`.
+  4. **`_project_has_local_configuration` function**:
+     - Signature: `_project_has_local_configuration() -> bool`
+     - Logic: Checks if the current project directory has local `.env` file with API keys (`OPENAI_API_KEY=`, `GOOGLE_API_KEY=`, `ANTHROPIC_API_KEY=`) or a `.pdd` subdirectory.
+  5. **`_should_show_onboarding_reminder` function**:
+     - Signature: `_should_show_onboarding_reminder(ctx: click.Context) -> bool`
+     - Logic: Determines if the onboarding reminder banner should be displayed.
+     - Conditions for *not* showing the reminder:
+       - `PDD_SUPPRESS_SETUP_REMINDER` env var is true.
+       - The current command is `setup`.
+       - `~/.pdd/api-env` exists.
+       - The project has local configuration.
+       - Shell completion is installed.
+  6. **`_run_setup_utility` function**:
+     - Signature: `_run_setup_utility() -> None`
+     - Logic: Executes the interactive setup utility script as a subprocess (`python -m pdd.setup_tool`).
+     - Raises a `RuntimeError` if the subprocess exits with a non-zero status.
+
+% Dependencies
+  - Imports `click`.
+  - Imports `get_current_shell`, `get_shell_rc_path` from `..install_completion`.
+
+% Instructions
+  - Use `pathlib` for file path manipulations.
+  - Handle `OSError` and `UnicodeDecodeError` when reading RC file content.
+
+% Deliverables
+  - Code: `pdd/core/utils.py`

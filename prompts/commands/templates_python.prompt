@@ -1,0 +1,31 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/templates.py`.
+
+% Role & Scope
+  This module contains the `templates` command group and its subcommands (`list`, `show`, `copy`).
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **templates_group**:
+     - Defines `templates` group as described in `README.md`.
+  2. **list**:
+     - Interface: Match `templates list` in `README.md`.
+     - Logic: Call `template_registry.list_templates`. Render text or JSON.
+  3. **show**:
+     - Interface: Match `templates show` in `README.md`.
+     - Logic: Call `template_registry.show_template`. Render rich tables for details (Variables, Usage, etc.).
+  4. **copy**:
+     - Interface: Match `templates copy` in `README.md`.
+     - Logic: Call `template_registry.copy_template`.
+
+% Instructions
+  - Use `Rich` for rendering tables in `show` command.
+  - Use `handle_error`.
+
+% Deliverables
+  - Code: `pdd/commands/templates.py`
