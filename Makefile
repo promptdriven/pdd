@@ -69,7 +69,7 @@ PUBLIC_COPY_TESTS ?= 1
 PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py tests/conftest.py
 PUBLIC_TEST_EXCLUDE ?= tests/regression* tests/sync_regression* tests/**/regression* tests/**/sync_regression* tests/**/*.ipynb tests/csv/**
 PUBLIC_COPY_CONTEXT ?= 1
-PUBLIC_CONTEXT_INCLUDE ?= context/*_example.py
+PUBLIC_CONTEXT_INCLUDE ?= context/**/*_example.py
 PUBLIC_CONTEXT_EXCLUDE ?= context/**/__pycache__ context/**/*.log context/**/*.csv
 PUBLIC_REGRESSION_SCRIPTS ?= $(wildcard tests/*regression*.sh)
 
@@ -90,8 +90,8 @@ CSV_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_csv.prompt,$(DATA_DIR)/%.csv,$(CSV_PR
 # Test files
 TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 
-# All Example files in context directory
-EXAMPLE_FILES := $(wildcard $(CONTEXT_DIR)/*_example.py)
+# All Example files in context directory (recursive)
+EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
 .PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public
 
@@ -102,17 +102,17 @@ ifdef MODULE
 	@echo "Generating example for module: $(MODULE)"
 	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
 	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
-	# Flatten example file path
-	$(eval EXAMPLE_FILE := $(CONTEXT_DIR)/$(notdir $(basename $(MODULE)))_example.py)
+	# Example file path in subdirectory
+	$(eval EXAMPLE_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
 
 	@# Generate example file
 	@echo "Generating $(EXAMPLE_FILE)"
 	@mkdir -p $(dir $(EXAMPLE_FILE))
 	-@PYTHONPATH=$(STAGING_DIR) pdd --strength .9 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
 else
-	# Code for generating all examples (flattened)
-	@echo "Generating all example files (flattened to $(CONTEXT_DIR))"
-	@$(foreach prompt_file,$(PY_PROMPTS),\n\t\t$(eval module_path := $(patsubst $(PROMPTS_DIR)/%_python.prompt,%,$(prompt_file)))\n\t\t$(eval py_file := $(PDD_DIR)/$(module_path).py)\n\t\t$(eval example_name := $(notdir $(basename $(module_path))))\n\t\t$(eval example_file := $(CONTEXT_DIR)/$(example_name)_example.py)\n\t\techo "Generating example for $(module_path) -> $(example_file)";\n\t\tmkdir -p $(dir $(example_file));\n\t\tPYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $(example_file) $(prompt_file) $(py_file) || true;\n\t)
+	# Code for generating all examples (nested)
+	@echo "Generating all example files (nested in $(CONTEXT_DIR))"
+	@$(foreach prompt_file,$(PY_PROMPTS),\n\t\t$(eval module_path := $(patsubst $(PROMPTS_DIR)/%_python.prompt,%,$(prompt_file)))\n\t\t$(eval py_file := $(PDD_DIR)/$(module_path).py)\n\t\t$(eval example_file := $(CONTEXT_DIR)/$(module_path)_example.py)\n\t\techo "Generating example for $(module_path) -> $(example_file)";\n\t\tmkdir -p $(dir $(example_file));\n\t\tPYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $(example_file) $(prompt_file) $(py_file) || true;\n\t)
 endif
 
 # Generate Python files
@@ -206,7 +206,7 @@ ifdef MODULE
 	@# Define file paths based on MODULE
 	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
 	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
-	$(eval PROGRAM_FILE := $(CONTEXT_DIR)/$(notdir $(basename $(MODULE)))_example.py)
+	$(eval PROGRAM_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
 	$(eval ERROR_FILE := $(MODULE)_crash.log)
 	
 	@echo "Running $(PROGRAM_FILE) to capture crash output..."
@@ -362,8 +362,9 @@ ifdef MODULE
 	fi;
 else
 	@echo "Attempting to fix all prompts"
-	@for prompt in $(wildcard $(PROMPTS_DIR)/*_python.prompt); do \
-		name=$$(basename $$prompt _python.prompt); \
+	@find $(PROMPTS_DIR) -name "*_python.prompt" | while read prompt; do \
+		rel_path="$${prompt#$(PROMPTS_DIR)/}"; \
+		name="$${rel_path%_python.prompt}"; \
 		echo "Fixing $$name"; \
 		if [ -f "$(CONTEXT_DIR)/$${name}_example.py" ]; then \
 			conda run -n pdd --no-capture-output python -m pdd.cli --strength .9 --temperature 0 --verbose --force fix --loop --auto-submit --max-attempts 5 --output-test output/ --output-code output/ --verification-program $(CONTEXT_DIR)/$${name}_example.py $$prompt $(PDD_DIR)/$${name}.py $(TESTS_DIR)/test_$${name}.py $${name}.log; \
