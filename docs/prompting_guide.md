@@ -13,7 +13,7 @@ If you are new to Prompt-Driven Development (PDD), follow this recipe:
 1.  **Think "One Prompt = One Module":** Don't try to generate the whole app at once. Focus on one file (e.g., `user_service.py`).
 2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies, Instructions.
 3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML.
-4.  **Regenerate, Don't Patch:** If the code is wrong, fix the prompt and run the generator again.
+4.  **Regenerate, Don't Patch:** If the code is wrong, fix it using `pdd fix`. This updates the system's memory so the next `pdd generate` is grounded in the correct solution.
 5.  **Verify:** Run the generated code/tests.
 
 *Tip: Treat your prompt like source code. It is the single source of truth.*
@@ -26,6 +26,7 @@ If you are new to Prompt-Driven Development (PDD), follow this recipe:
 - **Shared Preamble:** A standard text file (e.g., `project_preamble.prompt`) included in every prompt to enforce common rules like coding style, forbidden libraries, and formatting.
 - **PDD Directive:** Special tags like `<include>` or `<shell>` that the PDD tool processes *before* sending the text to the AI. The AI sees the *result* (the file content), not the tag.
 - **Source of Truth:** The definitive record. In PDD, the **Prompt** is the source of truth; the code is just a temporary artifact generated from it.
+- **Grounding (Few-Shot History):** The process where the PDD system automatically uses successful past pairs of (Prompt, Code) as "few-shot" examples during generation. This ensures that regenerated code adheres to the established style and logic of the previous version, preventing the model from hallucinating a completely different implementation.
 - **Drift:** When the generated code slowly diverges from the prompt's intent over time, or when manual edits to code make it inconsistent with the prompt.
 
 ---
@@ -67,6 +68,18 @@ flowchart TB
 Notes:
 - The prompt defines intent. Code, example, and tests are generated artifacts.
 - Regenerate rather than patch; keep tests accumulating over time.
+
+---
+
+## Automated Grounding (In-Context Learning)
+
+Unlike standard LLM interactions where every request is a blank slate, PDD uses **Automated Grounding** to prevent "implementation drift."
+
+*   **How it works:** When you successfully generate or fix a module, PDD records that specific version (the Prompt and the resulting Code).
+*   **The Loop:** When you run `pdd generate` again, the system retrieves the most recent successful version and provides it to the LLM as a "few-shot example."
+*   **The Benefit:** The LLM sees *how* it previously solved the problem. This ensures that re-generations preserve variable naming choices, helper function structures, and stylistic nuances, rather than rewriting the code from scratch in a different style.
+
+*Note: This is distinct from "Examples as Interfaces" (which teach how to **use** a dependency). Grounding teaches the model how to **write** the current module.*
 
 ---
 
@@ -156,6 +169,7 @@ Some PDD commands (e.g., `pdd test`, `pdd example`) can automatically include pr
 - Batch, reproducible flow: eliminate long chat histories; regeneration avoids patch accumulation and incoherent diffs.
 - Accumulating tests: protect behavior across wide regenerations and refactors; failures localize issues quickly.
 - Single source of truth: prompts unify intent and dependencies, improving cross‑team coordination and reducing drift.
+- Automated Grounding: By feeding successful past generations back into the context, the system stabilizes the code over time, making "regeneration" safe even for complex modules.
 
 ---
 
@@ -283,12 +297,15 @@ flowchart LR
 
 ## Regenerate, Verify, Test, Update
 
+**Crucial Prerequisite:** Before regenerating a module, ensure you have **high test coverage** for its current functionality. Because PDD overwrites the code file entirely, your test suite is the critical safety net that prevents regression of existing features while you iterate on new ones.
+
 The PDD workflow (see pdd/docs/whitepaper.md):
 
 1) **Generate:** Fully regenerate (overwrite) the code module and its example.
 2) **Crash → Verify:** Run the example. Fix immediate runtime errors.
 3) **Test (Accumulate):** Run existing tests. If fixing a bug, **write a new failing test case first** and append it to the test file. *Never overwrite the test file; tests must accumulate to prevent regressions.*
-4) **Fix via Prompt:** If the code is wrong, **do not patch the code**. Update the prompt to clarify the requirement or constraint that was missed, then **go to step 1**.
+4) **Fix via Command:** When you use `pdd fix` (or manual fixes verified by tests), the system **automatically submits** the successful Prompt+Code pair to PDD Cloud (or local history).
+5) **Fix via Prompt:** If the logic is fundamentally flawed, update the prompt text to clarify the requirement or constraint that was missed, then **go to step 1**.
 5) **Drift Check (Optional):** Occasionally regenerate the module *without* changing the prompt (e.g., after upgrading LLM versions or before major releases). If the output differs significantly or fails tests, your prompt has "drifted" (it relied on lucky seeds or implicit context). Tighten the prompt until the output is stable.
 6) **Update:** Once tests pass, back-propagate any final learnings into the prompt.
 
@@ -381,6 +398,7 @@ Key differences:
 ## Checklist: Before You Run `pdd generate`
 
 - Does the prompt state the module’s role and boundaries clearly?
+- Do you have high test coverage for the existing code? (Regeneration relies on tests to catch regressions).
 - Are functional and non‑functional requirements explicit and testable?
 - Are inputs/outputs and error handling specified?
 - Are dependencies minimal and included explicitly (with `<include>`)?
