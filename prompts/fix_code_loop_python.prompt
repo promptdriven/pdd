@@ -77,7 +77,7 @@
     - `history_log` string seeded with `<history>\n` for structured XML logging.
   Step 3. While `attempts < max_attempts` and `total_cost <= budget`:
     a. Print the attempt number to the Rich console (verbose adds more detail). Start an `<attempt number="X">` entry in memory.
-    b. Run the Python verification program via `subprocess.run([sys.executable, verification_program], capture_output=True, text=True, encoding="utf-8")`.
+    b. Run the Python verification program using a helper that streams stdout/stderr to the console in real-time (unbuffered) while capturing them, enforcing a 300-second timeout.
     c. Append a `<verification>` section with nested `<status>`, `<output>`, and `<error>` tags, each wrapping human-readable text inside CDATA blocks for stdout/stderr.
     d. If the return code is zero:
          - Mark success, close the `<attempt>` entry, append it to `history_log`, and break.
@@ -94,7 +94,7 @@
          - Increment `attempts` only after successfully applying fixes (so pure verification passes or “no change” exits leave `attempts` unchanged).
   Step 4. If `success` is still False after the loop, restore the original backups (if they exist). Regardless of success, attempt to remove the initial backup files and rewrite `error_log_file` with the final `history_log + "</history>\n"`.
   Step 5. If `success` is True, read the final file contents into `final_program` and `final_code`; otherwise return empty strings for both.
-  Step 6. Compute `final_attempts_reported` as the number of completed fix cycles (`attempts`), bumping by one when the last verification failed before reaching `max_attempts`. If `agentic_fallback` is enabled and the primary loop failed, invoke `_safe_run_agentic_fix` as a last resort, accumulate its cost, and re-read the files on success.
+  Step 6. Compute `final_attempts_reported` as the number of completed fix cycles (`attempts`), bumping by one when the last verification failed before reaching `max_attempts`. If `agentic_fallback` is enabled and the primary loop failed, ensure `error_log_file` exists (writing the last verification error to it if missing/empty), then invoke `_safe_run_agentic_fix` as a last resort, accumulate its cost, and re-read the files on success.
   Step 7. Return `(success, final_program, final_code, final_attempts_reported, total_cost, model_name)` where `model_name` may be `None` if no LLM calls took place. Document that failure cases intentionally return empty strings even though the originals were restored.
 
 % Implementation note: keep the demonstration harness under `if __name__ == "__main__":` that writes dummy files and monkeypatches `fix_code_module_errors` for manual testing.
