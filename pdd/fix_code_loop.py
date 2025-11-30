@@ -216,16 +216,23 @@ def fix_code_loop(
         if verbose:
             rprint(f"Running verification: {sys.executable} {verification_program}")
 
-        process = subprocess.run(
-            [sys.executable, verification_program],
-            capture_output=True,
-            text=True,
-            encoding='utf-8', # Ensure consistent encoding
-        )
+        try:
+            process = subprocess.run(
+                [sys.executable, verification_program],
+                capture_output=True,
+                text=True,
+                encoding='utf-8', # Ensure consistent encoding
+                timeout=300 # 5 minute timeout to prevent hangs
+            )
+            verification_status = f"Success (Return Code: {process.returncode})" if process.returncode == 0 else f"Failure (Return Code: {process.returncode})"
+            verification_output = process.stdout or "[No standard output]"
+            verification_error = process.stderr or "[No standard error]"
+        except subprocess.TimeoutExpired as e:
+            verification_status = "Failure (Timeout)"
+            verification_output = e.stdout or "[No standard output captured before timeout]"
+            verification_error = (e.stderr or "") + "\n[Error] Verification timed out after 300 seconds."
+            process = None # Indicator that process failed to complete
 
-        verification_status = f"Success (Return Code: {process.returncode})" if process.returncode == 0 else f"Failure (Return Code: {process.returncode})"
-        verification_output = process.stdout or "[No standard output]"
-        verification_error = process.stderr or "[No standard error]"
 
         # Add verification results to the attempt log entry
         attempt_log_entry += f"""\
