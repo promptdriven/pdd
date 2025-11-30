@@ -62,22 +62,25 @@ def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_f
 
 
 def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
-    import pytest
-    from .pytest_output import TestResultCollector
+    from .pytest_output import run_pytest_and_capture_output
     """
-    Run pytest on the specified test file using the TestResultCollector plugin.
+    Run pytest on the specified test file using the subprocess-based runner.
     Returns a tuple: (failures, errors, warnings, logs)
     """
-    collector = TestResultCollector()
-    pytest.main([test_file], plugins=[collector])
-    logs, _ = collector.get_logs()
+    # Use the subprocess-based runner to avoid module caching issues
+    output_data = run_pytest_and_capture_output(test_file)
     
-    # If there are any errors or failures, we should return a non-zero value
-    # to indicate that the test has failed.
-    if collector.errors > 0 or collector.failures > 0:
-        return collector.failures, collector.errors, collector.warnings, logs
+    # Extract results
+    results = output_data.get("test_results", [{}])[0]
     
-    return 0, 0, collector.warnings, logs
+    failures = results.get("failures", 0)
+    errors = results.get("errors", 0)
+    warnings = results.get("warnings", 0)
+    
+    # Combine stdout/stderr for the log
+    logs = (results.get("standard_output", "") or "") + "\n" + (results.get("standard_error", "") or "")
+    
+    return failures, errors, warnings, logs
 
 def format_log_for_output(log_structure):
     """
@@ -220,7 +223,7 @@ def fix_error_loop(unit_test_file: str,
             if not verify_cmd:
                 raise ValueError(f"No default verification command for language: {lang}")
             
-            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL)
             pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
             if verify_result.returncode == 0:
                 initial_fails, initial_errors, initial_warnings = 0, 0, 0
@@ -477,7 +480,7 @@ def fix_error_loop(unit_test_file: str,
             # Run the verification:
             try:
                 verify_cmd = [detect_host_python_executable(), verification_program]
-                verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+                verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
                 # Safely handle None for stdout or stderr:
                 verify_stdout = verify_result.stdout or ""
                 verify_stderr = verify_result.stderr or ""
