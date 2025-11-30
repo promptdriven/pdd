@@ -114,20 +114,6 @@ else
 	@echo "Generating all example files (flattened to $(CONTEXT_DIR))"
 	@$(foreach prompt_file,$(PY_PROMPTS),\n\t\t$(eval module_path := $(patsubst $(PROMPTS_DIR)/%_python.prompt,%,$(prompt_file)))\n\t\t$(eval py_file := $(PDD_DIR)/$(module_path).py)\n\t\t$(eval example_name := $(notdir $(basename $(module_path))))\n\t\t$(eval example_file := $(CONTEXT_DIR)/$(example_name)_example.py)\n\t\techo "Generating example for $(module_path) -> $(example_file)";\n\t\tmkdir -p $(dir $(example_file));\n\t\tPYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $(example_file) $(prompt_file) $(py_file) || true;\n\t)
 endif
-ifdef MODULE
-	@echo "Generating example for module: $(MODULE)"
-	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
-	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
-	$(eval EXAMPLE_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
-
-	@# Generate example file
-	@echo "Generating $(EXAMPLE_FILE)"
-	@mkdir -p $(dir $(EXAMPLE_FILE))
-	-@PYTHONPATH=$(STAGING_DIR) pdd --strength .9 --verbose example --output $(EXAMPLE_FILE) $(PY_PROMPT) $(PY_FILE)
-else
-	@echo "Generating all example files"
-	@$(MAKE) $(EXAMPLE_OUTPUTS)
-endif
 
 # Generate Python files
 $(PDD_DIR)/%.py: $(PROMPTS_DIR)/%_python.prompt
@@ -220,7 +206,7 @@ ifdef MODULE
 	@# Define file paths based on MODULE
 	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
 	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
-	$(eval PROGRAM_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
+	$(eval PROGRAM_FILE := $(CONTEXT_DIR)/$(notdir $(basename $(MODULE)))_example.py)
 	$(eval ERROR_FILE := $(MODULE)_crash.log)
 	
 	@echo "Running $(PROGRAM_FILE) to capture crash output..."
