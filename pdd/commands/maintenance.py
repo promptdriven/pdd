@@ -3,6 +3,7 @@ Maintenance commands (sync, auto_deps, setup).
 """
 import click
 from typing import Optional, Tuple
+from pathlib import Path
 
 from ..sync_main import sync_main
 from ..auto_deps_main import auto_deps_main
@@ -11,67 +12,106 @@ from ..core.errors import handle_error
 from ..core.utils import _run_setup_utility
 
 @click.command("sync")
-@click.argument("prompt_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.argument("basename", required=True)
 @click.option(
-    "--watch",
-    is_flag=True,
-    default=False,
-    help="Watch for file changes and sync automatically.",
+    "--max-attempts",
+    default=3,
+    help="Maximum number of fix attempts.",
 )
 @click.option(
-    "--recursive",
+    "--budget",
+    default=20.0,
+    help="Maximum total cost for the sync process.",
+)
+@click.option(
+    "--skip-verify",
     is_flag=True,
     default=False,
-    help="Recursively sync all prompts in the directory.",
+    help="Skip the functional verification step.",
+)
+@click.option(
+    "--skip-tests",
+    is_flag=True,
+    default=False,
+    help="Skip unit test generation and fixing.",
+)
+@click.option(
+    "--target-coverage",
+    default=0.0,
+    help="Desired code coverage percentage.",
+)
+@click.option(
+    "--log",
+    is_flag=True,
+    default=False,
+    help="Display sync logs instead of running the sync.",
 )
 @click.pass_context
 @track_cost
 def sync(
     ctx: click.Context,
-    prompt_file: Optional[str],
-    watch: bool,
-    recursive: bool,
+    basename: str,
+    max_attempts: int,
+    budget: float,
+    skip_verify: bool,
+    skip_tests: bool,
+    target_coverage: float,
+    log: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
 
-    If PROMPT_FILE is provided, syncs that specific prompt.
-    If no argument is provided, syncs all prompts in the current directory (or recursively with --recursive).
+    BASENAME is the base name of the prompt file (e.g., 'my_module' for 'prompts/my_module_python.prompt').
     """
     try:
         result, total_cost, model_name = sync_main(
             ctx=ctx,
-            prompt_file=prompt_file,
-            watch=watch,
-            recursive=recursive,
+            basename=basename,
+            max_attempts=max_attempts,
+            budget=budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            target_coverage=target_coverage,
+            log=log,
         )
-        return result, total_cost, model_name
+        return str(result), total_cost, model_name
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None
 
 
 @click.command("auto-deps")
-@click.argument("project_path", type=click.Path(exists=True, file_okay=False))
+@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
+# exists=False to allow manual handling of quoted paths or paths with globs that shell didn't expand
+@click.argument("directory_path", type=click.Path(exists=False, file_okay=False))
 @click.option(
     "--output",
     type=click.Path(writable=True),
     default=None,
-    help="Specify where to save the dependency graph (file or directory).",
+    help="Specify where to save the modified prompt (file or directory).",
 )
 @click.pass_context
 @track_cost
 def auto_deps(
     ctx: click.Context,
-    project_path: str,
+    prompt_file: str,
+    directory_path: str,
     output: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
-    """Analyze project dependencies and generate a report."""
+    """Analyze project dependencies and update the prompt file."""
     try:
+        # Strip quotes from directory_path if present (e.g. passed incorrectly)
+        if directory_path:
+            directory_path = directory_path.strip('"').strip("'")
+
+        # auto_deps_main signature: (ctx, prompt_file, directory_path, auto_deps_csv_path, output, force_scan)
         result, total_cost, model_name = auto_deps_main(
             ctx=ctx,
-            project_path=project_path,
+            prompt_file=prompt_file,
+            directory_path=directory_path,
+            auto_deps_csv_path=None,
             output=output,
+            force_scan=False
         )
         return result, total_cost, model_name
     except Exception as exception:
@@ -80,9 +120,16 @@ def auto_deps(
 
 
 @click.command("setup")
-def setup():
+@click.pass_context
+def setup(ctx: click.Context):
     """Run the interactive setup utility."""
     try:
+        # Import here to allow proper mocking
+        from .. import cli as cli_module
+        quiet = ctx.obj.get("quiet", False) if ctx.obj else False
+        # First install completion
+        cli_module.install_completion(quiet=quiet)
+        # Then run setup utility
         _run_setup_utility()
     except Exception as e:
         handle_error(e, "setup", False)

@@ -72,14 +72,19 @@ def verify(
 ) -> Optional[Tuple]:
     """Verify code using a verification program."""
     try:
+        # verify command implies a loop if max_attempts > 1, but let's enable loop by default
+        # as it's the more powerful mode and matches the CLI args provided (max_attempts).
+        # verification_program positional arg acts as both program_file (to run) and verification_program (reference)
         success, prog_code,  code_content, attempts, total_cost, model_name = fix_verification_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
-            verification_program=verification_program,
+            program_file=verification_program,
             output_code=output_code,
             output_program=output_program,
             output_results=output_results,
+            loop=True,
+            verification_program=verification_program,
             max_attempts=max_attempts,
             budget=budget,
         )
