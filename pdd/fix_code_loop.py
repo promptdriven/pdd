@@ -285,9 +285,10 @@ def fix_code_loop(
 
     # Step 3: Enter the fixing loop
     while attempts < max_attempts and total_cost <= budget:
-        current_attempt = attempts + 1
-        rprint(f"\n[bold cyan]Attempt {current_attempt}/{max_attempts}...[/bold cyan]")
-        attempt_log_entry = f'  <attempt number="{current_attempt}">\n'
+        # current_attempt is used for logging the current iteration number
+        current_iteration_number = attempts + 1
+        rprint(f"\n[bold cyan]Attempt {current_iteration_number}/{max_attempts}...[/bold cyan]")
+        attempt_log_entry = f'  <attempt number="{current_iteration_number}">\n'
 
         # b. Run the verification program
         if verbose:
@@ -311,7 +312,7 @@ def fix_code_loop(
 
 
         # Add verification results to the attempt log entry
-        attempt_log_entry += f"""\
+        attempt_log_entry += f"""
     <verification>
       <status>{verification_status}</status>
       <output><![CDATA[
@@ -335,7 +336,7 @@ def fix_code_loop(
         current_error_message = verification_error # Use stderr as the primary error source
 
         # Add current error to the attempt log entry
-        attempt_log_entry += f"""\
+        attempt_log_entry += f"""
     <current_error><![CDATA[
 {current_error_message}
 ]]></current_error>
@@ -344,13 +345,13 @@ def fix_code_loop(
         # Check budget *before* making the potentially expensive LLM call for the next attempt
         # (Only check if cost > 0 to avoid breaking before first attempt if budget is 0)
         if total_cost > budget and attempts > 0: # Check after first attempt cost is added
-             rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}) before attempt {current_attempt}. Stopping.[/bold yellow]")
+             rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}) before attempt {current_iteration_number}. Stopping.[/bold yellow]")
              history_log += attempt_log_entry + "    <error>Budget exceeded before LLM call</error>\n  </attempt>\n"
              break
 
         # Check max attempts *before* the LLM call for this attempt
         if attempts >= max_attempts:
-             rprint(f"[bold red]Maximum attempts ({max_attempts}) reached before attempt {current_attempt}. Stopping.[/bold red]")
+             rprint(f"[bold red]Maximum attempts ({max_attempts}) reached before attempt {current_iteration_number}. Stopping.[/bold red]")
              # No need to add to history here, loop condition handles it
              break
 
@@ -358,16 +359,16 @@ def fix_code_loop(
         # Create backup copies for this iteration BEFORE calling LLM
         code_base, code_ext = os.path.splitext(code_file)
         program_base, program_ext = os.path.splitext(verification_program)
-        code_backup_path = f"{code_base}_{current_attempt}{code_ext}"
-        program_backup_path = f"{program_base}_{current_attempt}{program_ext}"
+        code_backup_path = f"{code_base}_{current_iteration_number}{code_ext}"
+        program_backup_path = f"{program_base}_{current_iteration_number}{program_ext}"
 
         try:
             shutil.copy2(code_file, code_backup_path)
             shutil.copy2(verification_program, program_backup_path)
             if verbose:
-                rprint(f"Created backups for attempt {current_attempt}: {code_backup_path}, {program_backup_path}")
+                rprint(f"Created backups for attempt {current_iteration_number}: {code_backup_path}, {program_backup_path}")
         except Exception as e:
-            rprint(f"[bold red]Error creating backups for attempt {current_attempt}: {e}[/bold red]")
+            rprint(f"[bold red]Error creating backups for attempt {current_iteration_number}: {e}[/bold red]")
             history_log += attempt_log_entry + f"    <error>Failed to create backups: {e}</error>\n  </attempt>\n"
             break # Cannot proceed reliably without backups
 
@@ -413,17 +414,17 @@ def fix_code_loop(
             rprint(f"[bold red]Error calling fix_code_module_errors: {e}[/bold red]")
             cost = 0.0 # Assume no cost if the call failed
             # Add error to the attempt log entry
-            attempt_log_entry += f"""\
+            attempt_log_entry += f"""
     <fixing>
       <error>LLM call failed: {e}</error>
     </fixing>
 """
-            # Continue to the next attempt or break if limits reached? Let's break.
             history_log += attempt_log_entry + "  </attempt>\n" # Log the attempt with the LLM error
+            attempts += 1 # Increment attempts even if LLM call failed
             break # Stop if the fixing mechanism itself fails
 
         # Add fixing results to the attempt log entry
-        attempt_log_entry += f"""\
+        attempt_log_entry += f"""
     <fixing>
       <llm_analysis><![CDATA[
 {program_code_fix or "[No analysis provided]"}
@@ -449,11 +450,13 @@ def fix_code_loop(
             rprint(f"[bold red]Error writing to log file {error_log_file}: {e}[/bold red]")
 
 
-        # Add cost and check budget *after* the LLM call
+        # Add cost and increment attempt counter (as per fix report) *before* checking budget
         total_cost += cost
+        attempts += 1 # Moved this line here as per fix report
         rprint(f"Attempt Cost: ${cost:.4f}, Total Cost: ${total_cost:.4f}, Budget: ${budget:.4f}")
+
         if total_cost > budget:
-            rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}) after attempt {current_attempt}. Stopping.[/bold yellow]")
+            rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}) after attempt {attempts}. Stopping.[/bold yellow]")
             break # Stop loop
 
         # If LLM suggested no changes but verification failed, stop to prevent loops
@@ -475,8 +478,7 @@ def fix_code_loop(
             success = False # Mark as failed if we can't write updates
             break # Stop if we cannot apply fixes
 
-        # e. Increment attempt counter (used for loop condition)
-        attempts += 1
+        # The original 'attempts += 1' was here. It has been moved earlier.
 
         # Check if max attempts reached after incrementing (for the next loop iteration check)
         if attempts >= max_attempts:
