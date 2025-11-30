@@ -1,0 +1,32 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/fix.py`.
+
+% Role & Scope
+  This module contains the `fix` command, which attempts to fix code based on unit test errors.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  - **fix**:
+    - Interface: Match the `fix` command specification in `README.md` (including loop, agentic fallback, etc.).
+    - Logic: Call `fix_main`.
+    - Track cost.
+    - Return a dict with results.
+
+% Dependencies
+  <fix_main_example>
+  <include>context/fix_main_example.py</include>
+  </fix_main_example>
+  <track_cost_example>
+  <include>context/track_cost_example.py</include>
+  </track_cost_example>
+
+% Instructions
+  - Use `handle_error` for exceptions.
+
+% Deliverables
+  - Code: `pdd/commands/fix.py`

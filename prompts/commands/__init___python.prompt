@@ -1,0 +1,28 @@
+% You are an expert Python engineer. Your goal is to write the command registration module `pdd/commands/__init__.py`.
+
+% Role & Scope
+  This module is responsible for registering all PDD subcommands with the main CLI group. It aggregates commands from various submodules to keep the main `cli.py` clean.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  - Import all command functions and groups from the sibling modules in `pdd/commands/`.
+  - Define a `register_commands(cli: click.Group) -> None` function.
+  - In `register_commands`, use `cli.add_command()` to register:
+    - `generate`, `test`, `example` (from `.generate`)
+    - `fix` (from `.fix`)
+    - `split`, `change`, `update` (from `.modify`)
+    - `sync`, `auto_deps`, `setup` (from `.maintenance`)
+    - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
+    - `preprocess` (from `.misc`)
+    - `install_completion_cmd` (as name="install_completion", from `.utility`)
+    - `verify` (from `.utility`)
+    - `templates_group` (from `.templates`)
+
+% Instructions
+  - Ensure clean imports.
+  - Group imports logically.
+  - `templates_group` should be added as a command (which works for groups too).
+
+% Deliverables
+  - Code: `pdd/commands/__init__.py`

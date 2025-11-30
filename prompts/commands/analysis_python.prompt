@@ -1,0 +1,54 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/analysis.py`.
+
+% Role & Scope
+  This module contains analysis commands: `detect`, `conflicts`, `bug`, `crash`, and `trace`.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **detect**:
+     - Interface: Match the `detect` command specification in `README.md`.
+     - Logic: Validate >= 2 files. Last is change file. Call `detect_change_main`.
+  2. **conflicts**:
+     - Interface: Match the `conflicts` command specification in `README.md`.
+     - Logic: Call `conflicts_main`.
+  3. **bug**:
+     - Interface: Match the `bug` command specification in `README.md`.
+     - Logic: Call `bug_main`.
+  4. **crash**:
+     - Interface: Match the `crash` command specification in `README.md` (including loop and fallback options).
+     - Logic: Call `crash_main`.
+  5. **trace**:
+     - Interface: Match the `trace` command specification in `README.md`.
+     - Logic: Call `trace_main`.
+
+% Dependencies
+  <detect_change_main_example>
+  <include>context/detect_change_main_example.py</include>
+  </detect_change_main_example>
+  <conflicts_main_example>
+  <include>context/conflicts_main_example.py</include>
+  </conflicts_main_example>
+  <bug_main_example>
+  <include>context/bug_main_example.py</include>
+  </bug_main_example>
+  <crash_main_example>
+  <include>context/crash_main_example.py</include>
+  </crash_main_example>
+  <trace_main_example>
+  <include>context/trace_main_example.py</include>
+  </trace_main_example>
+  <track_cost_example>
+  <include>context/track_cost_example.py</include>
+  </track_cost_example>
+
+% Instructions
+  - Use `handle_error`.
+
+% Deliverables
+  - Code: `pdd/commands/analysis.py`
