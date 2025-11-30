@@ -16,7 +16,7 @@ RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
 @patch('pdd.core.cli.auto_update') # Patch auto_update
-@patch('pdd.commands.utility.cli_module.install_completion')
+@patch('pdd.cli.install_completion')  # Patch the actual function, not cli_module
 def test_cli_install_completion_cmd(mock_install_func, mock_auto_update, runner):
     """Test the install_completion command."""
     result = runner.invoke(cli.cli, ["install_completion"])
@@ -34,7 +34,7 @@ def test_cli_install_completion_cmd(mock_install_func, mock_auto_update, runner)
     mock_auto_update.assert_called_once_with()
 
 @patch('pdd.core.cli.auto_update') # Patch auto_update
-@patch('pdd.commands.utility.cli_module.install_completion')
+@patch('pdd.cli.install_completion')  # Patch the actual function, not cli_module
 def test_cli_install_completion_cmd_quiet(mock_install_func, mock_auto_update, runner):
     """Test the install_completion command with --quiet."""
     result = runner.invoke(cli.cli, ["--quiet", "install_completion"])

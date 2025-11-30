@@ -1,11 +1,12 @@
 import os
 import shutil
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pandas as pd
 import pytest
 
-from pdd.agentic_fix import run_agentic_fix
+from pdd.agentic_fix import run_agentic_fix, _verify_and_log
 
 
 def _df():
@@ -151,5 +152,90 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     )
     assert isinstance(changed_files, list)
 
-    # Don’t require success; just verify the chosen agent tag
+    # Don't require success; just verify the chosen agent tag
     assert model.startswith(f"agentic-{provider}")
+
+
+# --- Tests for _verify_and_log with run_command ---
+
+class TestVerifyAndLog:
+    """Tests for _verify_and_log function using run_command from language_format.csv."""
+
+    def test_verify_and_log_disabled(self, tmp_path):
+        """When verification is disabled, should return True immediately."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("raise Exception('fail')")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=False)
+        assert result is True
+
+    def test_verify_and_log_with_verify_cmd(self, tmp_path):
+        """When verify_cmd is provided, should use it instead of run_command."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("print('hello')")
+
+        # Use a command that will succeed
+        result = _verify_and_log(
+            str(test_file),
+            tmp_path,
+            verify_cmd="echo 'success'",
+            enabled=True
+        )
+        assert result is True
+
+    def test_verify_and_log_uses_run_command_for_python(self, tmp_path, monkeypatch):
+        """Should use python run command from CSV for .py files."""
+        # Set up PDD_PATH to point to actual data directory
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+
+        test_file = tmp_path / "example.py"
+        test_file.write_text("print('success')\n")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+        assert result is True
+
+    def test_verify_and_log_detects_failure(self, tmp_path, monkeypatch):
+        """Should detect when script exits with non-zero code."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+
+        test_file = tmp_path / "failing_example.py"
+        test_file.write_text("import sys; sys.exit(1)\n")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+        assert result is False
+
+    def test_verify_and_log_detects_exception(self, tmp_path, monkeypatch):
+        """Should detect when script raises an exception."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+
+        test_file = tmp_path / "crashing_example.py"
+        test_file.write_text("raise ValueError('intentional crash')\n")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+        assert result is False
+
+    def test_verify_and_log_with_javascript(self, tmp_path, monkeypatch):
+        """Should use node run command for .js files if node is available."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+
+        # Skip if node is not installed
+        if not shutil.which("node"):
+            pytest.skip("node not available")
+
+        test_file = tmp_path / "example.js"
+        test_file.write_text("console.log('success');\n")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+        assert result is True
+
+    def test_verify_and_log_fallback_to_python(self, tmp_path, monkeypatch):
+        """Should fallback to Python interpreter when no run_command found."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+
+        # Mock get_run_command_for_file to return empty string
+        with patch("pdd.agentic_fix.get_run_command_for_file", return_value=""):
+            test_file = tmp_path / "example.py"
+            test_file.write_text("print('fallback works')\n")
+
+            result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+            assert result is True
