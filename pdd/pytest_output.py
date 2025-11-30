@@ -91,7 +91,8 @@ def run_pytest_and_capture_output(test_file: str) -> dict:
             [python_executable, "-m", "pytest", test_file, "-v"],
             capture_output=True,
             text=True,
-            timeout=300
+            timeout=300,
+            stdin=subprocess.DEVNULL
         )
         
         stdout = result.stdout

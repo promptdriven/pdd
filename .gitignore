@@ -200,3 +200,4 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 
+.pdd/core_dumps/*
