@@ -211,13 +211,34 @@ ifdef MODULE
 	
 	@echo "Running $(PROGRAM_FILE) to capture crash output..."
 	@mkdir -p $(shell dirname $(ERROR_FILE))
-	@-PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python $(PROGRAM_FILE) 2> $(ERROR_FILE) || true
-	
-	@echo "Fixing crashes in $(PY_FILE)"
-	-pdd --strength .9 --temperature 0 --verbose crash --loop --max-attempts 3 --budget 5.0 --output $(PDD_DIR)/$(MODULE).py --output-program $(CONTEXT_DIR)/$(MODULE)_example.py $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE) $(ERROR_FILE)
+	@if PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python $(PROGRAM_FILE) 2> $(ERROR_FILE); then \
+		echo "No crashes detected in $(MODULE)."; \
+	else \
+		echo "Crash detected! Fixing crashes in $(PY_FILE)"; \
+		pdd --strength .9 --temperature 0 --verbose crash --loop --max-attempts 3 --budget 5.0 --output $(PDD_DIR)/$(MODULE).py --output-program $(CONTEXT_DIR)/$(MODULE)_example.py $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE) $(ERROR_FILE); \
+	fi
 else
-	@echo "Please specify a MODULE to fix crashes"
-	@echo "Usage: make crash MODULE=<module_name>"
+	@echo "Attempting to fix crashes for all modules"
+	@find $(PROMPTS_DIR) -name "*_python.prompt" | while read prompt; do \
+		rel_path="$${prompt#$(PROMPTS_DIR)/}"; \
+		name="$${rel_path%_python.prompt}"; \
+		py_file="$(PDD_DIR)/$${name}.py"; \
+		program_file="$(CONTEXT_DIR)/$${name}_example.py"; \
+		error_file="$${name}_crash.log"; \
+		if [ -f "$$program_file" ]; then \
+			echo "Processing module: $$name"; \
+			echo "Running $$program_file to capture crash output..."; \
+			mkdir -p $$(dirname "$$error_file"); \
+			if PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python "$$program_file" 2> "$$error_file"; then \
+				echo "No crashes detected in $$name."; \
+			else \
+				echo "Crash detected! Fixing crashes in $$py_file"; \
+				pdd --strength .9 --temperature 0 --verbose crash --loop --max-attempts 3 --budget 5.0 --output "$$py_file" --output-program "$$program_file" "$$prompt" "$$py_file" "$$program_file" "$$error_file"; \
+			fi; \
+		else \
+			echo "Skipping module $$name: No example program found at $$program_file"; \
+		fi; \
+	done
 endif
 
 # Verify code functionality against prompt intent

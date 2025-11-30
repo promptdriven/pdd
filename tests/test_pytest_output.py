@@ -216,4 +216,38 @@ def test_test_result_collector_pytest_hooks() -> None:
 
     collector.pytest_sessionfinish(MockSession())
     assert collector.warnings == 0  # Should remain 0 as terminalreporter is None
+
+
+class BrokenStdin:
+    def fileno(self):
+        raise ValueError("redirected stdin is pseudofile, has no fileno()")
+    
+    def read(self, size=-1):
+        return ""
+
+
+def test_subprocess_safe_stdin_in_run_pytest_and_capture_output(tmp_path) -> None:
+    """
+    Regression test for the 'redirected stdin is pseudofile' crash.
+    Verifies that run_pytest_and_capture_output handles invalid sys.stdin gracefully.
+    """
+    # Create a dummy test file
+    test_file = tmp_path / "test_dummy.py"
+    test_file.write_text("def test_pass(): assert True", encoding="utf-8")
+    
+    # Patch sys.stdin to simulate the broken environment
+    with patch('sys.stdin', BrokenStdin()):
+        try:
+            # This should NOT crash
+            # Since run_pytest_and_capture_output expects a string path, convert tmp_path
+            output = run_pytest_and_capture_output(str(test_file))
+            
+            # Verify it actually ran
+            results = output.get('test_results', [{}])[0]
+            assert results.get('passed') == 1
+            assert results.get('failures') == 0
+            assert results.get('errors') == 0
+        except ValueError as e:
+            pytest.fail(f"Function crashed with ValueError accessing stdin: {e}")
+
     
