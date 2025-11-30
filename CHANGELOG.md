@@ -1,3 +1,24 @@
+## v0.0.75 (2025-11-30)
+
+### Feat
+
+- Introduce JavaScript automation examples and enhance PDD agent capabilities, prompts, and testing infrastructure.
+- Enhance core PDD functionality, update prompts, examples, and tests across various modules.
+- Update core PDD logic, examples, tests, and documentation, including new error and architecture examples. core example generation
+- Update examples, prompt templates, core PDD scripts, and tests across various modules.
+- Update examples, tests, and core prompt logic across various modules.
+- Refine examples, update core logic, enhance prompts, and expand tests across the codebase.
+- Update examples, enhance testing infrastructure, and refine core PDD logic and prompts.
+- Add analysis command and example, update various
+- Update PDD core logic, prompts, examples, and tests, and add new architecture and run configurations.
+- Update core PDD logic, prompts, examples, tests, and documentation across various modules.
+- Update various examples, prompts, tests, and core PDD components across multiple languages and functionalities.
+- Update core PDD logic, prompts, examples, tests, and documentation assets.
+- Update core PDD logic, prompt templates, examples, and tests, including new test for `commands_generate`.
+- Enhance PDD code generation, agentic prompts, examples, tests, and documentation.
+- add goldilocks prompt image to public repositories
+- enhance JWT token handling and environment configuration
+
 ## v0.0.74 (2025-11-24)
 
 ### Feat
