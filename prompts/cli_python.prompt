@@ -1,216 +1,43 @@
-<context>
-% You are an expert Python engineer. Your goal is to write a Python command-line program, `pdd`. The command-line interface will be handled using the Python Click library. It will contain the `cli` function, which serves as the main Click group.
+% You are an expert Python engineer. Your goal is to write the main entry point for the PDD CLI, `pdd/cli.py`.
 
-% The `cli` function must include the following global options, in addition to any others specified in the program description or standard for such a tool:
-    - `--force`: Standard force flag.
-    - `--strength`: Float, default from `DEFAULT_STRENGTH` (imported from `pdd.__init__`), range 0.0-1.0.
-    - `--temperature`: Float, default 0.0, range 0.0-2.0.
-    - `--time`: Float, default `None`. Help text: 'Controls reasoning allocation for LLMs (0.0-1.0). Uses DEFAULT_TIME if None.' Store the provided value in `ctx.obj['time']`; if `None`, set `ctx.obj['time'] = DEFAULT_TIME` inside `cli()` before any commands run.
-    - `--verbose`: Standard verbose flag.
-    - `--quiet`: Standard quiet flag. If `--quiet` is set, force `verbose=False`.
-    - `--output-cost`: Path, for CSV cost tracking.
-    - `--review-examples`: Flag to review few-shot examples.
-    - `--local`: Flag to run commands locally.
-    - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`. Store the value in `ctx.obj['context']`.
-    - `--list-contexts`: List available contexts found in `.pddrc` (if any) and exit 0.
-% All these global options should be passed to the `cli` function and stored in `ctx.obj`.
-</context>
-
-% Use `@click.group(invoke_without_command=True)` for `cli` to allow `pdd` to run without subcommands. Implement a `@cli.result_callback()` that summarizes each command’s `(result, cost, model_name)` and prints the total cost. Label steps using the invoked subcommand names. Click’s chaining mode is optional and not required.
-
-% Call `get_local_pdd_path()` at the very start of `cli()` to ensure `PDD_PATH` is set (e.g., for UV installs).
-
-% Auto-update behavior: run `auto_update()` unless the environment variable `PDD_AUTO_UPDATE` equals `'false'` (case-insensitive).
-% If `--list-contexts` is provided, perform the listing and exit before running subcommands or auto-update. An onboarding reminder may be shown before this early exit.
-% The CLI may print a brief status message (e.g., 'Checking for updates...') when not `--quiet`.
-
-% Expose CLI version with `click.version_option(version=__version__, package_name='pdd-cli')`.
+% Role & Scope
+  This module is the entry point for the PDD CLI. It serves as a thin wrapper that:
+  1. Imports the main `cli` group from `pdd.core.cli`.
+  2. Imports `register_commands` from `pdd.commands`.
+  3. Registers all subcommands.
+  4. Re-exports commonly used items for backward compatibility with other modules that might import from `pdd.cli`.
 
 <include>context/python_preamble.prompt</include>
 
-% Here is a detailed description of the program functionality:
-    <program_description>
-    <include>./README.md</include>
-    </program_description>
+% Instructions
+  - Import `cli` from `.core.cli`.
+  - Import `register_commands` from `.commands`.
+  - Call `register_commands(cli)` to attach subcommands to the main group.
+  - Re-export the following symbols (commonly used in `tests` or other internal scripts):
+    - `templates_group` from `.commands.templates`
+    - `auto_update` from `.auto_update`
+    - `code_generator_main` from `.code_generator_main`
+    - `context_generator_main` from `.context_generator_main`
+    - `cmd_test_main` from `.cmd_test_main`
+    - `fix_main` from `.fix_main`
+    - `split_main` from `.split_main`
+    - `change_main` from `.change_main`
+    - `update_main` from `.update_main`
+    - `sync_main` from `.sync_main`
+    - `auto_deps_main` from `.auto_deps_main`
+    - `detect_change_main` from `.detect_change_main`
+    - `conflicts_main` from `.conflicts_main`
+    - `bug_main` from `.bug_main`
+    - `crash_main` from `.crash_main`
+    - `trace_main` from `.trace_main`
+    - `preprocess_main` from `.preprocess_main`
+    - `construct_paths` from `.construct_paths`
+    - `fix_verification_main` from `.fix_verification_main`
+    - `console` from `.core.errors`
+    - `install_completion` from `.install_completion`
+    - `_should_show_onboarding_reminder` from `.core.utils`
+    - `process_commands` from `.core.cli`
+  - Include a standard `if __name__ == "__main__":` block that calls `cli()`.
 
-% Directory structure of the program:
-    - `pdd/*.py` (including `cli.py` and command modules)
-    - `pdd/prompts`
-    - `pdd/context`
-    - `pdd/data`
-
-<examples>
-    % Here is how to use the Python Click library to create a command line program:
-    <click_example>
-    <include>context/click_example.py</include>
-    </click_example>
-</examples>
-
-<instructions>
-    % Examples of using internal modules:
-
-    % Important: Call get_local_pdd_path() at the very beginning of the CLI function to ensure PDD_PATH is set correctly, especially for UV installations.
-    % This ensures the environment variable is properly set before any commands run.
-
-    <internal_example_modules>
-        - The 'sync' command will be used to sync the prompt files with the code files. Here is an example of how to use the 'sync' command:
-        <sync_main_example>
-        <include>context/sync_main_example.py</include>
-        </sync_main_example>
-
-        - The 'auto_update' function will be used to check if pdd is up to date unless `PDD_AUTO_UPDATE` equals `'false'` (case-insensitive). Here is an example of how to use the 'auto_update' function:
-        <auto_update_example>
-        <include>context/auto_update_example.py</include>
-        </auto_update_example>
-
-        - The `track_cost` decorator has already been defined in another module. Here is an example of how to use the `track_cost` decorator:
-        <track_cost_example>
-        <include>./context/track_cost_example.py</include>
-        </track_cost_example>
-
-        - `change` command: The core logic is implemented in the `change_main` function, defined in a separate module. Here's how to use `change_main`:
-        <change_main_example>
-        <include>context/change_main_example.py</include>
-        </change_main_example>
-
-        - `generate` command: To generate runnable code from a prompt file, use `code_generator_main`. Here is an example of how to generate code from the prompt from a file:
-        <code_generator_example>
-        <include>context/code_generator_main_example.py</include>
-        </code_generator_example>
-        - `generate` options:
-            - `--output LOCATION`: Where to save the generated code (file or directory). Defaults follow `construct_paths`.
-            - `--original-prompt FILENAME`: Original prompt for incremental generation; if omitted, auto-detect from git.
-            - `--incremental`: Force incremental patching even if the analyzer suggests full regeneration. Pass this flag to `code_generator_main` to handle validation and fallback logic.
-            - `-e/--env KEY=VALUE | -e KEY`: Provide template variables as described below.
-            - If `--output` is omitted, write to the derived default path from `construct_paths` (respecting `PDD_GENERATE_OUTPUT_PATH`); do not print the artifact to stdout.
-
-        - `generate` command parameters for parameterized prompts:
-            - Add a repeatable option `-e/--env` to accept template variables from the CLI. Support two forms:
-                - `KEY=VALUE` pairs (parsed on the first `=` only)
-                - Bare `KEY` (Docker-style): value is read from `os.environ[KEY]` if present; if not present, emit a non-fatal warning whenever not `--quiet` and skip the key (do not gate this on `--verbose`)
-            - Parsing rules and precedence:
-                - Only variables explicitly provided via `-e/--env` (including the bare-key env fallback) are used for template substitution
-                - Values provided via `-e/--env` override any same-named OS environment variables for this command’s template expansion
-                - Unknown placeholders are left unchanged; no error is raised
-            - Pass the parsed mapping to `code_generator_main` as `env_vars: Dict[str, str]`
-            - Apply the same variables to expand `$VAR`/`${VAR}` both in the prompt content and in the `--output` path
-
-        - `example` command: To generate example code from a code file, use `context_generator_main`. Here is an example of how to generate an example from a code file:
-        <context_generator_example>
-        <include>context/context_generator_main_example.py</include>
-        </context_generator_example>
-
-        - `test` command: To generate or to increase coverage of a unit test from code and its prompt file, use `cmd_test_main`. Here is an example of how to generate/increase coverage of  a unit test from a code file:
-        <generate_test_example>
-        <include>context/cmd_test_main_example.py</include>
-        </generate_test_example>
-        - `test` options:
-            - `--merge`: Merge new tests with an existing test file instead of creating a separate file.
-
-        - `preprocess` command: The core logic is implemented in the `preprocess_main` function, defined in a separate module. Here's how to use `preprocess_main`:
-        <preprocess_main_example>
-        <include>context/preprocess_main_example.py</include>
-        </preprocess_main_example>
-
-        - `fix` command: To fix errors in code and unit tests, use `fix_main`. Here is an example of how to fix errors in code and unit tests:
-        <fix_errors_from_unit_tests_example>
-        <include>context/fix_main_example.py</include>
-        </fix_errors_from_unit_tests_example>
-
-        - `split` command: To split a prompt file into multiple prompt files, use the `split_main` function. Here is an example of how to split a prompt file into multiple prompt files:
-        <split_main_example>
-        <include>context/split_main_example.py</include>
-        </split_main_example>
-
-        - `update` command and related sub-commands: To update the prompt file, use the `update_main` function. Here is an example of how to update the prompt file:
-        <update_prompt_example>
-        <include>context/update_main_example.py</include>
-        </update_prompt_example>
-        - `update` options and validation:
-            - `--extensions EXT1,EXT2,...`: Only valid in repository-wide mode (when no files are provided). If files are provided, raise a `click.UsageError`.
-
-        - `detect` command: To analyze a list of prompt files and a change description to determine which prompts need to be changed, use the `detect_change_main` function. Here is an example of how to detect prompts that need changes:
-        <detect_change_example>
-        <include>context/detect_change_main_example.py</include>
-        </detect_change_example>
-
-        - `conflicts` command: To analyze two prompt files to find conflicts between them and suggest how to resolve those conflicts, use the `conflicts_main` function. Here is an example of how to use the `conflicts_main` function:
-        <conflicts_main_example>
-        <include>context/conflicts_main_example.py</include>
-        </conflicts_main_example>
-
-        - `crash` command and related sub-commands: To fix errors in a code module that caused a program to crash, use the `crash_main` function. Here is an example of how to fix errors in a code module that caused a program to crash:
-        <crash_main_example>
-        <include>context/crash_main_example.py</include>
-        </crash_main_example>
-
-        - `trace` command: The core logic is implemented in the `trace_main` function, which is defined in a separate module. Here is an example of how to use the `trace_main` function:
-        <trace_main_example>
-        <include>context/trace_main_example.py</include>
-        </trace_main_example>
-
-        - `bug` command: To create a unit test from a bug in a code module, use the `bug_main` function. Here is an example of how to create a unit test from a bug in a code module:
-        <bug_to_unit_test_example>
-        <include>context/bug_main_example.py</include>
-        </bug_to_unit_test_example>
-
-        - `auto-deps` command: The core logic is implemented in the `auto_deps_main` function, defined in a separate module. Strip surrounding single or double quotes from `directory_path` if present before calling `auto_deps_main`. Here's how to use `auto_deps_main`:
-        <auto_deps_main_example>
-        <include>context/auto_deps_main_example.py</include>
-        </auto_deps_main_example>
-        - `auto-deps` options:
-            - `--force-scan`: Force rescanning of all potential dependency files.
- 
-        - `verify` command: The core logic is implemented in the `fix_verification_main` function, defined in a separate module. This command verifies functional correctness of generated code by executing a specified program and using an LLM to judge the program's output against the original prompt's intent. Here's how to use `fix_verification_main`:
-        <verify_main_example>
-        <include>context/fix_verification_main_example.py</include>
-        </verify_main_example>
-        - `verify` options:
-            - `--max-attempts N`: Maximum number of fix attempts in the verification loop.
-            - `--budget FLOAT`: Maximum LLM spend for verification and fixes.
-        
-        - `setup` command: Expose an interactive bootstrap flow that installs shell completions and gathers API keys by invoking the existing `install_completion` helper and the packaged `pdd.setup_tool` module.
-
-        - `install_completion` command: The core logic is implemented in the `install_completion` function, defined in a separate module. Pass `quiet=ctx.obj['quiet']` to reduce noise. Here's how to use `install_completion` and `get_local_pdd_path`:
-        <install_completion_example>
-        <include>context/install_completion_example.py</include>
-        </install_completion_example>
-        % 
-    </internal_example_modules>
-
-    % Additional implementation notes:
-        - Context flags:
-            - Persist `--context` in `ctx.obj['context']` so subcommands that call `construct_paths` can pass it through as `context_override=ctx.obj['context']`.
-            - Implement `--list-contexts` as a global action inside `cli()`:
-                - Import `list_available_contexts` from `pdd.construct_paths` to avoid duplicating the listing logic.
-                - Call `list_available_contexts()` and print the sorted list it returns. If no `.pddrc` exists, it returns `["default"]`.
-                - Immediately call `ctx.exit(0)` after printing to avoid running auto-update or any subcommands.
-            - Optional early validation: if `--context` is provided and the name is not in `list_available_contexts()`, raise a `click.UsageError` listing available contexts and do not continue to command execution.
-            - Note: `construct_paths` also validates `context_override` and raises `ValueError` for unknown names. Early CLI validation prevents double-reporting by exiting before `construct_paths` is invoked when invalid.
-        - Decorate LLM-using commands with `@track_cost` and return `(result, total_cost, model_name)`.
-        - Local-only commands (e.g., `preprocess`) are not cost-tracked; return a dummy `("", 0.0, "local")` when needed for chain summaries.
-        - `install_completion` returns `None` and prints its own status.
-        - Utility/self-reporting commands that return `None` (e.g., `install_completion`, `pytest-output`) are shown as "completed" in the chain summary rather than "failed".
-        - The chain summary prints "Total Estimated Cost" only when at least one step reports a cost.
-        - Detect first-run state (missing `~/.pdd/api-env` or shell completion hook) before executing subcommands; if onboarding has not run, print a reminder banner suggesting `pdd setup` and continue with the requested command. Suppress the banner once `~/.pdd/api-env` exists or when the current project already supplies credentials via `.env` or a `.pdd/` directory.
-        - For `generate`, implement `@click.option("-e", "--env", "env_kv", multiple=True, help="Set template variable (KEY=VALUE) or read KEY from env")` and parse it into `env_vars: Dict[str, str]` as described above, then pass `env_vars` into `code_generator_main`.
-        - Add `@click.option("--template", "template_name", type=str, default=None, help="Use a packaged/project template by name (e.g., architecture/architecture_json)")`. If provided, resolve the prompt file via `pdd.template_registry.load_template(template_name)` and pass the resolved absolute path to `code_generator_main`. Disallow passing both `--template` and a positional `prompt_file` simultaneously.
-        - Add a `templates` command group with subcommands:
-            * `templates list [--json] [--filter TAG | --filter tag=TAG]`: call `pdd.template_registry.list_templates(filter_tag)`; render a compact list or a simple table; when `--json` is set, print JSON. Pass the filter argument directly to the registry helper.
-            * `templates show NAME`: call `pdd.template_registry.show_template(name)` and render each section with Rich tables for readability. Use compact key/value tables for the summary (name, description, version, tags, language, output, path) and discover settings, and a multi-column table for variables (`Name | Required | Type | Description | Default/Examples`). Usage examples should render with a two-column table (`Name | Command`). Fall back to plain text only when a section is missing or not tabular (e.g., free-form notes).
-            * `templates copy NAME --to DIR`: call `pdd.template_registry.copy_template(name, dest_dir)` and print the destination.
-        - All template subcommands must honor `ctx.obj['quiet']`, suppressing Rich/verbose output when quiet mode is enabled and routing errors through `handle_error(..., quiet=ctx.obj['quiet'])`.
-        - Templating behavior for `generate`: `$VAR` and `${VAR}` in prompt content and `--output` path are replaced using only keys present in `env_vars`. Unknown placeholders remain unchanged. This substitution may be implemented in the backend (e.g., `code_generator_main`) rather than the CLI wrapper.
-        - When using `--template`, if the template front matter includes a `discover` section, execute discovery before preprocessing to populate variables used in includes; merge results into `env_vars` unless overridden by `-e`. This logic may be implemented in the command backend (e.g., `code_generator_main`) instead of the CLI wrapper.
-        - When using `--template`, if the template front matter provides an `output_schema` and the generated artifact is JSON, validate the output against the schema and raise a friendly `click.UsageError` on validation failure. This validation may also be implemented in the backend.
-        - Implement a centralized `handle_error()` that uses Rich with a custom Theme and formats exceptions (including `click.UsageError` and `MarkupError`). After logging, commands may return `None` without re-raising; non-zero exit status is emitted only when a command chooses to re-raise.
-        - When `--quiet` is active, suppress non-essential console output and chain summaries.
-        - The `trace` command logs errors; exiting non-zero occurs when exceptions are re-raised; otherwise it may return `None`.
-        - The chain result callback may use `ctx.obj['invoked_subcommands']` (tracked by `@track_cost`) to label steps. For commands not decorated with `@track_cost`, the summary may fall back to labels like `Unknown Command X`. Treat known utility/self-reporting commands that legitimately return `None` (e.g., `install_completion`, `setup`, `pytest-output`, the `templates` group) as completed steps rather than failures in the summary.
-
-    % Utility command:
-        - `pytest-output` command: Run pytest on a given test file and emit structured output. Option `--json-only` prints only JSON to stdout. This command is not cost-tracked and is intended for internal debugging/support.
-
-
-    % Ensure consistency across commands, following shared coding standards and documentation practices.
-</instructions>
+% Deliverables
+  - Code: `pdd/cli.py`
