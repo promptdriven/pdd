@@ -370,11 +370,6 @@ PDD‑style prompt (source of truth):
   - Export `parseUserId`
   - Add narrow helpers if needed; keep module cohesive
   - Include basic JSDoc and simple debug logging hooks
-
-% Deliverables
-  - Code: `src/utils/user_id_parser.ts`
-  - Minimal usage example: `examples/user_id_parser_example.ts`
-  - Tests: `tests/user_id_parser.test.ts` covering happy/edge cases
 ```
 
 Key differences:
