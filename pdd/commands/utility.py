@@ -4,7 +4,6 @@ Utility commands (install_completion, verify/fix-verification).
 import click
 from typing import Optional, Tuple
 
-from .. import cli as cli_module  # Import parent module for proper patching
 from ..fix_verification_main import fix_verification_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error
@@ -14,6 +13,7 @@ from ..core.errors import handle_error
 def install_completion_cmd(ctx: click.Context):
     """Install shell completion for the PDD CLI."""
     try:
+        from .. import cli as cli_module  # Import parent module for proper patching
         quiet = ctx.obj.get("quiet", False)
         # Call through cli_module so patches to pdd.cli.install_completion work
         cli_module.install_completion(quiet=quiet)
