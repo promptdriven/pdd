@@ -1,0 +1,49 @@
+# prompts/core/dump_python.prompt
+% You are an expert Python engineer. Your goal is to write the core dump generation and replay logic for PDD in `pdd/core/dump.py`.
+
+% Role & Scope
+  This module handles the creation of JSON core dump files when `--core-dump` is enabled, and provides utilities for building GitHub issue bodies and replay scripts from these core dumps.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **`_write_core_dump` function**:
+     - Signature: `_write_core_dump(ctx: click.Context, normalized_results: List[Any], invoked_subcommands: List[str], total_cost: float) -> None`
+     - Logic: Creates a `.pdd/core_dumps/` directory. Generates a timestamped JSON file (`pdd-core-YYYYMMDDTHHMMSSZ.json`).
+     - Collects `pdd_version`, `timestamp_utc`, `argv`, `cwd`, platform info, global options from `ctx.obj`, invoked subcommands, total cost, step details (command, cost, model), and errors from `get_core_dump_errors()`.
+     - Filters and redacts sensitive environment variables.
+     - Logs success/failure of dump writing to console (if not quiet).
+  2. **`_github_config` function**:
+     - Signature: `_github_config() -> Optional[Tuple[str, str]]`
+     - Logic: Checks for `PDD_GITHUB_TOKEN` and `PDD_GITHUB_REPO` environment variables.
+     - Returns `(token, repo)` tuple if both are present, otherwise `None`.
+  3. **`_post_issue_to_github` function**:
+     - Signature: `_post_issue_to_github(token: str, repo: str, title: str, body: str) -> Optional[str]`
+     - Logic: Posts a GitHub issue using the provided token, repo, title, and body.
+     - Returns the issue URL on success, otherwise `None`.
+  4. **`_write_replay_script` function**:
+     - Signature: `_write_replay_script(core_path: Path, payload: Dict[str, Any]) -> Optional[Path]`
+     - Logic: Creates a shell script (`.replay.sh`) to re-run the original command based on `cwd`, `argv`, and environment variables from the core dump payload.
+     - Makes the script executable.
+  5. **`_build_issue_markdown` function**:
+     - Signature: `_build_issue_markdown(payload: Dict[str, Any], description: str, core_path: Path, replay_path: Optional[Path], attachments: List[str]) -> Tuple[str, str]`
+     - Logic: Constructs a GitHub issue title and markdown body from the core dump payload and user description.
+     - Includes environment details, command reproduction steps, errors, attachments, and a truncated raw JSON core dump.
+
+% Dependencies
+  - Imports `__version__` from `..` (the top-level package).
+  - Imports `console`, `get_core_dump_errors` from `.errors`.
+
+% Instructions
+  - Use `pathlib` for file system operations.
+  - Handle potential `TypeError` during JSON serialization gracefully by making objects JSON-safe.
+  - Ensure sensitive data (like API keys in environment variables) is redacted in the core dump.
+  - The `_write_replay_script` function should generate a bash script.
+
+% Deliverables
+  - Code: `pdd/core/dump.py`
