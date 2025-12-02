@@ -248,7 +248,8 @@ def update_main(
             repo_root = repo_obj.working_tree_dir
         except git.InvalidGitRepositoryError:
             rprint("[bold red]Error:[/bold red] Repository-wide mode requires the current directory to be within a Git repository.")
-            sys.exit(1)
+            # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+            return None
 
         pairs = find_and_resolve_all_pairs(repo_root, quiet, extensions, output)
         
@@ -453,8 +454,10 @@ def update_main(
     except (ValueError, git.InvalidGitRepositoryError) as e:
         if not quiet:
             rprint(f"[bold red]Input error:[/bold red] {str(e)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return None
     except Exception as e:
         if not quiet:
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return None

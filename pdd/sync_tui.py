@@ -305,7 +305,7 @@ class SyncApp(App):
         except BaseException as e:
             self.worker_exception = e
             # Print to widget
-            self.app.call_from_thread(self.log_widget.write, f"[bold red]Error in sync worker: {e}[/bold red]")
+            self.call_from_thread(self.log_widget.write, f"[bold red]Error in sync worker: {e}[/bold red]")
             # Print to original stderr so it's visible after TUI closes
             print(f"\nError in sync worker thread: {type(e).__name__}: {e}", file=original_stderr)
             import traceback
@@ -328,7 +328,7 @@ class SyncApp(App):
                 self.redirector.flush()
             except Exception:
                 pass
-            self.app.call_from_thread(self.exit, result=self.worker_result)
+            self.call_from_thread(self.exit, result=self.worker_result)
 
     def update_animation(self) -> None:
         """Updates the animation frame based on current shared state."""
@@ -404,35 +404,6 @@ class SyncApp(App):
         frame = _render_animation_frame(self.animation_state, width)
         self.animation_view.update(frame)
 
-def show_exit_animation():
-    """Shows the exit logo animation."""
-    from .logo_animation import ASCII_LOGO_ART, ELECTRIC_CYAN, DEEP_NAVY
-    
-    logo_lines = ASCII_LOGO_ART
-    if isinstance(logo_lines, str):
-        logo_lines = logo_lines.strip().splitlines()
-    
-    # Calculate dimensions from raw lines to ensure panel fits
-    max_width = max(len(line) for line in logo_lines) if logo_lines else 0
-    
-    console = Console()
-    console.clear()
-    
-    # Join lines as-is to preserve ASCII shape
-    logo_content = "\n".join(logo_lines)
-    
-    logo_panel = Panel(
-        Text(logo_content, justify="left"), # Ensure left alignment within the block
-        style=f"bold {ELECTRIC_CYAN} on {DEEP_NAVY}", 
-        border_style=ELECTRIC_CYAN,
-        padding=(1, 4), # Add padding (top/bottom, right/left) inside the border
-        expand=False # Shrink panel to fit content
-    )
-    
-    console.print(Align.center(logo_panel))
-    time.sleep(1.0)
-    console.clear()
-
     def request_confirmation(self, message: str, title: str = "Confirmation Required") -> bool:
         """
         Request user confirmation from the worker thread.
@@ -485,4 +456,34 @@ def show_exit_animation():
         """Helper to run async confirmation in the event loop."""
         import asyncio
         asyncio.create_task(coro)
+
+
+def show_exit_animation():
+    """Shows the exit logo animation."""
+    from .logo_animation import ASCII_LOGO_ART, ELECTRIC_CYAN, DEEP_NAVY
+
+    logo_lines = ASCII_LOGO_ART
+    if isinstance(logo_lines, str):
+        logo_lines = logo_lines.strip().splitlines()
+
+    # Calculate dimensions from raw lines to ensure panel fits
+    max_width = max(len(line) for line in logo_lines) if logo_lines else 0
+
+    console = Console()
+    console.clear()
+
+    # Join lines as-is to preserve ASCII shape
+    logo_content = "\n".join(logo_lines)
+
+    logo_panel = Panel(
+        Text(logo_content, justify="left"), # Ensure left alignment within the block
+        style=f"bold {ELECTRIC_CYAN} on {DEEP_NAVY}",
+        border_style=ELECTRIC_CYAN,
+        padding=(1, 4), # Add padding (top/bottom, right/left) inside the border
+        expand=False # Shrink panel to fit content
+    )
+
+    console.print(Align.center(logo_panel))
+    time.sleep(1.0)
+    console.clear()
 
