@@ -206,7 +206,8 @@ def fix_verification_main(
             quiet=quiet,
             command="verify",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
         output_code_path = output_file_paths.get("output_code")
         output_results_path = output_file_paths.get("output_results")

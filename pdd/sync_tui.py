@@ -5,8 +5,9 @@ from typing import List, Optional, Callable, Any
 import io
 
 from textual.app import App, ComposeResult
-from textual.widgets import Static, RichLog
-from textual.containers import Vertical, Container
+from textual.screen import ModalScreen
+from textual.widgets import Static, RichLog, Button, Label
+from textual.containers import Vertical, Container, Horizontal
 from textual.binding import Binding
 from textual.worker import Worker
 from textual import work
@@ -22,6 +23,80 @@ import re
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
 from . import logo_animation
 from rich.style import Style
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """A modal confirmation dialog for user prompts within the TUI."""
+
+    CSS = """
+    ConfirmScreen {
+        align: center middle;
+    }
+
+    #confirm-dialog {
+        width: 70;
+        height: auto;
+        border: thick $primary;
+        background: #0A0A23;
+        padding: 1 2;
+    }
+
+    #confirm-title {
+        width: 100%;
+        text-align: center;
+        text-style: bold;
+        color: #00D8FF;
+        margin-bottom: 1;
+    }
+
+    #confirm-message {
+        width: 100%;
+        text-align: center;
+        color: #FFFFFF;
+        margin-bottom: 1;
+    }
+
+    #confirm-buttons {
+        width: 100%;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    #confirm-buttons Button {
+        margin: 0 2;
+        min-width: 12;
+    }
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm_yes", "Yes"),
+        Binding("n", "confirm_no", "No"),
+        Binding("enter", "confirm_yes", "Confirm"),
+        Binding("escape", "confirm_no", "Cancel"),
+    ]
+
+    def __init__(self, message: str, title: str = "Confirmation Required"):
+        super().__init__()
+        self.message = message
+        self.title_text = title
+
+    def compose(self) -> ComposeResult:
+        with Container(id="confirm-dialog"):
+            yield Label(self.title_text, id="confirm-title")
+            yield Label(self.message, id="confirm-message")
+            with Horizontal(id="confirm-buttons"):
+                yield Button("Yes (Y)", id="yes", variant="success")
+                yield Button("No (N)", id="no", variant="error")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+    def action_confirm_yes(self) -> None:
+        self.dismiss(True)
+
+    def action_confirm_no(self) -> None:
+        self.dismiss(False)
+
 
 class ThreadSafeRedirector(io.TextIOBase):
     """
@@ -142,7 +217,13 @@ class SyncApp(App):
         # Result storage
         self.worker_result = None
         self.worker_exception = None
-        
+
+        # Confirmation mechanism for worker thread to request user input
+        self._confirm_event = threading.Event()
+        self._confirm_result = False
+        self._confirm_message = ""
+        self._confirm_title = ""
+
         # Logo Animation State
         self.logo_phase = True
         self.logo_start_time = 0.0
@@ -322,4 +403,57 @@ class SyncApp(App):
         
         frame = _render_animation_frame(self.animation_state, width)
         self.animation_view.update(frame)
+
+    def request_confirmation(self, message: str, title: str = "Confirmation Required") -> bool:
+        """
+        Request user confirmation from the worker thread.
+
+        This method is thread-safe and can be called from the worker thread.
+        It will block until the user responds to the modal dialog.
+
+        Args:
+            message: The confirmation message to display
+            title: The title of the confirmation dialog
+
+        Returns:
+            True if user confirmed, False otherwise
+        """
+        self._confirm_message = message
+        self._confirm_title = title
+        self._confirm_event.clear()
+
+        # Schedule the modal on the main thread
+        self.call_from_thread(self._show_confirm_modal)
+
+        # Block worker thread until user responds
+        self._confirm_event.wait()
+        return self._confirm_result
+
+    def _show_confirm_modal(self) -> None:
+        """Shows the confirmation modal (runs on main thread).
+
+        This is called via call_from_thread, so we're on the main thread.
+        We need to schedule the async push_screen_wait properly.
+        """
+        async def show_and_wait():
+            try:
+                result = await self.push_screen_wait(
+                    ConfirmScreen(self._confirm_message, self._confirm_title)
+                )
+                self._confirm_result = result
+            except Exception as e:
+                # If modal fails, default to True to not block
+                import sys
+                print(f"Confirmation modal error: {e}", file=sys.__stderr__)
+                self._confirm_result = True
+            finally:
+                self._confirm_event.set()
+
+        # Schedule the coroutine on the app's event loop
+        self.call_later(lambda: self._run_async_confirm(show_and_wait()))
+
+    def _run_async_confirm(self, coro) -> None:
+        """Helper to run async confirmation in the event loop."""
+        import asyncio
+        asyncio.create_task(coro)
 
