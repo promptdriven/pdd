@@ -200,11 +200,15 @@ class SyncApp(App):
     @work(thread=True)
     def run_worker_task(self) -> None:
         """Runs the sync logic in a separate thread, capturing stdout/stderr."""
-        
+
         # Force Rich and other tools to output ANSI colors
         os.environ["FORCE_COLOR"] = "1"
         # Some tools check TERM
         os.environ["TERM"] = "xterm-256color"
+        # Set COLUMNS so Rich Console uses the correct width for word wrapping
+        # Account for: log container border (2), RichLog padding (2), and scrollbar (2)
+        log_width = self.size.width - 6 if self.size.width > 6 else 80
+        os.environ["COLUMNS"] = str(log_width)
         
         # Capture stdout/stderr
         original_stdout = sys.stdout
