@@ -15,9 +15,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.align import Align
 from rich.text import Text
+import time
 
 # Reuse existing animation logic
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
+from . import logo_animation
+from rich.style import Style
 
 class ThreadSafeRedirector(io.TextIOBase):
     """
@@ -122,6 +125,12 @@ class SyncApp(App):
         # Result storage
         self.worker_result = None
         self.worker_exception = None
+        
+        # Logo Animation State
+        self.logo_phase = True
+        self.logo_start_time = 0.0
+        self.logo_expanded_init = False
+        self.particles = []
 
     def compose(self) -> ComposeResult:
         yield Container(Static(id="animation-view"), id="animation-container")
@@ -131,8 +140,34 @@ class SyncApp(App):
         self.log_widget = self.query_one("#log", RichLog)
         self.animation_view = self.query_one("#animation-view", Static)
         
-        # Start animation timer (10 FPS)
-        self.set_interval(0.1, self.update_animation)
+        # Initialize Logo Particles
+        local_ascii_logo_art = logo_animation.ASCII_LOGO_ART
+        if isinstance(local_ascii_logo_art, str):
+            local_ascii_logo_art = local_ascii_logo_art.strip().splitlines()
+        
+        self.particles = logo_animation._parse_logo_art(local_ascii_logo_art)
+        
+        # Set initial styles and formation targets
+        width = self.size.width if self.size.width > 0 else 80
+        height = 18 # Fixed animation height
+        
+        for p in self.particles:
+            p.style = Style(color=logo_animation.ELECTRIC_CYAN)
+            
+        logo_target_positions = logo_animation._get_centered_logo_positions(
+            self.particles, local_ascii_logo_art, width, height
+        )
+        
+        for i, p in enumerate(self.particles):
+            p.start_x = 0.0
+            p.start_y = float(height - 1)
+            p.current_x, p.current_y = p.start_x, p.start_y
+            p.target_x, p.target_y = float(logo_target_positions[i][0]), float(logo_target_positions[i][1])
+            
+        self.logo_start_time = time.monotonic()
+        
+        # Start animation timer (20 FPS for smoother logo)
+        self.set_interval(0.05, self.update_animation)
         
         # Start worker
         self.run_worker_task()
@@ -157,14 +192,32 @@ class SyncApp(App):
         
         try:
             self.worker_result = self.worker_func()
-        except Exception as e:
+        except BaseException as e:
             self.worker_exception = e
+            # Print to widget
             self.app.call_from_thread(self.log_widget.write, f"[bold red]Error in sync worker: {e}[/bold red]")
+            # Print to original stderr so it's visible after TUI closes
+            print(f"\nError in sync worker thread: {type(e).__name__}: {e}", file=original_stderr)
+            import traceback
+            traceback.print_exc(file=original_stderr)
+            
+            # Create a failure result so the app returns something meaningful
+            self.worker_result = {
+                "success": False,
+                "total_cost": 0.0,
+                "model_name": "",
+                "error": str(e),
+                "operations_completed": [],
+                "errors": [f"{type(e).__name__}: {e}"]
+            }
         finally:
             sys.stdout = original_stdout
             sys.stderr = original_stderr
             # Force flush any remaining buffer
-            redirector.flush()
+            try:
+                redirector.flush()
+            except Exception:
+                pass
             self.app.call_from_thread(self.exit, result=self.worker_result)
 
     def update_animation(self) -> None:
@@ -172,6 +225,50 @@ class SyncApp(App):
         if self.stop_event.is_set():
             return
 
+        # We need the width of the app/screen.
+        width = self.size.width
+        if width == 0: # Not ready yet
+            width = 80
+
+        # --- LOGO ANIMATION PHASE ---
+        if self.logo_phase:
+            current_time = time.monotonic()
+            elapsed = current_time - self.logo_start_time
+            
+            formation_dur = logo_animation.LOGO_FORMATION_DURATION or 0.1
+            hold_dur = logo_animation.LOGO_HOLD_DURATION or 0.1
+            expand_dur = logo_animation.LOGO_TO_BOX_TRANSITION_DURATION or 0.1
+            
+            if elapsed < formation_dur:
+                # Formation
+                progress = elapsed / formation_dur
+                for p in self.particles: p.update_progress(progress)
+            elif elapsed < formation_dur + hold_dur:
+                # Hold
+                for p in self.particles: p.update_progress(1.0)
+            elif elapsed < formation_dur + hold_dur + expand_dur:
+                # Expansion
+                if not self.logo_expanded_init:
+                    box_targets = logo_animation._get_box_perimeter_positions(self.particles, width, 18)
+                    for i, p in enumerate(self.particles):
+                         p.set_new_transition(float(box_targets[i][0]), float(box_targets[i][1]))
+                    self.logo_expanded_init = True
+                
+                expand_elapsed = elapsed - (formation_dur + hold_dur)
+                progress = expand_elapsed / expand_dur
+                for p in self.particles: p.update_progress(progress)
+            else:
+                # Logo animation done, switch to main UI
+                self.logo_phase = False
+                # Fall through to render main UI immediately
+            
+            if self.logo_phase:
+                frame = logo_animation._render_particles_to_text(self.particles, width, 18)
+                self.animation_view.update(frame)
+                return
+
+        # --- MAIN SYNC ANIMATION PHASE ---
+        
         # Update state from refs
         current_func_name = self.function_name_ref[0] if self.function_name_ref else "checking"
         current_cost = self.cost_ref[0] if self.cost_ref else 0.0
@@ -193,18 +290,6 @@ class SyncApp(App):
             current_prompt_path, current_code_path,
             current_example_path, current_tests_path
         )
-        
-        # Render frame
-        # We need the width of the app/screen.
-        width = self.size.width
-        if width == 0: # Not ready yet
-            width = 80
-            
-        # Render the frame using the existing function
-        # Note: _render_animation_frame returns a Panel. 
-        # We might need to adjust the height or style for Textual integration.
-        # The function _render_animation_frame creates a panel with fixed height ANIMATION_BOX_HEIGHT (18).
-        # That should be fine.
         
         frame = _render_animation_frame(self.animation_state, width)
         self.animation_view.update(frame)
