@@ -180,6 +180,9 @@ def crash_main(
             rprint(f"[bold red]Error:[/bold red] Input file not found: {e}")
         # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
         return False, "", "", 0, 0.0, f"FileNotFoundError: {e}"
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not quiet:
             rprint(f"[bold red]An unexpected error occurred:[/bold red] {str(e)}")

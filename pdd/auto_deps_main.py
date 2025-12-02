@@ -100,6 +100,9 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
 
         return modified_prompt, total_cost, model_name
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as exc:
         if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(exc)}")

@@ -216,6 +216,9 @@ def fix_verification_main(
         if verbose:
             rich_print("[dim]Resolved output paths via construct_paths.[/dim]")
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         # If the helper does not understand the "verify" command fall back.
         if "invalid command" in str(e).lower():

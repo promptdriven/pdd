@@ -207,6 +207,9 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
                 "model": "",
                 "error": "Update process returned no result.",
             }
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         return {
             "prompt_file": prompt_file,
@@ -456,6 +459,9 @@ def update_main(
             rprint(f"[bold red]Input error:[/bold red] {str(e)}")
         # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
         return None
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not quiet:
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
