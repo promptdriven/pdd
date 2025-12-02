@@ -12,76 +12,18 @@ from unittest.mock import MagicMock, patch, mock_open, AsyncMock
 import click
 import requests
 from rich.panel import Panel
-from rich.text import Text # ADDED THIS IMPORT
+from rich.text import Text
 
 # Import the function to be tested using an absolute path
 from pdd.code_generator_main import code_generator_main, CLOUD_GENERATE_URL, CLOUD_REQUEST_TIMEOUT
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
-from pdd import DEFAULT_TIME # Ensure DEFAULT_TIME is available if mock_ctx doesn't always set 'time'
+from pdd import DEFAULT_TIME
 
 # Constants for mocking
 DEFAULT_MOCK_GENERATED_CODE = "def hello():\n  print('Hello, world!')"
 DEFAULT_MOCK_COST = 0.001
 DEFAULT_MOCK_MODEL_NAME = "mock_model_v1"
 DEFAULT_MOCK_LANGUAGE = "python"
-
-# Test Plan
-#
-# I. Setup and Mocking (Fixtures)
-#    1.  `mock_ctx`: Pytest fixture for `click.Context`.
-#    2.  `temp_dir_setup`: Pytest fixture to create temporary directories for prompts, output. Manages cleanup.
-#    3.  `git_repo_setup`: Pytest fixture to initialize a temporary git repository, commit files, and provide paths.
-#    4.  `mock_env_vars`: Pytest fixture using `monkeypatch` to set/unset environment variables.
-#    5.  `mock_construct_paths_fixture`: Autouse fixture to mock `pdd.construct_paths.construct_paths`.
-#    6.  `mock_pdd_preprocess_fixture`: Autouse fixture to mock `pdd.preprocess.preprocess`.
-#    7.  `mock_local_generator_fixture`: Autouse fixture to mock `pdd.code_generator.local_code_generator_func`.
-#    8.  `mock_incremental_generator_fixture`: Autouse fixture to mock `pdd.incremental_code_generator.incremental_code_generator_func`.
-#    9.  `mock_get_jwt_token_fixture`: Autouse fixture to mock `pdd.get_jwt_token.get_jwt_token`.
-#   10.  `mock_requests_post_fixture`: Autouse fixture to mock `requests.post`.
-#   11.  `mock_subprocess_run_fixture`: Autouse fixture to mock `subprocess.run`.
-#   12.  `mock_rich_console_fixture`: Autouse fixture to mock `Console.print`.
-#
-# II. Core Functionality Tests
-#
-#    A. Full Generation - Local Execution
-#        1.  `test_full_gen_local_no_output_file`: Prompt exists, no output file yet. `--local` is True.
-#        2.  `test_full_gen_local_output_exists_no_incremental_possible`: Prompt exists, output file exists, but no original prompt source. `--local` is True.
-#        3.  `test_full_gen_local_output_to_console`: Prompt exists, no output path specified. `--local` is True, `quiet=False`.
-#
-#    B. Full Generation - Cloud Execution
-#        1.  `test_full_gen_cloud_success`: Prompt exists, no output file. `--local` is False. `get_jwt_token` and `requests.post` succeed.
-#        2.  `test_full_gen_cloud_auth_failure_fallback_to_local`: `--local` is False. `get_jwt_token` raises `AuthError`.
-#        3.  `test_full_gen_cloud_network_timeout_fallback_to_local`: `--local` is False. `requests.post` raises `requests.exceptions.Timeout`.
-#        4.  `test_full_gen_cloud_http_error_fallback_to_local`: `--local` is False. `requests.post` raises `requests.exceptions.HTTPError`.
-#        5.  `test_full_gen_cloud_json_error_fallback_to_local`: `--local` is False. `requests.post` returns non-JSON response.
-#        6.  `test_full_gen_cloud_no_code_returned_fallback_to_local`: `--local` is False. `requests.post` succeeds but JSON response has no `generatedCode`.
-#        7.  `test_full_gen_cloud_missing_env_vars_fallback_to_local`: `--local` is False. Firebase/GitHub env vars not set.
-#
-#    C. Incremental Generation
-#        1.  `test_incremental_gen_with_original_prompt_file`: Prompt, output, and original_prompt_file exist. `incremental_code_generator_func` returns `is_incremental=True`.
-#        2.  `test_incremental_gen_with_git_committed_prompt`: Prompt in git, modified. Output file exists. `incremental_code_generator_func` returns `is_incremental=True`.
-#        3.  `test_incremental_gen_git_staging_untracked_files`: Prompt is untracked, output file exists. Incremental attempt. `git_add_files` called.
-#        4.  `test_incremental_gen_git_staging_modified_files`: Prompt is committed and modified, output file exists. Incremental attempt. `git_add_files` called.
-#        5.  `test_incremental_gen_fallback_to_full_on_generator_suggestion`: Conditions for incremental met. `incremental_code_generator_func` returns `is_incremental=False`.
-#        6.  `test_incremental_gen_force_incremental_flag_success`: Conditions for incremental met. `force_incremental_flag=True`.
-#        7.  `test_incremental_gen_force_incremental_flag_but_no_output_file`: `force_incremental_flag=True`, but no output file. Warns, does full.
-#        8.  `test_incremental_gen_force_incremental_flag_but_no_original_prompt`: `force_incremental_flag=True`, output file exists, but no original prompt source. Warns, does full.
-#        9.  `test_incremental_gen_no_git_repo_fallback_to_full_if_git_needed`: Output file exists, prompt not in git, no `original_prompt_file` specified. Full generation.
-#
-#    D. File and Path Handling
-#        1.  `test_error_prompt_file_not_found`: `prompt_file` path is invalid.
-#        2.  `test_error_original_prompt_file_not_found`: `original_prompt_file_path` is invalid.
-#        3.  `test_output_file_creation_and_overwrite`: Test with and without `force=True` when output file exists.
-#
-#    E. Error and Edge Cases
-#        1.  `test_code_generation_fails_no_code_produced`: Generator returns `None` for code.
-#        2.  `test_unexpected_exception_during_generation`: Generator raises a generic `Exception`.
-#
-# III. Git Helper Function Tests (Simplified for brevity, focusing on `code_generator_main`'s usage)
-#    *   Git helper tests are implicitly covered by the incremental generation tests that rely on mocked `subprocess.run`.
-#       Dedicated tests for git helpers would mock `subprocess.run` and assert behavior of `is_git_repository`,
-#       `get_git_committed_content`, `get_file_git_status`, `git_add_files`.
-#       For this test suite, we focus on `code_generator_main`'s integration of these.
 
 @pytest.fixture
 def mock_ctx(monkeypatch):
@@ -153,7 +95,7 @@ def mock_construct_paths_fixture(monkeypatch):
     mock = MagicMock()
     monkeypatch.setattr("pdd.code_generator_main.construct_paths", mock)
     mock.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Test prompt content"}, 
         {"output": "output/test_output.py"}, 
         DEFAULT_MOCK_LANGUAGE
@@ -240,7 +182,7 @@ def test_full_gen_local_no_output_file(
     output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Local test prompt"},
         {"output": output_file_path_str}, 
         "python"
@@ -275,7 +217,10 @@ def test_preprocess_order_local_flow(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "order.py")
 
     mock_construct_paths_fixture.return_value = (
-        {}, {"prompt_file": "Hello $NAME"}, {"output": output_file_path_str}, "python"
+        {},
+        {"prompt_file": "Hello $NAME"},
+        {"output": output_file_path_str},
+        "python"
     )
 
     code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False, env_vars={"NAME": "X"})
@@ -291,7 +236,6 @@ def test_preprocess_order_local_flow(
     args2, kwargs2 = calls[1]
     assert kwargs2.get('recursive') is False
     assert kwargs2.get('double_curly_brackets') is True
-
 def test_full_gen_local_output_exists_no_incremental_possible(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_subprocess_run_fixture, mock_env_vars
 ):
@@ -304,7 +248,7 @@ def test_full_gen_local_output_exists_no_incremental_possible(
     create_file(output_file_path, "Old code")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Local test prompt"},
         {"output": str(output_file_path)}, 
         "python"
@@ -373,7 +317,7 @@ def test_full_gen_local_output_to_console(
     create_file(prompt_file_path, "Console test prompt")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Console test prompt"},
         {"output": None}, 
         "python"
@@ -415,7 +359,7 @@ def test_full_gen_cloud_success(
     output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Cloud test prompt"},
         {"output": output_file_path_str}, 
         "python"
@@ -476,7 +420,7 @@ def test_full_gen_cloud_fallback_scenarios(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "fallback_output.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Fallback test prompt"},
         {"output": output_file_path_str}, 
         "python" 
@@ -522,7 +466,7 @@ def test_full_gen_cloud_fallback_scenarios(
         assert called_kwargs["preprocess_prompt"] is False
         assert code == DEFAULT_MOCK_GENERATED_CODE
         assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
-    else: 
+    else:
         mock_local_generator_fixture.assert_not_called()
     
     mock_get_jwt_token_fixture.side_effect = None 
@@ -536,7 +480,7 @@ def test_full_gen_cloud_fallback_scenarios(
 
 
 def test_full_gen_cloud_missing_env_vars_fallback_to_local(
-    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, 
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
     mock_pdd_preprocess_fixture,
     mock_local_generator_fixture, mock_rich_console_fixture, monkeypatch 
 ):
@@ -546,7 +490,7 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "env_var_output.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Env var test prompt"},
         {"output": output_file_path_str}, 
         "python" 
@@ -557,7 +501,7 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     async def mock_get_jwt_token_with_check_for_this_test(firebase_api_key, **kwargs):
         if not os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"): 
             raise AuthError("Firebase API key not set.")
-        return "test_jwt_token" 
+        return "test_jwt_token"
     
     code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
     
@@ -588,7 +532,7 @@ def test_incremental_gen_with_original_prompt_file(
     create_file(original_prompt_file_path, "Original prompt content")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {
             "prompt_file": "New prompt content",
             "original_prompt_file": "Original prompt content" 
@@ -663,7 +607,7 @@ def test_incremental_gen_with_git_committed_prompt(
     create_file(output_file_path, "Existing code for git test")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": new_prompt_content_on_disk}, 
         {"output": str(output_file_path)}, 
         "python"
@@ -707,7 +651,7 @@ def test_incremental_gen_fallback_to_full_on_generator_suggestion(
     create_file(original_prompt_file_path, "Original prompt")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
         {"output": str(output_file_path)}, 
         "python" 
@@ -768,7 +712,10 @@ def test_unknown_variable_in_output_path_left_unchanged(
     output_pattern = str(temp_dir_setup["output_dir"] / "out_${UNKNOWN}.txt")
 
     mock_construct_paths_fixture.return_value = (
-        {}, {"prompt_file": "Ignorable"}, {"output": output_pattern}, "python"
+        {},
+        {"prompt_file": "Ignorable"},
+        {"output": output_pattern},
+        "python"
     )
 
     code_generator_main(
@@ -789,7 +736,10 @@ def test_cloud_payload_uses_processed_prompt(
     create_file(prompt_file_path, prompt_content)
 
     mock_construct_paths_fixture.return_value = (
-        {}, {"prompt_file": prompt_content}, {"output": str(temp_dir_setup["output_dir"] / "c.py")}, "python"
+        {},
+        {"prompt_file": prompt_content},
+        {"output": str(temp_dir_setup["output_dir"] / "c.py")},
+        "python"
     )
 
     code_generator_main(
@@ -811,7 +761,7 @@ def test_incremental_gen_force_incremental_flag_but_no_output_file(
     output_path_str = str(temp_dir_setup["output_dir"] / "force_inc_no_out.py") 
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Prompt content"},
         {"output": output_path_str}, 
         "python"
@@ -849,7 +799,7 @@ def test_code_generation_fails_no_code_produced(
     output_path_str = str(temp_dir_setup["output_dir"] / "no_code_output.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Prompt for no code"},
         {"output": output_path_str}, 
         "python" 
@@ -872,7 +822,7 @@ def test_unexpected_exception_during_generation(
     output_path_str = str(temp_dir_setup["output_dir"] / "exception_output.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},  # resolved_config
+        {},
         {"prompt_file": "Prompt for exception"},
         {"output": output_path_str}, 
         "python" 
@@ -924,7 +874,11 @@ def test_generate_with_output_directory_path_uses_resolved_file_and_succeeds(
     # Pass the directory as --output; command main should use resolved file
     raw_output_arg_dir = str(temp_dir_setup["output_dir"])  # directory path
     code, incremental, cost, model = code_generator_main(
-        mock_ctx, str(prompt_file_path), raw_output_arg_dir, None, False
+        mock_ctx,
+        str(prompt_file_path),
+        raw_output_arg_dir,
+        None,
+        False,
     )
 
     # Expect success and file written to resolved_output_file
@@ -979,7 +933,7 @@ def test_front_matter_output_path_with_env_substitution(
 
     output_template_path = temp_dir_setup["tmp_path"] / "templated_outputs" / "${NAME}.py"
     front_matter_prompt = f"""---
-output: "{output_template_path}"
+output: \"{output_template_path}\" 
 variables:
   NAME:
     required: true
@@ -1126,7 +1080,7 @@ variables:
     required: false
 discover:
   enabled: true
-  root: "{root_str}"
+  root: \"{root_str}\" 
   set:
     DOC_FILES:
       patterns:
@@ -1171,7 +1125,7 @@ def test_front_matter_output_schema_validation_failure(
     schema_output_path = temp_dir_setup["tmp_path"] / "schema_output.json"
     front_matter_prompt = f"""---
 language: json
-output: "{schema_output_path}"
+output: \"{schema_output_path}\" 
 output_schema:
   type: object
   required:
@@ -1580,7 +1534,7 @@ def test_full_gen_local_with_unit_test(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "output_with_test.py")
 
     mock_construct_paths_fixture.return_value = (
-        {}, 
+        {},
         {"prompt_file": prompt_content},
         {"output": output_file_path_str}, 
         "python"
@@ -1637,7 +1591,7 @@ def test_conflict(): pass
     output_file_path_str = str(temp_dir_setup["output_dir"] / "conflict_output.json")
 
     mock_construct_paths_fixture.return_value = (
-        {}, 
+        {},
         {"prompt_file": prompt_content},
         {"output": output_file_path_str}, 
         "json"
@@ -1665,3 +1619,128 @@ def test_conflict(): pass
     assert "</unit_test_content>" in called_prompt
     # Ensure the prompt's front matter is NOT in the final prompt passed to generator
     assert "language: json" not in called_prompt
+
+def test_find_default_test_files_logic(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars, mock_rich_console_fixture
+):
+    """Test automatic inclusion of test files based on code filename."""
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['verbose'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "auto_test.prompt"
+    create_file(prompt_file_path, "Prompt content")
+    
+    output_file_name = "auto_test_code.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+    
+    tests_dir = temp_dir_setup["tmp_path"] / "tests"
+    tests_dir.mkdir(exist_ok=True)
+    
+    # Create matching test files
+    test_file_1 = tests_dir / "test_auto_test_code.py"
+    create_file(test_file_1, "def test_1(): pass")
+    test_file_2 = tests_dir / "test_auto_test_code_extra.py"
+    create_file(test_file_2, "def test_2(): pass")
+    
+    # Create non-matching test file
+    create_file(tests_dir / "test_other.py", "def test_other(): pass")
+
+    mock_construct_paths_fixture.return_value = (
+        {"tests_dir": str(tests_dir)},  # resolved_config with tests_dir
+        {"prompt_file": "Prompt content"},
+        {"output": output_file_path_str}, 
+        "python"
+    )
+
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    called_prompt = called_kwargs["prompt"]
+    
+    assert "<unit_test_content>" in called_prompt
+    assert "File: test_auto_test_code.py" in called_prompt
+    assert "def test_1(): pass" in called_prompt
+    assert "File: test_auto_test_code_extra.py" in called_prompt
+    assert "def test_2(): pass" in called_prompt
+    assert "test_other.py" not in called_prompt
+    
+    # Check log output
+    assert any("Found default test files" in str(call_args[0][0]) for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
+
+
+def test_exclude_tests_flag_prevents_auto_inclusion(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars, mock_rich_console_fixture
+):
+    """Test --exclude-tests prevents automatic test inclusion."""
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['verbose'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "exclude_test.prompt"
+    create_file(prompt_file_path, "Prompt content")
+    
+    output_file_name = "exclude_test_code.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+    
+    tests_dir = temp_dir_setup["tmp_path"] / "tests"
+    tests_dir.mkdir(exist_ok=True)
+    test_file = tests_dir / "test_exclude_test_code.py"
+    create_file(test_file, "def test_should_not_include(): pass")
+
+    mock_construct_paths_fixture.return_value = (
+        {"tests_dir": str(tests_dir)}, 
+        {"prompt_file": "Prompt content"},
+        {"output": output_file_path_str}, 
+        "python"
+    )
+
+    # Pass exclude_tests=True
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False, exclude_tests=True
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    called_prompt = called_kwargs["prompt"]
+    
+    assert "<unit_test_content>" not in called_prompt
+    assert "def test_should_not_include(): pass" not in called_prompt
+    
+    # Check log output (should not see "Found default test files")
+    assert not any("Found default test files" in str(call_args[0][0]) for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
+
+
+def test_explicit_unit_test_file_precedence(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """Test explicit --unit-test overrides automatic discovery."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "precedence_test.prompt"
+    create_file(prompt_file_path, "Prompt content")
+    
+    output_file_name = "precedence_code.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+    
+    tests_dir = temp_dir_setup["tmp_path"] / "tests"
+    tests_dir.mkdir(exist_ok=True)
+    auto_test_file = tests_dir / "test_precedence_code.py"
+    create_file(auto_test_file, "def test_auto(): pass")
+    
+    explicit_test_file = temp_dir_setup["tmp_path"] / "explicit_test.py"
+    create_file(explicit_test_file, "def test_explicit(): pass")
+
+    mock_construct_paths_fixture.return_value = (
+        {"tests_dir": str(tests_dir)}, 
+        {"prompt_file": "Prompt content"},
+        {"output": output_file_path_str}, 
+        "python"
+    )
+
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False, unit_test_file=str(explicit_test_file)
+    )
+
+    called_kwargs = mock_local_generator_fixture.call_args.kwargs
+    called_prompt = called_kwargs["prompt"]
+    
+    assert "<unit_test_content>" in called_prompt
+    assert "def test_explicit(): pass" in called_prompt
+    assert "def test_auto(): pass" not in called_prompt
