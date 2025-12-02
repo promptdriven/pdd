@@ -293,23 +293,6 @@ def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Di
     return {'success': True, 'log_entries': log_entries}
 
 
-def _suppress_noisy_logs():
-    """Sets logging levels to WARNING for noisy modules during sync TUI."""
-    loggers_to_silence = [
-        "pdd.llm_invoke",
-        "pdd.generate_output_paths",
-        "pdd.construct_paths",
-        "litellm",
-        "urllib3",
-        "requests",
-        "google.auth",
-    ]
-    for logger_name in loggers_to_silence:
-        logging.getLogger(logger_name).setLevel(logging.WARNING)
-    
-    # Also try to silence root logger if it was configured to INFO
-    # logging.getLogger().setLevel(logging.WARNING) 
-
 def sync_orchestration(
     basename: str,
     target_coverage: float = 90.0,
@@ -338,10 +321,7 @@ def sync_orchestration(
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
     """
-    # Suppress logs before starting TUI to prevent clutter
-    if not verbose:
-        _suppress_noisy_logs()
-
+    # Import get_extension at function scope
     from .sync_determine_operation import get_extension
     
     if log:
@@ -699,6 +679,7 @@ def sync_orchestration(
             'total_time': time.time() - start_time,
             'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items()},
             'errors': errors,
+            'error': "; ".join(errors) if errors else None,  # Add this line
             'model_name': last_model_name,
         }
 
@@ -725,6 +706,12 @@ def sync_orchestration(
     # Check for worker exception that might have caused a crash
     if app.worker_exception:
         print(f"\n[Error] Worker thread crashed with exception: {app.worker_exception}", file=sys.stderr)
+        
+        if hasattr(app, 'captured_logs') and app.captured_logs:
+             print("\n[Captured Logs (last 20 lines)]", file=sys.stderr)
+             for line in app.captured_logs[-20:]: # Print last 20 lines
+                 print(f"  {line}", file=sys.stderr)
+        
         import traceback
         # Use trace module to print the stored exception's traceback if available
         if hasattr(app.worker_exception, '__traceback__'):
