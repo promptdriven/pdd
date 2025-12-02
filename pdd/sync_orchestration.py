@@ -12,7 +12,7 @@ import subprocess
 import re
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict
 import sys
 
@@ -309,7 +309,7 @@ def sync_orchestration(
     force: bool = False,
     strength: float = 0.5,
     temperature: float = 0.0,
-    time_param: float = 0.25, 
+    time_param: float = 0.25,
     verbose: bool = False,
     quiet: bool = False,
     output_cost: Optional[str] = None,
@@ -317,6 +317,7 @@ def sync_orchestration(
     local: bool = False,
     context_config: Optional[Dict[str, str]] = None,
     context_override: Optional[str] = None,
+    confirm_callback: Optional[Callable[[str, str], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
@@ -369,6 +370,31 @@ def sync_orchestration(
     code_box_color_ref = ["blue"]
     example_box_color_ref = ["blue"]
     tests_box_color_ref = ["blue"]
+
+    # Mutable container for the app reference (set after app creation)
+    # This allows the worker to access app.request_confirmation()
+    app_ref: List[Optional['SyncApp']] = [None]
+
+    # Track if user has already confirmed overwrite (to avoid asking multiple times)
+    user_confirmed_overwrite: List[bool] = [False]
+
+    def get_confirm_callback() -> Optional[Callable[[str, str], bool]]:
+        """Get the confirmation callback from the app if available.
+
+        Once user confirms, we remember it so subsequent operations don't ask again.
+        """
+        if user_confirmed_overwrite[0]:
+            # User already confirmed, return a callback that always returns True
+            return lambda msg, title: True
+
+        if app_ref[0] is not None:
+            def confirming_callback(msg: str, title: str) -> bool:
+                result = app_ref[0].request_confirmation(msg, title)
+                if result:
+                    user_confirmed_overwrite[0] = True
+                return result
+            return confirming_callback
+        return confirm_callback  # Fall back to provided callback
 
     def sync_worker_logic():
         """
@@ -504,7 +530,8 @@ def sync_orchestration(
                         force=force, strength=strength, temperature=temperature, time=time_param,
                         verbose=verbose, quiet=quiet, output_cost=output_cost,
                         review_examples=review_examples, local=local, budget=budget - current_cost_ref[0],
-                        max_attempts=max_attempts, target_coverage=target_coverage
+                        max_attempts=max_attempts, target_coverage=target_coverage,
+                        confirm_callback=get_confirm_callback()
                     )
                     
                     result = {}
@@ -700,6 +727,9 @@ def sync_orchestration(
         tests_color_ref=tests_box_color_ref,
         stop_event=stop_event
     )
+
+    # Store app reference so worker can access request_confirmation
+    app_ref[0] = app
 
     result = app.run()
     

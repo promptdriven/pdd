@@ -309,7 +309,8 @@ def code_generator_main(
             quiet=quiet,
             command="generate",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=cli_params.get('confirm_callback')
         )
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")

@@ -393,7 +393,8 @@ def update_main(
                 quiet=quiet,
                 command="update",
                 command_options=command_options,
-                context_override=ctx.obj.get('context')
+                context_override=ctx.obj.get('context'),
+                confirm_callback=ctx.obj.get('confirm_callback')
             )
 
             input_prompt = input_strings["input_prompt_file"]

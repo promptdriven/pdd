@@ -99,7 +99,8 @@ def fix_main(
             command="fix",
             command_options=command_options,
             create_error_file=loop,  # Only create error file if in loop mode
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
 
         # Get parameters from context
