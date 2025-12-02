@@ -1,12 +1,119 @@
+## v0.0.75 (2025-11-30)
+
+### Feat
+
+- Introduce JavaScript automation examples and enhance PDD agent capabilities, prompts, and testing infrastructure.
+- Enhance core PDD functionality, update prompts, examples, and tests across various modules.
+- Update core PDD logic, examples, tests, and documentation, including new error and architecture examples. core example generation
+- Update examples, prompt templates, core PDD scripts, and tests across various modules.
+- Update examples, tests, and core prompt logic across various modules.
+- Refine examples, update core logic, enhance prompts, and expand tests across the codebase.
+- Update examples, enhance testing infrastructure, and refine core PDD logic and prompts.
+- Add analysis command and example, update various
+- Update PDD core logic, prompts, examples, and tests, and add new architecture and run configurations.
+- Update core PDD logic, prompts, examples, tests, and documentation across various modules.
+- Update various examples, prompts, tests, and core PDD components across multiple languages and functionalities.
+- Update core PDD logic, prompts, examples, tests, and documentation assets.
+- Update core PDD logic, prompt templates, examples, and tests, including new test for `commands_generate`.
+- Enhance PDD code generation, agentic prompts, examples, tests, and documentation.
+- add goldilocks prompt image to public repositories
+- enhance JWT token handling and environment configuration
+
+## v0.0.74 (2025-11-24)
+
+### Feat
+
+- **Orchestration Cycle Detection:** Implemented logic to detect and break infinite loops of alternating `test` and `fix` operations in the sync orchestration process, preventing wasted compute cycles.
+- **Structured Output Schemas:** Added `output_schema` support in code generation and LLM invocation, enabling strict JSON schema validation for structured responses.
+- **Architecture Template Normalization:** Added automatic detection and repair of unsupported interface types in generated architecture JSON templates.
+- **Robust Local Fallback:** Enhanced the local execution fallback strategy to default to the first available input file if no prompt files are found, and improved `OPENAI_API_KEY` handling for regression tests.
+
+### Fix
+
+- **Web Scraping Resilience:** Enhanced error handling in web scraping modules to improve stability during regression tests.
+
+### Refactor
+
+- **Regression Test Simplification:** Simplified command usage patterns in synchronization regression tests for better maintainability.
+
+### Data
+
+- **Model Catalog Update:** Updated the LLM catalog to support the latest Claude 4.5 family. Replaced Claude Opus 4.1 with **Claude Opus 4.5** (via Anthropic and Vertex AI) and introduced **Claude Haiku 4.5**, including updated pricing and context window configurations.
+
+### Docs
+
+- **Prompting Guide Visuals:** Added and updated the "Goldilocks" zone diagram to visually illustrate the optimal level of abstraction for prompts. Thanks Rudi Cilibrasi for your feedback!
+
+### Tests
+
+- **Schema Validation Coverage:** Expanded tests in `test_code_generator_main.py` to validate `output_schema` parameter handling across local and cloud fallback scenarios.
+
+## v0.0.73 (2025-11-21)
+
+### Feat
+
+- **Core Dump & Issue Reporting:** Added global `--core-dump` flag to capture detailed execution state, environment variables, and error traces into JSON files on failure. Introduced `pdd report-core` command to parse these dumps into markdown issue reports or automatically post them to GitHub. Thank you Jiamin Cai for your contributions!
+- **Windows Support:** Added comprehensive `SETUP_WITH_WINDOWS.md` guide covering environment variable configuration for PowerShell, CMD, and Git Bash. Thank you Grant Petersen for your contributions!
+
+### Fix
+
+- **Prompt Loading:** Enhanced `load_prompt_template` to search `pdd/prompts/` subdirectories, ensuring packaged prompt templates are correctly discovered when PDD is installed via tools like `uv` or `pip`. Thank you Danial Toktarbayev for your contributions!
+
+### Docs
+
+- **Prompting Guide:** Added a "Quickstart: PDD in 5 Minutes" recipe and a "Glossary" of key terms. Clarified that `<include>` tags are PDD pre-processing directives rather than standard XML.
+
+## v0.0.72 (2025-11-18)
+
+### Feat
+
+- Enhance agentic fallback and path handling: The `run_agentic_fix` function now returns a list of all files modified by the agent. Agentic fix loops (`fix_code_loop`, `fix_error_loop`, `fix_verification_errors_loop`) now display a summary of files changed by the agent and ensure error logs are properly initialized with parent directories created.
+- Improve CLI help structure: The `pdd` CLI now uses a custom `Click` group to organize "Generate Suite" commands (`generate`, `test`, `example`) in its root help, enhancing readability and discoverability. The `generate` command's help text is also expanded for clarity.
+- Refine output path derivation: The `construct_paths` and `generate_output_paths` functions are enhanced to support more granular control over output file locations, allowing different output keys (e.g., `output_code`, `output_test`) to derive their paths from specific input file directories in commands like `fix`, `crash`, and `verify`.
+
+### Fix
+
+- Improve file writing robustness: Commands like `fix` and `verify` now proactively create parent directories for output files (e.g., fixed code, tests, results) before writing, preventing errors in cases where the target directory structure does not yet exist.
+
+### Docs
+
+- **Prompting Guide Improvements:**
+    - Added new references to "Effective Context Engineering" and "Anthropic Prompt Engineering Overview."
+    - Expanded "Steps" guidance to "Steps & Chain of Thought," emphasizing deterministic planning and explicit step-by-step reasoning for complex tasks.
+    - Introduced an "Advanced Tips" section covering: Shared Preamble for Consistency, Positive over Negative Constraints, Positioning Critical Instructions (Hierarchy of Attention), and Command-Specific Context Files.
+    - Added a "Level of Abstraction (The \"Goldilocks\" Zone\")" section, guiding users to focus on architecture, contract, and intent, with examples of effective prompt abstraction.
+    - Updated "Dependencies & Composability (Token-Efficient Examples)" to clarify examples as "compressed interfaces" and module interfaces, with a tip to use `pdd auto-deps`.
+    - Refined PDD Workflow steps and added a "Workflow Cheatsheet: Features vs. Bugs" table, with a strong emphasis on writing new failing tests for bugs and updating prompts (not patching code) for fixes.
+
+### Tests
+
+- Update agentic fix tests: Test assertions in `tests/test_agentic_fix.py` are updated to account for the new `changed_files` return value.
+- Enhance path construction tests: `tests/test_construct_paths.py` includes new tests for the improved `input_file_dirs` handling.
+- Refactor file writing tests: `tests/test_fix_main.py` and `tests/test_fix_verification_main.py` are adjusted to use `pathlib.Path` objects consistently for file operations and verify the new directory creation logic.
+
+Many thanks to Jiamin Cai for your contributions around your continued improvements to the agentic fallback and path handling and thank you to Kante Tran for your work on the CLI help improvements!
+
 ## v0.0.71 (2025-11-18)
 
 ### Feat
 
-- enhance image processing and multimodal generation capabilities
+- `pdd update` repository mode now walks the Git root, creates/updates prompts inside the shared `prompts/` directory, honors `--output` directories during regeneration, and blocks file-only switches (`--input-code`, `--git`, etc.) so repo-wide refreshes can be scripted safely.
+- Default output derivation for file-scoped commands (`fix`, `crash`, `verify`, `split`, `change`, `update`) now anchors to the input file’s directory (including relative `.pddrc` or env overrides), so regenerated prompts/tests land beside their sources instead of the current working directory.
 
-### Refactor
+### Docs
 
-- update LLM model references and prompt instructions
+- README and PyPI description bumped to 0.0.71, moved the agentic fallback guide next to the `fix` command docs (noting `crash`/`verify` support), and clarified the `update` examples/options.
+
+### Data
+
+- Refreshed the LLM catalog and defaults: replaced Gemini 2.5 entries with Gemini 3 previews, switched the CLI default to `gpt-5.1-codex-mini`, and added the latest GPT‑5.1 SKUs.
+
+### Tests
+
+- Added coverage for repo-wide prompt regeneration, prompt-directory summaries, construct-path defaults that follow input directories, CLI summary rendering with the new default model, and LLM invocation to lock in the catalog updates.
+
+Many thanks to Jiamin Cai for your contributions around fixing the directory issues!
+
 
 ## v0.0.70 (2025-11-13)
 

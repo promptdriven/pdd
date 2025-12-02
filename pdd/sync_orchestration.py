@@ -517,6 +517,30 @@ def sync_orchestration(
                             })
                             break
 
+                # Detect test-fix cycles (infinite loop protection)
+                if len(operation_history) >= 4:
+                    # Check for repeating test-fix pattern
+                    recent_ops = operation_history[-4:]
+                    if (recent_ops == ['test', 'fix', 'test', 'fix'] or
+                        recent_ops == ['fix', 'test', 'fix', 'test']):
+                        # Count how many times this cycle has occurred
+                        cycle_count = 0
+                        for i in range(0, len(operation_history) - 1, 2):
+                            if i + 1 < len(operation_history):
+                                if ((operation_history[i] == 'test' and operation_history[i+1] == 'fix') or
+                                    (operation_history[i] == 'fix' and operation_history[i+1] == 'test')):
+                                    cycle_count += 1
+                        
+                        if cycle_count >= MAX_CYCLE_REPEATS:
+                            errors.append(f"Detected test-fix cycle repeated {cycle_count} times. Breaking cycle.")
+                            errors.append("The test failures may not be resolvable by automated fixes in this environment.")
+                            log_sync_event(basename, language, "cycle_detected", {
+                                "cycle_type": "test-fix",
+                                "cycle_count": cycle_count,
+                                "operation_history": operation_history[-10:]  # Last 10 operations
+                            })
+                            break
+
                 # Detect consecutive fix operations (infinite fix loop protection)
                 if operation == 'fix':
                     # Count consecutive fix operations
