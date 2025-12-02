@@ -1,5 +1,6 @@
 import threading
 import sys
+import os
 from typing import List, Optional, Callable, Any
 import io
 
@@ -18,18 +19,36 @@ from rich.text import Text
 # Reuse existing animation logic
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
 
-class StdoutRedirector(io.TextIOBase):
-    """Redirects writes to a Textual RichLog."""
-    def __init__(self, log_widget: RichLog):
-        self.log_widget = log_widget
+class ThreadSafeRedirector(io.TextIOBase):
+    """
+    Redirects writes to a Textual RichLog, handling ANSI codes and line buffering.
+    """
+    def __init__(self, app: App, log: RichLog):
+        self.app = app
+        self.log = log
         self.buffer = ""
 
     def write(self, s: str) -> int:
-        self.log_widget.write(s)
+        if not s:
+            return 0
+            
+        self.buffer += s
+        
+        # Process complete lines
+        while '\n' in self.buffer:
+            line, self.buffer = self.buffer.split('\n', 1)
+            # Convert ANSI codes to Rich Text
+            text = Text.from_ansi(line)
+            self.app.call_from_thread(self.log.write, text)
+            
         return len(s)
     
     def flush(self):
-        pass
+        # Write any remaining content in buffer
+        if self.buffer:
+            text = Text.from_ansi(self.buffer)
+            self.app.call_from_thread(self.log.write, text)
+            self.buffer = ""
 
 class SyncApp(App):
     """Textual App for PDD Sync."""
@@ -122,28 +141,15 @@ class SyncApp(App):
     def run_worker_task(self) -> None:
         """Runs the sync logic in a separate thread, capturing stdout/stderr."""
         
+        # Force Rich and other tools to output ANSI colors
+        os.environ["FORCE_COLOR"] = "1"
+        # Some tools check TERM
+        os.environ["TERM"] = "xterm-256color"
+        
         # Capture stdout/stderr
         original_stdout = sys.stdout
         original_stderr = sys.stderr
         
-        # We need to use call_from_thread to safely write to widget from this thread
-        # But Textual's RichLog.write is thread-safe-ish if scheduled? 
-        # Better to use a custom redirector that schedules the write.
-        
-        class ThreadSafeRedirector(io.TextIOBase):
-            def __init__(self, app: App, log: RichLog):
-                self.app = app
-                self.log = log
-            def write(self, s: str):
-                if s:
-                    # Remove trailing newlines if any, as RichLog adds them or handles them?
-                    # RichLog.write appends a line or content. 
-                    # If we get partial writes, it might look weird.
-                    # Let's just pass it through.
-                    self.app.call_from_thread(self.log.write, s)
-                return len(s)
-            def flush(self): pass
-
         redirector = ThreadSafeRedirector(self, self.log_widget)
         
         sys.stdout = redirector
@@ -157,6 +163,8 @@ class SyncApp(App):
         finally:
             sys.stdout = original_stdout
             sys.stderr = original_stderr
+            # Force flush any remaining buffer
+            redirector.flush()
             self.app.call_from_thread(self.exit, result=self.worker_result)
 
     def update_animation(self) -> None:
