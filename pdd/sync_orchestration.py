@@ -17,6 +17,7 @@ from dataclasses import asdict
 import sys
 
 import click
+import logging
 
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
@@ -292,6 +293,23 @@ def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Di
     return {'success': True, 'log_entries': log_entries}
 
 
+def _suppress_noisy_logs():
+    """Sets logging levels to WARNING for noisy modules during sync TUI."""
+    loggers_to_silence = [
+        "pdd.llm_invoke",
+        "pdd.generate_output_paths",
+        "pdd.construct_paths",
+        "litellm",
+        "urllib3",
+        "requests",
+        "google.auth",
+    ]
+    for logger_name in loggers_to_silence:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
+    
+    # Also try to silence root logger if it was configured to INFO
+    # logging.getLogger().setLevel(logging.WARNING) 
+
 def sync_orchestration(
     basename: str,
     target_coverage: float = 90.0,
@@ -320,6 +338,10 @@ def sync_orchestration(
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
     """
+    # Suppress logs before starting TUI to prevent clutter
+    if not verbose:
+        _suppress_noisy_logs()
+
     from .sync_determine_operation import get_extension
     
     if log:
@@ -658,13 +680,15 @@ def sync_orchestration(
                         errors.append(f"Operation '{operation}' failed.")
                         break
 
-        except Exception as e:
-            errors.append(f"An unexpected error occurred in the orchestrator: {e}")
+        except BaseException as e:
+            errors.append(f"An unexpected error occurred in the orchestrator: {type(e).__name__}: {e}")
+            # Log the full traceback for debugging
+            import traceback
+            traceback.print_exc()
         finally:
             try:
                 log_sync_event(basename, language, "lock_released", {"pid": os.getpid(), "total_cost": current_cost_ref[0]})
-            except:
-                 pass
+            except: pass
             
         # Return result dict
         return {
@@ -698,6 +722,14 @@ def sync_orchestration(
 
     result = app.run()
     
+    # Check for worker exception that might have caused a crash
+    if app.worker_exception:
+        print(f"\n[Error] Worker thread crashed with exception: {app.worker_exception}", file=sys.stderr)
+        import traceback
+        # Use trace module to print the stored exception's traceback if available
+        if hasattr(app.worker_exception, '__traceback__'):
+            traceback.print_exception(type(app.worker_exception), app.worker_exception, app.worker_exception.__traceback__, file=sys.stderr)
+
     if result is None:
         return {
             "success": False,
