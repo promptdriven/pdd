@@ -478,3 +478,76 @@ def test_non_python_triggers_agentic_fallback_failure(tmp_path):
     # Should still return contents read from disk on best-effort basis
     assert "dummy test" in final_test
     assert "console.log('Hello, world!');" in final_code
+
+
+class BrokenStdin:
+    def fileno(self):
+        raise ValueError("redirected stdin is pseudofile, has no fileno()")
+    
+    def read(self, size=-1):
+        return ""
+
+
+def test_subprocess_safe_stdin_in_run_pytest_on_file(tmp_path):
+    """
+    Regression test ensuring the fix propagates to the higher-level helper 
+    used by fix_error_loop.
+    """
+    # We need to import run_pytest_on_file locally if not exposed, 
+    # but it is available from pdd.fix_error_loop
+    from pdd.fix_error_loop import run_pytest_on_file
+    
+    test_file = tmp_path / "test_dummy_2.py"
+    test_file.write_text("def test_pass(): assert True", encoding="utf-8")
+    
+    with patch('sys.stdin', BrokenStdin()):
+        try:
+            fails, errors, warnings, logs = run_pytest_on_file(str(test_file))
+            assert fails == 0
+            assert errors == 0
+        except ValueError as e:
+            pytest.fail(f"run_pytest_on_file crashed with ValueError accessing stdin: {e}")
+
+
+def test_fix_loop_reloading(tmp_path):
+    """
+    Regression test for module caching issues.
+    Ensures that if a test file imports a module, and that module changes on disk,
+    the next run of run_pytest_on_file sees the NEW code (because it uses a fresh subprocess).
+    """
+    import time
+    from pdd.fix_error_loop import run_pytest_on_file
+
+    # 1. Create the module
+    module_file = tmp_path / "target_module.py"
+    module_file.write_text("def target_func(): return 1\n", encoding="utf-8")
+    
+    # 2. Create the test that expects return value 2 (so it fails initially)
+    test_file = tmp_path / "test_target.py"
+    test_file.write_text("""
+import sys
+import os
+# Ensure current dir is in path so we can import target_module
+sys.path.insert(0, os.path.dirname(__file__))
+from target_module import target_func
+
+def test_func():
+    assert target_func() == 2
+""", encoding="utf-8")
+    
+    # 3. Run first time -> SHOULD FAIL
+    # run_pytest_on_file returns (fails, errors, warnings, logs)
+    fails, errors, warnings, logs = run_pytest_on_file(str(test_file))
+    assert fails == 1, "Test should have failed initially"
+    
+    # 4. Modify the module on disk to pass the test
+    # Wait a tiny bit to ensure filesystem timestamp update if needed (usually fine)
+    time.sleep(0.1) 
+    module_file.write_text("def target_func(): return 2\n", encoding="utf-8")
+    
+    # 5. Run second time -> SHOULD PASS
+    # If module caching was active (old behavior), this would fail again.
+    fails_2, errors_2, warnings_2, logs_2 = run_pytest_on_file(str(test_file))
+    
+    assert fails_2 == 0, f"Test should have passed after update. Logs:\n{logs_2}"
+

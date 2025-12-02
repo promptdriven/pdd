@@ -8,7 +8,7 @@ from .construct_paths import construct_paths
 from .conflicts_in_prompts import conflicts_in_prompts
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
-def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optional[str], verbose: bool = False) -> Tuple[List[Dict], float, str]:
+def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optional[str], verbose: bool = False, language: Optional[str] = None) -> Tuple[List[Dict], float, str]:
     """
     Main function to analyze conflicts between two prompts.
 
@@ -17,6 +17,7 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
     :param prompt2: Path to the second prompt file.
     :param output: Optional path to save the output CSV file.
     :param verbose: Optional parameter to control verbosity (default: False).
+    :param language: Optional language hint for file processing.
     :return: A tuple containing the list of conflicts, total cost, and model name used.
     """
     try:
@@ -28,6 +29,9 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         command_options = {
             "output": output
         }
+        if language:
+            command_options["language"] = language
+
         resolved_config, input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),

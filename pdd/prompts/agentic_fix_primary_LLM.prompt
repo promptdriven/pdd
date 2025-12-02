@@ -36,11 +36,16 @@ PRIMARY PATH (edit-enabled; do NOT run commands yourself):
 FALLBACK PATH (if you CANNOT run commands):
   A) Produce the ENTIRE corrected contents for every file you changed.
   B) For EACH changed file, print ONE block using this exact wrapping:
-       <<<BEGIN_FILE:/absolute/or/relative/path/to/file>>>
-       <FULL CORRECTED FILE CONTENT HERE>
-       <<<END_FILE:/absolute/or/relative/path/to/file>>>
+       <<<BEGIN_FILE:{code_abs}>>>
+       <FULL CORRECTED FILE CONTENT>
+       <<<END_FILE:{code_abs}>>>
+
+     If you also modify the test file:
+       <<<BEGIN_FILE:{test_abs}>>>
+       <FULL CORRECTED FILE CONTENT>
+       <<<END_FILE:{test_abs}>>>
   C) If you cannot run tests locally, ALSO output a single block with the exact shell command to run the tests:
        <<<BEGIN_TESTCMD>>>
-       <single-line or multi-line shell command to run the tests and return 0 on success>
+       python {test_abs}
        <<<END_TESTCMD>>>
   D) Print nothing else.
