@@ -179,6 +179,28 @@ def git_add_files(file_paths: List[str], verbose: bool = False) -> bool:
         return False
 # --- End Git Helper Functions ---
 
+def _find_default_test_files(tests_dir: Optional[str], code_file_path: Optional[str]) -> List[str]:
+    """Find default test files for a given code file in the tests directory."""
+    if not tests_dir or not code_file_path:
+        return []
+
+    tests_path = pathlib.Path(tests_dir)
+    code_path = pathlib.Path(code_file_path)
+
+    if not tests_path.exists() or not tests_path.is_dir():
+        return []
+
+    code_stem = code_path.stem
+    code_suffix = code_path.suffix
+
+    # Look for files starting with test_{code_stem}
+    # We look for test_{code_stem}*.{code_suffix}
+    # e.g., hello.py -> test_hello.py, test_hello_1.py
+    pattern = f"test_{code_stem}*{code_suffix}"
+    found_files = list(tests_path.glob(pattern))
+
+    return [str(p) for p in sorted(found_files)]
+
 
 def code_generator_main(
     ctx: click.Context,
@@ -188,6 +210,7 @@ def code_generator_main(
     force_incremental_flag: bool,
     env_vars: Optional[Dict[str, str]] = None,
     unit_test_file: Optional[str] = None,
+    exclude_tests: bool = False,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -224,20 +247,6 @@ def code_generator_main(
             prompt_content = body
         else:
             prompt_content = raw_prompt_content
-
-        if unit_test_file:
-            try:
-                with open(unit_test_file, 'r', encoding='utf-8') as f:
-                    unit_test_content = f.read()
-                
-                prompt_content += "\n\n<unit_test_content>\n"
-                prompt_content += "The following is the unit test content that the generated code must pass:\n"
-                prompt_content += "```\n" 
-                prompt_content += unit_test_content
-                prompt_content += "\n```\n"
-                prompt_content += "</unit_test_content>\n"
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not read unit test file {unit_test_file}: {e}[/yellow]")
         
         # Determine LLM state early to avoid unnecessary overwrite prompts
         llm_enabled: bool = True
@@ -283,6 +292,34 @@ def code_generator_main(
                 output_path = resolved_output
             else:
                 output_path = output
+
+        # --- Unit Test Inclusion Logic ---
+        test_files_to_include: List[str] = []
+        if unit_test_file:
+            test_files_to_include.append(unit_test_file)
+        elif not exclude_tests:
+            # Try to find default test files
+            tests_dir = resolved_config.get("tests_dir")
+            found_tests = _find_default_test_files(tests_dir, output_path)
+            if found_tests:
+                if verbose:
+                    console.print(f"[info]Found default test files: {', '.join(found_tests)}[/info]")
+                test_files_to_include.extend(found_tests)
+        
+        if test_files_to_include:
+            prompt_content += "\n\n<unit_test_content>\n"
+            prompt_content += "The following is the unit test content that the generated code must pass:\n"
+            for tf in test_files_to_include:
+                try:
+                    with open(tf, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    # If multiple files, label them? Or just concat?
+                    # Using code block with file path comment is safer for context.
+                    prompt_content += f"\nFile: {pathlib.Path(tf).name}\n```\n{content}\n```\n"
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Could not read unit test file {tf}: {e}[/yellow]")
+            prompt_content += "</unit_test_content>\n"
+        # ---------------------------------
 
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")

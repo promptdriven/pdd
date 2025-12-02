@@ -707,6 +707,13 @@ class GenerateCommand(click.Command):
     default=None,
     help="Path to a unit test file to include in the prompt.",
 )
+@click.option(
+    "--exclude-tests",
+    "exclude_tests",
+    is_flag=True,
+    default=False,
+    help="Do not automatically include test files found in the default tests directory.",
+)
 @click.pass_context
 @track_cost
 def generate(
@@ -718,6 +725,7 @@ def generate(
     env_kv: Tuple[str, ...],
     template_name: Optional[str],
     unit_test_file: Optional[str],
+    exclude_tests: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Generate code from a prompt file.
@@ -775,6 +783,7 @@ def generate(
             force_incremental_flag=incremental_flag,
             env_vars=env_vars or None,
             unit_test_file=unit_test_file,
+            exclude_tests=exclude_tests,
         )
         return generated_code, total_cost, model_name
     except Exception as exception:
