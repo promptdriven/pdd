@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 import os
 from pathlib import Path
-from typing import Dict, Tuple, Any, Optional, List
+from typing import Dict, Tuple, Any, Optional, List, Callable
 import fnmatch
 import logging
 
@@ -414,6 +414,7 @@ def construct_paths(
     command_options: Optional[Dict[str, Any]], # Allow None
     create_error_file: bool = True,  # Added parameter to control error file creation
     context_override: Optional[str] = None,  # Added parameter for context override
+    confirm_callback: Optional[Callable[[str, str], bool]] = None,  # Callback for interactive confirmation
 ) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]:
     """
     High‑level orchestrator that loads inputs, determines basename/language,
@@ -774,28 +775,38 @@ def construct_paths(
             existing_files[k] = p_obj # Store the Path object
 
     if existing_files and not force:
+        paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
         if not quiet:
             # Use the Path objects stored in existing_files for resolve()
             # Print without Rich tags for easier testing
-            paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
             console.print(
                 f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
                 style="warning"
             )
-        # Use click.confirm for user interaction
-        try:
-            if not click.confirm(
-                click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
-            ):
-                click.secho("Operation cancelled.", fg="red", err=True)
-                sys.exit(1) # Exit if user chooses not to overwrite
-        except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
-            if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
-                # Non-interactive environment, default to not overwriting
-                click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
-            else:
-                click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
-            sys.exit(1)
+
+        # Use confirm_callback if provided (for TUI environments), otherwise use click.confirm
+        if confirm_callback is not None:
+            # Use the provided callback for confirmation (e.g., from Textual TUI)
+            confirm_message = f"The following files will be overwritten:\n{paths_list}\n\nOverwrite existing files?"
+            if not confirm_callback(confirm_message, "Overwrite Confirmation"):
+                raise click.Abort()
+        else:
+            # Use click.confirm for CLI interaction
+            try:
+                if not click.confirm(
+                    click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
+                ):
+                    click.secho("Operation cancelled.", fg="red", err=True)
+                    raise click.Abort()
+            except click.Abort:
+                raise  # Re-raise Abort exceptions
+            except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
+                if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
+                    # Non-interactive environment, default to not overwriting
+                    click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
+                else:
+                    click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
+                raise click.Abort()
 
 
     # ------------- Final reporting ---------------------------

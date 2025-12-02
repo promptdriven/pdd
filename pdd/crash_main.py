@@ -80,7 +80,8 @@ def crash_main(
             quiet=quiet,
             command="crash",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
 
         prompt_content = input_strings["prompt_file"]
