@@ -178,8 +178,10 @@ def crash_main(
     except FileNotFoundError as e:
         if not quiet:
             rprint(f"[bold red]Error:[/bold red] Input file not found: {e}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return False, "", "", 0, 0.0, f"FileNotFoundError: {e}"
     except Exception as e:
         if not quiet:
             rprint(f"[bold red]An unexpected error occurred:[/bold red] {str(e)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return False, "", "", 0, 0.0, f"Error: {e}"

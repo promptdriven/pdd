@@ -111,4 +111,5 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
     except Exception as e:
         if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, f"Error: {e}"

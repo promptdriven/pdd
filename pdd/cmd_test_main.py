@@ -96,8 +96,8 @@ def cmd_test_main(
         # potential errors during file I/O and path construction, ensuring the
         # CLI remains robust.
         print(f"[bold red]Error constructing paths: {exception}[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, f"Error: {exception}"
 
     if verbose:
         print(f"[bold blue]Language detected:[/bold blue] {language}")
@@ -120,8 +120,8 @@ def cmd_test_main(
 
     if not output_file:
         print("[bold red]Error: Output file path could not be determined.[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, "Error: Output file path could not be determined"
 
     source_file_path_for_prompt = str(Path(code_file).expanduser().resolve())
     test_file_path_for_prompt = str(Path(output_file).expanduser().resolve())
@@ -147,16 +147,16 @@ def cmd_test_main(
             # during the test generation process, which involves external model
             # interactions and complex logic.
             print(f"[bold red]Error generating tests: {exception}[/bold red]")
-            ctx.exit(1)
-            return "", 0.0, ""
+            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+            return "", 0.0, f"Error: {exception}"
     else:
         if not existing_tests:
             print(
                 "[bold red]Error: --existing-tests is required "
                 "when using --coverage-report[/bold red]"
             )
-            ctx.exit(1)
-            return "", 0.0, ""
+            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+            return "", 0.0, "Error: --existing-tests is required when using --coverage-report"
         try:
             unit_test, total_cost, model_name = increase_tests(
                 existing_unit_tests=input_strings["existing_tests"],
@@ -174,16 +174,16 @@ def cmd_test_main(
             # while increasing test coverage, including problems with parsing
             # reports or interacting with the language model.
             print(f"[bold red]Error increasing test coverage: {exception}[/bold red]")
-            ctx.exit(1)
-            return "", 0.0, ""
+            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+            return "", 0.0, f"Error: {exception}"
 
     # Check if unit_test content is empty
     if not unit_test or not unit_test.strip():
         print(f"[bold red]Error: Generated unit test content is empty or whitespace-only.[/bold red]")
         print(f"[bold yellow]Debug: unit_test length: {len(unit_test) if unit_test else 0}[/bold yellow]")
         print(f"[bold yellow]Debug: unit_test content preview: {repr(unit_test[:100]) if unit_test else 'None'}[/bold yellow]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, "Error: Generated unit test content is empty"
     
     try:
         # Ensure parent directory exists
@@ -198,8 +198,8 @@ def cmd_test_main(
         # (e.g., permissions, disk space) that can occur when writing the
         # output file, preventing the program from crashing unexpectedly.
         print(f"[bold red]Error saving tests to file: {exception}[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, f"Error: {exception}"
 
     if verbose:
         print(f"[bold blue]Total cost:[/bold blue] ${total_cost:.6f}")
