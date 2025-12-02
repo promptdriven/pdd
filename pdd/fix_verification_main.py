@@ -234,7 +234,8 @@ def fix_verification_main(
                     input_strings["program_file"] = f.read()
             except FileNotFoundError as fe:
                 rich_print(f"[bold red]Error:[/bold red] {fe}")
-                sys.exit(1)
+                # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+                return False, "", "", 0, 0.0, f"FileNotFoundError: {fe}"
 
             # Pick or build output paths
             if output_code_path is None:
@@ -256,7 +257,8 @@ def fix_verification_main(
             if verbose:
                 import traceback
                 rich_print(Panel(traceback.format_exc(), title="Traceback", border_style="red"))
-            sys.exit(1)
+            # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+            return False, "", "", 0, 0.0, f"Error: {e}"
 
     # --- Core Logic ---
     success: bool = False

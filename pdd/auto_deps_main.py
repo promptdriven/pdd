@@ -103,4 +103,5 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
     except Exception as exc:
         if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(exc)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, f"Error: {exc}"
