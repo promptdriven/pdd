@@ -108,6 +108,9 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
 
         return example_code, total_cost, model_name
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")

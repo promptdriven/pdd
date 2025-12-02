@@ -91,6 +91,9 @@ def cmd_test_main(
             context_override=ctx.obj.get('context'),
             confirm_callback=ctx.obj.get('confirm_callback')
         )
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as exception:
         # Catching a general exception is necessary here to handle a wide range of
         # potential errors during file I/O and path construction, ensuring the

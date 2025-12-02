@@ -295,6 +295,9 @@ def fix_main(
 
         return success, fixed_unit_test, fixed_code, attempts, total_cost, model_name
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not ctx.obj.get('quiet', False):
             # Safely handle and print MarkupError

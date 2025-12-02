@@ -329,6 +329,9 @@ def code_generator_main(
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
         return "", False, 0.0, "error"
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         console.print(f"[red]Error during path construction: {e}[/red]")
         return "", False, 0.0, "error"
@@ -1019,16 +1022,19 @@ def code_generator_main(
                 console.print("[red]Error: Code generation failed. No code was produced.[/red]")
                 return "", was_incremental_operation, total_cost, model_name or "error"
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if isinstance(e, click.UsageError):
             raise
-        
+
         # For any other unexpected error, we should fail hard so the CLI exits non-zero
         # Log the detailed traceback first if verbose
         if verbose:
             import traceback
             console.print(traceback.format_exc())
-            
+
         raise click.UsageError(f"An unexpected error occurred: {e}")
         
     return generated_code_content or "", was_incremental_operation, total_cost, model_name
