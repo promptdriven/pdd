@@ -733,6 +733,11 @@ def sync_orchestration(
 
     result = app.run()
     
+    # Show exit animation if not quiet
+    if not quiet:
+        from .sync_tui import show_exit_animation
+        show_exit_animation()
+    
     # Check for worker exception that might have caused a crash
     if app.worker_exception:
         print(f"\n[Error] Worker thread crashed with exception: {app.worker_exception}", file=sys.stderr)
