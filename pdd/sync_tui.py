@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.align import Align
 from rich.text import Text
 import time
+import re
 
 # Reuse existing animation logic
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
@@ -28,8 +29,11 @@ class ThreadSafeRedirector(io.TextIOBase):
     """
     def __init__(self, app: App, log: RichLog):
         self.app = app
-        self.log = log
+        self.log_widget = log
         self.buffer = ""
+        # Heuristic pattern for standard logging timestamp (e.g., 2025-12-02 01:20:28,193)
+        self.log_pattern = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
+        self.captured_logs = [] # Store logs for debug
 
     def write(self, s: str) -> int:
         if not s:
@@ -40,9 +44,20 @@ class ThreadSafeRedirector(io.TextIOBase):
         # Process complete lines
         while '\n' in self.buffer:
             line, self.buffer = self.buffer.split('\n', 1)
+            self.captured_logs.append(line) # Capture raw line
+            
             # Convert ANSI codes to Rich Text
             text = Text.from_ansi(line)
-            self.app.call_from_thread(self.log.write, text)
+            
+            # Check if the line looks like a log message and dim it
+            # We strip ANSI codes for pattern matching to ensure the regex works
+            plain_text = text.plain
+            if self.log_pattern.match(plain_text):
+                # Apply dim style to the whole text object
+                # This layers 'dim' over existing styles (like colors)
+                text.style = Style(dim=True)
+                
+            self.app.call_from_thread(self.log_widget.write, text)
             
         return len(s)
     
@@ -50,7 +65,9 @@ class ThreadSafeRedirector(io.TextIOBase):
         # Write any remaining content in buffer
         if self.buffer:
             text = Text.from_ansi(self.buffer)
-            self.app.call_from_thread(self.log.write, text)
+            if self.log_pattern.match(text.plain):
+                text.style = Style(dim=True)
+            self.app.call_from_thread(self.log_widget.write, text)
             self.buffer = ""
 
 class SyncApp(App):
@@ -131,6 +148,14 @@ class SyncApp(App):
         self.logo_start_time = 0.0
         self.logo_expanded_init = False
         self.particles = []
+        
+        self.redirector = None # Will hold the redirector instance
+
+    @property
+    def captured_logs(self) -> List[str]:
+        if self.redirector:
+            return self.redirector.captured_logs
+        return []
 
     def compose(self) -> ComposeResult:
         yield Container(Static(id="animation-view"), id="animation-container")
@@ -185,10 +210,10 @@ class SyncApp(App):
         original_stdout = sys.stdout
         original_stderr = sys.stderr
         
-        redirector = ThreadSafeRedirector(self, self.log_widget)
+        self.redirector = ThreadSafeRedirector(self, self.log_widget)
         
-        sys.stdout = redirector
-        sys.stderr = redirector
+        sys.stdout = self.redirector
+        sys.stderr = self.redirector
         
         try:
             self.worker_result = self.worker_func()
@@ -215,7 +240,7 @@ class SyncApp(App):
             sys.stderr = original_stderr
             # Force flush any remaining buffer
             try:
-                redirector.flush()
+                self.redirector.flush()
             except Exception:
                 pass
             self.app.call_from_thread(self.exit, result=self.worker_result)
