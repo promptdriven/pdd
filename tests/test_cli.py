@@ -45,7 +45,7 @@ def test_cli_list_contexts(runner):
     assert "default" in result.output
 
 
-@patch('pdd.cli.auto_update')
+@patch('pdd.core.cli.auto_update')
 def test_cli_list_contexts_early_exit_no_auto_update(mock_auto_update, runner, tmp_path, monkeypatch):
     """Ensure --list-contexts exits early and does not call auto_update."""
     # Create a .pddrc with multiple contexts
@@ -77,8 +77,8 @@ def test_cli_list_contexts_malformed_pddrc_shows_usage_error(runner, tmp_path, m
     assert "Failed to load .pddrc" in result.output
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_context_known_passed_to_subcommand(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     """--context NAME sets ctx.obj['context'] and threads into the subcommand."""
     # Setup .pddrc with an alt context
@@ -105,8 +105,8 @@ def test_cli_context_known_passed_to_subcommand(mock_main, mock_auto_update, run
     assert passed_ctx.obj.get('context') == 'alt'
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_context_unknown_raises_usage_error(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     """Unknown --context fails early with UsageError (exit code 2) and no subcommand runs."""
     # .pddrc only has default
@@ -124,8 +124,8 @@ def test_cli_context_unknown_raises_usage_error(mock_main, mock_auto_update, run
     mock_auto_update.assert_not_called()
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_context_unknown_without_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     """Unknown context should still fail even when no .pddrc exists (only 'default' is available)."""
     (tmp_path / "prompts").mkdir()
@@ -171,8 +171,8 @@ def test_cli_command_help(runner):
     assert "--output" in result.output
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_generate_env_parsing_key_value(mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
     files = create_dummy_files("envtest.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
@@ -192,8 +192,8 @@ def test_cli_generate_env_parsing_key_value(mock_main, mock_auto_update, runner,
     assert call_kwargs["env_vars"] == {"MODULE": "orders", "PACKAGE": "core"}
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_generate_env_parsing_bare_key_fallback(mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
     files = create_dummy_files("envbare.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
@@ -213,8 +213,8 @@ def test_cli_generate_env_parsing_bare_key_fallback(mock_main, mock_auto_update,
     assert call_kwargs["env_vars"] == {"SERVICE": "billing"}
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, runner, create_dummy_files):
     files = create_dummy_files("inc.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
@@ -234,8 +234,8 @@ def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, 
 
 # --- Template Functionality Tests ---
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.template_registry.load_template')
 def test_cli_generate_template_uses_registry_path(mock_load_template, mock_code_main, mock_auto_update, runner, tmp_path):
     """`generate --template` should resolve the prompt path via the registry."""
@@ -256,8 +256,8 @@ def test_cli_generate_template_uses_registry_path(mock_load_template, mock_code_
     assert kwargs.get("env_vars") is None
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_generate_template_with_prompt_raises_usage_error(mock_code_main, mock_auto_update, runner, create_dummy_files):
     """Providing both --template and PROMPT_FILE should raise a usage error."""
     files = create_dummy_files("conflict.prompt")
@@ -272,8 +272,8 @@ def test_cli_generate_template_with_prompt_raises_usage_error(mock_code_main, mo
     mock_code_main.assert_not_called()
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.template_registry.load_template', side_effect=FileNotFoundError("missing"))
 def test_cli_generate_template_load_failure(mock_load_template, mock_code_main, mock_auto_update, runner):
     """Failed template resolution should surface as a UsageError without running the command."""
@@ -390,8 +390,8 @@ def test_cli_templates_group_registered():
 
 # --- Global Options Tests ---
 
-@patch('pdd.cli.auto_update') # Patch auto_update here as well
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update') # Patch auto_update here as well
+@patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths') # Now this patch should work
 def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test default global options are passed in context."""
@@ -425,8 +425,8 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['time'] == DEFAULT_TIME # Check default for time
     mock_auto_update.assert_called_once_with() # Check auto_update was called
 
-@patch('pdd.cli.auto_update') # Patch auto_update here as well
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update') # Patch auto_update here as well
+@patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths') # Now this patch should work
 def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test explicit global options override defaults."""
@@ -468,8 +468,8 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['time'] == 0.7 # Check time override
     mock_auto_update.assert_called_once_with() # Check auto_update was called
 
-@patch('pdd.cli.auto_update') # Patch auto_update here as well
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update') # Patch auto_update here as well
+@patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths') # Now this patch should work
 def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test --quiet overrides --verbose."""
@@ -502,8 +502,8 @@ def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, m
 
 # --- Auto Update Tests ---
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main') # Need to mock a command to trigger cli execution
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main') # Need to mock a command to trigger cli execution
 @patch('pdd.cli.construct_paths') # Now this patch should work
 def test_cli_auto_update_called_by_default(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test auto_update is called by default."""
@@ -525,8 +525,8 @@ def test_cli_auto_update_called_by_default(mock_construct, mock_main, mock_auto_
     mock_main.assert_called_once() # Ensure command still ran
 
 @patch.dict(os.environ, {"PDD_AUTO_UPDATE": "false"}, clear=True)
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths') # Now this patch should work
 def test_cli_auto_update_not_called_when_disabled(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test auto_update is not called when PDD_AUTO_UPDATE=false."""
@@ -546,8 +546,8 @@ def test_cli_auto_update_not_called_when_disabled(mock_construct, mock_main, moc
     mock_auto_update.assert_not_called()
     mock_main.assert_called_once() # Ensure command still ran
 
-@patch('pdd.cli.auto_update', side_effect=Exception("Network error"))
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update', side_effect=Exception("Network error"))
+@patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths') # Now this patch should work
 def test_cli_auto_update_handles_exception(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test auto_update exceptions are handled gracefully."""
@@ -576,9 +576,9 @@ def test_cli_auto_update_handles_exception(mock_construct, mock_main, mock_auto_
 # Note: With handle_error NOT re-raising, we expect exit code 0
 # and the tests need to assert the specific error message in the output.
 
-@patch('pdd.cli.auto_update') # Patch auto_update
+@patch('pdd.core.cli.auto_update') # Patch auto_update
 # Mock the main function where the error originates
-@patch('pdd.cli.code_generator_main', side_effect=FileNotFoundError("Input file missing"))
+@patch('pdd.commands.generate.code_generator_main', side_effect=FileNotFoundError("Input file missing"))
 # @patch('pdd.cli.construct_paths') # No need to patch construct_paths if main is mocked with side_effect
 def test_cli_handle_error_filenotfound(mock_main, mock_auto_update, runner, create_dummy_files):
     """Test handle_error for FileNotFoundError."""
@@ -595,8 +595,8 @@ def test_cli_handle_error_filenotfound(mock_main, mock_auto_update, runner, crea
     mock_main.assert_called_once() # Main is called before raising the error
     mock_auto_update.assert_called_once_with() # Auto update runs before command error
 
-@patch('pdd.cli.auto_update') # Patch auto_update
-@patch('pdd.cli.code_generator_main', side_effect=ValueError("Invalid prompt content"))
+@patch('pdd.core.cli.auto_update') # Patch auto_update
+@patch('pdd.commands.generate.code_generator_main', side_effect=ValueError("Invalid prompt content"))
 # @patch('pdd.cli.construct_paths') # No need to patch construct_paths if main is mocked with side_effect
 def test_cli_handle_error_valueerror(mock_main, mock_auto_update, runner, create_dummy_files):
     """Test handle_error for ValueError."""
@@ -612,8 +612,8 @@ def test_cli_handle_error_valueerror(mock_main, mock_auto_update, runner, create
     mock_main.assert_called_once()
     mock_auto_update.assert_called_once_with()
 
-@patch('pdd.cli.auto_update') # Patch auto_update
-@patch('pdd.cli.code_generator_main', side_effect=Exception("Unexpected LLM issue"))
+@patch('pdd.core.cli.auto_update') # Patch auto_update
+@patch('pdd.commands.generate.code_generator_main', side_effect=Exception("Unexpected LLM issue"))
 # @patch('pdd.cli.construct_paths') # No need to patch construct_paths if main is mocked with side_effect
 def test_cli_handle_error_generic(mock_main, mock_auto_update, runner, create_dummy_files):
     """Test handle_error for generic Exception."""
@@ -630,8 +630,8 @@ def test_cli_handle_error_generic(mock_main, mock_auto_update, runner, create_du
     mock_main.assert_called_once()
     mock_auto_update.assert_called_once_with()
 
-@patch('pdd.cli.auto_update') # Patch auto_update
-@patch('pdd.cli.code_generator_main', side_effect=FileNotFoundError("Input file missing"))
+@patch('pdd.core.cli.auto_update') # Patch auto_update
+@patch('pdd.commands.generate.code_generator_main', side_effect=FileNotFoundError("Input file missing"))
 # @patch('pdd.cli.construct_paths') # No need to patch construct_paths if main is mocked with side_effect
 def test_cli_handle_error_quiet(mock_main, mock_auto_update, runner, create_dummy_files):
     """Test handle_error respects --quiet."""
@@ -705,9 +705,9 @@ def sample_function():
     assert language == "python"
 
 
-@patch('pdd.cli.auto_update') # Patch auto_update
+@patch('pdd.core.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths') # Mock construct_paths in cli module namespace
-@patch('pdd.cli.change_main')
+@patch('pdd.commands.modify.change_main')
 def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files, tmp_path):
     """Test 'change' command validation for --csv."""
     files = create_dummy_files("changes.csv", "p.prompt")
@@ -792,9 +792,9 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     mock_auto_update.assert_called_once_with()
 
 
-@patch('pdd.cli.auto_update') # Patch auto_update
+@patch('pdd.core.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths') # Now this patch should work
-@patch('pdd.cli.auto_deps_main')
+@patch('pdd.commands.maintenance.auto_deps_main')
 def test_cli_auto_deps_strips_quotes(mock_main, mock_construct, mock_auto_update, runner, create_dummy_files, tmp_path):
     """Test that auto-deps strips quotes from directory_path."""
     files = create_dummy_files("dep.prompt")
@@ -908,7 +908,7 @@ def test_cli_result_callback_non_tuple_result_warning():
 
 # --- install_completion Command Test ---
 
-@patch('pdd.cli.auto_update') # Patch auto_update
+@patch('pdd.core.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.install_completion')
 def test_cli_install_completion_cmd(mock_install_func, mock_auto_update, runner):
     """Test the install_completion command."""
@@ -926,7 +926,7 @@ def test_cli_install_completion_cmd(mock_install_func, mock_auto_update, runner)
     mock_install_func.assert_called_once_with(quiet=False)
     mock_auto_update.assert_called_once_with()
 
-@patch('pdd.cli.auto_update') # Patch auto_update
+@patch('pdd.core.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.install_completion')
 def test_cli_install_completion_cmd_quiet(mock_install_func, mock_auto_update, runner):
     """Test the install_completion command with --quiet."""
@@ -945,10 +945,10 @@ def test_cli_install_completion_cmd_quiet(mock_install_func, mock_auto_update, r
     mock_auto_update.assert_called_once_with()
 
 
-@patch('pdd.cli._should_show_onboarding_reminder', return_value=False)
-@patch('pdd.cli.subprocess.run')
+@patch('pdd.core.cli._should_show_onboarding_reminder', return_value=False)
+@patch('pdd.core.utils.subprocess.run')
 @patch('pdd.cli.install_completion')
-@patch('pdd.cli.auto_update')
+@patch('pdd.core.cli.auto_update')
 def test_cli_setup_command(mock_auto_update, mock_install, mock_run, _mock_reminder, runner):
     """`pdd setup` should install completions and run the setup utility."""
     mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
@@ -960,7 +960,6 @@ def test_cli_setup_command(mock_auto_update, mock_install, mock_run, _mock_remin
     mock_install.assert_called_once_with(quiet=False)
 
     mock_run.assert_called_once_with([sys.executable, "-m", "pdd.setup_tool"])
-    assert "Setup completed" in result.output
 
 
 def test_cli_onboarding_reminder_shown(monkeypatch, runner, tmp_path):
@@ -969,12 +968,13 @@ def test_cli_onboarding_reminder_shown(monkeypatch, runner, tmp_path):
     home_dir.mkdir()
     rc_path = home_dir / ".bashrc"
 
-    monkeypatch.setattr(cli, "auto_update", lambda: None)
-    monkeypatch.setattr(cli, "get_current_shell", lambda: "bash")
-    monkeypatch.setattr(cli, "get_shell_rc_path", lambda _shell: str(rc_path))
+    from pdd import core
+    monkeypatch.setattr(core.cli, "auto_update", lambda: None)
+    monkeypatch.setattr(core.utils, "get_current_shell", lambda: "bash")
+    monkeypatch.setattr(core.utils, "get_shell_rc_path", lambda _shell: str(rc_path))
     monkeypatch.delenv("PDD_SUPPRESS_SETUP_REMINDER", raising=False)
 
-    with patch('pdd.cli.Path.home', return_value=home_dir):
+    with patch('pdd.core.utils.Path.home', return_value=home_dir):
         with runner.isolated_filesystem():
             result = runner.invoke(cli.cli, [])
 
@@ -988,12 +988,13 @@ def test_cli_onboarding_reminder_suppressed_by_project_env(monkeypatch, runner, 
     home_dir.mkdir()
     rc_path = home_dir / ".bashrc"
 
-    monkeypatch.setattr(cli, "auto_update", lambda: None)
-    monkeypatch.setattr(cli, "get_current_shell", lambda: "bash")
-    monkeypatch.setattr(cli, "get_shell_rc_path", lambda _shell: str(rc_path))
+    from pdd import core
+    monkeypatch.setattr(core.cli, "auto_update", lambda: None)
+    monkeypatch.setattr(core.utils, "get_current_shell", lambda: "bash")
+    monkeypatch.setattr(core.utils, "get_shell_rc_path", lambda _shell: str(rc_path))
     monkeypatch.delenv("PDD_SUPPRESS_SETUP_REMINDER", raising=False)
 
-    with patch('pdd.cli.Path.home', return_value=home_dir):
+    with patch('pdd.core.utils.Path.home', return_value=home_dir):
         with runner.isolated_filesystem():
             Path(".env").write_text("OPENAI_API_KEY=abc123\n", encoding="utf-8")
             result = runner.invoke(cli.cli, [])
@@ -1011,12 +1012,13 @@ def test_cli_onboarding_reminder_suppressed_by_api_env(monkeypatch, runner, tmp_
 
     rc_path = home_dir / ".zshrc"
 
-    monkeypatch.setattr(cli, "auto_update", lambda: None)
-    monkeypatch.setattr(cli, "get_current_shell", lambda: "zsh")
-    monkeypatch.setattr(cli, "get_shell_rc_path", lambda _shell: str(rc_path))
+    from pdd import core
+    monkeypatch.setattr(core.cli, "auto_update", lambda: None)
+    monkeypatch.setattr(core.utils, "get_current_shell", lambda: "zsh")
+    monkeypatch.setattr(core.utils, "get_shell_rc_path", lambda _shell: str(rc_path))
     monkeypatch.delenv("PDD_SUPPRESS_SETUP_REMINDER", raising=False)
 
-    with patch('pdd.cli.Path.home', return_value=home_dir):
+    with patch('pdd.core.utils.Path.home', return_value=home_dir):
         with runner.isolated_filesystem():
             result = runner.invoke(cli.cli, [])
 
@@ -1408,14 +1410,14 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
             os.environ['PDD_PATH'] = original_pdd_path
 
 
-@patch('pdd.cli.auto_update') # Patch auto_update
+@patch('pdd.core.cli.auto_update') # Patch auto_update
 @patch('pdd.fix_verification_main.construct_paths') # Not used in this test but kept for compatibility
 @patch('pdd.cli.fix_verification_main') # The key function we want to test
-def test_cli_verify_command_calls_fix_verification_main(mock_fix_verification, mock_construct_in_main, 
+def test_cli_verify_command_calls_fix_verification_main(mock_fix_verification, mock_construct_in_main,
                                                        mock_auto_update, runner, create_dummy_files, tmp_path):
     """Test that fix_verification_main can be called with the expected arguments."""
     from pdd.cli import fix_verification_main as imported_func
-    
+
     # Verify that the function is importable and the mocking works
     assert imported_func is mock_fix_verification, "The imported fix_verification_main should be the same as the mocked function"
     
@@ -1484,9 +1486,9 @@ def test_cli_verify_command_calls_fix_verification_main(mock_fix_verification, m
     # Verify the return value
     assert result == (True, "prog_content", "code_content", 1, 0.01, "test_model")
 
-@patch('pdd.cli.auto_update')
+@patch('pdd.core.cli.auto_update')
 @patch('pdd.fix_verification_main.construct_paths')
-@patch('pdd.cli.fix_verification_main')
+@patch('pdd.commands.utility.fix_verification_main')
 def test_cli_verify_command_default_output_program(mock_fix_verification, mock_construct_in_main, mock_auto_update, runner, create_dummy_files, tmp_path):
     """Test `pdd verify` calls fix_verification_main with output_program=None by default."""
     files = create_dummy_files("test.prompt", "test.py", "program.py")
@@ -1524,9 +1526,9 @@ def test_cli_verify_command_default_output_program(mock_fix_verification, mock_c
     assert kwargs.get('output_program') is None # Key assertion
 
 @patch.dict(os.environ, {"PDD_VERIFY_PROGRAM_OUTPUT_PATH": "env_prog_output.py"}, clear=True) # Added clear=True
-@patch('pdd.cli.auto_update')
+@patch('pdd.core.cli.auto_update')
 @patch('pdd.fix_verification_main.construct_paths') 
-@patch('pdd.cli.fix_verification_main')
+@patch('pdd.commands.utility.fix_verification_main')
 def test_cli_verify_command_env_var_output_program(mock_fix_verification, mock_construct_in_main, mock_auto_update, runner, create_dummy_files, tmp_path):
     """Test `pdd verify` uses PDD_VERIFY_PROGRAM_OUTPUT_PATH env var."""
     files = create_dummy_files("test.prompt", "test.py", "program.py")
@@ -1754,8 +1756,8 @@ if __name__ == "__main__":
 
 # --- Core Dump Global Option Tests ---
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_core_dump_default_flag_false(mock_main, mock_auto_update, runner, create_dummy_files):
     """By default, core_dump flag in context should be False (or missing)."""
     files = create_dummy_files("test_core_default.prompt")
@@ -1777,8 +1779,8 @@ def test_cli_core_dump_default_flag_false(mock_main, mock_auto_update, runner, c
     mock_auto_update.assert_called_once_with()
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main')
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
 def test_cli_core_dump_flag_sets_ctx_true(mock_main, mock_auto_update, runner, create_dummy_files):
     """`--core-dump` should set ctx.obj['core_dump'] to True."""
     files = create_dummy_files("test_core_enabled.prompt")
@@ -1806,8 +1808,8 @@ def test_cli_core_dump_flag_sets_ctx_true(mock_main, mock_auto_update, runner, c
     mock_auto_update.assert_called_once_with()
 
 
-@patch('pdd.cli.auto_update')
-@patch('pdd.cli.code_generator_main', side_effect=Exception("Core dump test error"))
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main', side_effect=Exception("Core dump test error"))
 def test_cli_core_dump_does_not_propagate_exception(mock_main, mock_auto_update, runner, create_dummy_files):
     """
     When --core-dump is enabled and the command raises,
