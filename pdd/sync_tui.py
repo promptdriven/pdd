@@ -131,9 +131,9 @@ class ThreadSafeRedirector(io.TextIOBase):
                 # Apply dim style to the whole text object
                 # This layers 'dim' over existing styles (like colors)
                 text.style = Style(dim=True)
-                
+
             self.app.call_from_thread(self.log_widget.write, text)
-            
+
         return len(s)
     
     def flush(self):
@@ -229,8 +229,12 @@ class SyncApp(App):
         self.logo_start_time = 0.0
         self.logo_expanded_init = False
         self.particles = []
-        
+
         self.redirector = None # Will hold the redirector instance
+
+        # Track log widget width for proper text wrapping
+        # Accounts for: log-container border (2), RichLog padding (2), scrollbar (2)
+        self._log_width = 74  # Default fallback (80 - 6)
 
     @property
     def captured_logs(self) -> List[str]:
@@ -274,7 +278,11 @@ class SyncApp(App):
         
         # Start animation timer (20 FPS for smoother logo)
         self.set_interval(0.05, self.update_animation)
-        
+
+        # Calculate initial log width based on current size
+        if self.size.width > 0:
+            self._log_width = max(20, self.size.width - 6)
+
         # Start worker
         self.run_worker_task()
 
@@ -286,7 +294,10 @@ class SyncApp(App):
         os.environ["FORCE_COLOR"] = "1"
         # Some tools check TERM
         os.environ["TERM"] = "xterm-256color"
-        
+        # Set COLUMNS so Rich Console/Panels render at log widget width, not terminal width
+        # This must be set before any code imports/creates Rich Console objects
+        os.environ["COLUMNS"] = str(self._log_width)
+
         # Capture stdout/stderr
         original_stdout = sys.stdout
         original_stderr = sys.stderr
@@ -335,6 +346,14 @@ class SyncApp(App):
         width = self.size.width
         if width == 0: # Not ready yet
             width = 80
+
+        # Update log width and COLUMNS env var for resize handling
+        # This ensures Rich Panels created after resize use the new width
+        # Offset of 6 accounts for: border (2), padding (2), scrollbar (2)
+        new_log_width = max(20, width - 6)
+        if new_log_width != self._log_width:
+            self._log_width = new_log_width
+            os.environ["COLUMNS"] = str(self._log_width)
 
         # --- LOGO ANIMATION PHASE ---
         if self.logo_phase:
