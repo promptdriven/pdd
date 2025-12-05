@@ -943,6 +943,86 @@ def _extract_balanced_json_objects(text: str) -> List[str]:
     return results
 
 
+def _looks_like_python_code(s: str) -> bool:
+    """
+    Heuristic check if a string looks like Python code.
+
+    Used to determine if we should attempt Python syntax repair on a string field.
+    """
+    if not s or len(s) < 10:
+        return False
+    # Check for common Python patterns
+    code_indicators = ('def ', 'class ', 'import ', 'from ', 'if __name__', 'return ', 'print(')
+    return any(indicator in s for indicator in code_indicators)
+
+
+def _repair_python_syntax(code: str) -> str:
+    """
+    Validate Python code syntax and attempt repairs if invalid.
+
+    Sometimes LLMs include spurious characters at string boundaries,
+    especially when the code contains quotes. This function attempts
+    to detect and repair such issues.
+
+    Args:
+        code: Python code string to validate/repair
+
+    Returns:
+        Repaired code if a fix was found, otherwise original code
+    """
+    import ast
+
+    if not code or not code.strip():
+        return code
+
+    # First, try to parse as-is
+    try:
+        ast.parse(code)
+        return code  # Valid, no repair needed
+    except SyntaxError:
+        pass
+
+    # Try common repairs
+    repaired = code
+
+    # Repair 1: Trailing spurious quote (the specific issue we've seen)
+    for quote in ['"', "'"]:
+        if repaired.rstrip().endswith(quote):
+            candidate = repaired.rstrip()[:-1]
+            try:
+                ast.parse(candidate)
+                logger.info(f"[INFO] Repaired code by removing trailing {quote!r}")
+                return candidate
+            except SyntaxError:
+                pass
+
+    # Repair 2: Leading spurious quote
+    for quote in ['"', "'"]:
+        if repaired.lstrip().startswith(quote):
+            candidate = repaired.lstrip()[1:]
+            try:
+                ast.parse(candidate)
+                logger.info(f"[INFO] Repaired code by removing leading {quote!r}")
+                return candidate
+            except SyntaxError:
+                pass
+
+    # Repair 3: Both leading and trailing spurious quotes
+    for quote in ['"', "'"]:
+        stripped = repaired.strip()
+        if stripped.startswith(quote) and stripped.endswith(quote):
+            candidate = stripped[1:-1]
+            try:
+                ast.parse(candidate)
+                logger.info(f"[INFO] Repaired code by removing surrounding {quote!r}")
+                return candidate
+            except SyntaxError:
+                pass
+
+    # If no repair worked, return original (let it fail downstream)
+    return code
+
+
 def _unescape_code_newlines(obj: Any) -> Any:
     """
     Fix double-escaped newlines in Pydantic model string fields.
@@ -950,6 +1030,8 @@ def _unescape_code_newlines(obj: Any) -> Any:
     Some models (e.g., Gemini) return JSON with \\\\n instead of \\n in code strings,
     resulting in literal backslash-n text instead of actual newlines after JSON parsing.
     This function recursively unescapes these in string fields of Pydantic models.
+
+    Also repairs Python syntax errors in code-like string fields (e.g., trailing quotes).
 
     The check uses literal backslash-n (2 chars) vs actual newline (1 char):
     - '\\\\n' in Python source = literal backslash + n (2 chars) - needs fixing
@@ -959,7 +1041,7 @@ def _unescape_code_newlines(obj: Any) -> Any:
         obj: A Pydantic model, dict, list, or primitive value
 
     Returns:
-        The same object with string fields unescaped
+        The same object with string fields unescaped and code fields repaired
     """
     if obj is None:
         return obj
@@ -969,17 +1051,28 @@ def _unescape_code_newlines(obj: Any) -> Any:
     LITERAL_BACKSLASH_R_N = '\\' + 'r' + '\\' + 'n'  # Literal \r\n (4 chars)
     LITERAL_BACKSLASH_T = '\\' + 't'      # Literal \t (2 chars)
 
+    def _process_string(s: str) -> str:
+        """Process a string: unescape newlines and repair Python syntax if needed."""
+        result = s
+        # Unescape double-escaped newlines if present
+        if LITERAL_BACKSLASH_N in result:
+            result = result.replace(LITERAL_BACKSLASH_R_N, '\r\n')
+            result = result.replace(LITERAL_BACKSLASH_N, '\n')
+            result = result.replace(LITERAL_BACKSLASH_T, '\t')
+        # Repair Python syntax if this looks like code
+        if _looks_like_python_code(result):
+            result = _repair_python_syntax(result)
+        return result
+
     # Handle Pydantic models
     if isinstance(obj, BaseModel):
-        # Get all field values and unescape strings
+        # Get all field values and process strings
         for field_name in obj.model_fields:
             value = getattr(obj, field_name)
-            if isinstance(value, str) and LITERAL_BACKSLASH_N in value:
-                # Unescape double-escaped newlines (literal \n -> actual newline)
-                unescaped = value.replace(LITERAL_BACKSLASH_R_N, '\r\n')
-                unescaped = unescaped.replace(LITERAL_BACKSLASH_N, '\n')
-                unescaped = unescaped.replace(LITERAL_BACKSLASH_T, '\t')
-                object.__setattr__(obj, field_name, unescaped)
+            if isinstance(value, str):
+                processed = _process_string(value)
+                if processed != value:
+                    object.__setattr__(obj, field_name, processed)
             elif isinstance(value, (dict, list, BaseModel)):
                 _unescape_code_newlines(value)
         return obj
@@ -987,10 +1080,8 @@ def _unescape_code_newlines(obj: Any) -> Any:
     # Handle dicts
     if isinstance(obj, dict):
         for key, value in obj.items():
-            if isinstance(value, str) and LITERAL_BACKSLASH_N in value:
-                unescaped = value.replace(LITERAL_BACKSLASH_R_N, '\r\n')
-                unescaped = unescaped.replace(LITERAL_BACKSLASH_N, '\n')
-                obj[key] = unescaped.replace(LITERAL_BACKSLASH_T, '\t')
+            if isinstance(value, str):
+                obj[key] = _process_string(value)
             elif isinstance(value, (dict, list)):
                 _unescape_code_newlines(value)
         return obj
@@ -998,10 +1089,8 @@ def _unescape_code_newlines(obj: Any) -> Any:
     # Handle lists
     if isinstance(obj, list):
         for i, item in enumerate(obj):
-            if isinstance(item, str) and LITERAL_BACKSLASH_N in item:
-                unescaped = item.replace(LITERAL_BACKSLASH_R_N, '\r\n')
-                unescaped = unescaped.replace(LITERAL_BACKSLASH_N, '\n')
-                obj[i] = unescaped.replace(LITERAL_BACKSLASH_T, '\t')
+            if isinstance(item, str):
+                obj[i] = _process_string(item)
             elif isinstance(item, (dict, list, BaseModel)):
                 _unescape_code_newlines(item)
         return obj
@@ -1799,7 +1888,10 @@ def llm_invoke(
                                         if cleaned_result_str.endswith("```"):
                                             cleaned_result_str = cleaned_result_str[:-3]
                                         cleaned_result_str = cleaned_result_str.strip()
-                                        if cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}'):
+                                        # Check for complete JSON object or array
+                                        is_complete_object = cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}')
+                                        is_complete_array = cleaned_result_str.startswith('[') and cleaned_result_str.endswith(']')
+                                        if is_complete_object or is_complete_array:
                                             if verbose:
                                                 logger.debug(f"[DEBUG] Attempting parse after generic fence cleaning. Cleaned string: '{cleaned_result_str}'")
                                             json_string_to_parse = cleaned_result_str
@@ -1814,7 +1906,7 @@ def llm_invoke(
                                                 except ImportError:
                                                     pass
                                                 parsed_result = json_string_to_parse
-                                        elif cleaned_result_str.startswith('{'):
+                                        elif cleaned_result_str.startswith('{') or cleaned_result_str.startswith('['):
                                             # Attempt to repair truncated JSON (e.g., missing closing braces)
                                             # This can happen when Gemini generates excessive trailing content
                                             # that causes token limit truncation
@@ -1835,15 +1927,26 @@ def llm_invoke(
                                             # If we're in the middle of a string value, try to close it
                                             # Count unescaped quotes to determine if we're inside a string
                                             # Simple heuristic: if it ends without proper closure, add closing
-                                            if not repaired.endswith('}'):
+                                            is_array = cleaned_result_str.startswith('[')
+                                            expected_end = ']' if is_array else '}'
+                                            if not repaired.endswith(expected_end):
                                                 # Try adding various closures to repair
-                                                repair_attempts = [
-                                                    repaired + '"}',  # Close string and object
-                                                    repaired + '"}\n}',  # Close string and nested object
-                                                    repaired + '"}}}',  # Deeper nesting
-                                                    repaired.rstrip(',') + '}',  # Remove trailing comma
-                                                    repaired.rstrip('"') + '"}',  # Handle partial string end
-                                                ]
+                                                if is_array:
+                                                    repair_attempts = [
+                                                        repaired + '}]',  # Close object and array
+                                                        repaired + '"}]',  # Close string, object and array
+                                                        repaired + '"}}]',  # Close string, nested object and array
+                                                        repaired.rstrip(',') + ']',  # Remove trailing comma and close array
+                                                        repaired.rstrip('"') + '"}]',  # Handle partial string end
+                                                    ]
+                                                else:
+                                                    repair_attempts = [
+                                                        repaired + '"}',  # Close string and object
+                                                        repaired + '"}\n}',  # Close string and nested object
+                                                        repaired + '"}}}',  # Deeper nesting
+                                                        repaired.rstrip(',') + '}',  # Remove trailing comma
+                                                        repaired.rstrip('"') + '"}',  # Handle partial string end
+                                                    ]
 
                                                 for attempt in repair_attempts:
                                                     try:
