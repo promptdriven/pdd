@@ -1,3 +1,16 @@
+## v0.0.76 (2025-12-05)
+
+### Feat
+
+- Implement smart unescaping for code newlines and enhance error handling in llm_invoke to retry on invalid Python syntax after repair.
+- Add _unescape_code_newlines function to handle double-escaped newlines in Pydantic models and update prompt documentation for JSON formatting rules.
+- Add function to detect and repair malformed JSON responses, enhance response handling in llm_invoke, and update prompt documentation for JSON formatting requirements.
+- Update agentic fix to include permission flag and enhance JSON response handling with repair logic for malformed responses.
+
+### Refactor
+
+- Simplify local execution handling in regression tests by using the --local CLI flag instead of manipulating environment variables; update code generator to check for generated code content more clearly.
+
 ## v0.0.75 (2025-11-30)
 
 ### Architecture & CLI Refactor
