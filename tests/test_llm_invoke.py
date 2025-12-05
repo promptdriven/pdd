@@ -333,7 +333,11 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
                 assert call_kwargs['model'] == 'gpt-5-nano'
-                assert call_kwargs['response_format'] == SampleOutputModel
+                # response_format now uses explicit json_object with response_schema for structured output
+                response_format = call_kwargs['response_format']
+                assert response_format['type'] == 'json_object'
+                assert 'response_schema' in response_format
+                assert response_format['response_schema'] == SampleOutputModel.model_json_schema()
 
 def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_set_llm_cache):
     model_key_name = "GOOGLE_API_KEY"
@@ -357,9 +361,12 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
                 assert call_kwargs['model'] == 'gemini-pro'
-                # The actual logic now might adapt based on availability of response_format param
-                # If it was passed:
-                assert call_kwargs.get('response_format') == SampleOutputModel
+                # response_format now uses explicit json_object with response_schema for structured output
+                response_format = call_kwargs.get('response_format')
+                assert response_format['type'] == 'json_object'
+                assert 'response_schema' in response_format
+                assert response_format['response_schema'] == SampleOutputModel.model_json_schema()
+
 def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mock_set_llm_cache):
     model_key_name = "GOOGLE_API_KEY"
     with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
