@@ -1023,6 +1023,130 @@ def _repair_python_syntax(code: str) -> str:
     return code
 
 
+def _smart_unescape_code(code: str) -> str:
+    """
+    Unescape literal \\n sequences in code while preserving them inside string literals.
+
+    When LLMs return code as JSON, newlines get double-escaped. After JSON parsing,
+    we have literal backslash-n (2 chars) that should be actual newlines for code
+    structure, BUT escape sequences inside Python strings (like print("\\n")) should
+    remain as escape sequences.
+
+    Args:
+        code: Python code that may have literal \\n sequences
+
+    Returns:
+        Code with structural newlines unescaped but string literals preserved
+    """
+    LITERAL_BACKSLASH_N = '\\' + 'n'      # Literal \n (2 chars)
+
+    if LITERAL_BACKSLASH_N not in code:
+        return code
+
+    # First, check if the code already has actual newlines (mixed state)
+    # If it does, we need to be more careful
+    has_actual_newlines = '\n' in code
+
+    if not has_actual_newlines:
+        # All newlines are escaped - this is the double-escaped case
+        # We need to unescape them but preserve \n inside string literals
+
+        # Strategy: Use a placeholder for \n inside strings, unescape all, then restore
+        # We detect string literals by tracking quote state
+
+        result = []
+        i = 0
+        in_string = False
+        string_char = None
+        in_fstring = False
+
+        # Placeholder that won't appear in code
+        PLACEHOLDER = '\x00NEWLINE_ESCAPE\x00'
+
+        while i < len(code):
+            # Check for escape sequences (both actual and literal)
+            if i + 1 < len(code) and code[i] == '\\':
+                next_char = code[i + 1]
+
+                if in_string:
+                    # Inside a string - preserve escape sequences
+                    if next_char == 'n':
+                        result.append(PLACEHOLDER)
+                        i += 2
+                        continue
+                    elif next_char == 't':
+                        result.append('\\' + 't')  # Keep \t as-is in strings
+                        i += 2
+                        continue
+                    elif next_char == 'r':
+                        result.append('\\' + 'r')  # Keep \r as-is in strings
+                        i += 2
+                        continue
+                    elif next_char in ('"', "'", '\\'):
+                        # Keep escaped quotes and backslashes
+                        result.append(code[i:i+2])
+                        i += 2
+                        continue
+
+            # Check for string delimiters
+            if not in_string:
+                # Check for triple quotes first
+                if i + 2 < len(code) and code[i:i+3] in ('"""', "'''"):
+                    in_string = True
+                    string_char = code[i:i+3]
+                    # Check if preceded by 'f' for f-string
+                    in_fstring = i > 0 and code[i-1] == 'f'
+                    result.append(code[i:i+3])
+                    i += 3
+                    continue
+                elif code[i] in ('"', "'"):
+                    in_string = True
+                    string_char = code[i]
+                    in_fstring = i > 0 and code[i-1] == 'f'
+                    result.append(code[i])
+                    i += 1
+                    continue
+            else:
+                # Check for end of string
+                if len(string_char) == 3:  # Triple quote
+                    if i + 2 < len(code) and code[i:i+3] == string_char:
+                        in_string = False
+                        in_fstring = False
+                        result.append(code[i:i+3])
+                        i += 3
+                        continue
+                else:  # Single quote
+                    if code[i] == string_char:
+                        in_string = False
+                        in_fstring = False
+                        result.append(code[i])
+                        i += 1
+                        continue
+
+            result.append(code[i])
+            i += 1
+
+        intermediate = ''.join(result)
+
+        # Now unescape all remaining \n (these are structural)
+        LITERAL_BACKSLASH_R_N = '\\' + 'r' + '\\' + 'n'
+        LITERAL_BACKSLASH_T = '\\' + 't'
+
+        intermediate = intermediate.replace(LITERAL_BACKSLASH_R_N, '\r\n')
+        intermediate = intermediate.replace(LITERAL_BACKSLASH_N, '\n')
+        intermediate = intermediate.replace(LITERAL_BACKSLASH_T, '\t')
+
+        # Restore placeholders to \n (as escape sequences in strings)
+        result_code = intermediate.replace(PLACEHOLDER, '\\n')
+
+        return result_code
+    else:
+        # Mixed state - some actual newlines, some literal \n
+        # This means the JSON parsing already converted some, but not all
+        # The literal \n remaining are likely in strings, so leave them alone
+        return code
+
+
 def _unescape_code_newlines(obj: Any) -> Any:
     """
     Fix double-escaped newlines in Pydantic model string fields.
@@ -1046,22 +1170,22 @@ def _unescape_code_newlines(obj: Any) -> Any:
     if obj is None:
         return obj
 
-    # Literal backslash-n sequences (2 chars each) that indicate double-escaping
-    LITERAL_BACKSLASH_N = '\\' + 'n'      # Literal \n (2 chars)
-    LITERAL_BACKSLASH_R_N = '\\' + 'r' + '\\' + 'n'  # Literal \r\n (4 chars)
-    LITERAL_BACKSLASH_T = '\\' + 't'      # Literal \t (2 chars)
-
     def _process_string(s: str) -> str:
         """Process a string: unescape newlines and repair Python syntax if needed."""
         result = s
-        # Unescape double-escaped newlines if present
-        if LITERAL_BACKSLASH_N in result:
-            result = result.replace(LITERAL_BACKSLASH_R_N, '\r\n')
-            result = result.replace(LITERAL_BACKSLASH_N, '\n')
-            result = result.replace(LITERAL_BACKSLASH_T, '\t')
-        # Repair Python syntax if this looks like code
+        # Smart unescape that preserves \n inside string literals
         if _looks_like_python_code(result):
+            result = _smart_unescape_code(result)
             result = _repair_python_syntax(result)
+        else:
+            # For non-code strings, do simple unescape
+            LITERAL_BACKSLASH_N = '\\' + 'n'
+            LITERAL_BACKSLASH_R_N = '\\' + 'r' + '\\' + 'n'
+            LITERAL_BACKSLASH_T = '\\' + 't'
+            if LITERAL_BACKSLASH_N in result:
+                result = result.replace(LITERAL_BACKSLASH_R_N, '\r\n')
+                result = result.replace(LITERAL_BACKSLASH_N, '\n')
+                result = result.replace(LITERAL_BACKSLASH_T, '\t')
         return result
 
     # Handle Pydantic models
@@ -1096,6 +1220,55 @@ def _unescape_code_newlines(obj: Any) -> Any:
         return obj
 
     return obj
+
+
+def _has_invalid_python_code(obj: Any) -> bool:
+    """
+    Check if any code-like string fields have invalid Python syntax.
+
+    This is used after _unescape_code_newlines to detect if repair failed
+    and we should retry with cache disabled.
+
+    Args:
+        obj: A Pydantic model, dict, list, or primitive value
+
+    Returns:
+        True if there are invalid code fields that couldn't be repaired
+    """
+    import ast
+
+    if obj is None:
+        return False
+
+    if isinstance(obj, str):
+        if _looks_like_python_code(obj):
+            try:
+                ast.parse(obj)
+                return False  # Valid
+            except SyntaxError:
+                return True  # Invalid
+        return False
+
+    if isinstance(obj, BaseModel):
+        for field_name in obj.model_fields:
+            value = getattr(obj, field_name)
+            if _has_invalid_python_code(value):
+                return True
+        return False
+
+    if isinstance(obj, dict):
+        for value in obj.values():
+            if _has_invalid_python_code(value):
+                return True
+        return False
+
+    if isinstance(obj, list):
+        for item in obj:
+            if _has_invalid_python_code(item):
+                return True
+        return False
+
+    return False
 
 
 # --- Main Function ---
@@ -1988,6 +2161,61 @@ def llm_invoke(
                                 logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content)) # CORRECTED (or use f-string)
                                 results.append(f"ERROR: Failed to parse structured output. Raw: {repr(raw_result)}")
                                 continue # Skip appending result below if parsing failed
+
+                            # Post-process: unescape newlines and repair Python syntax
+                            _unescape_code_newlines(parsed_result)
+
+                            # Check if code fields still have invalid Python syntax after repair
+                            # If so, retry without cache to get a fresh response
+                            if _has_invalid_python_code(parsed_result):
+                                logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
+                                if not use_batch_mode and prompt and input_json is not None:
+                                    # Add a small variation to bypass cache
+                                    modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
+                                    try:
+                                        retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                        # Disable cache for retry
+                                        original_cache = litellm.cache
+                                        litellm.cache = None
+                                        retry_response = litellm.completion(
+                                            model=model_name_litellm,
+                                            messages=retry_messages,
+                                            temperature=current_temperature,
+                                            response_format=response_format,
+                                            **time_kwargs
+                                        )
+                                        # Re-enable cache
+                                        litellm.cache = original_cache
+                                        # Extract and re-parse the retry result
+                                        retry_raw_result = retry_response.choices[0].message.content
+                                        if retry_raw_result is not None:
+                                            # Re-parse the retry result
+                                            retry_parsed = None
+                                            if output_pydantic:
+                                                if isinstance(retry_raw_result, output_pydantic):
+                                                    retry_parsed = retry_raw_result
+                                                elif isinstance(retry_raw_result, dict):
+                                                    retry_parsed = output_pydantic.model_validate(retry_raw_result)
+                                                elif isinstance(retry_raw_result, str):
+                                                    retry_parsed = output_pydantic.model_validate_json(retry_raw_result)
+                                            elif output_schema and isinstance(retry_raw_result, str):
+                                                retry_parsed = retry_raw_result  # Keep as string for schema validation
+
+                                            if retry_parsed is not None:
+                                                _unescape_code_newlines(retry_parsed)
+                                                if not _has_invalid_python_code(retry_parsed):
+                                                    logger.info(f"[SUCCESS] Cache bypass retry for invalid Python code succeeded for item {i}")
+                                                    parsed_result = retry_parsed
+                                                else:
+                                                    logger.warning(f"[WARNING] Cache bypass retry still has invalid Python code for item {i}, using original")
+                                            else:
+                                                logger.warning(f"[WARNING] Cache bypass retry returned unparseable result for item {i}")
+                                        else:
+                                            logger.warning(f"[WARNING] Cache bypass retry returned None for item {i}")
+                                    except Exception as retry_e:
+                                        logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
+                                else:
+                                    logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
 
                             results.append(parsed_result)
 
