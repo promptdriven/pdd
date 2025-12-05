@@ -1103,14 +1103,23 @@ def llm_invoke(
                         if verbose:
                             logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
                     except FileNotFoundError:
+                        # Still pass project and location so ADC can work
+                        litellm_kwargs["vertex_project"] = vertex_project_env
+                        litellm_kwargs["vertex_location"] = vertex_location_env
                         if verbose:
-                            logger.error(f"[ERROR] Vertex credentials file not found at path specified by VERTEX_CREDENTIALS env var: '{credentials_file_path}'. LiteLLM may try ADC or fail.")
+                            logger.warning(f"[WARN] Vertex credentials file not found at '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
                     except json.JSONDecodeError:
+                        # Still pass project and location so ADC can work
+                        litellm_kwargs["vertex_project"] = vertex_project_env
+                        litellm_kwargs["vertex_location"] = vertex_location_env
                         if verbose:
-                            logger.error(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Check file content. LiteLLM may try ADC or fail.")
+                            logger.error(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
                     except Exception as e:
+                        # Still pass project and location so ADC can work
+                        litellm_kwargs["vertex_project"] = vertex_project_env
+                        litellm_kwargs["vertex_location"] = vertex_location_env
                         if verbose:
-                            logger.error(f"[ERROR] Failed to load or process Vertex credentials from '{credentials_file_path}': {e}. LiteLLM may try ADC or fail.")
+                            logger.error(f"[ERROR] Failed to load Vertex credentials from '{credentials_file_path}': {e}. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
                 else:
                     if verbose:
                         logger.warning(f"[WARN] For Vertex AI (using '{api_key_name_from_csv}'): One or more required environment variables (VERTEX_CREDENTIALS, VERTEX_PROJECT, VERTEX_LOCATION) are missing.")
