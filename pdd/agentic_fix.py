@@ -336,7 +336,7 @@ def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, lab
     full = wrapper + "\n" + prompt_text
 
     variants = [
-        ["claude", "-p", full],
+        ["claude", "-p", "--dangerously-skip-permissions", full],
     ]
     per_attempt = max(8, min(30, total_timeout // 2))
     last: Optional[subprocess.CompletedProcess] = None
