@@ -87,8 +87,9 @@ def run_pytest_and_capture_output(test_file: str) -> dict:
     
     try:
         # Run pytest using subprocess with the detected Python executable
+        # Use -B flag to disable bytecode caching, ensuring fresh imports
         result = subprocess.run(
-            [python_executable, "-m", "pytest", test_file, "-v"],
+            [python_executable, "-B", "-m", "pytest", test_file, "-v"],
             capture_output=True,
             text=True,
             timeout=300,
