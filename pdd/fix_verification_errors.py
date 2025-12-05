@@ -268,13 +268,10 @@ def fix_verification_errors(
                 fixed_program = fix_result_obj.fixed_program
                 fixed_code = fix_result_obj.fixed_code
                 fix_explanation = fix_result_obj.explanation
-                
-                # Unescape literal \n strings to actual newlines
-                if fixed_program:
-                    fixed_program = fixed_program.replace('\\n', '\n')
-                if fixed_code:
-                    fixed_code = fixed_code.replace('\\n', '\n')
-                
+
+                # Note: Unescaping is now handled by llm_invoke's _unescape_code_newlines
+                # which properly preserves \n inside string literals
+
                 parsed_fix_successfully = True
                 if verbose:
                     rprint("[green]Successfully parsed structured output for fix.[/green]")
@@ -289,11 +286,13 @@ def fix_verification_errors(
                     fixed_code_candidate = code_match.group(1).strip() if (code_match and code_match.group(1)) else None
                     fix_explanation_candidate = explanation_match.group(1).strip() if (explanation_match and explanation_match.group(1)) else None
 
-                    # Unescape literal \n strings to actual newlines
-                    if fixed_program_candidate:
-                        fixed_program_candidate = fixed_program_candidate.replace('\\n', '\n')
-                    if fixed_code_candidate:
-                        fixed_code_candidate = fixed_code_candidate.replace('\\n', '\n')
+                    # Note: For XML-parsed strings, we still need to unescape, but use smart unescape
+                    # Import and use the smart unescape from llm_invoke
+                    from .llm_invoke import _smart_unescape_code, _looks_like_python_code
+                    if fixed_program_candidate and _looks_like_python_code(fixed_program_candidate):
+                        fixed_program_candidate = _smart_unescape_code(fixed_program_candidate)
+                    if fixed_code_candidate and _looks_like_python_code(fixed_code_candidate):
+                        fixed_code_candidate = _smart_unescape_code(fixed_code_candidate)
 
                     fixed_program = fixed_program_candidate if fixed_program_candidate else program
                     fixed_code = fixed_code_candidate if fixed_code_candidate else code
