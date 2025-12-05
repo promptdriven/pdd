@@ -494,6 +494,54 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
 
 # --- Helper Functions ---
 
+def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
+    """
+    Detect if a JSON response appears malformed due to excessive trailing newlines.
+
+    This can happen when Gemini generates thousands of \n characters in a JSON string value,
+    causing the response to be truncated and missing closing braces.
+
+    Args:
+        content: The raw response content string
+        threshold: Number of consecutive trailing \n sequences to consider malformed
+
+    Returns:
+        True if the response appears malformed, False otherwise
+    """
+    if not content or not isinstance(content, str):
+        return False
+
+    # Check if it starts like JSON but doesn't end properly
+    stripped = content.strip()
+    if not stripped.startswith('{'):
+        return False
+
+    # If it ends with }, it's probably fine
+    if stripped.endswith('}'):
+        return False
+
+    # Count trailing \n sequences (escaped newlines in JSON strings)
+    # The pattern \n in a JSON string appears as \\n in the raw content
+    trailing_newline_count = 0
+    check_content = stripped
+    while check_content.endswith('\\n'):
+        trailing_newline_count += 1
+        check_content = check_content[:-2]
+
+    # If there are many trailing \n sequences, it's likely malformed
+    if trailing_newline_count >= threshold:
+        return True
+
+    # Also check for response that looks truncated mid-string
+    # (ends with characters that suggest we're inside a JSON string value)
+    if not stripped.endswith('}') and not stripped.endswith(']') and not stripped.endswith('"'):
+        # Could be truncated in the middle of an escaped sequence
+        if stripped.endswith('\\'):
+            return True
+
+    return False
+
+
 def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
     """Loads and preprocesses the LLM model data from CSV.
     
@@ -1194,7 +1242,12 @@ def llm_invoke(
                     if output_pydantic:
                         if verbose:
                             logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
-                        response_format = output_pydantic
+                        # Use explicit json_object format with response_schema for better Gemini/Vertex AI compatibility
+                        # Passing Pydantic class directly may not trigger native structured output for all providers
+                        response_format = {
+                            "type": "json_object",
+                            "response_schema": output_pydantic.model_json_schema()
+                        }
                     else: # output_schema is set
                         if verbose:
                             logger.info(f"[INFO] Requesting structured output (JSON Schema) for {model_name_litellm}")
@@ -1551,7 +1604,41 @@ def llm_invoke(
                                 logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
                                 results.append("ERROR: LLM returned None content and cannot retry")
                                 continue
-                        
+
+                        # Check for malformed JSON response (excessive trailing newlines causing truncation)
+                        # This can happen when Gemini generates thousands of \n in JSON string values
+                        if isinstance(raw_result, str) and _is_malformed_json_response(raw_result):
+                            logger.warning(f"[WARNING] Detected malformed JSON response with excessive trailing newlines for item {i}. Retrying with cache bypass...")
+                            if not use_batch_mode and prompt and input_json is not None:
+                                # Add a small space to bypass cache
+                                modified_prompt = prompt + " "
+                                try:
+                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    # Disable cache for retry
+                                    original_cache = litellm.cache
+                                    litellm.cache = None
+                                    retry_response = litellm.completion(
+                                        model=model_name_litellm,
+                                        messages=retry_messages,
+                                        temperature=current_temperature,
+                                        response_format=response_format,
+                                        **time_kwargs
+                                    )
+                                    # Re-enable cache
+                                    litellm.cache = original_cache
+                                    # Extract result from retry
+                                    retry_raw_result = retry_response.choices[0].message.content
+                                    if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
+                                        logger.info(f"[SUCCESS] Cache bypass retry for malformed JSON succeeded for item {i}")
+                                        raw_result = retry_raw_result
+                                    else:
+                                        # Retry also failed, but we'll continue with repair logic below
+                                        logger.warning(f"[WARNING] Cache bypass retry also returned malformed JSON for item {i}, attempting repair...")
+                                except Exception as retry_e:
+                                    logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
+                            else:
+                                logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
+
                         if output_pydantic or output_schema:
                             parsed_result = None
                             json_string_to_parse = None
@@ -1649,7 +1736,7 @@ def llm_invoke(
                                             if verbose:
                                                 logger.debug(f"[DEBUG] Attempting parse after generic fence cleaning. Cleaned string: '{cleaned_result_str}'")
                                             json_string_to_parse = cleaned_result_str
-                                            
+
                                             if output_pydantic:
                                                 parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
                                             else:
@@ -1660,6 +1747,59 @@ def llm_invoke(
                                                 except ImportError:
                                                     pass
                                                 parsed_result = json_string_to_parse
+                                        elif cleaned_result_str.startswith('{'):
+                                            # Attempt to repair truncated JSON (e.g., missing closing braces)
+                                            # This can happen when Gemini generates excessive trailing content
+                                            # that causes token limit truncation
+                                            if verbose:
+                                                logger.debug(f"[DEBUG] JSON appears truncated (missing closing brace). Attempting repair.")
+
+                                            # Try to find the last valid JSON structure
+                                            # For simple schemas like {"extracted_code": "..."}, we can try to close it
+                                            repaired = cleaned_result_str.rstrip()
+
+                                            # Strip trailing escaped newline sequences (\\n in the JSON string)
+                                            # These appear as literal backslash-n when Gemini generates excessive newlines
+                                            while repaired.endswith('\\n'):
+                                                repaired = repaired[:-2]
+                                            # Also strip trailing literal backslashes that might be orphaned
+                                            repaired = repaired.rstrip('\\')
+
+                                            # If we're in the middle of a string value, try to close it
+                                            # Count unescaped quotes to determine if we're inside a string
+                                            # Simple heuristic: if it ends without proper closure, add closing
+                                            if not repaired.endswith('}'):
+                                                # Try adding various closures to repair
+                                                repair_attempts = [
+                                                    repaired + '"}',  # Close string and object
+                                                    repaired + '"}\n}',  # Close string and nested object
+                                                    repaired + '"}}}',  # Deeper nesting
+                                                    repaired.rstrip(',') + '}',  # Remove trailing comma
+                                                    repaired.rstrip('"') + '"}',  # Handle partial string end
+                                                ]
+
+                                                for attempt in repair_attempts:
+                                                    try:
+                                                        if output_pydantic:
+                                                            parsed_result = output_pydantic.model_validate_json(attempt)
+                                                        else:
+                                                            loaded = json.loads(attempt)
+                                                            try:
+                                                                import jsonschema
+                                                                jsonschema.validate(instance=loaded, schema=output_schema)
+                                                            except ImportError:
+                                                                pass
+                                                            parsed_result = attempt
+
+                                                        if verbose:
+                                                            logger.info(f"[INFO] Successfully repaired truncated JSON response")
+                                                        json_string_to_parse = attempt
+                                                        break
+                                                    except (json.JSONDecodeError, ValidationError, ValueError):
+                                                        continue
+
+                                                if parsed_result is None:
+                                                    raise ValueError("Content after cleaning doesn't look like JSON (and repair attempts failed)")
                                         else:
                                             raise ValueError("Content after cleaning doesn't look like JSON")
 
