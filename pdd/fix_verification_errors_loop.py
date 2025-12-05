@@ -957,20 +957,6 @@ def fix_verification_errors_loop(
 
     if not overall_success and agentic_fallback:
         console.print("[bold yellow]Initiating agentic fallback...[/bold yellow]")
-        # Ensure verification_log_file exists before calling agentic fix
-        try:
-            if not os.path.exists(verification_log_file) or os.path.getsize(verification_log_file) == 0:
-                verification_log_path = Path(verification_log_file)
-                verification_log_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(verification_log_path, "w") as vlog:
-                    if log_structure["iterations"]:
-                        vlog.write(format_log_for_output(log_structure))
-                    else:
-                        # No iterations ran, write initial state info
-                        vlog.write(f"Initial verification issues: {stats.get('initial_issues', 0)}\n")
-        except Exception as e:
-            console.print(f"[yellow]Warning: Could not write verification log before agentic fallback: {e}[/yellow]")
-
         agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
