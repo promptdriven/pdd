@@ -1,15 +1,39 @@
 ## v0.0.76 (2025-12-05)
 
-### Feat
+### LLM Response Handling & Python Syntax Repair
 
-- Implement smart unescaping for code newlines and enhance error handling in llm_invoke to retry on invalid Python syntax after repair.
-- Add _unescape_code_newlines function to handle double-escaped newlines in Pydantic models and update prompt documentation for JSON formatting rules.
-- Add function to detect and repair malformed JSON responses, enhance response handling in llm_invoke, and update prompt documentation for JSON formatting requirements.
-- Update agentic fix to include permission flag and enhance JSON response handling with repair logic for malformed responses.
+- **Smart Code Unescaping:** Added `_smart_unescape_code()` function that intelligently unescapes `\n` sequences in code while preserving escape sequences inside Python string literals (e.g., `print("line1\nline2")` remains intact).
+- **Malformed JSON Detection:** Added `_is_malformed_json_response()` to detect truncated JSON responses caused by LLMs (particularly Gemini) generating thousands of `\n` characters, causing response truncation before closing braces.
+- **Python Syntax Repair:** Added `_repair_python_syntax()` to validate and automatically fix common syntax errors in LLM-generated Python code, such as spurious trailing quotes at string boundaries.
+- **Pydantic Model Processing:** Added `_unescape_code_newlines()` to recursively process Pydantic model fields, fixing double-escaped newlines in code strings and repairing Python syntax errors.
+- **Automatic Retry on Invalid Syntax:** Enhanced `llm_invoke` to detect invalid Python syntax after initial repair attempts and retry the LLM call with cache bypass, improving reliability for structured code output.
+
+### Prompt Templates
+
+- **JSON Formatting Rules:** Updated `extract_program_code_fix_LLM.prompt` with explicit documentation on proper JSON escaping for newlines (use `\n` not `\\n` for actual line breaks).
+- **Clean JSON Output:** Added instruction to `extract_code_LLM.prompt` requiring output of only the JSON object without trailing whitespace or newlines.
+- **Architecture Schema Fix:** Fixed architecture JSON schema in `architecture_json.prompt` to include `type: string` alongside `enum` properties, ensuring proper JSON Schema compliance.
+
+### Agentic Fix
+
+- **Unattended Execution:** Added `--dangerously-skip-permissions` flag to the Anthropic Claude variant in `agentic_fix.py`, enabling fully automated fix attempts without interactive permission prompts.
+
+### Fix Verification
+
+- **Improved Code Unescaping:** Refactored `fix_verification_errors.py` to use the new `_smart_unescape_code()` function instead of naive string replacement, properly preserving escape sequences inside string literals.
+
+### Examples
+
+- **Architecture Example:** Added comprehensive `examples/arch/` directory demonstrating architecture generation workflow, including `ORDER_MANAGEMENT_PRD.md` (product requirements), `architecture.json` (generated architecture), `architecture_diagram.html` (Mermaid visualization), and `tech_stack.md`.
 
 ### Refactor
 
-- Simplify local execution handling in regression tests by using the --local CLI flag instead of manipulating environment variables; update code generator to check for generated code content more clearly.
+- **Regression Test Simplification:** Replaced environment variable manipulation (`unset GITHUB_CLIENT_ID`) with the cleaner `--local` CLI flag approach in both `regression.sh` and `sync_regression.sh`.
+- **Code Generator Check:** Changed empty content check from `is None` to falsy check in `code_generator_main.py` to properly handle empty strings from cloud execution.
+
+### Tests
+
+- **LLM Invoke Coverage:** Added 270+ lines of new tests for Python code repair, syntax validation, retry logic, and structured output handling in `test_llm_invoke.py`.
 
 ## v0.0.75 (2025-11-30)
 
