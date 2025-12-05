@@ -942,6 +942,73 @@ def _extract_balanced_json_objects(text: str) -> List[str]:
                         start_idx = -1
     return results
 
+
+def _unescape_code_newlines(obj: Any) -> Any:
+    """
+    Fix double-escaped newlines in Pydantic model string fields.
+
+    Some models (e.g., Gemini) return JSON with \\\\n instead of \\n in code strings,
+    resulting in literal backslash-n text instead of actual newlines after JSON parsing.
+    This function recursively unescapes these in string fields of Pydantic models.
+
+    The check uses literal backslash-n (2 chars) vs actual newline (1 char):
+    - '\\\\n' in Python source = literal backslash + n (2 chars) - needs fixing
+    - '\\n' in Python source = newline character (1 char) - already correct
+
+    Args:
+        obj: A Pydantic model, dict, list, or primitive value
+
+    Returns:
+        The same object with string fields unescaped
+    """
+    if obj is None:
+        return obj
+
+    # Literal backslash-n sequences (2 chars each) that indicate double-escaping
+    LITERAL_BACKSLASH_N = '\\' + 'n'      # Literal \n (2 chars)
+    LITERAL_BACKSLASH_R_N = '\\' + 'r' + '\\' + 'n'  # Literal \r\n (4 chars)
+    LITERAL_BACKSLASH_T = '\\' + 't'      # Literal \t (2 chars)
+
+    # Handle Pydantic models
+    if isinstance(obj, BaseModel):
+        # Get all field values and unescape strings
+        for field_name in obj.model_fields:
+            value = getattr(obj, field_name)
+            if isinstance(value, str) and LITERAL_BACKSLASH_N in value:
+                # Unescape double-escaped newlines (literal \n -> actual newline)
+                unescaped = value.replace(LITERAL_BACKSLASH_R_N, '\r\n')
+                unescaped = unescaped.replace(LITERAL_BACKSLASH_N, '\n')
+                unescaped = unescaped.replace(LITERAL_BACKSLASH_T, '\t')
+                object.__setattr__(obj, field_name, unescaped)
+            elif isinstance(value, (dict, list, BaseModel)):
+                _unescape_code_newlines(value)
+        return obj
+
+    # Handle dicts
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, str) and LITERAL_BACKSLASH_N in value:
+                unescaped = value.replace(LITERAL_BACKSLASH_R_N, '\r\n')
+                unescaped = unescaped.replace(LITERAL_BACKSLASH_N, '\n')
+                obj[key] = unescaped.replace(LITERAL_BACKSLASH_T, '\t')
+            elif isinstance(value, (dict, list)):
+                _unescape_code_newlines(value)
+        return obj
+
+    # Handle lists
+    if isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, str) and LITERAL_BACKSLASH_N in item:
+                unescaped = item.replace(LITERAL_BACKSLASH_R_N, '\r\n')
+                unescaped = unescaped.replace(LITERAL_BACKSLASH_N, '\n')
+                obj[i] = unescaped.replace(LITERAL_BACKSLASH_T, '\t')
+            elif isinstance(item, (dict, list, BaseModel)):
+                _unescape_code_newlines(item)
+        return obj
+
+    return obj
+
+
 # --- Main Function ---
 
 def llm_invoke(
@@ -1819,7 +1886,6 @@ def llm_invoke(
                                 results.append(f"ERROR: Failed to parse structured output. Raw: {repr(raw_result)}")
                                 continue # Skip appending result below if parsing failed
 
-                            # If parsing succeeded, append the parsed_result
                             results.append(parsed_result)
 
                         else:
