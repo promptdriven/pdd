@@ -39,7 +39,5 @@ from .core.utils import _should_show_onboarding_reminder
 from .core.cli import process_commands
 import subprocess
 
-
-
 if __name__ == "__main__":
     cli()

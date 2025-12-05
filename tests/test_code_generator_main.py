@@ -12,18 +12,75 @@ from unittest.mock import MagicMock, patch, mock_open, AsyncMock
 import click
 import requests
 from rich.panel import Panel
-from rich.text import Text
+from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
 from pdd.code_generator_main import code_generator_main, CLOUD_GENERATE_URL, CLOUD_REQUEST_TIMEOUT
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
-from pdd import DEFAULT_TIME
+from pdd import DEFAULT_TIME # Ensure DEFAULT_TIME is available if mock_ctx doesn't always set 'time'
 
 # Constants for mocking
 DEFAULT_MOCK_GENERATED_CODE = "def hello():\n  print('Hello, world!')"
 DEFAULT_MOCK_COST = 0.001
 DEFAULT_MOCK_MODEL_NAME = "mock_model_v1"
 DEFAULT_MOCK_LANGUAGE = "python"
+# Test Plan
+#
+# I. Setup and Mocking (Fixtures)
+#    1.  `mock_ctx`: Pytest fixture for `click.Context`.
+#    2.  `temp_dir_setup`: Pytest fixture to create temporary directories for prompts, output. Manages cleanup.
+#    3.  `git_repo_setup`: Pytest fixture to initialize a temporary git repository, commit files, and provide paths.
+#    4.  `mock_env_vars`: Pytest fixture using `monkeypatch` to set/unset environment variables.
+#    5.  `mock_construct_paths_fixture`: Autouse fixture to mock `pdd.construct_paths.construct_paths`.
+#    6.  `mock_pdd_preprocess_fixture`: Autouse fixture to mock `pdd.preprocess.preprocess`.
+#    7.  `mock_local_generator_fixture`: Autouse fixture to mock `pdd.code_generator.local_code_generator_func`.
+#    8.  `mock_incremental_generator_fixture`: Autouse fixture to mock `pdd.incremental_code_generator.incremental_code_generator_func`.
+#    9.  `mock_get_jwt_token_fixture`: Autouse fixture to mock `pdd.get_jwt_token.get_jwt_token`.
+#   10.  `mock_requests_post_fixture`: Autouse fixture to mock `requests.post`.
+#   11.  `mock_subprocess_run_fixture`: Autouse fixture to mock `subprocess.run`.
+#   12.  `mock_rich_console_fixture`: Autouse fixture to mock `Console.print`.
+#
+# II. Core Functionality Tests
+#
+#    A. Full Generation - Local Execution
+#        1.  `test_full_gen_local_no_output_file`: Prompt exists, no output file yet. `--local` is True.
+#        2.  `test_full_gen_local_output_exists_no_incremental_possible`: Prompt exists, output file exists, but no original prompt source. `--local` is True.
+#        3.  `test_full_gen_local_output_to_console`: Prompt exists, no output path specified. `--local` is True, `quiet=False`.
+#
+#    B. Full Generation - Cloud Execution
+#        1.  `test_full_gen_cloud_success`: Prompt exists, no output file. `--local` is False. `get_jwt_token` and `requests.post` succeed.
+#        2.  `test_full_gen_cloud_auth_failure_fallback_to_local`: `--local` is False. `get_jwt_token` raises `AuthError`.
+#        3.  `test_full_gen_cloud_network_timeout_fallback_to_local`: `--local` is False. `requests.post` raises `requests.exceptions.Timeout`.
+#        4.  `test_full_gen_cloud_http_error_fallback_to_local`: `--local` is False. `requests.post` raises `requests.exceptions.HTTPError`.
+#        5.  `test_full_gen_cloud_json_error_fallback_to_local`: `--local` is False. `requests.post` returns non-JSON response.
+#        6.  `test_full_gen_cloud_no_code_returned_fallback_to_local`: `--local` is False. `requests.post` succeeds but JSON response has no `generatedCode`.
+#        7.  `test_full_gen_cloud_missing_env_vars_fallback_to_local`: `--local` is False. Firebase/GitHub env vars not set.
+#
+#    C. Incremental Generation
+#        1.  `test_incremental_gen_with_original_prompt_file`: Prompt, output, and original_prompt_file exist. `incremental_code_generator_func` returns `is_incremental=True`.
+#        2.  `test_incremental_gen_with_git_committed_prompt`: Prompt in git, modified. Output file exists. `incremental_code_generator_func` returns `is_incremental=True`.
+#        3.  `test_incremental_gen_git_staging_untracked_files`: Prompt is untracked, output file exists. Incremental attempt. `git_add_files` called.
+#        4.  `test_incremental_gen_git_staging_modified_files`: Prompt is committed and modified, output file exists. Incremental attempt. `git_add_files` called.
+#        5.  `test_incremental_gen_fallback_to_full_on_generator_suggestion`: Conditions for incremental met. `incremental_code_generator_func` returns `is_incremental=False`.
+#        6.  `test_incremental_gen_force_incremental_flag_success`: Conditions for incremental met. `force_incremental_flag=True`.
+#        7.  `test_incremental_gen_force_incremental_flag_but_no_output_file`: `force_incremental_flag=True`, but no output file. Warns, does full.
+#        8.  `test_incremental_gen_force_incremental_flag_but_no_original_prompt`: `force_incremental_flag=True`, output file exists, but no original prompt source. Warns, does full.
+#        9.  `test_incremental_gen_no_git_repo_fallback_to_full_if_git_needed`: Output file exists, prompt not in git, no `original_prompt_file` specified. Full generation.
+#
+#    D. File and Path Handling
+#        1.  `test_error_prompt_file_not_found`: `prompt_file` path is invalid.
+#        2.  `test_error_original_prompt_file_not_found`: `original_prompt_file_not_found` is invalid.
+#        3.  `test_output_file_creation_and_overwrite`: Test with and without `force=True` when output file exists.
+#
+#    E. Error and Edge Cases
+#        1.  `test_code_generation_fails_no_code_produced`: Generator returns `None` for code.
+#        2.  `test_unexpected_exception_during_generation`: Generator raises a generic `Exception`.
+#
+# III. Git Helper Function Tests (Simplified for brevity, focusing on `code_generator_main`'s usage)
+#    *   Git helper tests are implicitly covered by the incremental generation tests that rely on mocked `subprocess.run`.
+#       Dedicated tests for git helpers would mock `subprocess.run` and assert behavior of `is_git_repository`,
+#       `get_git_committed_content`, `get_file_git_status`, `git_add_files`.
+#       For this test suite, we focus on `code_generator_main`'s integration of these.
 
 @pytest.fixture
 def mock_ctx(monkeypatch):
@@ -182,7 +239,7 @@ def test_full_gen_local_no_output_file(
     output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Local test prompt"},
         {"output": output_file_path_str}, 
         "python"
@@ -218,7 +275,7 @@ def test_preprocess_order_local_flow(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "order.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Hello $NAME"},
         {"output": output_file_path_str},
         "python"
@@ -249,7 +306,7 @@ def test_full_gen_local_output_exists_no_incremental_possible(
     create_file(output_file_path, "Old code")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Local test prompt"},
         {"output": str(output_file_path)}, 
         "python"
@@ -285,7 +342,7 @@ def test_env_substitution_in_output_path_and_prompt(
 
     # Construct paths should return our provided strings
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": prompt_content},
         {"output": output_pattern},
         "python",
@@ -319,7 +376,7 @@ def test_full_gen_local_output_to_console(
     create_file(prompt_file_path, "Console test prompt")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Console test prompt"},
         {"output": None}, 
         "python"
@@ -362,7 +419,7 @@ def test_full_gen_cloud_success(
     output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Cloud test prompt"},
         {"output": output_file_path_str}, 
         "python"
@@ -423,7 +480,7 @@ def test_full_gen_cloud_fallback_scenarios(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "fallback_output.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Fallback test prompt"},
         {"output": output_file_path_str}, 
         "python" 
@@ -494,7 +551,7 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "env_var_output.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Env var test prompt"},
         {"output": output_file_path_str}, 
         "python" 
@@ -537,7 +594,7 @@ def test_incremental_gen_with_original_prompt_file(
     create_file(original_prompt_file_path, "Original prompt content")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {
             "prompt_file": "New prompt content",
             "original_prompt_file": "Original prompt content" 
@@ -612,7 +669,7 @@ def test_incremental_gen_with_git_committed_prompt(
     create_file(output_file_path, "Existing code for git test")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": new_prompt_content_on_disk}, 
         {"output": str(output_file_path)}, 
         "python"
@@ -656,7 +713,7 @@ def test_incremental_gen_fallback_to_full_on_generator_suggestion(
     create_file(original_prompt_file_path, "Original prompt")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
         {"output": str(output_file_path)}, 
         "python" 
@@ -687,7 +744,7 @@ def test_incremental_with_env_vars_substitution(
     create_file(output_file_path, "Existing code body")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "New says $NAME", "original_prompt_file": "Old says ${NAME}"},
         {"output": str(output_file_path)},
         "python",
@@ -717,7 +774,7 @@ def test_unknown_variable_in_output_path_left_unchanged(
     output_pattern = str(temp_dir_setup["output_dir"] / "out_${UNKNOWN}.txt")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Ignorable"},
         {"output": output_pattern},
         "python"
@@ -741,7 +798,7 @@ def test_cloud_payload_uses_processed_prompt(
     create_file(prompt_file_path, prompt_content)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": prompt_content},
         {"output": str(temp_dir_setup["output_dir"] / "c.py")},
         "python"
@@ -766,7 +823,7 @@ def test_incremental_gen_force_incremental_flag_but_no_output_file(
     output_path_str = str(temp_dir_setup["output_dir"] / "force_inc_no_out.py") 
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Prompt content"},
         {"output": output_path_str}, 
         "python"
@@ -804,7 +861,7 @@ def test_code_generation_fails_no_code_produced(
     output_path_str = str(temp_dir_setup["output_dir"] / "no_code_output.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Prompt for no code"},
         {"output": output_path_str}, 
         "python" 
@@ -827,7 +884,7 @@ def test_unexpected_exception_during_generation(
     output_path_str = str(temp_dir_setup["output_dir"] / "exception_output.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Prompt for exception"},
         {"output": output_path_str}, 
         "python" 
@@ -856,7 +913,7 @@ def test_generate_with_output_directory_path_uses_resolved_file_and_succeeds(
 
     resolved_output_file = temp_dir_setup["output_dir"] / "dir_output.py"
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": "Prompt content for dir output"},
         {"output": str(resolved_output_file)},
         "python",
@@ -899,7 +956,7 @@ Say hi to the user.
     create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "fm_lang.py")},
         "python",
@@ -934,7 +991,7 @@ Generate module for $NAME.
     create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "fallback.py")},
         "python",
@@ -980,7 +1037,7 @@ Name: $NAME | Color: $COLOR | Style: $STYLE | Override: $OVERRIDE
     create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "defaults.py")},
         "python",
@@ -1022,7 +1079,7 @@ Hello $NAME
     create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "missing.py")},
         "python",
@@ -1082,7 +1139,7 @@ Docs included: $DOC_FILES
     create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "discover.py")},
         "python",
@@ -1127,7 +1184,7 @@ Return JSON for the spec.
     create_file(prompt_file_path, front_matter_prompt)
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(temp_dir_setup["output_dir"] / "schema.json")},
         "python",
@@ -1179,7 +1236,7 @@ def test_architecture_template_datasource_object_passes_schema(
     output_path = temp_dir_setup["output_dir"] / "architecture.json"
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": template_content},
         {"output": str(output_path)},
         "json",
@@ -1254,7 +1311,7 @@ def test_architecture_template_datasource_string_rejected(
     output_path = temp_dir_setup["output_dir"] / "architecture_string.json"
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": template_content},
         {"output": str(output_path)},
         "json",
@@ -1317,7 +1374,7 @@ def test_architecture_template_repairs_invalid_interface_type(
     output_path = temp_dir_setup["output_dir"] / "architecture_type.json"
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": template_content},
         {"output": str(output_path)},
         "json",
@@ -1397,7 +1454,7 @@ Generate a simple module.
 
     # construct_paths should return our prompt content and resolved output
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": front_matter_prompt},
         {"output": str(output_file_path)},
         "python",
@@ -1448,7 +1505,7 @@ def test_architecture_postprocess_passes_absolute_input_path(
     create_file(prd_path, "Spec content for absolute path regression")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": template_content},
         {"output": relative_output},
         "json",
@@ -1521,7 +1578,7 @@ def test_architecture_postprocess_rewrites_json_pretty(
 
     output_path = temp_dir_setup["output_dir"] / "architecture.json"
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": template_content},
         {"output": str(output_path)},
         "json",
@@ -1578,7 +1635,7 @@ def test_full_gen_local_with_unit_test(
     output_file_path_str = str(temp_dir_setup["output_dir"] / "output_with_test.py")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": prompt_content},
         {"output": output_file_path_str}, 
         "python"
@@ -1635,7 +1692,7 @@ def test_conflict(): pass
     output_file_path_str = str(temp_dir_setup["output_dir"] / "conflict_output.json")
 
     mock_construct_paths_fixture.return_value = (
-        {},
+        {},  # resolved_config
         {"prompt_file": prompt_content},
         {"output": output_file_path_str}, 
         "json"
