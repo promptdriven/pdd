@@ -614,11 +614,11 @@ def test_llm_invoke_project_pdd_directory(mock_set_llm_cache, tmp_path, monkeypa
     # Create fake home directory
     fake_home = tmp_path / "fake_home"
     fake_home.mkdir()
-    
+
     # Create the .pdd directory structure
     pdd_dir = tmp_path / ".pdd"
     pdd_dir.mkdir(exist_ok=True)
-    
+
     # Create a CSV file in .pdd directory
     csv_path = pdd_dir / "llm_model.csv"
     csv_data = pd.DataFrame({
@@ -633,16 +633,262 @@ def test_llm_invoke_project_pdd_directory(mock_set_llm_cache, tmp_path, monkeypa
         'max_reasoning_tokens': [0]
     })
     csv_data.to_csv(csv_path, index=False)
-    
+
     # Set PDD_PATH to control PROJECT_ROOT
     monkeypatch.setenv('PDD_PATH', str(tmp_path))
-    
+
     # Mock home directory to ensure user CSV doesn't exist
     with patch('pdd.llm_invoke.Path.home', return_value=fake_home):
             # Re-import to trigger path determination
             import importlib
             import pdd.llm_invoke
             importlib.reload(pdd.llm_invoke)
-            
+
             # Should find tmp_path/.pdd/llm_model.csv
-            assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == csv_path 
+            assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == csv_path
+
+
+# --- Python Code Repair and Retry Tests ---
+
+# Pydantic model with code fields for testing repair/retry logic
+class CodeOutputModel(BaseModel):
+    explanation: str
+    code: str
+
+
+def test_unescape_code_newlines_repairs_trailing_quote():
+    """Test that _unescape_code_newlines repairs Python code with trailing quote."""
+    from pdd.llm_invoke import _unescape_code_newlines
+    import ast
+
+    # Create a model with invalid Python code (trailing quote)
+    obj = CodeOutputModel(
+        explanation="Fixed the bug",
+        code='def test():\n    return 1\n\ntest()"'  # Trailing quote
+    )
+
+    # Before repair, code should be invalid
+    with pytest.raises(SyntaxError):
+        ast.parse(obj.code)
+
+    # Apply repair
+    _unescape_code_newlines(obj)
+
+    # After repair, code should be valid
+    ast.parse(obj.code)  # Should not raise
+    assert obj.code == 'def test():\n    return 1\n\ntest()'
+
+
+def test_has_invalid_python_code_detects_syntax_errors():
+    """Test that _has_invalid_python_code correctly detects invalid Python."""
+    from pdd.llm_invoke import _has_invalid_python_code
+
+    # Valid code should return False
+    valid_obj = CodeOutputModel(
+        explanation="All good",
+        code='def test():\n    return 1'
+    )
+    assert not _has_invalid_python_code(valid_obj)
+
+    # Invalid code should return True
+    invalid_obj = CodeOutputModel(
+        explanation="Has bug",
+        code='def test():\n    return 1\n\ntest()"'  # Trailing quote
+    )
+    assert _has_invalid_python_code(invalid_obj)
+
+
+def test_has_invalid_python_code_ignores_non_code_strings():
+    """Test that _has_invalid_python_code ignores strings that don't look like code."""
+    from pdd.llm_invoke import _has_invalid_python_code
+
+    # String that doesn't look like code should not trigger validation
+    obj = CodeOutputModel(
+        explanation="This has a trailing quote\"",  # Not code-like
+        code='def test():\n    return 1'  # Valid code
+    )
+    assert not _has_invalid_python_code(obj)
+
+
+def test_llm_invoke_retries_on_invalid_python_code(mock_load_models, mock_set_llm_cache, caplog):
+    """Test that llm_invoke retries with cache bypass when Python code is invalid after repair."""
+    model_key_name = "OPENAI_API_KEY"
+
+    # First response has invalid code (trailing quote that can't be repaired by simple logic)
+    # Using a more complex case where repair might not work
+    invalid_code = 'def test():\n    x = "hello\n    return x'  # Unclosed string - can't be repaired
+
+    # Second response (retry) has valid code
+    valid_code = 'def test():\n    x = "hello"\n    return x'
+
+    first_response_json = json.dumps({"explanation": "First attempt", "code": invalid_code})
+    second_response_json = json.dumps({"explanation": "Retry attempt", "code": valid_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # First call returns invalid code, second call (retry) returns valid code
+            mock_response_1 = create_mock_litellm_response(first_response_json, model_name='gpt-5-nano')
+            mock_response_2 = create_mock_litellm_response(second_response_json, model_name='gpt-5-nano')
+            mock_completion.side_effect = [mock_response_1, mock_response_2]
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Generate code for {task}",
+                    input_json={"task": "test"},
+                    strength=0.5,
+                    temperature=0.7,
+                    verbose=True,
+                    output_pydantic=CodeOutputModel
+                )
+
+                # Should have retried
+                assert mock_completion.call_count == 2
+
+                # Result should be from the retry (valid code)
+                assert isinstance(response['result'], CodeOutputModel)
+                assert response['result'].code == valid_code
+
+                # Check logs for retry message
+                assert "invalid Python syntax" in caplog.text.lower() or "cache bypass retry" in caplog.text.lower()
+
+
+def test_llm_invoke_uses_repaired_code_without_retry(mock_load_models, mock_set_llm_cache):
+    """Test that llm_invoke uses repaired code without retry when repair succeeds."""
+    model_key_name = "OPENAI_API_KEY"
+
+    # Code with trailing quote that CAN be repaired
+    repairable_code = 'def test():\n    return 1\n\ntest()"'
+    expected_repaired = 'def test():\n    return 1\n\ntest()'
+
+    response_json = json.dumps({"explanation": "Generated", "code": repairable_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response(response_json, model_name='gpt-5-nano')
+            mock_completion.return_value = mock_response
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Generate code for {task}",
+                    input_json={"task": "test"},
+                    strength=0.5,
+                    temperature=0.7,
+                    verbose=False,
+                    output_pydantic=CodeOutputModel
+                )
+
+                # Should NOT have retried (repair succeeded)
+                assert mock_completion.call_count == 1
+
+                # Result should have repaired code
+                assert isinstance(response['result'], CodeOutputModel)
+                assert response['result'].code == expected_repaired
+
+
+def test_llm_invoke_no_retry_in_batch_mode(mock_load_models, mock_set_llm_cache, caplog):
+    """Test that retry is skipped in batch mode even with invalid Python code."""
+    model_key_name = "OPENAI_API_KEY"
+
+    # Invalid code that can't be repaired
+    invalid_code = 'def test():\n    x = "hello\n    return x'
+    response_json = json.dumps({"explanation": "Batch result", "code": invalid_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response([response_json], model_name='gpt-5-nano')
+            mock_completion.return_value = mock_response
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Generate code for {task}",
+                    input_json=[{"task": "test"}],  # List triggers batch mode
+                    strength=0.5,
+                    temperature=0.7,
+                    verbose=True,
+                    output_pydantic=CodeOutputModel,
+                    use_batch_mode=True
+                )
+
+                # Should NOT have retried (batch mode)
+                assert mock_completion.call_count == 1
+
+                # Should log that retry was skipped
+                assert "batch mode" in caplog.text.lower() or "cannot retry" in caplog.text.lower()
+
+
+def test_smart_unescape_code_preserves_newlines_in_strings():
+    """Test that _smart_unescape_code preserves \\n inside string literals."""
+    from pdd.llm_invoke import _smart_unescape_code
+    import ast
+
+    # Simulate double-escaped JSON: all newlines are literal \n (2 chars)
+    # The code has structural newlines AND \n inside an f-string
+    literal_backslash_n = chr(92) + 'n'  # Literal \n (2 chars)
+
+    # Build test code with literal backslash-n everywhere
+    test_code = (
+        'def main():' + literal_backslash_n +
+        '    print(f"' + literal_backslash_n + 'Adding integers")' + literal_backslash_n +
+        '    return 0'
+    )
+
+    # Verify input has no actual newlines
+    assert '\n' not in test_code, "Test input should have no actual newlines"
+    assert literal_backslash_n in test_code, "Test input should have literal backslash-n"
+
+    result = _smart_unescape_code(test_code)
+
+    # Verify structural newlines are unescaped
+    assert '\n' in result, "Result should have actual newlines for structure"
+
+    # Verify newline inside string is preserved as escape sequence
+    assert '\\n' in result, "Result should preserve \\n inside string literal"
+
+    # Most importantly: verify the result is valid Python
+    try:
+        ast.parse(result)
+    except SyntaxError as e:
+        pytest.fail(f"Result should be valid Python, got SyntaxError: {e}")
+
+
+def test_smart_unescape_code_mixed_state():
+    """Test that _smart_unescape_code handles mixed state (some real, some escaped newlines)."""
+    from pdd.llm_invoke import _smart_unescape_code
+
+    # Mixed state: some actual newlines, some literal \n
+    # This happens when JSON parsing already converted some but not all
+    mixed_code = 'def main():\n    print("\\nHello")\n    return 0'
+
+    result = _smart_unescape_code(mixed_code)
+
+    # In mixed state, should leave the string unchanged
+    assert result == mixed_code, "Mixed state should be unchanged"
+
+
+def test_smart_unescape_code_only_structural():
+    """Test that _smart_unescape_code works with only structural newlines."""
+    from pdd.llm_invoke import _smart_unescape_code
+    import ast
+
+    literal_backslash_n = chr(92) + 'n'  # Literal \n (2 chars)
+
+    # Code with only structural newlines (no escape sequences in strings)
+    test_code = (
+        'def add(a, b):' + literal_backslash_n +
+        '    return a + b'
+    )
+
+    result = _smart_unescape_code(test_code)
+
+    # Should convert to actual newlines
+    assert '\n' in result
+    assert '\\n' not in result  # No escape sequences to preserve
+
+    # Should be valid Python
+    try:
+        ast.parse(result)
+    except SyntaxError as e:
+        pytest.fail(f"Result should be valid Python, got SyntaxError: {e}") 
