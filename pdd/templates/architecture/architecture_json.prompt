@@ -83,7 +83,7 @@ output_schema:
       interface:
         type: object
         properties:
-          type: { enum: [component, page, module, api, graphql, cli, job, message, config] }
+          type: { type: string, enum: [component, page, module, api, graphql, cli, job, message, config] }
           component: { type: object }
           page:
             type: object
@@ -104,7 +104,7 @@ output_schema:
                   type: object
                   required: [kind, source]
                   properties:
-                    kind: { enum: [api, query, stream, file, cache, message, job, other] }
+                    kind: { type: string, enum: [api, query, stream, file, cache, message, job, other] }
                     source: { type: string }
                     method: { type: string }
                     description: { type: string }
@@ -158,7 +158,7 @@ OUTPUT FORMAT (authoritative):
       "interface": {
         "type": "object",
         "properties": {
-          "type": {"enum": ["component", "page", "module", "api", "graphql", "cli", "job", "message", "config"]},
+          "type": {"type": "string", "enum": ["component", "page", "module", "api", "graphql", "cli", "job", "message", "config"]},
           "component": {"type": "object"},
           "page": {
             "type": "object",

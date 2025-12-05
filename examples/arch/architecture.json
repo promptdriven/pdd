@@ -2,36 +2,42 @@
   {
     "reason": "Core API endpoints for order management operations",
     "description": "RESTful API endpoints for creating, retrieving, updating, and listing orders. Includes authentication middleware and error handling.",
-    "dependencies": ["order_models_Python.prompt"],
+    "dependencies": [
+      "order_models_Python.prompt"
+    ],
     "priority": 1,
     "filename": "order_api_Python.prompt",
     "filepath": "src/api/orders.py",
-    "tags": ["backend", "api", "fastapi"],
+    "tags": [
+      "backend",
+      "api",
+      "fastapi"
+    ],
     "interface": {
       "type": "api",
       "endpoints": [
         {
           "method": "POST",
-          "path": "/api/v1/orders",
+          "path": "/api/orders",
           "auth": "JWT required",
           "requestSchema": "OrderCreateRequest",
           "responseSchema": "OrderResponse"
         },
         {
           "method": "GET",
-          "path": "/api/v1/orders/{order_id}",
+          "path": "/api/orders/{order_id}",
           "auth": "JWT required",
           "responseSchema": "OrderResponse"
         },
         {
           "method": "GET",
-          "path": "/api/v1/orders",
+          "path": "/api/orders",
           "auth": "JWT required",
           "responseSchema": "OrderListResponse"
         },
         {
-          "method": "PUT",
-          "path": "/api/v1/orders/{order_id}/status",
+          "method": "PATCH",
+          "path": "/api/orders/{order_id}/status",
           "auth": "JWT required",
           "requestSchema": "OrderStatusUpdateRequest",
           "responseSchema": "OrderResponse"
@@ -46,13 +52,17 @@
     "priority": 2,
     "filename": "order_models_Python.prompt",
     "filepath": "src/models/order.py",
-    "tags": ["backend", "database", "sqlalchemy"],
+    "tags": [
+      "backend",
+      "database",
+      "sqlalchemy"
+    ],
     "interface": {
       "type": "module",
       "functions": [
         {
           "name": "Order.__init__",
-          "signature": "def __init__(self, user_id: int, items: List[OrderItem], status: OrderStatus)",
+          "signature": "def __init__(self, user_id: UUID, items: List[OrderItem], status: OrderStatus)",
           "returns": "Order instance",
           "sideEffects": "Creates database record"
         },
@@ -74,11 +84,18 @@
   {
     "reason": "Main order listing page with filtering and pagination",
     "description": "Next.js page component for displaying orders with filters for status, date range, and customer. Includes pagination controls and real-time updates.",
-    "dependencies": ["order_api_Python.prompt", "order_components_TypeScriptReact.prompt"],
+    "dependencies": [
+      "order_api_Python.prompt",
+      "order_components_TypeScriptReact.prompt"
+    ],
     "priority": 3,
     "filename": "orders_page_TypeScriptReact.prompt",
     "filepath": "app/orders/page.tsx",
-    "tags": ["frontend", "nextjs", "typescript"],
+    "tags": [
+      "frontend",
+      "nextjs",
+      "typescript"
+    ],
     "interface": {
       "type": "page",
       "route": "/orders",
@@ -89,31 +106,132 @@
           "description": "Filter orders by status (pending, processing, shipped, delivered)"
         },
         {
-          "name": "dateFrom",
+          "name": "start_date",
           "type": "string",
           "description": "Start date for date range filter"
         },
         {
-          "name": "dateTo",
+          "name": "end_date",
           "type": "string",
           "description": "End date for date range filter"
+        },
+        {
+          "name": "user_id",
+          "type": "string",
+          "description": "Filter orders by user/customer"
         },
         {
           "name": "page",
           "type": "number",
           "description": "Page number for pagination"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "description": "Number of items per page"
         }
       ],
       "dataSources": [
         {
           "kind": "api",
-          "source": "/api/v1/orders",
+          "source": "/api/orders",
           "method": "GET",
           "description": "Fetch orders with filters and pagination",
           "auth": "JWT token",
-          "inputs": ["status", "dateFrom", "dateTo", "page", "limit"],
-          "outputs": ["orders", "totalCount", "hasNextPage"],
+          "inputs": [
+            "status",
+            "start_date",
+            "end_date",
+            "user_id",
+            "page",
+            "limit"
+          ],
+          "outputs": [
+            "orders",
+            "totalCount",
+            "hasNextPage"
+          ],
           "refreshInterval": "30s"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Detailed view of a specific order",
+    "description": "Next.js page component for displaying full order details, including status timeline and items. Fetches data based on the order ID from the route.",
+    "dependencies": [
+      "order_api_Python.prompt"
+    ],
+    "priority": 4,
+    "filename": "view_order_page_TypeScriptReact.prompt",
+    "filepath": "app/orders/[orderId]/page.tsx",
+    "tags": [
+      "frontend",
+      "nextjs",
+      "typescript"
+    ],
+    "interface": {
+      "type": "page",
+      "route": "/orders/[orderId]",
+      "params": [
+        {
+          "name": "orderId",
+          "type": "string",
+          "description": "The unique identifier of the order to view"
+        }
+      ],
+      "dataSources": [
+        {
+          "kind": "api",
+          "source": "/api/orders/{order_id}",
+          "method": "GET",
+          "description": "Fetch complete order details",
+          "auth": "JWT token",
+          "inputs": [
+            "orderId"
+          ],
+          "outputs": [
+            "order"
+          ],
+          "refreshInterval": "none"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Order creation form and workflow",
+    "description": "Next.js page for creating new orders with item selection, quantity input, and validation. Includes real-time total calculation and submission handling.",
+    "dependencies": [
+      "order_api_Python.prompt",
+      "order_components_TypeScriptReact.prompt"
+    ],
+    "priority": 5,
+    "filename": "create_order_page_TypeScriptReact.prompt",
+    "filepath": "app/orders/create/page.tsx",
+    "tags": [
+      "frontend",
+      "nextjs",
+      "typescript",
+      "form"
+    ],
+    "interface": {
+      "type": "page",
+      "route": "/orders/create",
+      "params": [],
+      "dataSources": [
+        {
+          "kind": "api",
+          "source": "/api/orders",
+          "method": "POST",
+          "description": "Create new order",
+          "auth": "JWT token",
+          "inputs": [
+            "orderData"
+          ],
+          "outputs": [
+            "createdOrder"
+          ],
+          "refreshInterval": "none"
         }
       ]
     }
@@ -122,10 +240,15 @@
     "reason": "Reusable order-related UI components",
     "description": "TypeScript React components for order display, status badges, and interactive elements. Includes proper TypeScript types and accessibility features.",
     "dependencies": [],
-    "priority": 4,
+    "priority": 6,
     "filename": "order_components_TypeScriptReact.prompt",
     "filepath": "src/components/orders/OrderList.tsx",
-    "tags": ["frontend", "react", "typescript", "ui"],
+    "tags": [
+      "frontend",
+      "react",
+      "typescript",
+      "ui"
+    ],
     "interface": {
       "type": "component",
       "props": [
@@ -158,39 +281,17 @@
     }
   },
   {
-    "reason": "Order creation form and workflow",
-    "description": "Next.js page for creating new orders with item selection, quantity input, and validation. Includes real-time total calculation and submission handling.",
-    "dependencies": ["order_api_Python.prompt", "order_components_TypeScriptReact.prompt"],
-    "priority": 5,
-    "filename": "create_order_page_TypeScriptReact.prompt",
-    "filepath": "app/orders/create/page.tsx",
-    "tags": ["frontend", "nextjs", "typescript", "form"],
-    "interface": {
-      "type": "page",
-      "route": "/orders/create",
-      "params": [],
-      "dataSources": [
-        {
-          "kind": "api",
-          "source": "/api/v1/orders",
-          "method": "POST",
-          "description": "Create new order",
-          "auth": "JWT token",
-          "inputs": ["orderData"],
-          "outputs": ["createdOrder"],
-          "refreshInterval": "none"
-        }
-      ]
-    }
-  },
-  {
     "reason": "Database configuration and connection management",
     "description": "PostgreSQL database configuration, connection pooling, and migration setup. Includes environment-based configuration and health checks.",
     "dependencies": [],
-    "priority": 6,
+    "priority": 7,
     "filename": "database_config_Python.prompt",
     "filepath": "src/database/config.py",
-    "tags": ["backend", "database", "config"],
+    "tags": [
+      "backend",
+      "database",
+      "config"
+    ],
     "interface": {
       "type": "config",
       "keys": [

@@ -29,16 +29,6 @@ log "Running tests: $TARGET_TEST"
 # Set PDD_AUTO_UPDATE to false to prevent interference
 export PDD_AUTO_UPDATE=false
 
-# Force local execution by unsetting GitHub client ID
-unset GITHUB_CLIENT_ID
-
-# Ensure OPENAI_API_KEY is set since we are forcing local execution fallback
-if [ -z "${OPENAI_API_KEY:-}" ]; then
-    log "WARNING: GITHUB_CLIENT_ID is unset to force local fallback, but OPENAI_API_KEY is missing."
-    log "Regression tests may fail if no valid API key is available for local models."
-    # We don't exit here to allow for other auth methods (e.g. Bedrock), but we warn loudly.
-fi
-
 # Define base variables
 # Set PDD base directory as the script's location (two directories up from this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,6 +52,10 @@ if [ -f "$PDD_BASE_DIR/.env" ]; then
 else
     log "No .env file found at $PDD_BASE_DIR/.env"
 fi
+
+# Force local execution for regression tests using the --local CLI flag.
+# This is cleaner than manipulating environment variables.
+TEST_LOCAL=true
 
 PDD_PATH="$PDD_BASE_DIR/pdd"
 STAGING_PATH="$PDD_BASE_DIR/staging"

@@ -1,23 +1,42 @@
-## v0.0.75 (2025-11-30)
+## v0.0.76 (2025-12-05)
 
 ### Feat
 
-- Introduce JavaScript automation examples and enhance PDD agent capabilities, prompts, and testing infrastructure.
-- Enhance core PDD functionality, update prompts, examples, and tests across various modules.
-- Update core PDD logic, examples, tests, and documentation, including new error and architecture examples. core example generation
-- Update examples, prompt templates, core PDD scripts, and tests across various modules.
-- Update examples, tests, and core prompt logic across various modules.
-- Refine examples, update core logic, enhance prompts, and expand tests across the codebase.
-- Update examples, enhance testing infrastructure, and refine core PDD logic and prompts.
-- Add analysis command and example, update various
-- Update PDD core logic, prompts, examples, and tests, and add new architecture and run configurations.
-- Update core PDD logic, prompts, examples, tests, and documentation across various modules.
-- Update various examples, prompts, tests, and core PDD components across multiple languages and functionalities.
-- Update core PDD logic, prompts, examples, tests, and documentation assets.
-- Update core PDD logic, prompt templates, examples, and tests, including new test for `commands_generate`.
-- Enhance PDD code generation, agentic prompts, examples, tests, and documentation.
-- add goldilocks prompt image to public repositories
-- enhance JWT token handling and environment configuration
+- Implement smart unescaping for code newlines and enhance error handling in llm_invoke to retry on invalid Python syntax after repair.
+- Add _unescape_code_newlines function to handle double-escaped newlines in Pydantic models and update prompt documentation for JSON formatting rules.
+- Add function to detect and repair malformed JSON responses, enhance response handling in llm_invoke, and update prompt documentation for JSON formatting requirements.
+- Update agentic fix to include permission flag and enhance JSON response handling with repair logic for malformed responses.
+
+### Refactor
+
+- Simplify local execution handling in regression tests by using the --local CLI flag instead of manipulating environment variables; update code generator to check for generated code content more clearly.
+
+## v0.0.75 (2025-11-30)
+
+### Architecture & CLI Refactor
+
+- **Modular Command Structure:** Massive refactoring of the monolithic `pdd/cli.py` into a modular architecture. The CLI is now organized into distinct command modules under `pdd/commands/` (`analysis`, `fix`, `generate`, `maintenance`, `misc`, `modify`, `templates`, `utility`) and core logic under `pdd/core/` (`cli`, `dump`, `errors`, `utils`). This significantly improves maintainability and extensibility.
+- **Test Suite Restructuring:** The monolithic `tests/test_cli.py` has been split into granular test files (`tests/test_commands_*.py`, `tests/test_core_*.py`) mirroring the new module structure, with enhanced coverage.
+
+### Feat
+
+- **Universal Execution Engine:** Introduced `pdd/get_run_command.py` and updated `data/language_format.csv` to define execution commands for supported languages (e.g., `python {file}`, `node {file}`, `go run {file}`). This allows the agentic fixer (`pdd/agentic_fix.py`) to verify fixes across multiple languages without hardcoded fallbacks.
+- **JavaScript Automation:** Enhanced `agentic_fix` and `agentic_langtest` to support JavaScript/TypeScript workflows, including Node.js and NPM detection. Added a comprehensive `examples/agentic_fallback_example_javascript` to demonstrate this capability.
+- **Analysis Module:** Consolidated analysis-related commands (`detect`, `conflicts`, `bug`, `crash`, `trace`) into a unified `pdd/commands/analysis.py` module.
+- **Core Dump Module:** Extracted and formalized core dump generation logic into `pdd/core/dump.py`, supporting the `report-core` functionality.
+- **Example Organization:** Reorganized context examples into structured subdirectories (e.g., `context/commands/`, `context/core/`) and added new examples for `dump`, `errors`, and `utils` usage.
+- **Goldilocks Prompt Image:** Added the "Goldilocks Zone" diagram asset to the public repository for documentation consistency.
+
+### Fix
+
+- **Agentic Fix Loops:** Refined `fix_code_loop` and `fix_error_loop` to leverage the new universal execution engine, improving stability and language support.
+- **JWT Token Handling:** Enhanced `get_jwt_token.py` with better environment configuration and error handling.
+- **Agentic Fallback Tests:** Updated `tests/test_agentic_fix.py` and `tests/test_agentic_langtest.py` to validate the new Node.js/NPM detection and universal execution paths.
+
+### Docs
+
+- **Prompting Guide:** Updated `docs/prompting_guide.md` with new insights and structural improvements.
+- **Example Generation:** Updated internal logic and prompts for generating core examples, ensuring they align with the new modular CLI structure.
 
 ## v0.0.74 (2025-11-24)
 
