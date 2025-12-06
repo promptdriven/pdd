@@ -1149,7 +1149,8 @@ def test_sync_orchestration_detects_fix_test_loop(orchestration_fixture):
     assert len(result['operations_completed']) == 3
 
 
-def test_tui_confirmation_modal_never_displayed_causes_hang():
+@pytest.mark.asyncio
+async def test_tui_request_confirmation_completes_without_hanging():
     """
     Regression test for TUI confirmation modal hang bug.
 
@@ -1169,134 +1170,89 @@ def test_tui_confirmation_modal_never_displayed_causes_hang():
        - The ConfirmScreen is never pushed, so _confirm_event.set() is never called
     6. Worker thread hangs indefinitely, TUI keeps animating (62% CPU)
 
-    This test verifies that request_confirmation() actually displays the modal
-    and properly signals completion within a reasonable timeout.
+    This test verifies that request_confirmation() properly signals completion
+    within a reasonable timeout. It should FAIL until the bug is fixed.
     """
     import threading
-    import time
+    import asyncio
+    from unittest.mock import MagicMock, patch, AsyncMock
 
-    # We need to test the actual mechanism without running a full Textual app
-    # The key issue is that the async task scheduling is broken
+    from pdd.sync_tui import SyncApp
 
-    # Simulate the broken mechanism
-    confirm_event = threading.Event()
-    confirm_result = [None]
-
-    # This simulates what _run_async_confirm does
-    def broken_async_confirm_scheduling():
-        """
-        This replicates the bug: asyncio.create_task() is called but
-        the task never actually runs because we're not in an async context.
-        """
-        import asyncio
-
-        async def mock_show_and_wait():
-            # This would set the event, but it never runs
-            confirm_result[0] = True
-            confirm_event.set()
-
-        # This is the bug: create_task() without a running event loop
-        # or in a context where the task won't be awaited
-        try:
-            # In the actual bug, this is called from call_later() which
-            # doesn't guarantee an async context
-            asyncio.create_task(mock_show_and_wait())
-        except RuntimeError:
-            # "no running event loop" - this is what happens
-            pass
-
-    # Simulate the worker thread blocking pattern
-    def worker_thread_simulation():
-        # Simulate: self.call_from_thread(self._show_confirm_modal)
-        # Which eventually calls broken_async_confirm_scheduling
-        broken_async_confirm_scheduling()
-
-    # Run the simulation
-    worker_thread_simulation()
-
-    # The event should NOT be set because the async task never ran
-    # This demonstrates the bug
-    event_was_set = confirm_event.wait(timeout=0.5)
-
-    # This assertion proves the bug exists:
-    # The confirm_event is never set because asyncio.create_task()
-    # doesn't work as expected outside of an async context
-    assert not event_was_set, (
-        "Bug reproduction failed: confirm_event was unexpectedly set. "
-        "The async scheduling bug should prevent the event from being set."
+    # Create a minimal SyncApp instance for testing
+    app = SyncApp(
+        basename="test",
+        budget=10.0,
+        worker_func=lambda: {"success": True},
+        function_name_ref=["test"],
+        cost_ref=[0.0],
+        prompt_path_ref=[""],
+        code_path_ref=[""],
+        example_path_ref=[""],
+        tests_path_ref=[""],
+        prompt_color_ref=["blue"],
+        code_color_ref=["blue"],
+        example_color_ref=["blue"],
+        tests_color_ref=["blue"],
+        stop_event=threading.Event(),
     )
 
-    # The actual fix should ensure that when request_confirmation() is called,
-    # the confirmation modal is properly displayed and the event is set
-    # within a reasonable timeout (e.g., when user clicks Yes/No)
+    # Use Textual's async test runner to properly run the app
+    async with app.run_test() as pilot:
+        confirmation_completed = [False]
+        confirmation_result = [None]
+        worker_timed_out = [False]
 
+        def worker_thread():
+            """Simulates the sync worker thread requesting confirmation."""
+            # This simulates what happens in sync_orchestration when
+            # construct_paths() needs to confirm file overwrite
+            try:
+                result = app.request_confirmation(
+                    "Files will be overwritten. Continue?",
+                    "Overwrite Confirmation"
+                )
+                confirmation_completed[0] = True
+                confirmation_result[0] = result
+            except Exception:
+                pass
 
-def test_tui_request_confirmation_blocks_worker_indefinitely():
-    """
-    Test that demonstrates the worker thread hanging when confirmation is requested.
+        # Start worker thread (simulates the @work(thread=True) worker)
+        worker = threading.Thread(target=worker_thread)
+        worker.start()
 
-    This test simulates the exact sequence that causes pdd sync to hang:
-    1. sync_orchestration creates a SyncApp and starts worker thread
-    2. Worker thread calls construct_paths() which detects file overwrites
-    3. construct_paths() calls confirm_callback() which maps to app.request_confirmation()
-    4. request_confirmation() blocks on _confirm_event.wait()
-    5. The modal is never displayed due to async scheduling bug
-    6. Worker hangs indefinitely, TUI keeps animating (62% CPU)
+        # Give the worker time to call request_confirmation
+        await asyncio.sleep(0.1)
 
-    The test uses a timeout to detect the hang condition.
-    """
-    import threading
-    import time
+        # Give the app time to process the call_from_thread and show the modal
+        # The bug is that the modal never appears, so we need to wait and check
+        await asyncio.sleep(0.5)
 
-    # Simulate the confirmation mechanism from sync_tui.py
-    class MockSyncApp:
-        def __init__(self):
-            self._confirm_event = threading.Event()
-            self._confirm_result = False
-            self._modal_displayed = False
+        # Try to interact with the confirmation dialog if it appeared
+        # Press Enter to confirm (or 'y' for yes)
+        await pilot.press("enter")
 
-        def request_confirmation(self, message: str, title: str) -> bool:
-            """Simulates SyncApp.request_confirmation() - blocks worker thread."""
-            self._confirm_event.clear()
+        # Give more time for the confirmation to be processed
+        await asyncio.sleep(0.3)
 
-            # In real code: self.call_from_thread(self._show_confirm_modal)
-            # But due to the bug, the modal is never shown
-            # Simulate the broken behavior by NOT setting the event
+        # Wait for worker with timeout
+        worker.join(timeout=2.0)
 
-            # Worker blocks here indefinitely
-            got_response = self._confirm_event.wait(timeout=1.0)  # Use timeout to prevent actual hang
+        if worker.is_alive():
+            worker_timed_out[0] = True
+            # Unblock the worker so the test can complete
+            app._confirm_event.set()
+            worker.join(timeout=1.0)
 
-            if not got_response:
-                # This is the bug condition - event was never set
-                raise TimeoutError("Confirmation modal was never displayed - worker hung")
-
-            return self._confirm_result
-
-    mock_app = MockSyncApp()
-    worker_exception = [None]
-
-    def worker_thread():
-        """Simulates the sync worker thread requesting confirmation."""
-        try:
-            # This is what happens when construct_paths() needs overwrite confirmation
-            result = mock_app.request_confirmation(
-                "Files will be overwritten. Continue?",
-                "Overwrite Confirmation"
-            )
-        except TimeoutError as e:
-            worker_exception[0] = e
-
-    # Start worker thread
-    thread = threading.Thread(target=worker_thread)
-    thread.start()
-
-    # Wait for worker to complete (or timeout)
-    thread.join(timeout=2.0)
-
-    # Verify the bug condition was detected
-    assert worker_exception[0] is not None, (
-        "Expected TimeoutError from blocked worker thread"
-    )
-    assert "Confirmation modal was never displayed" in str(worker_exception[0]), (
-        f"Unexpected exception: {worker_exception[0]}"
-    )
+        # The test should FAIL if:
+        # 1. The worker timed out (modal never appeared, worker hung)
+        # 2. The confirmation was never completed
+        assert not worker_timed_out[0], (
+            "BUG: Worker thread hung waiting for confirmation. "
+            "The confirmation modal was never displayed because the async task "
+            "scheduling in _show_confirm_modal/_run_async_confirm is broken."
+        )
+        assert confirmation_completed[0], (
+            "BUG: Confirmation was never completed. "
+            "The ConfirmScreen was never shown or never returned a result."
+        )
