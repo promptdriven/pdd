@@ -433,27 +433,15 @@ class SyncApp(App):
         Returns:
             True if user confirmed, False otherwise
         """
-        self._confirm_message = message
-        self._confirm_title = title
+        import asyncio
+
         self._confirm_event.clear()
 
-        # Schedule the modal on the main thread
-        self.call_from_thread(self._show_confirm_modal)
-
-        # Block worker thread until user responds
-        self._confirm_event.wait()
-        return self._confirm_result
-
-    def _show_confirm_modal(self) -> None:
-        """Shows the confirmation modal (runs on main thread).
-
-        This is called via call_from_thread, so we're on the main thread.
-        We need to schedule the async push_screen_wait properly.
-        """
         async def show_and_wait():
+            """Async function to show the modal and wait for result."""
             try:
                 result = await self.push_screen_wait(
-                    ConfirmScreen(self._confirm_message, self._confirm_title)
+                    ConfirmScreen(message, title)
                 )
                 self._confirm_result = result
             except Exception as e:
@@ -464,13 +452,21 @@ class SyncApp(App):
             finally:
                 self._confirm_event.set()
 
-        # Schedule the coroutine on the app's event loop
-        self.call_later(lambda: self._run_async_confirm(show_and_wait()))
+        # Schedule the coroutine directly on the app's event loop from this thread
+        # using run_coroutine_threadsafe which is designed for cross-thread scheduling
+        try:
+            loop = self._loop  # Textual App exposes the event loop
+            asyncio.run_coroutine_threadsafe(show_and_wait(), loop)
+        except Exception as e:
+            # Fallback if scheduling fails
+            import sys
+            print(f"Failed to schedule confirmation modal: {e}", file=sys.__stderr__)
+            self._confirm_result = True
+            self._confirm_event.set()
 
-    def _run_async_confirm(self, coro) -> None:
-        """Helper to run async confirmation in the event loop."""
-        import asyncio
-        asyncio.create_task(coro)
+        # Block worker thread until user responds
+        self._confirm_event.wait()
+        return self._confirm_result
 
 
 def show_exit_animation():
