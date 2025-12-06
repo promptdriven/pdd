@@ -800,7 +800,7 @@ def code_generator_main(
                         total_cost = float(response_data.get("totalCost", 0.0))
                         model_name = response_data.get("modelName", "cloud_model")
 
-                        if generated_code_content is None:
+                        if not generated_code_content:
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
