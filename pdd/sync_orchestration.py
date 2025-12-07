@@ -592,61 +592,29 @@ def sync_orchestration(
                                 # Remove TUI-specific env vars that might contaminate subprocess
                                 for var in ['FORCE_COLOR', 'COLUMNS']:
                                     env.pop(var, None)
-
-                                # === DIAGNOSTIC LOGGING ===
-                                example_path = str(pdd_files['example'])
-                                example_cwd = str(pdd_files['example'].parent)
-                                cmd = ['python', example_path]
-
-                                print(f"\n[DEBUG CRASH CHECK] Starting subprocess diagnostics...")
-                                print(f"[DEBUG] Command: {cmd}")
-                                print(f"[DEBUG] CWD: {example_cwd}")
-                                print(f"[DEBUG] Example exists: {pdd_files['example'].exists()}")
-                                print(f"[DEBUG] Example is file: {pdd_files['example'].is_file() if pdd_files['example'].exists() else 'N/A'}")
-                                print(f"[DEBUG] PYTHONPATH: {env.get('PYTHONPATH', 'NOT SET')}")
-                                print(f"[DEBUG] sys.stdin type: {type(sys.stdin)}")
-                                print(f"[DEBUG] sys.stdin.isatty(): {sys.stdin.isatty() if hasattr(sys.stdin, 'isatty') else 'N/A'}")
-                                print(f"[DEBUG] Current thread: {threading.current_thread().name}")
-
-                                # Check a few key env vars
-                                for key in ['TERM', 'COLUMNS', 'FORCE_COLOR', 'PYTHONHOME', 'PYTHONPATH']:
-                                    print(f"[DEBUG] env[{key}]: {env.get(key, 'NOT SET')}")
-
-                                import time as time_module
-                                start_time = time_module.time()
-                                print(f"[DEBUG] Calling subprocess.run at {start_time}...")
-                                sys.stdout.flush()
-
-                                try:
-                                    # start_new_session isolates subprocess from TUI's terminal control
-                                    ex_res = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env, cwd=example_cwd, stdin=subprocess.DEVNULL, start_new_session=True)
-                                    elapsed = time_module.time() - start_time
-                                    print(f"[DEBUG] subprocess.run completed in {elapsed:.2f}s")
-                                    print(f"[DEBUG] Return code: {ex_res.returncode}")
-                                    print(f"[DEBUG] STDOUT length: {len(ex_res.stdout)}")
-                                    print(f"[DEBUG] STDERR length: {len(ex_res.stderr)}")
-                                    if ex_res.stderr:
-                                        print(f"[DEBUG] STDERR (first 500 chars): {ex_res.stderr[:500]}")
-                                    sys.stdout.flush()
-                                except subprocess.TimeoutExpired as te:
-                                    elapsed = time_module.time() - start_time
-                                    print(f"[DEBUG] TIMEOUT after {elapsed:.2f}s: {te}")
-                                    sys.stdout.flush()
-                                    raise
-                                except Exception as e:
-                                    elapsed = time_module.time() - start_time
-                                    print(f"[DEBUG] EXCEPTION after {elapsed:.2f}s: {type(e).__name__}: {e}")
-                                    sys.stdout.flush()
-                                    raise
-                                # === END DIAGNOSTIC LOGGING ===
-
+                                # start_new_session isolates subprocess from TUI's terminal control
+                                ex_res = subprocess.run(
+                                    ['python', str(pdd_files['example'])],
+                                    capture_output=True, text=True, timeout=60,
+                                    env=env, cwd=str(pdd_files['example'].parent),
+                                    stdin=subprocess.DEVNULL, start_new_session=True
+                                )
                                 if ex_res.returncode != 0:
                                     has_crash = True
                                     crash_log_content = f"Example failed exit code: {ex_res.returncode}\nSTDOUT:\n{ex_res.stdout}\nSTDERR:\n{ex_res.stderr}\n"
                                     if "SyntaxError" in ex_res.stderr:
                                          crash_log_content = "SYNTAX ERROR DETECTED:\n" + crash_log_content
                                 else:
-                                    # No crash
+                                    # No crash - save run report with exit_code=0 so sync_determine_operation
+                                    # knows the example was tested and passed (prevents infinite loop)
+                                    report = RunReport(
+                                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        exit_code=0,
+                                        tests_passed=1,
+                                        tests_failed=0,
+                                        coverage=0.0
+                                    )
+                                    save_run_report(asdict(report), basename, language)
                                     skipped_operations.append('crash')
                                     continue
                                     
