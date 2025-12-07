@@ -229,6 +229,53 @@ def _github_config(repo: Optional[str] = None) -> Optional[Tuple[str, str]]:
     return token, repo
 
 
+def _create_gist_with_files(token: str, payload: Dict[str, Any], core_path: Path) -> Optional[str]:
+    """
+    Create a GitHub Gist with core dump and all tracked files.
+
+    Returns the Gist URL on success, None on failure.
+    """
+    try:
+        # Prepare files for gist
+        gist_files = {}
+
+        # Add the core dump JSON
+        gist_files["core-dump.json"] = {
+            "content": json.dumps(payload, indent=2)
+        }
+
+        # Add all tracked files
+        file_contents = payload.get("file_contents", {})
+        for filename, content in file_contents.items():
+            # GitHub gist filenames can't have slashes, replace with underscores
+            safe_filename = filename.replace("/", "_").replace("\\", "_")
+            gist_files[safe_filename] = {
+                "content": content if not content.startswith("<") else f"# {content}"
+            }
+
+        # Create the gist
+        url = "https://api.github.com/gists"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        }
+
+        gist_data = {
+            "description": f"PDD Core Dump - {core_path.name}",
+            "public": False,  # Private gist
+            "files": gist_files
+        }
+
+        resp = requests.post(url, headers=headers, json=gist_data, timeout=30)
+        if 200 <= resp.status_code < 300:
+            data = resp.json()
+            return data.get("html_url")
+    except Exception as e:
+        print(f"Failed to create gist: {e}")
+        return None
+    return None
+
+
 def _post_issue_to_github(token: str, repo: str, title: str, body: str) -> Optional[str]:
     """Post an issue to GitHub, returning the issue URL on success, otherwise None."""
     try:
@@ -288,6 +335,7 @@ def _build_issue_markdown(
     replay_path: Optional[Path],
     attachments: List[str],
     truncate_files: bool = False,
+    gist_url: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Build a GitHub issue title and markdown body from a core dump payload.
@@ -295,6 +343,8 @@ def _build_issue_markdown(
     Args:
         truncate_files: If True, truncate file contents aggressively for URL length limits.
                        Use True for browser-based submission, False for API submission.
+        gist_url: If provided, link to a GitHub Gist containing all files instead of
+                 including them in the body.
     """
     platform_info = payload.get("platform", {})
     system = platform_info.get("system", "unknown")
@@ -387,7 +437,15 @@ def _build_issue_markdown(
         lines.append("## File Contents")
         lines.append("")
 
-        if truncate_files:
+        if gist_url:
+            # Link to gist instead of embedding files
+            lines.append(f"**All files are attached in this Gist:** [{gist_url}]({gist_url})")
+            lines.append("")
+            lines.append("Files included:")
+            for filename in file_contents.keys():
+                lines.append(f"- `{filename}`")
+            lines.append("")
+        elif truncate_files:
             # For browser-based submission, truncate to avoid URL length limits
             MAX_FILE_CHARS = 300  # Limit per file
             for filename, content in file_contents.items():
@@ -401,7 +459,7 @@ def _build_issue_markdown(
                 lines.append("```")
                 lines.append("")
         else:
-            # For API-based submission, include full contents
+            # For API-based submission without gist, include full contents
             for filename, content in file_contents.items():
                 lines.append(f"### {filename}")
                 lines.append("```")
@@ -410,7 +468,10 @@ def _build_issue_markdown(
                 lines.append("")
 
     # --- Raw core dump JSON at the bottom ---
-    if truncate_files:
+    if gist_url:
+        # If we have a gist, no need for raw JSON (it's in the gist)
+        pass
+    elif truncate_files:
         # For browser-based submission, skip or heavily truncate raw JSON to save URL space
         lines.append("## Raw core dump (JSON)")
         lines.append("")
