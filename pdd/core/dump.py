@@ -271,7 +271,7 @@ def _create_gist_with_files(token: str, payload: Dict[str, Any], core_path: Path
             data = resp.json()
             return data.get("html_url")
     except Exception as e:
-        print(f"Failed to create gist: {e}")
+        console.print(f"[warning]Failed to create gist: {e}[/warning]", style="warning")
         return None
     return None
 

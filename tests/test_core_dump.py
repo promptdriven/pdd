@@ -152,7 +152,9 @@ def test_core_dump_includes_file_contents(tmp_path):
 
     # Test that browser-based markdown truncates files
     title, body = _build_issue_markdown(core_dump_data, "", core_dumps[0], None, [], truncate_files=True)
-    assert "... (truncated" not in body or len(body) < 5000  # Should be much smaller
+    # For browser-based submission, verify files are truncated
+    # The body should be reasonably sized (not include full raw JSON, etc.)
+    assert len(body) < 5000, f"Browser-based body should be truncated, but was {len(body)} chars"
 
     # Test that API-based markdown includes full contents
     title, body_full = _build_issue_markdown(core_dump_data, "", core_dumps[0], None, [], truncate_files=False)
