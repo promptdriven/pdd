@@ -39,19 +39,35 @@ def track_cost(func):
         end_time = datetime.now()
 
         try:
+            # Always collect files for core dump, even if output_cost is not set
+            input_files, output_files = collect_files(args, kwargs)
+
+            # Store collected files in context for core dump (even if output_cost not set)
+            if ctx.obj is not None and ctx.obj.get('core_dump'):
+                files_set = ctx.obj.get('core_dump_files', set())
+                for f in input_files + output_files:
+                    if isinstance(f, str) and f:
+                        # Convert to absolute path for reliable access later
+                        abs_path = os.path.abspath(f)
+                        # Add the file if it exists OR if it looks like a file path
+                        # (it might have been created/deleted during command execution)
+                        if os.path.exists(abs_path) or '.' in os.path.basename(f):
+                            files_set.add(abs_path)
+                            print(f"Debug: Added to core_dump_files: {abs_path} (exists: {os.path.exists(abs_path)})")
+                ctx.obj['core_dump_files'] = files_set
+                print(f"Debug: Total files in core_dump_files: {len(files_set)}")
+
+            # Check if we need to write cost tracking
             if ctx.obj and hasattr(ctx.obj, 'get'):
                 output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
             else:
                 output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
-            
+
             if not output_cost_path:
                 return result
 
             command_name = ctx.command.name
-
             cost, model_name = extract_cost_and_model(result)
-
-            input_files, output_files = collect_files(args, kwargs)
 
             timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
 
@@ -93,27 +109,67 @@ def collect_files(args, kwargs):
     input_files = []
     output_files = []
 
-    # Collect from args
-    for arg in args:
-        if isinstance(arg, str):
-            input_files.append(arg)
-        elif isinstance(arg, list):
-            input_files.extend([f for f in arg if isinstance(f, str)])
+    print(f"Debug: collect_files called")
+    print(f"Debug: args = {args}")
+    print(f"Debug: kwargs keys = {list(kwargs.keys())}")
+    print(f"Debug: kwargs = {kwargs}")
 
-    # Collect from kwargs
+    # Known input parameter names that typically contain file paths
+    input_param_names = {
+        'prompt_file', 'prompt', 'input', 'input_file', 'source', 'source_file',
+        'file', 'path', 'original_prompt_file_path', 'files', 'core_file',
+        'code_file', 'unit_test_file', 'error_file', 'test_file', 'example_file'
+    }
+
+    # Known output parameter names (anything with 'output' in the name)
+    output_param_names = {
+        'output', 'output_file', 'output_path', 'destination', 'dest', 'target',
+        'output_test', 'output_code', 'output_results'
+    }
+
+    # Helper to check if something looks like a file path
+    def looks_like_file(path_str):
+        """Check if string looks like a file path."""
+        if not path_str or not isinstance(path_str, str):
+            return False
+        # Has file extension or exists
+        return '.' in os.path.basename(path_str) or os.path.isfile(path_str)
+
+    # Collect from kwargs (most reliable since Click uses named parameters)
     for k, v in kwargs.items():
-        if k == 'output_cost':
+        if k in ('ctx', 'context', 'output_cost'):
             continue
-        if isinstance(v, str):
-            if k.startswith('output'):
+
+        # Check if this is a known parameter name
+        is_input_param = k in input_param_names or 'file' in k.lower() or 'prompt' in k.lower()
+        is_output_param = k in output_param_names or 'output' in k.lower()
+
+        if isinstance(v, str) and v and looks_like_file(v):
+            if is_output_param:
                 output_files.append(v)
             else:
+                # For input files, be more lenient - include if it looks like a file
                 input_files.append(v)
         elif isinstance(v, list):
-            if k.startswith('output'):
-                output_files.extend([f for f in v if isinstance(f, str)])
-            else:
-                input_files.extend([f for f in v if isinstance(f, str)])
+            for item in v:
+                if isinstance(item, str) and item and looks_like_file(item):
+                    if is_output_param:
+                        output_files.append(item)
+                    else:
+                        input_files.append(item)
+
+    # Collect from positional args (skip first arg which is usually Click context)
+    for i, arg in enumerate(args):
+        # Skip first argument if it looks like a Click context
+        if i == 0 and hasattr(arg, 'obj'):
+            continue
+
+        if isinstance(arg, str) and arg and looks_like_file(arg):
+            input_files.append(arg)
+        elif isinstance(arg, list):
+            for item in arg:
+                if isinstance(item, str) and item and looks_like_file(item):
+                    input_files.append(item)
 
     print(f"Debug: Collected input files: {input_files}")
     print(f"Debug: Collected output files: {output_files}")
