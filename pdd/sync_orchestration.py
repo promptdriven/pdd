@@ -155,14 +155,19 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
             package_path = str(relative_path).replace(os.sep, '.')
             cov_target = f'{package_path}.{module_name}' if package_path else module_name
         
+        # Use clean env without TUI-specific vars
+        clean_env = os.environ.copy()
+        for var in ['FORCE_COLOR', 'COLUMNS']:
+            clean_env.pop(var, None)
+        # start_new_session isolates subprocess from TUI's terminal control
         result = subprocess.run([
-            python_executable, '-m', 'pytest', 
-            str(test_file), 
-            '-v', 
+            python_executable, '-m', 'pytest',
+            str(test_file),
+            '-v',
             '--tb=short',
             f'--cov={cov_target}',
             '--cov-report=term-missing'
-        ], capture_output=True, text=True, timeout=300)
+        ], capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
         
         exit_code = result.returncode
         stdout = result.stdout
@@ -580,11 +585,61 @@ def sync_orchestration(
                                 has_crash = True
                                 crash_log_content = f"Test execution failed exit code: {current_run_report.exit_code}\n"
                             else:
-                                # Manual check
+                                # Manual check - run the example to see if it crashes
                                 env = os.environ.copy()
                                 src_dir = Path.cwd() / 'src'
                                 env['PYTHONPATH'] = f"{src_dir}:{env.get('PYTHONPATH', '')}"
-                                ex_res = subprocess.run(['python', str(pdd_files['example'])], capture_output=True, text=True, timeout=60, env=env, cwd=str(pdd_files['example'].parent))
+                                # Remove TUI-specific env vars that might contaminate subprocess
+                                for var in ['FORCE_COLOR', 'COLUMNS']:
+                                    env.pop(var, None)
+
+                                # === DIAGNOSTIC LOGGING ===
+                                example_path = str(pdd_files['example'])
+                                example_cwd = str(pdd_files['example'].parent)
+                                cmd = ['python', example_path]
+
+                                print(f"\n[DEBUG CRASH CHECK] Starting subprocess diagnostics...")
+                                print(f"[DEBUG] Command: {cmd}")
+                                print(f"[DEBUG] CWD: {example_cwd}")
+                                print(f"[DEBUG] Example exists: {pdd_files['example'].exists()}")
+                                print(f"[DEBUG] Example is file: {pdd_files['example'].is_file() if pdd_files['example'].exists() else 'N/A'}")
+                                print(f"[DEBUG] PYTHONPATH: {env.get('PYTHONPATH', 'NOT SET')}")
+                                print(f"[DEBUG] sys.stdin type: {type(sys.stdin)}")
+                                print(f"[DEBUG] sys.stdin.isatty(): {sys.stdin.isatty() if hasattr(sys.stdin, 'isatty') else 'N/A'}")
+                                print(f"[DEBUG] Current thread: {threading.current_thread().name}")
+
+                                # Check a few key env vars
+                                for key in ['TERM', 'COLUMNS', 'FORCE_COLOR', 'PYTHONHOME', 'PYTHONPATH']:
+                                    print(f"[DEBUG] env[{key}]: {env.get(key, 'NOT SET')}")
+
+                                import time as time_module
+                                start_time = time_module.time()
+                                print(f"[DEBUG] Calling subprocess.run at {start_time}...")
+                                sys.stdout.flush()
+
+                                try:
+                                    # start_new_session isolates subprocess from TUI's terminal control
+                                    ex_res = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env, cwd=example_cwd, stdin=subprocess.DEVNULL, start_new_session=True)
+                                    elapsed = time_module.time() - start_time
+                                    print(f"[DEBUG] subprocess.run completed in {elapsed:.2f}s")
+                                    print(f"[DEBUG] Return code: {ex_res.returncode}")
+                                    print(f"[DEBUG] STDOUT length: {len(ex_res.stdout)}")
+                                    print(f"[DEBUG] STDERR length: {len(ex_res.stderr)}")
+                                    if ex_res.stderr:
+                                        print(f"[DEBUG] STDERR (first 500 chars): {ex_res.stderr[:500]}")
+                                    sys.stdout.flush()
+                                except subprocess.TimeoutExpired as te:
+                                    elapsed = time_module.time() - start_time
+                                    print(f"[DEBUG] TIMEOUT after {elapsed:.2f}s: {te}")
+                                    sys.stdout.flush()
+                                    raise
+                                except Exception as e:
+                                    elapsed = time_module.time() - start_time
+                                    print(f"[DEBUG] EXCEPTION after {elapsed:.2f}s: {type(e).__name__}: {e}")
+                                    sys.stdout.flush()
+                                    raise
+                                # === END DIAGNOSTIC LOGGING ===
+
                                 if ex_res.returncode != 0:
                                     has_crash = True
                                     crash_log_content = f"Example failed exit code: {ex_res.returncode}\nSTDOUT:\n{ex_res.stdout}\nSTDERR:\n{ex_res.stderr}\n"
@@ -621,7 +676,12 @@ def sync_orchestration(
                                 run_report = read_run_report(basename, language)
                                 if run_report and run_report.tests_failed > 0:
                                      python_executable = detect_host_python_executable()
-                                     test_result = subprocess.run([python_executable, '-m', 'pytest', str(pdd_files['test']), '-v', '--tb=short'], capture_output=True, text=True, timeout=300)
+                                     # Use clean env without TUI-specific vars
+                                     clean_env = os.environ.copy()
+                                     for var in ['FORCE_COLOR', 'COLUMNS']:
+                                         clean_env.pop(var, None)
+                                     # start_new_session isolates subprocess from TUI's terminal control
+                                     test_result = subprocess.run([python_executable, '-m', 'pytest', str(pdd_files['test']), '-v', '--tb=short'], capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
                                      error_content = f"Test failures:\n{test_result.stdout}\n{test_result.stderr}"
                                 else:
                                      error_content = "Simulated failures"
@@ -673,7 +733,12 @@ def sync_orchestration(
                     if success and operation == 'crash':
                         # Re-run example
                         try:
-                             ex_res = subprocess.run(['python', str(pdd_files['example'])], capture_output=True, text=True, timeout=60, cwd=str(pdd_files['example'].parent))
+                             # Use clean env without TUI-specific vars
+                             clean_env = os.environ.copy()
+                             for var in ['FORCE_COLOR', 'COLUMNS']:
+                                 clean_env.pop(var, None)
+                             # start_new_session isolates subprocess from TUI's terminal control
+                             ex_res = subprocess.run(['python', str(pdd_files['example'])], capture_output=True, text=True, timeout=60, cwd=str(pdd_files['example'].parent), stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
                              report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), ex_res.returncode, 1 if ex_res.returncode==0 else 0, 0 if ex_res.returncode==0 else 1, 100.0 if ex_res.returncode==0 else 0.0)
                              save_run_report(asdict(report), basename, language)
                         except:
