@@ -91,14 +91,12 @@ def orchestration_fixture(tmp_path):
         mock_lock.return_value.__exit__.return_value = None
         mock_auto_deps.return_value = {'success': True, 'cost': 0.01, 'model': 'mock-model'}
         mock_code_gen.return_value = {'success': True, 'cost': 0.05, 'model': 'mock-model'}
-        mock_context_gen.return_value = {'success': True, 'cost': 0.03, 'model': 'mock-model'}
         mock_crash.return_value = {'success': True, 'cost': 0.08, 'model': 'mock-model'}
         mock_verify.return_value = {'success': True, 'cost': 0.10, 'model': 'mock-model'}
-        mock_test.return_value = {'success': True, 'cost': 0.06, 'model': 'mock-model'}
         mock_fix.return_value = {'success': True, 'cost': 0.15, 'model': 'mock-model'}
         mock_update.return_value = {'success': True, 'cost': 0.04, 'model': 'mock-model'}
         mock_display_log.return_value = {'success': True, 'log_entries': ['log entry']}
-        
+
         # Configure path mocks to return expected paths
         mock_get_paths.return_value = {
             'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
@@ -106,14 +104,24 @@ def orchestration_fixture(tmp_path):
             'example': tmp_path / 'examples' / 'calculator_example.py',
             'test': tmp_path / 'tests' / 'test_calculator.py'
         }
-        
+
+        # Create the example file when context_generator_main is called
+        # This is needed because verify operation checks if example file exists
+        def create_example_file(*args, **kwargs):
+            """Mock function that creates the example file and returns success"""
+            example_file = tmp_path / 'examples' / 'calculator_example.py'
+            example_file.write_text("# Mock example file created by fixture")
+            return {'success': True, 'cost': 0.03, 'model': 'mock-model'}
+
+        mock_context_gen.side_effect = create_example_file
+
         # Create the test file so validation passes when sync_orchestration checks for it
         def create_test_file(*args, **kwargs):
             """Mock function that creates the test file and returns success"""
             test_file = tmp_path / 'tests' / 'test_calculator.py'
             test_file.write_text("# Mock test file created by fixture")
             return {'success': True, 'cost': 0.06, 'model': 'mock-model'}
-        
+
         mock_test.side_effect = create_test_file
 
         yield {
@@ -171,6 +179,8 @@ def test_sync_stops_on_operation_failure(orchestration_fixture):
         SyncDecision(operation='example', reason='Code exists, example missing'),
     ]
     # Simulate failure during the 'example' step
+    # Must use side_effect to override the fixture's side_effect (return_value is ignored when side_effect is set)
+    orchestration_fixture['context_generator_main'].side_effect = None
     orchestration_fixture['context_generator_main'].return_value = {'success': False, 'cost': 0.03}
 
     result = sync_orchestration(basename="calculator", language="python")

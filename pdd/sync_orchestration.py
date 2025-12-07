@@ -513,21 +513,27 @@ def sync_orchestration(
                         append_sync_log(basename, language, log_entry)
                         break
                     
-                    # Handle skips
+                    # Handle skips - per spec, save fingerprint to advance state machine
                     if operation == 'verify' and (skip_verify or skip_tests):
                         skipped_operations.append('verify')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
+                        # Save fingerprint to advance state machine (as per spec)
+                        _save_operation_fingerprint(basename, language, 'verify', pdd_files, 0.0, 'skip_verify')
                         continue
                     if operation == 'test' and skip_tests:
                         skipped_operations.append('test')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
+                        # Save fingerprint to advance state machine (as per spec)
+                        _save_operation_fingerprint(basename, language, 'test', pdd_files, 0.0, 'skipped')
                         continue
                     if operation == 'crash' and skip_tests:
                         skipped_operations.append('crash')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
+                        # Save fingerprint to advance state machine (as per spec)
+                        _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped')
                         continue
 
                     current_function_name_ref[0] = operation
