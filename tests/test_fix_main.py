@@ -541,20 +541,24 @@ def test_fix_main_success_is_false_when_no_updates(
     assert model_name == "gpt-4"
 
 
-@patch('pdd.fix_main.Path')
 @patch('pdd.fix_main.construct_paths')
 @patch('pdd.fix_main.fix_errors_from_unit_tests')
 def test_fix_main_success_when_only_code_updated(
     mock_fix_errors,
     mock_construct_paths,
-    mock_path,
     mock_ctx
 ):
     """
     Test that success is True when only update_code=True (update_unit_test=False).
     Verifies the OR logic: success = update_unit_test or update_code
     """
-    mock_path.return_value.exists.return_value = True
+    from pathlib import Path as RealPath
+
+    # Use real Path objects but wrap to track exists() calls
+    class MockPath(type(RealPath())):
+        """A Path subclass that always returns True for exists()"""
+        def exists(self):
+            return True
 
     mock_construct_paths.return_value = (
         {},
@@ -584,22 +588,24 @@ def test_fix_main_success_when_only_code_updated(
     )
 
     m_open = mock_open()
-    with patch('builtins.open', m_open):
-        success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
-            ctx=mock_ctx,
-            prompt_file="prompt.prompt",
-            code_file="code.py",
-            unit_test_file="test.py",
-            error_file="errors.log",
-            output_test=None,
-            output_code=None,
-            output_results=None,
-            loop=False,
-            verification_program=None,
-            max_attempts=3,
-            budget=5.0,
-            auto_submit=False
-        )
+    with patch('pdd.fix_main.Path', MockPath):
+        with patch.object(MockPath, 'mkdir'):
+            with patch('builtins.open', m_open):
+                success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+                    ctx=mock_ctx,
+                    prompt_file="prompt.prompt",
+                    code_file="code.py",
+                    unit_test_file="test.py",
+                    error_file="errors.log",
+                    output_test=None,
+                    output_code=None,
+                    output_results=None,
+                    loop=False,
+                    verification_program=None,
+                    max_attempts=3,
+                    budget=5.0,
+                    auto_submit=False
+                )
 
     # Assert
     assert success is True  # True because update_code was True
@@ -607,8 +613,7 @@ def test_fix_main_success_when_only_code_updated(
     assert fixed_code == "fixed code content"
 
     # Verify only code file was written (not test file since it's empty)
-    from pathlib import Path as PathLib
-    m_open.assert_called_once_with(PathLib('output/code.py'), 'w')
+    m_open.assert_called_once_with(MockPath('output/code.py'), 'w')
 
 
 @patch('pdd.fix_main.Path')
