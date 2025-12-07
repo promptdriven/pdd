@@ -4,7 +4,7 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object provides 'verbose', 'strength', 'temperature', 'time' (defaulting to `DEFAULT_TIME`), as well as 'force' and 'quiet' via `ctx.obj`.
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object provides 'verbose', 'strength', 'temperature', 'time' (a float or None), as well as 'force', 'quiet', 'context' (optional context override), and 'confirm_callback' (optional TUI confirmation callback) via `ctx.obj`.
         - `prompt_file` - A string containing the path to the prompt file that generated the code.
         - `code_file` - A string containing the path to the code file to be tested.
         - `output` - An optional string containing the path where to save the generated test file. If None, use the resolved path from `construct_paths`.
@@ -25,16 +25,21 @@
 %      command_options: {output, language, merge, target_coverage}
 %      along with ctx.obj['force'], ctx.obj['quiet'], and command="test".
 %      When calling `construct_paths`, include `context_override=ctx.obj.get('context')` so a global `--context` is honored.
-%  - If 'coverage_report' is NOT provided: call `generate_test(prompt, code, strength, temperature, time, language, verbose)`.
-%  - If 'coverage_report' IS provided: require 'existing_tests'; otherwise print a Rich error and `ctx.exit(1)`. If provided, call
+%      Also pass `confirm_callback=ctx.obj.get('confirm_callback')` for TUI confirmation support.
+%  - If 'coverage_report' is NOT provided: call `generate_test(prompt, code, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name)`.
+%      The additional parameters are computed as:
+%      • `source_file_path = str(Path(code_file).expanduser().resolve())`
+%      • `test_file_path = str(Path(output_file).expanduser().resolve())` where `output_file` is the resolved output path
+%      • `module_name = Path(source_file_path).stem`
+%  - If 'coverage_report' IS provided: require 'existing_tests'; otherwise print a Rich error and return an error result. If provided, call
 %    `increase_tests(existing_unit_tests, coverage_report, code, prompt_that_generated_code, language, strength, temperature, time, verbose)`.
-%  - Use `ctx.obj.get('time', DEFAULT_TIME)` where `DEFAULT_TIME` is imported from `pdd.__init__`; `time` is a float in [0.0–1.0] representing relative thinking time.
-%  - Validate generated content is non-empty after stripping; on empty, print diagnostics and `ctx.exit(1)`.
+%  - Use `ctx.obj.get('time')` to retrieve the time parameter; `time` is a float in [0.0–1.0] representing relative thinking time (or None if not set).
+%  - Validate generated content is non-empty after stripping; on empty, print diagnostics and return an error result.
 %  - Resolve output path:
 %      * If `output` is None, or is a directory path or ends with '/', write to the resolved file from `construct_paths`.
 %      * If `merge` is True and `existing_tests` is provided, write to `existing_tests`.
 %      * Ensure parent directories exist and write with UTF-8 encoding.
-%  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and call `ctx.exit(1)`.
+%  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}")` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
@@ -61,7 +66,7 @@
    </internal_example_modules>
 </examples>
 
-% Here is the README for the cli command that has details of how the 'test' command works. Be sure to support the necessary global options like verbose, strength, temperature, and time (retrieved from `ctx.obj.get('time', DEFAULT_TIME)`, where `DEFAULT_TIME` is a float in [0.0–1.0]) when calling the `generate_test` and `increase_tests` functions. Also pass `force` and `quiet` to `construct_paths`.
+% Here is the README for the cli command that has details of how the 'test' command works. Be sure to support the necessary global options like verbose, strength, temperature, and time (retrieved from `ctx.obj.get('time')`, where `time` is a float in [0.0–1.0] or None) when calling the `generate_test` and `increase_tests` functions. Also pass `force` and `quiet` to `construct_paths`.
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>

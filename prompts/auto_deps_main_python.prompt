@@ -24,12 +24,17 @@
         • `command_options = {"output": output, "csv": auto_deps_csv_path}`
         • `force = ctx.obj.get('force', False)` and `quiet = ctx.obj.get('quiet', False)`
         • `context_override = ctx.obj.get('context')` to honor a global `--context`
+        • `confirm_callback = ctx.obj.get('confirm_callback')` for interactive confirmation handling
+    - Unpack the four return values from `construct_paths`:
+        • `(resolved_config, input_strings, output_file_paths, _)` where `_` is the unused language value.
     - Resolve `csv_path` from `output_file_paths.get("csv", "project_dependencies.csv")`.
       Note: If the path constructor does not produce a `csv` entry, default to "project_dependencies.csv".
-    - If `force_scan` is True and `Path(csv_path).exists()`, delete the CSV file before continuing.
-    - Read LLM parameters from context with defaults: 
+    - If `force_scan` is True and `Path(csv_path).exists()`:
+        • Print a yellow message (unless quiet): "Removing existing CSV file due to --force-scan option: {csv_path}"
+        • Delete the CSV file before continuing.
+    - Read LLM parameters from context with defaults:
         • `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`
-        • `temperature = ctx.obj.get('temperature', 0.0)`
+        • `temperature = ctx.obj.get('temperature', 0)`
         • `time_budget = ctx.obj.get('time', DEFAULT_TIME)`
       Compute verbosity as `verbose = not ctx.obj.get('quiet', False)` and pass to downstream calls.
     - Call `insert_includes` as:
@@ -37,9 +42,16 @@
       Capture `(modified_prompt, csv_output, total_cost, model_name)`.
     - Save outputs:
         • Write `modified_prompt` to `output_file_paths["output"]` (UTF-8).
-        • If `csv_output` is non-empty, write it to `csv_path` (UTF-8).
-    - Console output: Print success/cost/model and destinations unless `quiet` is set.
-    - Errors: On any exception, print a red error message unless `quiet` and call `sys.exit(1)`.
+        • If `csv_output` is truthy (non-empty), write it to `csv_path` (UTF-8).
+    - Console output (unless `quiet` is set), print using Rich formatting:
+        • "[bold green]Successfully analyzed and inserted dependencies![/bold green]"
+        • "[bold]Model used:[/bold] {model_name}"
+        • "[bold]Total cost:[/bold] ${total_cost:.6f}"
+        • "[bold]Modified prompt saved to:[/bold] {output_path}"
+        • "[bold]Dependency information saved to:[/bold] {csv_path}"
+    - Error handling:
+        • On `click.Abort` exception: re-raise to allow the orchestrator to stop the sync loop.
+        • On any other exception: print a red error message (unless `quiet`) and return an error tuple `("", 0.0, f"Error: {exc}")` instead of calling `sys.exit(1)`. This allows the orchestrator to handle failures gracefully.
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:

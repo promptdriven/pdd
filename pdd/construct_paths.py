@@ -789,7 +789,7 @@ def construct_paths(
             # Use the provided callback for confirmation (e.g., from Textual TUI)
             confirm_message = f"The following files will be overwritten:\n{paths_list}\n\nOverwrite existing files?"
             if not confirm_callback(confirm_message, "Overwrite Confirmation"):
-                raise click.Abort()
+                sys.exit(1)
         else:
             # Use click.confirm for CLI interaction
             try:
@@ -797,16 +797,16 @@ def construct_paths(
                     click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
                 ):
                     click.secho("Operation cancelled.", fg="red", err=True)
-                    raise click.Abort()
+                    sys.exit(1)
             except click.Abort:
-                raise  # Re-raise Abort exceptions
+                sys.exit(1)  # Convert Abort to sys.exit(1) for consistent behavior
             except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
                 if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
                     # Non-interactive environment, default to not overwriting
                     click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
                 else:
                     click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
-                raise click.Abort()
+                sys.exit(1)
 
 
     # ------------- Final reporting ---------------------------
