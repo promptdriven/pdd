@@ -38,7 +38,7 @@ def mock_files_fixture():
 
 
 # pylint: disable=redefined-outer-name
-@pytest.mark.parametrize("coverage_report, existing_tests, expect_exit", [
+@pytest.mark.parametrize("coverage_report, existing_tests, expect_error", [
     (None, None, False),
     ("fake_coverage_report.xml", None, True),
     ("fake_coverage_report.xml", "fake_existing_tests.py", False),
@@ -48,7 +48,7 @@ def test_cmd_test_main_coverage_handling(
     mock_files_fixture,
     coverage_report,
     existing_tests,
-    expect_exit
+    expect_error
 ):
     """
     Tests behavior when coverage_report is missing or present
@@ -81,16 +81,7 @@ def test_cmd_test_main_coverage_handling(
         mock_generate_test.return_value = ("generated_tests_code", 0.05, "test_model")
         mock_increase_tests.return_value = ("enhanced_tests_code", 0.10, "coverage_model")
 
-        # Run the function
-        exit_called = False
-        def mock_exit(code):
-            nonlocal exit_called
-            exit_called = True
-            assert code == 1, "Expected exit code 1 for this test case"
-
-        mock_ctx_fixture.exit.side_effect = mock_exit
-
-        cmd_test_main(
+        result = cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
@@ -102,11 +93,13 @@ def test_cmd_test_main_coverage_handling(
             merge=False,
         )
 
-        # Check if we expected click.Context.exit to be invoked
-        assert exit_called == expect_exit
-
-        if not expect_exit:
-            # If not exiting, we either tested generate_test or increase_tests
+        # Check if we expected an error result (tuple with Error in model_name)
+        if expect_error:
+            assert result[0] == ""
+            assert result[1] == 0.0
+            assert "Error:" in result[2]
+        else:
+            # If not an error, we either tested generate_test or increase_tests
             if coverage_report is None:
                 # Should have invoked generate_test
                 mock_generate_test.assert_called_once()
@@ -122,20 +115,12 @@ def test_cmd_test_main_coverage_handling(
 def test_cmd_test_main_path_construction_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if construct_paths raises an exception,
-    cmd_test_main handles it and calls ctx.exit(1).
+    cmd_test_main handles it and returns an error result tuple.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths:
         mock_construct_paths.side_effect = Exception("construct_paths error")
 
-        exit_called = False
-        def mock_exit(code):
-            nonlocal exit_called
-            exit_called = True
-            assert code == 1
-
-        mock_ctx_fixture.exit.side_effect = mock_exit
-
-        cmd_test_main(
+        result = cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
@@ -146,14 +131,19 @@ def test_cmd_test_main_path_construction_error(mock_ctx_fixture, mock_files_fixt
             target_coverage=None,
             merge=False,
         )
-        assert exit_called is True
+
+        # Verify error result tuple is returned
+        assert result[0] == ""
+        assert result[1] == 0.0
+        assert "Error:" in result[2]
+        assert "construct_paths error" in result[2]
 
 
 # pylint: disable=unused-argument
 def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if generate_test raises an exception,
-    cmd_test_main handles it and calls ctx.exit(1).
+    cmd_test_main handles it and returns an error result tuple.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
          patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
@@ -166,15 +156,7 @@ def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture)
         )
         mock_generate_test.side_effect = Exception("generate_test error")
 
-        exit_called = False
-        def mock_exit(code):
-            nonlocal exit_called
-            exit_called = True
-            assert code == 1
-
-        mock_ctx_fixture.exit.side_effect = mock_exit
-
-        cmd_test_main(
+        result = cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
@@ -185,14 +167,19 @@ def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture)
             target_coverage=None,
             merge=False,
         )
-        assert exit_called is True
+
+        # Verify error result tuple is returned
+        assert result[0] == ""
+        assert result[1] == 0.0
+        assert "Error:" in result[2]
+        assert "generate_test error" in result[2]
 
 
 # pylint: disable=unused-argument
 def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if increase_tests raises an exception (when coverage_report is provided),
-    cmd_test_main handles it and calls ctx.exit(1).
+    cmd_test_main handles it and returns an error result tuple.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
          patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests:
@@ -210,15 +197,7 @@ def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture
         )
         mock_increase_tests.side_effect = Exception("increase_tests error")
 
-        exit_called = False
-        def mock_exit(code):
-            nonlocal exit_called
-            exit_called = True
-            assert code == 1
-
-        mock_ctx_fixture.exit.side_effect = mock_exit
-
-        cmd_test_main(
+        result = cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
@@ -229,7 +208,12 @@ def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture
             target_coverage=95.0,
             merge=False,
         )
-        assert exit_called is True
+
+        # Verify error result tuple is returned
+        assert result[0] == ""
+        assert result[1] == 0.0
+        assert "Error:" in result[2]
+        assert "increase_tests error" in result[2]
 
 
 # pylint: disable=redefined-outer-name

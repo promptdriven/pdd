@@ -4,19 +4,21 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This context is expected to provide global options like 'strength', 'temperature', 'verbose', 'quiet', 'force', and 'time'. Resolve them as follows:
+        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This context is expected to provide global options like 'strength', 'temperature', 'verbose', 'quiet', 'force', 'time', 'context', and 'confirm_callback'. Resolve them as follows:
             - `strength = ctx.obj.get('strength', 0.5)`
             - `temperature = ctx.obj.get('temperature', 0)`
             - `time = ctx.obj.get('time')`  % Intentionally no default here
             - `force = ctx.obj.get('force', False)`, `quiet = ctx.obj.get('quiet', False)`, `verbose = ctx.obj.get('verbose', False)`
+            - `context_override = ctx.obj.get('context')` % For passing to construct_paths
+            - `confirm_callback = ctx.obj.get('confirm_callback')` % For construct_paths confirmation handling
         - `prompt_file` - A string containing the path to the prompt file that generated the code.
         - `code_file` - A string containing the path to the existing code file.
         - `output` - An optional string containing the path where to save the generated example code. If None, uses default naming convention.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`):
-            - `str`: The generated example code.
-            - `float`: The total cost of the operation.
-            - `str`: The name of the model used.
+            - `str`: The generated example code (may be empty string on error).
+            - `float`: The total cost of the operation (0.0 on error).
+            - `str`: The name of the model used (or error message on failure).
 
 <examples>
    % Here is how to use the Python Click library to create a command line program:
@@ -41,19 +43,28 @@
 
 % Implementation details that must be reflected in the wrapper:
     - Use `construct_paths` to:
-        * Read `prompt_file` and `code_file` contents into `input_strings`.
+        * Call it with `input_file_paths`, `force`, `quiet`, `command="example"`, `command_options`, `context_override`, and `confirm_callback`.
+        * It returns a 4-tuple: `(resolved_config, input_strings, output_file_paths, language)`.
+        * Read `prompt_file` and `code_file` contents from `input_strings`.
         * Determine `language` (pass through whatever is returned; it may be `None`).
-        * Compute `output_file_paths` for the 'example' command.
+        * Compute `output_file_paths` for the 'example' command. Use `output_file_paths["output"]` for the resolved output path.
         * When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
+    - File path computation for context_generator:
+        * Compute `source_file_path = str(Path(code_file).resolve())` for the absolute path to the source code file.
+        * Compute `example_file_path = str(Path(resolved_output).resolve())` for the absolute path to the example output file (empty string if resolved_output is None).
+        * Extract `module_name = Path(code_file).stem` from the code file path.
+        * Pass these three additional parameters (`source_file_path`, `example_file_path`, `module_name`) to `context_generator` to enable correct import path generation in the example code.
     - Output file handling:
         * If `output` is `None`, write to `output_file_paths["output"]`.
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.
         * Otherwise, write to the explicit `output` path provided by the user.
-        * Only write the file if example generation returned non-None content; otherwise, log a warning and skip writing.
+        * Only write the file if example generation returned non-None content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
     - Printing behavior:
         * When not quiet: print success/failure status, model name, total cost, and the save path if applicable.
         * Regardless of quiet: print a "Generated Example Code:" header and the example code if it exists; otherwise print a message indicating no example code was produced.
-    - Error handling: on any exception, print an error message (respecting `quiet` for status messages) and exit with `sys.exit(1)`.
+    - Error handling:
+        * Handle `click.Abort` separately by re-raising it to allow user cancellation to propagate (e.g., when user declines overwrite confirmation).
+        * For other exceptions, print an error message (respecting `quiet` for status messages) and return an error tuple `("", 0.0, f"Error: {e}")` instead of calling `sys.exit(1)`. This allows orchestrators (like the sync command) to handle errors gracefully.
 
 % Here is the README for the cli command that has details of how the 'example' command works. Be sure to support the necessary global options like verbose, strength, temperature, and time (retrieved as `ctx.obj.get('time')`) for the context_generator function.
    <cli_command_readme>

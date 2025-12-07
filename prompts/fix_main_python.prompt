@@ -31,12 +31,15 @@
         - Returns a tuple containing:
             - `bool`: Success status of the fix operation
             - `str`: The fixed unit test code
-            - `str`: The fixed source code  
+            - `str`: The fixed source code
             - `int`: Total number of fix attempts made
             - `float`: Total cost of the operation
-            - `str`: Name of the model used
+            - `str`: Name of the model used, OR an error message string (e.g., `f"Error: {e}"`) when an exception occurs
 
 % Important Implementation Notes:
+0.  Initialization:
+    - Initialize `analysis_results = None` before the main try block to prevent reference errors (it is only set in non-loop mode).
+
 1.  Parameter Retrieval:
     - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`.
     - Retrieve `temperature = ctx.obj.get('temperature', 0)`.
@@ -44,13 +47,15 @@
     - Retrieve `verbose = ctx.obj.get('verbose', False)`.
     - Retrieve `force = ctx.obj.get('force', False)`.
     - Retrieve `quiet = ctx.obj.get('quiet', False)`.
+    - Retrieve `context = ctx.obj.get('context')` for passing to `construct_paths` as `context_override`.
+    - Retrieve `confirm_callback = ctx.obj.get('confirm_callback')` for TUI confirmation support.
     - It is fine to pass `force`/`quiet` directly to `construct_paths` without first storing locals.
     - Optionally accept `agentic_fallback: bool = True` and pass through to `fix_error_loop` when supported.
 
 2.  File Path Handling and Function Calls:
-    - When calling `fix_error_loop`, pass the original file paths (`code_file` and `unit_test_file`), `prompt` content, `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), and `verbose` directly.
+    - When calling `fix_error_loop`, pass the original file paths (`code_file`, `unit_test_file`, and `prompt_file`), `prompt` content (from `input_strings`), `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), and `verbose` directly.
     - When calling `fix_error_loop`, also pass `agentic_fallback` when available.
-    - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths['output_results']`, along with `strength`, `temperature`, `time`, and `verbose`.
+    - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths.get('output_results')`, along with `strength`, `temperature`, `time`, and `verbose`. The function returns 7 values: `update_unit_test, update_code, fixed_unit_test, fixed_code, analysis_results, total_cost, model_name`. Determine `success` as `update_unit_test or update_code`, and set `attempts = 1` for non-loop mode.
     - In non-loop mode, pre‑validate the provided `error_file` exists before constructing paths; raise `FileNotFoundError` if missing.
     - Call `construct_paths(..., create_error_file=loop, context_override=ctx.obj.get('context'))` so an empty error log is created only during loop mode and the global `--context` is honored.
     - Handle both fixing approaches appropriately based on the `--loop` parameter.
@@ -63,33 +68,38 @@
     - Handle file operations:
         * Use `try/except` blocks for file reading/writing.
         * Provide formatted error messages using `rich.print`.
+        * Create parent directories automatically (`mkdir(parents=True, exist_ok=True)`) before writing output files.
     - Handle auto-submission errors:
         * Authentication errors.
         * API submission errors.
         * Missing environment variables.
-    - Exit with `sys.exit(1)` on critical errors.
+    - Handle `click.Abort` exceptions:
+        * Re-raise `click.Abort` without catching it, to allow orchestrators (TUI/CLI) to handle user cancellation gracefully.
+    - On critical errors, return an error tuple `(False, "", "", 0, 0.0, f"Error: {e}")` instead of calling `sys.exit(1)`. This allows orchestrators to handle failures gracefully.
     - When printing any analysis output in verbose mode, show only a short preview (e.g., first ~200 characters) and handle Rich `MarkupError` safely by escaping content when needed. Implementations may attempt a Rich-rendered string first and fall back to escaped text on `MarkupError` or other exceptions during printing.
-    - A single outer try/except that encompasses file operations is acceptable, provided errors are reported via `rich.print` and the process exits on critical failures.
+    - In the main exception handler, also detect `MarkupError` specifically and escape its message before printing with `rich.print`.
+    - A single outer try/except that encompasses file operations is acceptable, provided errors are reported via `rich.print` (with escaped content for safety) and an error result tuple is returned.
 
 4.  Auto-submit Functionality:
     When `auto_submit` is True and the fix is successful:
     a) Authentication:
         - Get JWT token using `get_jwt_token()`.
-        - Required environment variables (use fallback order shown):
-            * `NEXT_PUBLIC_FIREBASE_API_KEY`, else fall back to `REACT_APP_FIREBASE_API_KEY`
+        - Required environment variables:
+            * `NEXT_PUBLIC_FIREBASE_API_KEY`
             * `GITHUB_CLIENT_ID`
         - Implementations MAY optionally provide an `app_name` to `get_jwt_token` for telemetry/UX purposes.
     b) Submission Payload:
-        - Input files:
-            * prompts (content and filename) — preprocess via `preprocess(..., recursive=False, double_curly_brackets=True)` for submission only
-            * code (content and filename)
-            * test (content and filename)
-            * error (if available)
-            * verification program (if specified) under `input['example']`
-        - Output files:
-            * fixed code (content and filename)
-            * fixed tests (content and filename)
-            * analysis (if available). Prefer the results file at `output_file_paths['output_results']`; if unavailable, use in‑memory `analysis_results`.
+        - Structure: Fields like `prompts`, `code`, `test`, `error`, `example`, and `analysis` are arrays of objects with `content` and `filename` keys.
+        - Input files (`payload["input"]`):
+            * `prompts`: array containing `[{"content": processed_prompt, "filename": basename}]` — preprocess via `preprocess(..., recursive=False, double_curly_brackets=True)` for submission only
+            * `code`: array containing `[{"content": input_strings["code_file"], "filename": basename}]`
+            * `test`: array containing `[{"content": input_strings["unit_test_file"], "filename": basename}]`
+            * `error`: array (if available from `input_strings["error_file"]`)
+            * `example`: array (if `verification_program` specified, read its content and include)
+        - Output files (`payload["output"]`):
+            * `code`: array containing `[{"content": fixed_code, "filename": basename}]`
+            * `test`: array containing `[{"content": fixed_unit_test, "filename": basename}]`
+            * `analysis`: array (if available). Prefer reading from the file at `output_file_paths['output_results']`; if file read fails or path is unavailable, fall back to in‑memory `analysis_results` (with filename `"analysis.log"`).
         - Metadata:
             * title: "Auto-submitted fix for {filename}"
             * description: "Automatically submitted successful code fix"
@@ -104,8 +114,8 @@
         - Handle response and provide user feedback.
 
     d) Scope of auto-submit (guidance):
-        - By default, trigger auto-submit when unit tests pass during the fix loop.
-        - Implementations MAY also trigger auto-submit on non-loop success if they have an external verification program or policy that ensures correctness; loop usage is strongly preferred for verification.
+        - Trigger auto-submit when the fix operation is successful (i.e., `success` is True), regardless of whether `--loop` mode was used.
+        - The success condition applies to both loop mode (iterative fixing) and non-loop mode (single-pass fixing).
 
 5.  Verbose Output:
     - The `verbose` parameter (retrieved from `ctx`) should be passed to both `fix_error_loop` and `fix_errors_from_unit_tests` calls.

@@ -505,29 +505,40 @@ def test_loop_mode_missing_verification_program(mock_context, setup_files):
 
 @patch('pdd.fix_verification_main.construct_paths')
 def test_construct_paths_file_not_found(mock_construct, mock_context, setup_files, capsys):
-    """Verify SystemExit if construct_paths raises FileNotFoundError."""
+    """Verify error tuple is returned if construct_paths raises FileNotFoundError.
+
+    Per the spec: For critical/unrecoverable errors, return an error tuple with
+    success=False and an error message in the model_name field. This allows
+    orchestrating code (such as `pdd sync`) to handle failures gracefully rather
+    than terminating via sys.exit(1).
+    """
     def construct_side_effect(*args, **kwargs):
         raise FileNotFoundError("mock_file.txt not found")
     mock_construct.side_effect = construct_side_effect
 
-    with pytest.raises(SystemExit) as e:
-        fix_verification_main(
-            ctx=mock_context,
-            prompt_file=setup_files["prompt"],
-            code_file=setup_files["code"],
-            program_file=setup_files["program"],
-            output_results=None,
-            output_code=None,
-            output_program=None,
-            loop=False,
-            verification_program=None
-        )
+    result = fix_verification_main(
+        ctx=mock_context,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=False,
+        verification_program=None
+    )
 
-    assert e.value.code == 1
+    # Should return error tuple: (success=False, program="", code="", attempts=0, cost=0.0, error_message)
+    assert result[0] is False  # success = False
+    assert result[1] == ""     # final_program = ""
+    assert result[2] == ""     # final_code = ""
+    assert result[3] == 0      # attempts = 0
+    assert result[4] == 0.0    # total_cost = 0.0
+    assert "Error:" in result[5]  # model_name field contains error message
+
     captured = capsys.readouterr()
-    # Check stderr for the rich_print output if it goes there, or stdout
-    # The code prints to rich_print, which defaults to stdout.
-    assert "Failed during path construction" in captured.out # Corrected to check captured.out
+    # Check that error message was printed
+    assert "Failed during path construction" in captured.out
     assert 'force' in mock_construct.call_args[1]
 
 

@@ -2,6 +2,25 @@
 
 <include>./context/python_preamble.prompt</include>
 
+% Module-Level Constants and Imports:
+   - Import `DEFAULT_STRENGTH` and `DEFAULT_TIME` from the parent package (`.`)
+   - Define local constants: `DEFAULT_TEMPERATURE = 0.0`, `DEFAULT_MAX_ATTEMPTS = 3`, `DEFAULT_BUDGET = 5.0`
+   - Define a constant for the verification program name if needed (e.g., `VERIFICATION_PROGRAM_NAME`)
+   - Configure module-level logging via `logging.getLogger(__name__)`
+   - Use `pathlib.Path` for file path operations (parent directory creation, file writing)
+
+% Helper Function - `run_program`:
+   Define a helper function `run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]` that:
+   - Executes the program at `program_path` with optional arguments
+   - Determines interpreter by file extension: `.py` uses `detect_host_python_executable()`, `.js` uses `node`, `.sh` uses `bash`
+   - Sets working directory to the program's parent directory
+   - Sets `PYTHONUNBUFFERED=1` in environment
+   - Uses a 60-second timeout
+   - Always prints command, working directory, and PYTHONPATH using `rich_print` (Note: currently does not respect verbose flag)
+   - For syntax errors in stderr, prefixes with `SYNTAX_ERROR:` and displays in a red panel
+   - Returns `(success, stdout, stderr)` tuple where success is True only if exit code is 0
+   - Handles `FileNotFoundError`, `TimeoutExpired`, and generic exceptions gracefully
+
 % Here are the inputs and outputs of the function:
     Inputs:
         - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
@@ -37,7 +56,7 @@
    - When calling `fix_verification_errors_loop`, pass the *content* of the `prompt_file`, the *path* to the `code_file`, the *path* to the `program_file`, the *path* to the `verification_program`, and the `llm_time` argument using the `time` value from `ctx.obj`. Also pass the path for the `verification_log_file` if provided. Do not pass output file paths to the loop.
    - It is acceptable (and sometimes useful) to also pass `prompt_file` (its path) to the loop function for downstream logging or fallback mechanisms, in addition to the `prompt` content.
    - When calling `fix_verification_errors`, read the contents of the files first and pass them as strings (including the combined program output), and pass the `time` value from `ctx.obj`.
-   - Use `construct_paths` to generate default output paths when not explicitly provided. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored. If `construct_paths` raises an "invalid command" error for `verify`, fall back to manual handling: read input files and derive default paths, including `output_program`. For other `construct_paths` errors, print a formatted error and `sys.exit(1)`.
+   - Use `construct_paths` to generate default output paths when not explicitly provided. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored, and pass `confirm_callback=ctx.obj.get('confirm_callback')` to support interactive confirmation flows. If `construct_paths` raises an "invalid command" error for `verify`, fall back to manual handling: read input files and derive default paths, including `output_program`. For other `construct_paths` errors, print a formatted error and `sys.exit(1)`.
    - Ensure the final program content is written to the `output_program` path when one is resolved.
 
 2. Error Handling Requirements:
@@ -46,7 +65,9 @@
    - Handle file operations:
      * Use try/except blocks for file reading/writing
      * Provide formatted error messages using rich.print
-   - Exit with `sys.exit(1)` on critical/unrecoverable errors (e.g., invalid command in `construct_paths` without a viable fallback, missing mandatory files). For recoverable issues (e.g., LLM call failures), returning partial results with appropriate warnings is acceptable.
+   - For critical/unrecoverable errors (e.g., invalid command in `construct_paths` without a viable fallback, missing mandatory files), return an error tuple with `success=False` and an error message in the model_name field (e.g., `"FileNotFoundError: {fe}"` or `"Error: {e}"`). This allows orchestrating code (such as `pdd sync`) to handle failures gracefully rather than terminating via `sys.exit(1)`.
+   - Re-raise `click.Abort` exceptions to allow user cancellation to propagate.
+   - For recoverable issues (e.g., LLM call failures), returning partial results with appropriate warnings is acceptable.
 
 3. Verification Process:
    - For `loop=True`:
@@ -60,8 +81,15 @@
 
 4. Verbose/Quiet Output:
    - Add a `verbose` parameter to both function calls.
-   - When `verbose` is True, provide additional debugging information during the verification process, including resolved paths, invoked command, working directory, environment hints, and formatted panels for errors.
+   - When `verbose` is True, provide additional debugging information during the verification process, including:
+     * Resolved paths and path resolution method (e.g., "Resolved output paths via construct_paths.")
+     * Invoked command, working directory, and environment hints
+     * Formatted panels for errors and tracebacks
+     * DEBUG-prefixed rich_print statements showing save attempt details (paths, content lengths, success/failure)
+     * Program output in a panel
+     * On failed single-pass, display syntax-highlighted final code and program content
    - In non-verbose mode, show minimal, single-line warnings on non-zero program exits and critical errors only; do not echo command/cwd/env details or render error panels.
+   - Note: The `run_program` helper currently prints command/cwd/env details regardless of the verbose flag.
    - When `quiet` is True, suppress all non-critical output; still show fatal errors that precede an exit.
 
 5. User Feedback:
@@ -70,8 +98,8 @@
    - Display total attempts and cost
    - Show model name used
    - List saved file paths (including `output_code`, `output_results`, and `output_program`)
-   - Summarize verification results and any improvements made
-   - In single-pass mode, write a "PDD Verify Results (Single Pass)" log with a current ISO-8601 timestamp (optionally include input file mtimes for context), files, success, issue count, change flags, model, cost, explanation, and combined program output.
+   - Summarize verification results in a final Panel showing: status, attempts, total cost, model used, saved code path (or "N/A"), saved program path (or "N/A"), and results log path (or "N/A")
+   - In single-pass mode, write a "PDD Verify Results (Single Pass)" log with the prompt file's modification time (via `os.path.getmtime(prompt_file)`), files, success, issue count, change flags, model, cost, explanation, and combined program output.
    - In loop mode, delegate log writing to `fix_verification_errors_loop`; the wrapper only confirms the expected log path.
    - Note: Output files are written when specified, regardless of verification success, to allow inspection of the final state
 

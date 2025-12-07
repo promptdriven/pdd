@@ -12,14 +12,15 @@ Create a Python module that orchestrates the complete PDD (Prompt-Driven Develop
     <include>./docs/whitepaper.md</include>
 </whitepaper>
 
-The sync command is the primary command in PDD that automatically executes the complete workflow loop from dependency injection through code generation, testing, and verification. This orchestration module coordinates the execution while providing real-time feedback to users.
+The sync command is the primary command in PDD that automatically executes the complete workflow loop from dependency injection through code generation, testing, and verification. This orchestration module coordinates the execution while providing real-time feedback to users via a Textual-based TUI.
 
 ## Architecture
 
 This module works in conjunction with `sync_main`, which handles the CLI interface:
 
 - **sync_main**: Handles CLI parameter extraction, validation, language detection, path resolution via `construct_paths()`, and .pddrc configuration management
-- **sync_orchestration**: Focuses solely on workflow orchestration, animation coordination, and operation execution using the resolved paths provided by sync_main
+- **sync_orchestration**: Focuses solely on workflow orchestration, TUI coordination, and operation execution using the resolved paths provided by sync_main
+- **sync_tui**: Provides the Textual-based TUI components (`SyncApp`, `show_exit_animation`) that display real-time animation and log output
 
 The separation allows sync_main to handle all CLI and configuration concerns while sync_orchestration handles the core workflow logic.
 
@@ -51,6 +52,8 @@ def sync_orchestration(
     review_examples: bool = False,
     local: bool = False,
     context_config: Optional[Dict[str, str]] = None,
+    context_override: Optional[str] = None,
+    confirm_callback: Optional[Callable[[str, str], bool]] = None,
 ) -> Dict[str, Any]:
     """
     Orchestrate the complete PDD sync workflow with parallel animation.
@@ -74,17 +77,14 @@ def sync_orchestration(
     - 'total_time': float total time elapsed
     - 'final_state': Dict with final file states
     - 'errors': List of any errors encountered
+    - 'error': str joined error message (semicolon-separated) or None
+    - 'model_name': str name of the last model used
     - 'log_entries': List of log entries (when log=True)
     """
 ```
 
 Here are examples of how to use the internal functions:
 <examples>
-    - Here is how to use the `sync_animation` function:
-      <sync_animation_example>
-        <include>context/sync_animation_example.py</include>
-      </sync_animation_example>
-      
     - Here is how to use the `sync_determine_operation` function:
       <sync_determine_operation_example>
         <include>context/sync_determine_operation_example.py</include>
@@ -223,17 +223,38 @@ If `--skip-verify` or `--skip-tests` flags are used, the orchestrator should not
    - For test operations: Create RunReport with perfect coverage assumption when skipped
    - For crash operations: Create RunReport indicating the operation was skipped due to missing files or test skip requirements
 
-### Parallel Animation System
+### TUI Animation System
 
-The module should:
+The module uses a Textual-based TUI (Terminal User Interface) for real-time feedback:
 
-1. **Start Animation Thread**: Launch `sync_animation` before beginning operations
-2. **Update Animation State**: Use mutable list references to update animation in real-time:
-   - `function_name_ref`: Current operation being executed
-   - `cost_ref`: Running total of costs
-   - `prompt_color/code_color/example_color/tests_color`: Visual status indicators
-   - `prompt_path_ref/code_path_ref/example_path_ref/tests_path_ref`: File paths
-3. **Stop Animation**: Set stop_event when workflow completes
+1. **SyncApp Architecture**: Instantiate `SyncApp` from `sync_tui` module, passing:
+   - `basename`, `budget`: Module identification and budget limit
+   - `worker_func`: The `sync_worker_logic()` function containing the main workflow loop
+   - Mutable reference lists for state updates (see below)
+   - `stop_event`: threading.Event for coordination
+
+2. **Worker Function Pattern**: Define `sync_worker_logic()` as a nested function that:
+   - Contains the main workflow loop with lock acquisition
+   - Has access to outer scope's mutable state references
+   - Returns the final result dictionary
+   - Is executed by the TUI app in a managed worker thread
+
+3. **Update Animation State**: Use mutable list references to update TUI in real-time:
+   - `function_name_ref`: Current operation being executed (e.g., `["initializing"]`, `["generate"]`, `["synced"]`)
+   - `cost_ref`: Running total of costs (e.g., `[0.0]`)
+   - `prompt_color_ref/code_color_ref/example_color_ref/tests_color_ref`: Visual status indicators
+   - `prompt_path_ref/code_path_ref/example_path_ref/tests_path_ref`: File paths for display
+
+4. **App Reference for Confirmations**: Store app reference in `app_ref` list to allow worker to access `app.request_confirmation()` for user confirmations. Track `user_confirmed_overwrite` to avoid asking for confirmation multiple times within the same sync run.
+
+5. **Confirmation Callback Factory**: Implement `get_confirm_callback()` helper that:
+   - Returns a callback that always returns True if user already confirmed
+   - Otherwise returns a callback that calls `app.request_confirmation()` and remembers the result
+   - Falls back to the provided `confirm_callback` parameter if app is not available
+
+6. **Exit Animation**: After app completes, call `show_exit_animation()` from `sync_tui` (unless quiet mode)
+
+7. **Worker Exception Handling**: After `app.run()` completes, check `app.worker_exception` for any exceptions that occurred in the worker thread. If present, print error message and traceback to stderr, including captured logs for debugging.
 
 ### Operation Execution
 
@@ -304,18 +325,33 @@ Implement robust error handling:
   - Dictionary format: Extract 'success', 'cost', and 'model' fields directly
   - Tuple format: Treat as successful if no exceptions, extract cost from second-to-last element and model from last element
   - Ensure fingerprint state is saved after successful operations regardless of return format
-- **Enhanced Cycle Detection**: Detect and break crash-verify cycles with configurable repeat limits (e.g., MAX_CYCLE_REPEATS = 2)
+- **Enhanced Cycle Detection**: Detect and break multiple cycle types:
+  - Auto-deps infinite loop: When auto-deps appears 2+ times in last 3 operations, force advance to generate
+  - Crash-verify cycles: Detect alternating crash/verify operations (MAX_CYCLE_REPEATS = 2)
+  - Test-fix cycles: Detect alternating test/fix operations (MAX_CYCLE_REPEATS = 2)
+  - Consecutive fix operations: Break after 5 consecutive fix operations
+  - Consecutive test operations: Break after MAX_CONSECUTIVE_TESTS (3) consecutive test operations
 - **Graceful Degradation**: Continue workflow even if non-critical steps fail
 - **User Feedback**: Provide clear error messages through animation
 - **Lock Cleanup**: Always release lock, even on exceptions or early exits
 
 ### Integration with Main Components
 
-The orchestrator should import and use:
+The orchestrator should import and use at module level:
 
 ```python
-from .sync_determine_operation import sync_determine_operation
-from .sync_animation import sync_animation
+from .sync_tui import SyncApp
+from .sync_determine_operation import (
+    sync_determine_operation,
+    get_pdd_file_paths,
+    RunReport,
+    SyncDecision,
+    PDD_DIR,
+    META_DIR,
+    SyncLock,
+    read_run_report,
+    estimate_operation_cost,
+)
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
 from .context_generator_main import context_generator_main
@@ -324,7 +360,14 @@ from .fix_verification_main import fix_verification_main
 from .cmd_test_main import cmd_test_main
 from .fix_main import fix_main
 from .update_main import update_main
+from .python_env_detector import detect_host_python_executable
 ```
+
+Note: The following imports are performed at function scope rather than module level:
+- `from .sync_determine_operation import calculate_current_hashes, Fingerprint` - imported in `_save_operation_fingerprint()`
+- `from .sync_determine_operation import get_extension` - imported at the start of `sync_orchestration()`
+- `from . import __version__` - imported in `_save_operation_fingerprint()`
+- `from .sync_tui import show_exit_animation` - imported conditionally after app.run() completes
 
 ### Required Dependencies
 
@@ -337,12 +380,23 @@ import json
 import datetime
 import subprocess
 import re
+import os
+import sys
+import shutil
+import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict
 
 import click
-# Note: rich.console.Console not used in current implementation
+```
+
+Note: `shutil` is used for moving temporary files in the auto-deps operation.
+
+### Module Constants
+
+```python
+MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts before breaking loop
 ```
 
 ### Command Execution Pattern
@@ -353,12 +407,15 @@ For each PDD operation, construct appropriate arguments based on the up-to-date 
 
 The orchestrator should implement these helper functions for proper state management:
 
-- **load_sync_log(basename, language)**: Load sync log entries from the metadata directory
-- **create_sync_log_entry(decision, budget_remaining)**: Create initial log entry from decision with all fields (actual results set to None initially)
-- **update_sync_log_entry(entry, result, duration)**: Update log entry with execution results (actual_cost, success, model, duration, error)
-- **append_sync_log(basename, language, entry)**: Append completed log entry to the sync log file
-- **save_run_report(report, basename, language)**: Save RunReport data to enable state progression
-- **_save_operation_fingerprint(basename, language, operation, paths, cost, model)**: Save fingerprint state after successful operations to update the workflow state machine
+- **load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]**: Load sync log entries from the metadata directory. Returns empty list if file doesn't exist or on parse error.
+- **create_sync_log_entry(decision, budget_remaining: float) -> Dict[str, Any]**: Create initial log entry from decision with all fields (actual results set to None initially)
+- **update_sync_log_entry(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]**: Update log entry with execution results (actual_cost, success, model, duration, error)
+- **append_sync_log(basename: str, language: str, entry: Dict[str, Any])**: Append completed log entry to the sync log file
+- **log_sync_event(basename: str, language: str, event: str, details: Dict[str, Any] = None)**: Log special sync events (lock_acquired, lock_released, budget_exceeded, budget_warning, cycle_detected) to the sync log
+- **save_run_report(report: Dict[str, Any], basename: str, language: str)**: Save RunReport data (as dict, not RunReport object) to enable state progression
+- **_save_operation_fingerprint(basename: str, language: str, operation: str, paths: Dict[str, Path], cost: float, model: str)**: Save fingerprint state after successful operations to update the workflow state machine. Imports `calculate_current_hashes`, `Fingerprint`, and `__version__` at function scope.
+- **_display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]**: Internal function to display formatted sync log when log=True
+- **_create_mock_context(**kwargs) -> click.Context**: Creates a mock Click context object to pass parameters to command functions
 
 ### Test Execution Integration
 
