@@ -38,8 +38,8 @@ def create_mock_context(command_name: str, params: dict, obj: dict = None):
 
     if obj is not None:
         mock_obj = MagicMock()
-        # Mock the get method for obj
-        mock_obj.get.side_effect = lambda key: obj.get(key, None)
+        # Mock the get method for obj - support both one and two argument calls
+        mock_obj.get.side_effect = lambda key, default=None: obj.get(key, default)
         mock_ctx.obj = mock_obj
     else:
         # If obj is not provided, set obj to None to simulate absence

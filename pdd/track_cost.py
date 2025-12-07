@@ -144,19 +144,28 @@ def collect_files(args, kwargs):
         is_input_param = k in input_param_names or 'file' in k.lower() or 'prompt' in k.lower()
         is_output_param = k in output_param_names or 'output' in k.lower()
 
-        if isinstance(v, str) and v and looks_like_file(v):
-            if is_output_param:
-                output_files.append(v)
-            else:
-                # For input files, be more lenient - include if it looks like a file
-                input_files.append(v)
+        if isinstance(v, str) and v:
+            # For known parameter names, trust that they represent file paths
+            # For unknown parameters, check if it looks like a file
+            if is_input_param or is_output_param or looks_like_file(v):
+                if is_output_param:
+                    output_files.append(v)
+                elif is_input_param:
+                    input_files.append(v)
+                else:
+                    # Unknown parameter but looks like a file, treat as input
+                    input_files.append(v)
         elif isinstance(v, list):
             for item in v:
-                if isinstance(item, str) and item and looks_like_file(item):
-                    if is_output_param:
-                        output_files.append(item)
-                    else:
-                        input_files.append(item)
+                if isinstance(item, str) and item:
+                    # Same logic for list items
+                    if is_input_param or is_output_param or looks_like_file(item):
+                        if is_output_param:
+                            output_files.append(item)
+                        elif is_input_param:
+                            input_files.append(item)
+                        else:
+                            input_files.append(item)
 
     # Collect from positional args (skip first arg which is usually Click context)
     for i, arg in enumerate(args):
