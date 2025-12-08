@@ -70,13 +70,13 @@ def fix_main(
     # Initialize analysis_results to None to prevent reference errors
     analysis_results = None
 
+    # Input validation - let these propagate to caller for proper exit code
+    if not loop:
+        error_path = Path(error_file)
+        if not error_path.exists():
+            raise FileNotFoundError(f"Error file '{error_file}' does not exist.")
+
     try:
-        # Verify error file exists if not in loop mode
-        if not loop:
-            error_path = Path(error_file)
-            if not error_path.exists():
-                raise FileNotFoundError(f"Error file '{error_file}' does not exist.")
-                
         # Construct file paths
         input_file_paths = {
             "prompt_file": prompt_file,
@@ -99,7 +99,8 @@ def fix_main(
             command="fix",
             command_options=command_options,
             create_error_file=loop,  # Only create error file if in loop mode
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
 
         # Get parameters from context
@@ -294,6 +295,9 @@ def fix_main(
 
         return success, fixed_unit_test, fixed_code, attempts, total_cost, model_name
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not ctx.obj.get('quiet', False):
             # Safely handle and print MarkupError
@@ -304,4 +308,5 @@ def fix_main(
                  # Print other errors normally, escaping the error string
                  from rich.markup import escape # Ensure escape is imported
                  rprint(f"[bold red]Error:[/bold red] {escape(str(e))}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return False, "", "", 0, 0.0, f"Error: {e}"

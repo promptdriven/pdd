@@ -50,7 +50,8 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
             quiet=ctx.obj.get('quiet', False),
             command="auto-deps",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
 
         # Get the CSV file path
@@ -99,7 +100,11 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
 
         return modified_prompt, total_cost, model_name
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as exc:
         if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(exc)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, f"Error: {exc}"

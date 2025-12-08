@@ -240,9 +240,11 @@ def sync_main(
                 "time": time_param,
             }
 
+            # Use force=True for path discovery - actual file writes happen in sync_orchestration
+            # which will handle confirmations via the TUI's confirm_callback
             resolved_config, _, _, resolved_language = construct_paths(
                 input_file_paths={"prompt_file": str(prompt_file_path)},
-                force=force,
+                force=True,  # Always force during path discovery
                 quiet=True,
                 command="sync",
                 command_options=command_options,
