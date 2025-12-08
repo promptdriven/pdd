@@ -70,13 +70,13 @@ def fix_main(
     # Initialize analysis_results to None to prevent reference errors
     analysis_results = None
 
+    # Input validation - let these propagate to caller for proper exit code
+    if not loop:
+        error_path = Path(error_file)
+        if not error_path.exists():
+            raise FileNotFoundError(f"Error file '{error_file}' does not exist.")
+
     try:
-        # Verify error file exists if not in loop mode
-        if not loop:
-            error_path = Path(error_file)
-            if not error_path.exists():
-                raise FileNotFoundError(f"Error file '{error_file}' does not exist.")
-                
         # Construct file paths
         input_file_paths = {
             "prompt_file": prompt_file,
