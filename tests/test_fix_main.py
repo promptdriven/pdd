@@ -33,7 +33,10 @@ def mock_ctx():
         'quiet': False,
         'strength': DEFAULT_STRENGTH,
         'temperature': 0.0,
-        'verbose': False # Add verbose default
+        'verbose': False,
+        'time': None,
+        'context': None,
+        'confirm_callback': None
     }
     return ctx
 
@@ -136,8 +139,9 @@ def test_fix_main_without_loop(
             'output_code': None,
             'output_results': None
         },
-        create_error_file=False, # Explicitly check this argument
-        context_override=None
+        create_error_file=False,
+        context_override=None,
+        confirm_callback=None
     )
     assert success is True
     assert fixed_test == "Fixed unit test content"
@@ -234,8 +238,9 @@ def test_fix_main_with_loop(
             'output_code': None,
             'output_results': None
         },
-        create_error_file=True, # Add this expected argument
-        context_override=None
+        create_error_file=True,
+        context_override=None,
+        confirm_callback=None
     )
     assert success is True
     assert fixed_test == "Iteratively fixed test"
@@ -255,6 +260,69 @@ def test_fix_main_with_loop(
     # Check write calls - order might vary depending on dict iteration
     write_calls = [call("Iteratively fixed test"), call("Iteratively fixed code")]
     handle.write.assert_has_calls(write_calls, any_order=True)
+
+
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_error_loop')
+def test_fix_main_passes_agentic_fallback_to_fix_error_loop(
+    mock_fix_error_loop,
+    mock_construct_paths,
+    mock_ctx
+):
+    """
+    Test that fix_main passes agentic_fallback parameter to fix_error_loop
+    as specified in the prompt.
+    """
+    # Arrange
+    mock_construct_paths.return_value = (
+        {},  # resolved_config
+        {
+            'prompt_file': 'Test prompt file content',
+            'code_file': 'Test code file content',
+            'unit_test_file': 'Test unit test file content'
+        },
+        {
+            'output_test': 'output/test_code_fixed.py',
+            'output_code': 'output/code_fixed.py',
+            'output_results': 'results/fix_results.log'
+        },
+        None
+    )
+
+    mock_fix_error_loop.return_value = (
+        True,
+        "Fixed test",
+        "Fixed code",
+        1,
+        0.5,
+        "gpt-4"
+    )
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        # Act - call with agentic_fallback=False (non-default)
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt_file.prompt",
+            code_file="code_file.py",
+            unit_test_file="test_code_file.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=True,
+            verification_program="verify.py",
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False,
+            agentic_fallback=False  # Explicitly set to False
+        )
+
+    # Assert - verify agentic_fallback was passed to fix_error_loop
+    mock_fix_error_loop.assert_called_once()
+    call_kwargs = mock_fix_error_loop.call_args.kwargs
+    assert 'agentic_fallback' in call_kwargs
+    assert call_kwargs['agentic_fallback'] is False
 
 
 def test_fix_main_loop_requires_verification_program(mock_ctx):
@@ -280,28 +348,27 @@ def test_fix_main_loop_requires_verification_program(mock_ctx):
             auto_submit=False
         )
 
-# Patch Path.exists for this test as well
-@patch('pdd.fix_main.Path') # Patch Path where it's used in fix_main
-@patch('pdd.fix_main.construct_paths', side_effect=Exception("Construct paths failed"))
-def test_fix_main_handles_exception_and_exits(mocked_construct_paths, mock_path, mock_ctx): # Add mock_path
-    """
-    Test that fix_main handles an exception from construct_paths, prints an error,
-    and calls sys.exit(1).
-    """
-    # Arrange
-    # Configure the mock Path object's exists method to return True
-    mock_path_instance = mock_path.return_value
-    mock_path_instance.exists.return_value = True
-    mock_ctx.obj['quiet'] = False  # so we can see the printed error
 
-    # Act & Assert
-    with pytest.raises(SystemExit) as sys_exit:
+@patch('pdd.fix_main.Path')
+def test_fix_main_error_file_not_found_in_non_loop_mode(mock_path, mock_ctx):
+    """
+    Test that fix_main raises FileNotFoundError when error_file doesn't exist
+    in non-loop mode, as per spec: 'pre-validate the provided error_file exists
+    before constructing paths'. Input validation errors propagate to caller
+    for proper exit code handling.
+    """
+    # Arrange - configure Path to report file doesn't exist
+    mock_path_instance = mock_path.return_value
+    mock_path_instance.exists.return_value = False
+
+    # Act & Assert - should raise FileNotFoundError for input validation
+    with pytest.raises(FileNotFoundError) as exc_info:
         fix_main(
             ctx=mock_ctx,
             prompt_file="prompt_file.prompt",
             code_file="code_file.py",
             unit_test_file="test_code_file.py",
-            error_file="errors.log", # This check will now pass
+            error_file="nonexistent_errors.log",
             output_test=None,
             output_code=None,
             output_results=None,
@@ -311,11 +378,612 @@ def test_fix_main_handles_exception_and_exits(mocked_construct_paths, mock_path,
             budget=5.0,
             auto_submit=False
         )
-    assert sys_exit.type == SystemExit
-    assert sys_exit.value.code == 1
+
+    # Verify the error message contains useful information
+    assert "nonexistent_errors.log" in str(exc_info.value)
+    assert "does not exist" in str(exc_info.value)
+
+    # Verify Path was called to check existence
+    mock_path.assert_called_once_with('nonexistent_errors.log')
+    mock_path_instance.exists.assert_called_once()
+
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths', side_effect=click.Abort())
+def test_fix_main_reraises_click_abort(mock_construct_paths, mock_path, mock_ctx):
+    """
+    Test that fix_main re-raises click.Abort without catching it, allowing
+    orchestrators (TUI/CLI) to handle user cancellation gracefully.
+    """
+    # Arrange - configure Path to report file exists (so we get past the check)
+    mock_path_instance = mock_path.return_value
+    mock_path_instance.exists.return_value = True
+
+    # Act & Assert - click.Abort should be re-raised, not caught
+    with pytest.raises(click.Abort):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt_file.prompt",
+            code_file="code_file.py",
+            unit_test_file="test_code_file.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+
+# Patch Path.exists for this test as well
+@patch('pdd.fix_main.Path') # Patch Path where it's used in fix_main
+@patch('pdd.fix_main.construct_paths', side_effect=Exception("Construct paths failed"))
+def test_fix_main_handles_exception_returns_error_tuple(mocked_construct_paths, mock_path, mock_ctx):
+    """
+    Test that fix_main handles an exception from construct_paths and returns
+    an error tuple instead of calling sys.exit(1), allowing orchestrators to
+    handle failures gracefully.
+    """
+    # Arrange
+    # Configure the mock Path object's exists method to return True
+    mock_path_instance = mock_path.return_value
+    mock_path_instance.exists.return_value = True
+    mock_ctx.obj['quiet'] = False  # so we can see the printed error
+
+    # Act
+    success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt_file.prompt",
+        code_file="code_file.py",
+        unit_test_file="test_code_file.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Assert - should return error tuple per spec
+    assert success is False
+    assert fixed_test == ""
+    assert fixed_code == ""
+    assert attempts == 0
+    assert total_cost == 0.0
+    assert model_name.startswith("Error:")
+    assert "Construct paths failed" in model_name
 
     # Now construct_paths should be called because Path.exists returned True
     mocked_construct_paths.assert_called_once()
     # Check that Path('errors.log').exists() was called
     mock_path.assert_called_once_with('errors.log')
     mock_path_instance.exists.assert_called_once()
+
+
+# ============================================================================
+# Tests for actual business logic (not just mock wiring)
+# ============================================================================
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_success_is_false_when_no_updates(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_ctx
+):
+    """
+    Test that success is False when fix_errors_from_unit_tests returns
+    update_unit_test=False AND update_code=False.
+    This tests the actual logic: success = update_unit_test or update_code
+    """
+    # Arrange
+    mock_path.return_value.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt content',
+            'code_file': 'code content',
+            'unit_test_file': 'test content',
+            'error_file': 'error content'
+        },
+        {
+            'output_test': 'output/test.py',
+            'output_code': 'output/code.py',
+            'output_results': 'results/results.log'
+        },
+        None
+    )
+
+    # Both update flags are False - no fix was made
+    mock_fix_errors.return_value = (
+        False,  # update_unit_test
+        False,  # update_code
+        "",     # fixed_unit_test (empty)
+        "",     # fixed_code (empty)
+        "No changes needed",
+        0.50,
+        "gpt-4"
+    )
+
+    # Act
+    success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Assert - success should be False because neither update flag was True
+    assert success is False
+    assert attempts == 1  # Still counted as 1 attempt
+    assert total_cost == 0.50
+    assert model_name == "gpt-4"
+
+
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_success_when_only_code_updated(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_ctx
+):
+    """
+    Test that success is True when only update_code=True (update_unit_test=False).
+    Verifies the OR logic: success = update_unit_test or update_code
+    """
+    from pathlib import Path as RealPath
+
+    # Use real Path objects but wrap to track exists() calls
+    class MockPath(type(RealPath())):
+        """A Path subclass that always returns True for exists()"""
+        def exists(self):
+            return True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt',
+            'code_file': 'code',
+            'unit_test_file': 'test',
+            'error_file': 'error'
+        },
+        {
+            'output_test': 'output/test.py',
+            'output_code': 'output/code.py',
+            'output_results': 'results/results.log'
+        },
+        None
+    )
+
+    # Only code was updated, not the test
+    mock_fix_errors.return_value = (
+        False,  # update_unit_test
+        True,   # update_code
+        "",     # fixed_unit_test (empty - not updated)
+        "fixed code content",
+        "Fixed the code",
+        0.60,
+        "gpt-4"
+    )
+
+    m_open = mock_open()
+    with patch('pdd.fix_main.Path', MockPath):
+        with patch.object(MockPath, 'mkdir'):
+            with patch('builtins.open', m_open):
+                success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+                    ctx=mock_ctx,
+                    prompt_file="prompt.prompt",
+                    code_file="code.py",
+                    unit_test_file="test.py",
+                    error_file="errors.log",
+                    output_test=None,
+                    output_code=None,
+                    output_results=None,
+                    loop=False,
+                    verification_program=None,
+                    max_attempts=3,
+                    budget=5.0,
+                    auto_submit=False
+                )
+
+    # Assert
+    assert success is True  # True because update_code was True
+    assert fixed_test == ""
+    assert fixed_code == "fixed code content"
+
+    # Verify only code file was written (not test file since it's empty)
+    m_open.assert_called_once_with(MockPath('output/code.py'), 'w')
+
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_does_not_write_empty_files(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_ctx
+):
+    """
+    Test that fix_main does NOT write files when fixed content is empty.
+    Spec: 'Write fixed files only when the corresponding fixed content is non-empty.'
+    """
+    mock_path.return_value.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt',
+            'code_file': 'code',
+            'unit_test_file': 'test',
+            'error_file': 'error'
+        },
+        {
+            'output_test': 'output/test.py',
+            'output_code': 'output/code.py',
+            'output_results': 'results/results.log'
+        },
+        None
+    )
+
+    # Both fixed contents are empty strings
+    mock_fix_errors.return_value = (
+        False,  # update_unit_test
+        False,  # update_code
+        "",     # fixed_unit_test (empty)
+        "",     # fixed_code (empty)
+        "Analysis",
+        0.25,
+        "gpt-4"
+    )
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.prompt",
+            code_file="code.py",
+            unit_test_file="test.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    # Assert - open should NOT have been called since both contents are empty
+    m_open.assert_not_called()
+
+
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_error_loop')
+def test_fix_main_passes_time_to_fix_error_loop(
+    mock_fix_error_loop,
+    mock_construct_paths,
+    mock_ctx
+):
+    """
+    Test that the time parameter from context is passed to fix_error_loop.
+    """
+    # Set a specific time value in context
+    mock_ctx.obj['time'] = 120
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+
+    mock_fix_error_loop.return_value = (True, "test", "code", 1, 0.5, "gpt-4")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="p.prompt",
+            code_file="c.py",
+            unit_test_file="t.py",
+            error_file="e.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=True,
+            verification_program="verify.py",
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    # Assert time was passed correctly
+    call_kwargs = mock_fix_error_loop.call_args.kwargs
+    assert call_kwargs['time'] == 120
+
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_passes_time_to_fix_errors_from_unit_tests(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_ctx
+):
+    """
+    Test that the time parameter from context is passed to fix_errors_from_unit_tests.
+    """
+    mock_ctx.obj['time'] = 90
+    mock_path.return_value.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't', 'error_file': 'e'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "gpt-4")
+
+    fix_main(
+        ctx=mock_ctx,
+        prompt_file="p.prompt",
+        code_file="c.py",
+        unit_test_file="t.py",
+        error_file="e.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Assert time was passed correctly
+    call_kwargs = mock_fix_errors.call_args.kwargs
+    assert call_kwargs['time'] == 90
+
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_passes_verbose_to_fix_errors_from_unit_tests(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_ctx
+):
+    """
+    Test that verbose parameter is passed to fix_errors_from_unit_tests.
+    """
+    mock_ctx.obj['verbose'] = True
+    mock_path.return_value.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't', 'error_file': 'e'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "gpt-4")
+
+    fix_main(
+        ctx=mock_ctx,
+        prompt_file="p.prompt",
+        code_file="c.py",
+        unit_test_file="t.py",
+        error_file="e.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    call_kwargs = mock_fix_errors.call_args.kwargs
+    assert call_kwargs['verbose'] is True
+
+
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_error_loop')
+def test_fix_main_loop_mode_excludes_error_file_from_input_paths(
+    mock_fix_error_loop,
+    mock_construct_paths,
+    mock_ctx
+):
+    """
+    Test that in loop mode, error_file is NOT included in input_file_paths
+    passed to construct_paths (since the error log is generated during the loop).
+    """
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+
+    mock_fix_error_loop.return_value = (True, "test", "code", 1, 0.5, "gpt-4")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="p.prompt",
+            code_file="c.py",
+            unit_test_file="t.py",
+            error_file="e.log",  # This is passed but should NOT be in input_file_paths
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=True,
+            verification_program="verify.py",
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    # Verify error_file was NOT in the input_file_paths
+    call_kwargs = mock_construct_paths.call_args.kwargs
+    assert 'error_file' not in call_kwargs['input_file_paths']
+    # But create_error_file should be True
+    assert call_kwargs['create_error_file'] is True
+
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_non_loop_mode_includes_error_file_in_input_paths(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_ctx
+):
+    """
+    Test that in non-loop mode, error_file IS included in input_file_paths.
+    """
+    mock_path.return_value.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't', 'error_file': 'e'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "gpt-4")
+
+    fix_main(
+        ctx=mock_ctx,
+        prompt_file="p.prompt",
+        code_file="c.py",
+        unit_test_file="t.py",
+        error_file="my_errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Verify error_file WAS in the input_file_paths
+    call_kwargs = mock_construct_paths.call_args.kwargs
+    assert call_kwargs['input_file_paths']['error_file'] == 'my_errors.log'
+    # And create_error_file should be False
+    assert call_kwargs['create_error_file'] is False
+
+
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_error_loop')
+def test_fix_main_loop_returns_multiple_attempts(
+    mock_fix_error_loop,
+    mock_construct_paths,
+    mock_ctx
+):
+    """
+    Test that fix_main correctly returns the attempt count from fix_error_loop.
+    In loop mode, attempts can be > 1.
+    """
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+
+    # Simulate 5 attempts before success
+    mock_fix_error_loop.return_value = (True, "test", "code", 5, 2.50, "gpt-4")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+            ctx=mock_ctx,
+            prompt_file="p.prompt",
+            code_file="c.py",
+            unit_test_file="t.py",
+            error_file="e.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=True,
+            verification_program="verify.py",
+            max_attempts=10,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    assert attempts == 5
+    assert total_cost == 2.50
+
+
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_non_loop_always_has_one_attempt(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_ctx
+):
+    """
+    Test that in non-loop mode, attempts is always 1 regardless of success.
+    """
+    mock_path.return_value.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't', 'error_file': 'e'},
+        {'output_test': 'o/t.py', 'output_code': 'o/c.py', 'output_results': 'r/r.log'},
+        None
+    )
+
+    # Even when fix fails, attempts should be 1
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "gpt-4")
+
+    success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+        ctx=mock_ctx,
+        prompt_file="p.prompt",
+        code_file="c.py",
+        unit_test_file="t.py",
+        error_file="e.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    assert success is False
+    assert attempts == 1  # Always 1 in non-loop mode

@@ -261,3 +261,42 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
         
         # Restore original working directory
         os.chdir(original_cwd)
+
+
+def test_fix_command_exits_nonzero_for_nonexistent_error_file(tmp_path):
+    """
+    Test that the 'fix' command exits with a non-zero exit code when the
+    error_file does not exist (regression test for error handling).
+    """
+    runner = CliRunner()
+
+    # Create valid prompt, code, and test files
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("// Test prompt\ndef foo(): pass")
+
+    code_file = tmp_path / "code.py"
+    code_file.write_text("def foo(): pass")
+
+    test_file = tmp_path / "test_code.py"
+    test_file.write_text("def test_foo(): assert True")
+
+    # Error file intentionally does NOT exist
+    nonexistent_error_file = tmp_path / "nonexistent" / "error.log"
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--force",
+            "fix",
+            str(prompt_file),
+            str(code_file),
+            str(test_file),
+            str(nonexistent_error_file),
+        ],
+    )
+
+    # The command should exit with a non-zero code since the error file doesn't exist
+    assert result.exit_code != 0, (
+        f"Expected non-zero exit code for nonexistent error file, "
+        f"got {result.exit_code}. Output: {result.output}"
+    )
