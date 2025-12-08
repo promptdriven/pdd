@@ -31,7 +31,7 @@ def _find_project_root(start_path: str, boundary: Path | None = None) -> Path:
 
     while p != p.parent:
         # Stop if we've reached or passed the boundary
-        if p == boundary or boundary not in p.parents and p != boundary:
+        if p == boundary or boundary not in p.parents:
             # Check boundary itself before giving up
             if any((boundary / f).exists() for f in ["build.gradle", "build.gradle.kts", "pom.xml", "package.json", "jest.config.js"]):
                 return boundary
