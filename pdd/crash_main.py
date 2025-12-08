@@ -80,7 +80,8 @@ def crash_main(
             quiet=quiet,
             command="crash",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
 
         prompt_content = input_strings["prompt_file"]
@@ -165,20 +166,36 @@ def crash_main(
                 if code_updated:
                     rprint(f"[bold]Fixed code saved to:[/bold] {output_code_path_str}")
                 else:
-                    rprint(f"[info]Code file '{Path(code_file).name}' was not modified (but output file was written).[/info]")
+                    rprint(f"[bold]Code saved to:[/bold] {output_code_path_str} [dim](not modified)[/dim]")
             if output_program_path_str:
                 if program_updated:
                     rprint(f"[bold]Fixed program saved to:[/bold] {output_program_path_str}")
                 else:
-                    rprint(f"[info]Program file '{Path(program_file).name}' was not modified (but output file was written).[/info]")
+                    rprint(f"[bold]Program saved to:[/bold] {output_program_path_str} [dim](not modified)[/dim]")
+
+            if verbose:
+                rprint("\n[bold]Verbose diagnostics:[/bold]")
+                rprint(f"  Code file: {code_file}")
+                rprint(f"  Program file: {program_file}")
+                rprint(f"  Code updated: {code_updated}")
+                rprint(f"  Program updated: {program_updated}")
+                rprint(f"  Original code length: {len(original_code_content)} chars")
+                rprint(f"  Final code length: {len(final_code)} chars")
+                rprint(f"  Original program length: {len(original_program_content)} chars")
+                rprint(f"  Final program length: {len(final_program)} chars")
 
         return success, final_code, final_program, attempts, cost, model
 
     except FileNotFoundError as e:
         if not quiet:
             rprint(f"[bold red]Error:[/bold red] Input file not found: {e}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return False, "", "", 0, 0.0, f"FileNotFoundError: {e}"
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not quiet:
             rprint(f"[bold red]An unexpected error occurred:[/bold red] {str(e)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return False, "", "", 0, 0.0, f"Error: {e}"

@@ -853,7 +853,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
       sed -i.bak 's/return a + b/return a - b/' "$MATH_SCRIPT"
 
       # Directly call pdd verify instead of the python harness script
-      run_pdd_command_noexit --strength .9 verify \
+      run_pdd_command_noexit --strength .75 verify \
           --output-results "$VERIFY_RESULTS_LOG" \
           --output-code "$VERIFY_CODE_OUTPUT" \
           --output-program "$VERIFY_PROGRAM_OUTPUT" \
