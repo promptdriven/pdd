@@ -647,3 +647,47 @@ def test_collect_files_skips_non_existent_files(mock_click_context, mock_rprint)
 
     mock_rprint.assert_not_called()
     assert result == ('/path/to/output', 1.0, 'test-model')
+
+
+def test_files_tracked_on_command_failure(mock_click_context, mock_rprint, tmp_path):
+    """
+    Test that input/output files are tracked in core dump even when command raises exception.
+    This is a regression test for the bug where collect_files() was not called when commands failed.
+    """
+    # Create temporary files
+    prompt_file = tmp_path / "test.prompt"
+    output_file = tmp_path / "output.py"
+
+    prompt_file.write_text("test prompt")
+
+    # Define a command that raises an exception (simulating user cancellation or error)
+    @track_cost
+    def failing_command(ctx, prompt_file: str, output: str = None) -> Tuple[str, float, str]:
+        raise Exception("User cancelled command")
+
+    # Setup a real-like context object with core_dump enabled
+    obj_dict = {'core_dump_files': set(), 'core_dump': True}
+    mock_ctx = MagicMock()
+    mock_ctx.command.name = 'generate'
+    mock_ctx.obj = obj_dict
+    mock_click_context.return_value = mock_ctx
+
+    # Call the command and expect it to raise an exception
+    with pytest.raises(Exception, match="User cancelled command"):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            failing_command(mock_ctx, prompt_file=str(prompt_file), output=str(output_file))
+
+    # Check that files were STILL added to core_dump_files despite the exception
+    core_dump_files = obj_dict['core_dump_files']
+
+    # The prompt file should be tracked even though command failed
+    assert any(str(prompt_file) in f for f in core_dump_files), \
+        f"prompt_file should be tracked on failure, but core_dump_files={core_dump_files}"
+
+    # The output file should also be tracked
+    assert any(str(output_file) in f for f in core_dump_files), \
+        f"output_file should be tracked on failure, but core_dump_files={core_dump_files}"
+
+    # No tracking errors should be printed (the exception handling should be clean)
+    # Note: rprint might be called for the actual exception, but not for tracking errors
+    # We just want to make sure the test doesn't crash and files are tracked

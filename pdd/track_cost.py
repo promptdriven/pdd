@@ -14,6 +14,9 @@ def track_cost(func):
             return func(*args, **kwargs)
 
         start_time = datetime.now()
+        result = None
+        exception_raised = None
+
         try:
             # Record the invoked subcommand name on the shared ctx.obj so
             # the CLI result callback can display proper names instead of
@@ -35,66 +38,70 @@ def track_cost(func):
 
             result = func(*args, **kwargs)
         except Exception as e:
-            raise e
-        end_time = datetime.now()
+            exception_raised = e
+        finally:
+            end_time = datetime.now()
 
-        try:
-            # Always collect files for core dump, even if output_cost is not set
-            input_files, output_files = collect_files(args, kwargs)
+            try:
+                # Always collect files for core dump, even if output_cost is not set
+                input_files, output_files = collect_files(args, kwargs)
 
-            # Store collected files in context for core dump (even if output_cost not set)
-            if ctx.obj is not None and ctx.obj.get('core_dump'):
-                files_set = ctx.obj.get('core_dump_files', set())
-                for f in input_files + output_files:
-                    if isinstance(f, str) and f:
-                        # Convert to absolute path for reliable access later
-                        abs_path = os.path.abspath(f)
-                        # Add the file if it exists OR if it looks like a file path
-                        # (it might have been created/deleted during command execution)
-                        if os.path.exists(abs_path) or '.' in os.path.basename(f):
-                            files_set.add(abs_path)
-                            print(f"Debug: Added to core_dump_files: {abs_path} (exists: {os.path.exists(abs_path)})")
-                ctx.obj['core_dump_files'] = files_set
-                print(f"Debug: Total files in core_dump_files: {len(files_set)}")
+                # Store collected files in context for core dump (even if output_cost not set)
+                if ctx.obj is not None and ctx.obj.get('core_dump'):
+                    files_set = ctx.obj.get('core_dump_files', set())
+                    for f in input_files + output_files:
+                        if isinstance(f, str) and f:
+                            # Convert to absolute path for reliable access later
+                            abs_path = os.path.abspath(f)
+                            # Add the file if it exists OR if it looks like a file path
+                            # (it might have been created/deleted during command execution)
+                            if os.path.exists(abs_path) or '.' in os.path.basename(f):
+                                files_set.add(abs_path)
+                                print(f"Debug: Added to core_dump_files: {abs_path} (exists: {os.path.exists(abs_path)})")
+                    ctx.obj['core_dump_files'] = files_set
+                    print(f"Debug: Total files in core_dump_files: {len(files_set)}")
 
-            # Check if we need to write cost tracking
-            if ctx.obj and hasattr(ctx.obj, 'get'):
-                output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
-            else:
-                output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
+                # Check if we need to write cost tracking (only on success)
+                if exception_raised is None:
+                    if ctx.obj and hasattr(ctx.obj, 'get'):
+                        output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
+                    else:
+                        output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
 
-            if not output_cost_path:
-                return result
+                    if output_cost_path:
+                        command_name = ctx.command.name
+                        cost, model_name = extract_cost_and_model(result)
 
-            command_name = ctx.command.name
-            cost, model_name = extract_cost_and_model(result)
+                        timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
 
-            timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
+                        row = {
+                            'timestamp': timestamp,
+                            'model': model_name,
+                            'command': command_name,
+                            'cost': cost,
+                            'input_files': ';'.join(input_files),
+                            'output_files': ';'.join(output_files),
+                        }
 
-            row = {
-                'timestamp': timestamp,
-                'model': model_name,
-                'command': command_name,
-                'cost': cost,
-                'input_files': ';'.join(input_files),
-                'output_files': ';'.join(output_files),
-            }
+                        file_exists = os.path.isfile(output_cost_path)
+                        fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
 
-            file_exists = os.path.isfile(output_cost_path)
-            fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
+                        with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            if not file_exists:
+                                writer.writeheader()
+                            writer.writerow(row)
 
-            with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerow(row)
+                        print(f"Debug: Writing row to CSV: {row}")
+                        print(f"Debug: Input files: {input_files}")
+                        print(f"Debug: Output files: {output_files}")
 
-            print(f"Debug: Writing row to CSV: {row}")
-            print(f"Debug: Input files: {input_files}")
-            print(f"Debug: Output files: {output_files}")
+            except Exception as e:
+                rprint(f"[red]Error tracking cost: {e}[/red]")
 
-        except Exception as e:
-            rprint(f"[red]Error tracking cost: {e}[/red]")
+        # Re-raise the exception if one occurred
+        if exception_raised is not None:
+            raise exception_raised
 
         return result
 
