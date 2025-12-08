@@ -125,8 +125,9 @@ def _resolve_config_hierarchy(
     # Configuration keys to resolve
     config_keys = {
         'generate_output_path': 'PDD_GENERATE_OUTPUT_PATH',
-        'test_output_path': 'PDD_TEST_OUTPUT_PATH', 
+        'test_output_path': 'PDD_TEST_OUTPUT_PATH',
         'example_output_path': 'PDD_EXAMPLE_OUTPUT_PATH',
+        'prompts_dir': 'PDD_PROMPTS_DIR',
         'default_language': 'PDD_DEFAULT_LANGUAGE',
         'target_coverage': 'PDD_TEST_COVERAGE_TARGET',
         'strength': None,
@@ -525,9 +526,9 @@ def construct_paths(
                 # Fall back to context-aware logic
                 # Use original_context_config to avoid checking augmented config with env vars
                 if original_context_config and any(key.endswith('_output_path') for key in original_context_config):
-                    # For configured contexts, prompts are typically at the same level as output dirs
-                    # e.g., if code goes to "pdd/", prompts should be at "prompts/" (siblings)
-                    resolved_config["prompts_dir"] = "prompts"
+                    # For configured contexts, use prompts_dir from config if provided,
+                    # otherwise default to "prompts" at the same level as output dirs
+                    resolved_config["prompts_dir"] = original_context_config.get("prompts_dir", "prompts")
                     resolved_config["code_dir"] = str(gen_path.parent)
                 else:
                     # For default contexts, maintain relative relationship 
@@ -536,7 +537,14 @@ def construct_paths(
                     resolved_config["code_dir"] = str(gen_path.parent)
             
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
-            resolved_config["examples_dir"] = str(Path(output_paths_str.get("example_output_path", "examples")).parent)
+            # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+            # If it ends with / or has no file extension, treat as directory; otherwise use parent
+            example_path_str = output_paths_str.get("example_output_path", "examples")
+            example_path = Path(example_path_str)
+            if example_path_str.endswith('/') or '.' not in example_path.name:
+                resolved_config["examples_dir"] = example_path_str.rstrip('/')
+            else:
+                resolved_config["examples_dir"] = str(example_path.parent)
 
         except Exception as e:
             console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
@@ -834,7 +842,14 @@ def construct_paths(
     resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
-    resolved_config["examples_dir"] = str(Path(resolved_config.get("example_output_path", "examples")).parent)
+    # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+    # If it ends with / or has no file extension, treat as directory; otherwise use parent
+    example_path_str = resolved_config.get("example_output_path", "examples")
+    example_path = Path(example_path_str)
+    if example_path_str.endswith('/') or '.' not in example_path.name:
+        resolved_config["examples_dir"] = example_path_str.rstrip('/')
+    else:
+        resolved_config["examples_dir"] = str(example_path.parent)
 
 
     return resolved_config, input_strings, output_file_paths_str_return, language

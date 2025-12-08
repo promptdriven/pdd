@@ -1,8 +1,27 @@
+## v0.0.78 (2025-12-08)
+
 ## v0.0.77 (2025-12-07)
 
 ### Feat
 
-- Enhance LLM response handling with smart code unescaping, malformed JSON detection, and automatic syntax repair; update prompt templates and add comprehensive examples.
+- **Textual TUI for Sync:** Introduced a rich Terminal User Interface (TUI) for the `sync` command using `Textual`. This includes real-time log streaming, progress animations, and modal dialogs for user input/confirmation, replacing the previous CLI output.
+- **Enhance LLM Response Handling:** Added smart code unescaping, malformed JSON detection, and automatic syntax repair to improve robustness against noisy LLM outputs.
+- **Sync Orchestration:** Improved project root detection (`_find_project_root`), added operation fingerprinting to skip redundant steps, and integrated language-specific run commands.
+- **Universal Execution:** Updated `agentic_langtest` to support more language execution paths.
+
+### Fix
+
+- **Fix Command:** Added validation for error file existence (`--error-file`) and improved error reporting when files are missing.
+- **Boundary Checks:** Fixed boundary checks in project root finding to prevent traversing above the project ceiling.
+
+### Refactor
+
+- **Verification Logic:** Simplified `fix_verification_errors.py` by removing legacy XML parsing fallbacks in favor of Pydantic-based processing.
+- **Tests:** Extensive refactoring of `tests/test_fix_main.py` and addition of new tests for the TUI and orchestration logic.
+
+### Ops
+
+- **Dependencies:** Added `textual` to `requirements.txt`.
 
 ## v0.0.76 (2025-12-05)
 

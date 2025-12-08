@@ -1,9 +1,9 @@
 {
-  "pdd_version": "0.0.65",
-  "timestamp": "2025-11-08T07:23:48.740052+00:00",
-  "command": "generate",
+  "pdd_version": "0.0.77",
+  "timestamp": "2025-12-08T07:21:26.316773+00:00",
+  "command": "test",
   "prompt_hash": "f8df355ee1c6e73a393a00c18232048a83fde694b33c472771246631a3724bf6",
-  "code_hash": "95ba136707363f793effb9496bac37b138db3c8e177957b518652f82e02c0838",
-  "example_hash": "13449ce86a0ee3912b9c2cbc2cf9bfc939bbe07dc53d1c848f7ef1d4fa393725",
-  "test_hash": "ea739ce0fff252821f97ae422753ad33510fa915b2690b2b2d7f5a0cb24cc19c"
+  "code_hash": "28e5b8e7a20729f2e71a921b8e765fc8263b00f5854fa95a47cfe41a77e9427f",
+  "example_hash": "9b4b49e11974adab7afa2feee1aa9524f5988ad11038e0722c26f131b85efaf7",
+  "test_hash": "cb101d3672528356654c933f3cc6f9aa649b96f4120c635a285da91e2d478cb7"
 }
