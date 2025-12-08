@@ -7,7 +7,10 @@ from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from . import DEFAULT_TIME
 class PromptUpdate(BaseModel):
-    modified_prompt: str = Field(description="The updated prompt that will generate the modified code")
+    modified_prompt: str = Field(
+        description="The updated prompt that will generate the modified code",
+        min_length=10  # Reject empty or too-short prompts from LLM
+    )
 
 def update_prompt(
     input_prompt: str,
@@ -97,6 +100,14 @@ def update_prompt(
 
         if not second_response or not isinstance(second_response, dict) or 'result' not in second_response:
             raise RuntimeError("Second LLM invocation failed")
+
+        # Validate that modified_prompt is not empty or whitespace-only
+        modified_prompt_text = second_response['result'].modified_prompt
+        if not modified_prompt_text or not modified_prompt_text.strip():
+            raise RuntimeError(
+                "LLM returned an empty modified prompt. The extraction may have failed. "
+                "Try running with --verbose to see the first LLM's output."
+            )
 
         # Step 4: Print modified prompt if verbose
         if verbose:
