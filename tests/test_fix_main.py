@@ -352,39 +352,36 @@ def test_fix_main_loop_requires_verification_program(mock_ctx):
 @patch('pdd.fix_main.Path')
 def test_fix_main_error_file_not_found_in_non_loop_mode(mock_path, mock_ctx):
     """
-    Test that fix_main returns an error tuple when error_file doesn't exist
+    Test that fix_main raises FileNotFoundError when error_file doesn't exist
     in non-loop mode, as per spec: 'pre-validate the provided error_file exists
-    before constructing paths'.
+    before constructing paths'. Input validation errors propagate to caller
+    for proper exit code handling.
     """
     # Arrange - configure Path to report file doesn't exist
     mock_path_instance = mock_path.return_value
     mock_path_instance.exists.return_value = False
 
-    # Act
-    success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
-        ctx=mock_ctx,
-        prompt_file="prompt_file.prompt",
-        code_file="code_file.py",
-        unit_test_file="test_code_file.py",
-        error_file="nonexistent_errors.log",
-        output_test=None,
-        output_code=None,
-        output_results=None,
-        loop=False,
-        verification_program=None,
-        max_attempts=3,
-        budget=5.0,
-        auto_submit=False
-    )
+    # Act & Assert - should raise FileNotFoundError for input validation
+    with pytest.raises(FileNotFoundError) as exc_info:
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt_file.prompt",
+            code_file="code_file.py",
+            unit_test_file="test_code_file.py",
+            error_file="nonexistent_errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
 
-    # Assert - should return error tuple with FileNotFoundError message
-    assert success is False
-    assert fixed_test == ""
-    assert fixed_code == ""
-    assert attempts == 0
-    assert total_cost == 0.0
-    assert "Error:" in model_name
-    assert "nonexistent_errors.log" in model_name or "does not exist" in model_name
+    # Verify the error message contains useful information
+    assert "nonexistent_errors.log" in str(exc_info.value)
+    assert "does not exist" in str(exc_info.value)
 
     # Verify Path was called to check existence
     mock_path.assert_called_once_with('nonexistent_errors.log')
