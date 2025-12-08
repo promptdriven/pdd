@@ -11,6 +11,7 @@
     - 'command_options' (dict) - A dictionary of the command options for the given command. For example, it could have the 'language' key for the 'test' command or output locations for other commands.
     - 'create_error_file' (boolean, optional, default: True) - A flag that indicates whether to create the error file if it does not exist.
     - 'context_override' (string, optional, default: None) - Manually specify the .pddrc context to use, overriding automatic detection. If provided and unknown, raise a clear ValueError that includes the list of available contexts. The CLI may perform early validation; this function should still validate as a safeguard when called directly.
+    - 'confirm_callback' (Callable[[str, str], bool], optional, default: None) - A callback function for interactive confirmation in non-CLI environments (e.g., Textual TUI). Takes a confirmation message and title as arguments, returns True to proceed or False to cancel. When None, uses click.confirm for CLI interaction.
     Outputs: A tuple containing:
     - 'resolved_config' (Dict[str, Any]) - A dictionary containing the fully resolved configuration from all sources (CLI, .pddrc, env vars), including resolved output paths and directory paths like `prompts_dir`.
     - 'input_strings' (dict) - A dictionary with the keys being the pdd description examples and the values being the input file strings. Include all existing files, including error files.
