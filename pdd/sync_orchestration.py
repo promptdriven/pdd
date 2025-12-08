@@ -44,6 +44,7 @@ from .cmd_test_main import cmd_test_main
 from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
+from .get_run_command import get_run_command_for_file
 
 # --- Mock Helper Functions ---
 
@@ -598,9 +599,18 @@ def sync_orchestration(
                                 # Remove TUI-specific env vars that might contaminate subprocess
                                 for var in ['FORCE_COLOR', 'COLUMNS']:
                                     env.pop(var, None)
+                                # Get language-appropriate run command from language_format.csv
+                                example_path = str(pdd_files['example'])
+                                run_cmd = get_run_command_for_file(example_path)
+                                if run_cmd:
+                                    # Use the language-specific interpreter (e.g., node for .js)
+                                    cmd_parts = run_cmd.split()
+                                else:
+                                    # Fallback to Python if no run command found
+                                    cmd_parts = ['python', example_path]
                                 # start_new_session isolates subprocess from TUI's terminal control
                                 ex_res = subprocess.run(
-                                    ['python', str(pdd_files['example'])],
+                                    cmd_parts,
                                     capture_output=True, text=True, timeout=60,
                                     env=env, cwd=str(pdd_files['example'].parent),
                                     stdin=subprocess.DEVNULL, start_new_session=True
@@ -711,8 +721,15 @@ def sync_orchestration(
                              clean_env = os.environ.copy()
                              for var in ['FORCE_COLOR', 'COLUMNS']:
                                  clean_env.pop(var, None)
+                             # Get language-appropriate run command
+                             example_path = str(pdd_files['example'])
+                             run_cmd = get_run_command_for_file(example_path)
+                             if run_cmd:
+                                 cmd_parts = run_cmd.split()
+                             else:
+                                 cmd_parts = ['python', example_path]
                              # start_new_session isolates subprocess from TUI's terminal control
-                             ex_res = subprocess.run(['python', str(pdd_files['example'])], capture_output=True, text=True, timeout=60, cwd=str(pdd_files['example'].parent), stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
+                             ex_res = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=60, cwd=str(pdd_files['example'].parent), stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
                              report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), ex_res.returncode, 1 if ex_res.returncode==0 else 0, 0 if ex_res.returncode==0 else 1, 100.0 if ex_res.returncode==0 else 0.0)
                              save_run_report(asdict(report), basename, language)
                         except:
