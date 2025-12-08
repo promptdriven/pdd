@@ -7,7 +7,6 @@ import json
 import platform
 import datetime
 import shlex
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import click
@@ -65,70 +64,6 @@ def _write_core_dump(
                 else:
                     interesting_env[k] = v
 
-        # Collect file contents from tracked files
-        file_contents = {}
-        core_dump_files = ctx.obj.get("core_dump_files", set())
-
-        if not ctx.obj.get("quiet"):
-            console.print(f"[info]Core dump: Found {len(core_dump_files)} tracked files[/info]")
-
-        # Auto-include relevant meta files for the invoked commands
-        meta_dir = Path.cwd() / ".pdd" / "meta"
-        if meta_dir.exists():
-            for cmd in invoked_subcommands:
-                # Look for meta files related to this command
-                for meta_file in meta_dir.glob(f"*_{cmd}.json"):
-                    core_dump_files.add(str(meta_file.resolve()))
-                # Also include general meta files (without command suffix)
-                for meta_file in meta_dir.glob("*.json"):
-                    if meta_file.stem.endswith(f"_{cmd}") or not any(
-                        meta_file.stem.endswith(f"_{c}") for c in ["generate", "test", "run", "fix", "update"]
-                    ):
-                        core_dump_files.add(str(meta_file.resolve()))
-
-        # Auto-include PDD config files if they exist
-        config_files = [
-            Path.cwd() / ".pdd" / "config.json",
-            Path.cwd() / ".pddconfig",
-            Path.cwd() / "pdd.json",
-        ]
-        for config_file in config_files:
-            if config_file.exists() and config_file.is_file():
-                core_dump_files.add(str(config_file.resolve()))
-
-        for file_path in core_dump_files:
-            try:
-                path = Path(file_path)
-                if not ctx.obj.get("quiet"):
-                    console.print(f"[info]Core dump: Checking file {file_path}[/info]")
-
-                if path.exists() and path.is_file():
-                    if path.stat().st_size < 50000:  # 50KB limit
-                        try:
-                            # Use relative path if possible for cleaner keys
-                            try:
-                                key = str(path.relative_to(Path.cwd()))
-                            except ValueError:
-                                key = str(path)
-
-                            file_contents[key] = path.read_text(encoding='utf-8')
-                            if not ctx.obj.get("quiet"):
-                                console.print(f"[info]Core dump: Added content for {key}[/info]")
-                        except UnicodeDecodeError:
-                            file_contents[str(path)] = "<binary>"
-                            if not ctx.obj.get("quiet"):
-                                console.print(f"[warning]Core dump: Binary file {path}[/warning]")
-                    else:
-                        file_contents[str(path)] = "<too large>"
-                        if not ctx.obj.get("quiet"):
-                            console.print(f"[warning]Core dump: File too large {path}[/warning]")
-                else:
-                    if not ctx.obj.get("quiet"):
-                        console.print(f"[warning]Core dump: File not found or not a file: {file_path}[/warning]")
-            except Exception as e:
-                file_contents[str(file_path)] = f"<error reading file: {e}>"
-                if not ctx.obj.get("quiet"):
-                    console.print(f"[warning]Core dump: Error reading {file_path}: {e}[/warning]")
 
         payload: Dict[str, Any] = {
             "schema_version": 1,
@@ -159,7 +94,6 @@ def _write_core_dump(
             "steps": steps,
             "errors": get_core_dump_errors(),
             "environment": interesting_env,
-            "file_contents": file_contents,
         }
 
         dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -175,105 +109,13 @@ def _write_core_dump(
             console.print(f"[warning]Failed to write core dump: {exc}[/warning]", style="warning")
 
 
-def _get_github_token() -> Optional[str]:
-    """
-    Get GitHub token using standard authentication methods.
-
-    Tries in order:
-    1. GitHub CLI (gh) if available
-    2. GITHUB_TOKEN environment variable (standard in GitHub Actions)
-    3. GH_TOKEN environment variable (alternative standard)
-    4. PDD_GITHUB_TOKEN (backwards compatibility)
-
-    Returns None if no token found.
-    """
-    # Try GitHub CLI first
-    try:
-        result = subprocess.run(
-            ["gh", "auth", "token"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            token = result.stdout.strip()
-            if token:
-                return token
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    # Try standard environment variables
-    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or os.getenv("PDD_GITHUB_TOKEN")
-    if token:
-        return token
-
-    return None
-
-
-def _github_config(repo: Optional[str] = None) -> Optional[Tuple[str, str]]:
-    """
-    Return (token, repo) if GitHub issue posting is configured, otherwise None.
-
-    Args:
-        repo: Optional repository in format "owner/repo". If not provided,
-              will try PDD_GITHUB_REPO env var or default to "promptdriven/pdd"
-    """
-    token = _get_github_token()
-    if not token:
+def _github_config() -> Optional[Tuple[str, str]]:
+    """Return (token, repo) if GitHub issue posting is configured, otherwise None."""
+    token = os.getenv("PDD_GITHUB_TOKEN")
+    repo = os.getenv("PDD_GITHUB_REPO")
+    if not token or not repo:
         return None
-
-    if not repo:
-        repo = os.getenv("PDD_GITHUB_REPO", "promptdriven/pdd")
-
     return token, repo
-
-
-def _create_gist_with_files(token: str, payload: Dict[str, Any], core_path: Path) -> Optional[str]:
-    """
-    Create a GitHub Gist with core dump and all tracked files.
-
-    Returns the Gist URL on success, None on failure.
-    """
-    try:
-        # Prepare files for gist
-        gist_files = {}
-
-        # Add the core dump JSON
-        gist_files["core-dump.json"] = {
-            "content": json.dumps(payload, indent=2)
-        }
-
-        # Add all tracked files
-        file_contents = payload.get("file_contents", {})
-        for filename, content in file_contents.items():
-            # GitHub gist filenames can't have slashes, replace with underscores
-            safe_filename = filename.replace("/", "_").replace("\\", "_")
-            gist_files[safe_filename] = {
-                "content": content if not content.startswith("<") else f"# {content}"
-            }
-
-        # Create the gist
-        url = "https://api.github.com/gists"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-        }
-
-        gist_data = {
-            "description": f"PDD Core Dump - {core_path.name}",
-            "public": False,  # Private gist
-            "files": gist_files
-        }
-
-        resp = requests.post(url, headers=headers, json=gist_data, timeout=30)
-        if 200 <= resp.status_code < 300:
-            data = resp.json()
-            return data.get("html_url")
-    except Exception as e:
-        console.print(f"[warning]Failed to create gist: {e}[/warning]", style="warning")
-        return None
-    return None
 
 
 def _post_issue_to_github(token: str, repo: str, title: str, body: str) -> Optional[str]:
@@ -334,18 +176,8 @@ def _build_issue_markdown(
     core_path: Path,
     replay_path: Optional[Path],
     attachments: List[str],
-    truncate_files: bool = False,
-    gist_url: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """
-    Build a GitHub issue title and markdown body from a core dump payload.
-
-    Args:
-        truncate_files: If True, truncate file contents aggressively for URL length limits.
-                       Use True for browser-based submission, False for API submission.
-        gist_url: If provided, link to a GitHub Gist containing all files instead of
-                 including them in the body.
-    """
+    """Build a GitHub issue title and markdown body from a core dump payload."""
     platform_info = payload.get("platform", {})
     system = platform_info.get("system", "unknown")
     release = platform_info.get("release", "")
@@ -432,81 +264,35 @@ def _build_issue_markdown(
             lines.append(f"- `{p}`")
         lines.append("")
 
-    file_contents = payload.get("file_contents", {})
-    if file_contents:
-        lines.append("## File Contents")
-        lines.append("")
-
-        if gist_url:
-            # Link to gist instead of embedding files
-            lines.append(f"**All files are attached in this Gist:** [{gist_url}]({gist_url})")
-            lines.append("")
-            lines.append("Files included:")
-            for filename in file_contents.keys():
-                lines.append(f"- `{filename}`")
-            lines.append("")
-        elif truncate_files:
-            # For browser-based submission, truncate to avoid URL length limits
-            MAX_FILE_CHARS = 300  # Limit per file
-            for filename, content in file_contents.items():
-                lines.append(f"### {filename}")
-                lines.append("```")
-                if len(content) > MAX_FILE_CHARS:
-                    lines.append(content[:MAX_FILE_CHARS])
-                    lines.append(f"\n... (truncated, {len(content)} total chars)")
-                else:
-                    lines.append(content)
-                lines.append("```")
-                lines.append("")
-        else:
-            # For API-based submission without gist, include full contents
-            for filename, content in file_contents.items():
-                lines.append(f"### {filename}")
-                lines.append("```")
-                lines.append(content)
-                lines.append("```")
-                lines.append("")
-
     # --- Raw core dump JSON at the bottom ---
-    if gist_url:
-        # If we have a gist, no need for raw JSON (it's in the gist)
-        pass
-    elif truncate_files:
-        # For browser-based submission, skip or heavily truncate raw JSON to save URL space
-        lines.append("## Raw core dump (JSON)")
-        lines.append("")
-        lines.append("_Core dump JSON omitted to reduce URL length. Full dump available in the attached core file._")
-        lines.append("")
+    try:
+        raw_json = json.dumps(payload, indent=2, sort_keys=True)
+    except TypeError:
+        # Fallback: make values JSON-safe by stringifying non-serializable objects
+        def _safe(obj: Any) -> Any:
+            try:
+                json.dumps(obj)
+                return obj
+            except TypeError:
+                return str(obj)
+
+        safe_payload = {k: _safe(v) for k, v in payload.items()}
+        raw_json = json.dumps(safe_payload, indent=2, sort_keys=True)
+
+    MAX_JSON_CHARS = 8000  # guard so huge dumps don't blow up the issue body
+    if len(raw_json) > MAX_JSON_CHARS:
+        raw_display = raw_json[:MAX_JSON_CHARS] + (
+            "\n... (truncated; see core file on disk for full dump)\n"
+        )
     else:
-        # For API-based submission, include more of the JSON
-        try:
-            raw_json = json.dumps(payload, indent=2, sort_keys=True)
-        except TypeError:
-            # Fallback: make values JSON-safe by stringifying non-serializable objects
-            def _safe(obj: Any) -> Any:
-                try:
-                    json.dumps(obj)
-                    return obj
-                except TypeError:
-                    return str(obj)
+        raw_display = raw_json
 
-            safe_payload = {k: _safe(v) for k, v in payload.items()}
-            raw_json = json.dumps(safe_payload, indent=2, sort_keys=True)
-
-        MAX_JSON_CHARS = 8000  # guard so huge dumps don't blow up the issue body
-        if len(raw_json) > MAX_JSON_CHARS:
-            raw_display = raw_json[:MAX_JSON_CHARS] + (
-                "\n... (truncated; see core file on disk for full dump)\n"
-            )
-        else:
-            raw_display = raw_json
-
-        lines.append("## Raw core dump (JSON)")
-        lines.append("")
-        lines.append("```json")
-        lines.append(raw_display)
-        lines.append("```")
-        lines.append("")
+    lines.append("## Raw core dump (JSON)")
+    lines.append("")
+    lines.append("```json")
+    lines.append(raw_display)
+    lines.append("```")
+    lines.append("")
     # ----------------------------------------
 
     lines.append("<!-- Generated by `pdd report-core` -->")

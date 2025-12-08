@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.77"
+version = "0.0.79"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -55,7 +55,8 @@ dependencies = [
     "google-cloud-aiplatform>=1.3",
     "openai>=1.99.5",
     "pillow-heif==1.1.1",
-    "Pillow==12.0.0"]
+    "Pillow==12.0.0",
+    "textual"]
 requires-python = ">=3.12"
 
 [project.urls]
@@ -95,7 +96,7 @@ dev = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.0.77"
+version = "0.0.79"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",

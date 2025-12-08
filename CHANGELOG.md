@@ -1,8 +1,42 @@
+## v0.0.79 (2025-12-08)
+
+## v0.0.78 (2025-12-08)
+
+### Fix
+
+- **Path Resolution for `examples_dir`:** Fixed a bug where `examples_dir` was incorrectly resolved when `example_output_path` was a directory path (e.g., `context/`) rather than a file path. Previously, `Path('context/').parent` would incorrectly evaluate to `.` instead of `context`. The fix now detects directory paths (ending with `/` or having no file extension) and preserves them correctly.
+
+- **Custom `prompts_dir` from Context Config:** Fixed sync discovery mode to respect `prompts_dir` from `.pddrc` context configuration. Previously, the code hardcoded `"prompts"` even when a custom subdirectory like `prompts/backend` was specified in the context config.
+
+- **Empty Prompt Validation in Update:** Added defense-in-depth validation to prevent writing empty prompts. The `update_prompt` module now validates that the LLM returns a non-empty `modified_prompt` (minimum 10 characters via Pydantic), and `update_main` double-checks before writing to disk.
+
+### Tests
+
+- Added regression test `test_construct_paths_sync_discovery_examples_dir_from_directory_path` to verify correct `examples_dir` resolution when `example_output_path` is a directory.
+- Added regression test `test_construct_paths_sync_discovery_custom_prompts_dir` to ensure `prompts_dir` respects `.pddrc` context configuration.
+
 ## v0.0.77 (2025-12-07)
 
 ### Feat
 
-- Enhance LLM response handling with smart code unescaping, malformed JSON detection, and automatic syntax repair; update prompt templates and add comprehensive examples.
+- **Textual TUI for Sync:** Introduced a rich Terminal User Interface (TUI) for the `sync` command using `Textual`. This includes real-time log streaming, progress animations, and modal dialogs for user input/confirmation, replacing the previous CLI output.
+- **Enhance LLM Response Handling:** Added smart code unescaping, malformed JSON detection, and automatic syntax repair to improve robustness against noisy LLM outputs.
+- **Sync Orchestration:** Improved project root detection (`_find_project_root`), added operation fingerprinting to skip redundant steps, and integrated language-specific run commands.
+- **Universal Execution:** Updated `agentic_langtest` to support more language execution paths.
+
+### Fix
+
+- **Fix Command:** Added validation for error file existence (`--error-file`) and improved error reporting when files are missing.
+- **Boundary Checks:** Fixed boundary checks in project root finding to prevent traversing above the project ceiling.
+
+### Refactor
+
+- **Verification Logic:** Simplified `fix_verification_errors.py` by removing legacy XML parsing fallbacks in favor of Pydantic-based processing.
+- **Tests:** Extensive refactoring of `tests/test_fix_main.py` and addition of new tests for the TUI and orchestration logic.
+
+### Ops
+
+- **Dependencies:** Added `textual` to `requirements.txt`.
 
 ## v0.0.76 (2025-12-05)
 
