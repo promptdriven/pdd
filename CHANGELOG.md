@@ -1,3 +1,9 @@
+## v0.0.77 (2025-12-07)
+
+### Feat
+
+- Enhance LLM response handling with smart code unescaping, malformed JSON detection, and automatic syntax repair; update prompt templates and add comprehensive examples.
+
 ## v0.0.76 (2025-12-05)
 
 ### LLM Response Handling & Python Syntax Repair
