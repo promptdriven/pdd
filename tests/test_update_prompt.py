@@ -130,9 +130,54 @@ def test_verbose_output(valid_inputs, mock_llm_invoke, mock_load_prompt_template
     """Test verbose output functionality"""
     valid_inputs['verbose'] = True
     result = update_prompt(**valid_inputs)
-    
+
     captured = capsys.readouterr()
     assert "Running first LLM invocation" in captured.out
     assert "Running second LLM invocation" in captured.out
     assert "Modified Prompt" in captured.out
     assert "Total Cost" in captured.out
+
+
+def test_empty_modified_prompt_response(valid_inputs, mock_load_prompt_template, mock_preprocess, monkeypatch):
+    """Test that empty modified_prompt from LLM raises an error instead of silently returning empty string.
+
+    This catches the bug where vertex_ai/gemini-2.5-flash returns {"modified_prompt": ""} which
+    previously passed validation and resulted in an empty output file.
+    """
+
+    # Mock LLM to return an empty modified_prompt (the bug scenario)
+    empty_prompt_response = {
+        'result': PromptUpdate.model_construct(modified_prompt=''),  # Empty string!
+        'cost': 0.002,
+        'model_name': 'vertex_ai/gemini-2.5-flash'
+    }
+
+    def mock_llm(*args, **kwargs):
+        if 'output_pydantic' in kwargs:
+            return empty_prompt_response  # Second call returns empty
+        return MOCK_FIRST_RESPONSE  # First call succeeds
+
+    monkeypatch.setattr('pdd.update_prompt.llm_invoke', mock_llm)
+
+    with pytest.raises(RuntimeError, match="empty modified prompt"):
+        update_prompt(**valid_inputs)
+
+
+def test_whitespace_only_modified_prompt_response(valid_inputs, mock_load_prompt_template, mock_preprocess, monkeypatch):
+    """Test that whitespace-only modified_prompt from LLM raises an error."""
+
+    whitespace_prompt_response = {
+        'result': PromptUpdate.model_construct(modified_prompt='   \n\t  '),  # Only whitespace
+        'cost': 0.002,
+        'model_name': 'vertex_ai/gemini-2.5-flash'
+    }
+
+    def mock_llm(*args, **kwargs):
+        if 'output_pydantic' in kwargs:
+            return whitespace_prompt_response
+        return MOCK_FIRST_RESPONSE
+
+    monkeypatch.setattr('pdd.update_prompt.llm_invoke', mock_llm)
+
+    with pytest.raises(RuntimeError, match="empty modified prompt"):
+        update_prompt(**valid_inputs)
