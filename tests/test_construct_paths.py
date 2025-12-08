@@ -838,6 +838,37 @@ def test_construct_paths_sync_discovery_requires_basename(tmpdir):
     assert 'Basename must be provided' in str(excinfo.value)
 
 
+def test_construct_paths_sync_discovery_examples_dir_from_directory_path(tmpdir):
+    """
+    Test that examples_dir is correctly resolved when example_output_path
+    is a directory path (e.g., 'context/') rather than a file path.
+
+    This is a regression test for the bug where Path('context/').parent
+    incorrectly evaluates to '.' instead of 'context'.
+    """
+    input_file_paths = {}  # No inputs for sync discovery mode
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {'basename': 'my_module', 'language': 'python'}
+
+    # Mock output paths where example_output_path is a DIRECTORY, not a file
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "backend" / "functions" / "my_module.py"),
+        "test_output_path": str(tmpdir / "backend" / "tests" / "test_my_module.py"),
+        "example_output_path": "context/",  # Directory path, not file path!
+    }
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # The bug: Path('context/').parent == '.' but we want 'context'
+    assert resolved_config["examples_dir"] == "context", \
+        f"Expected 'context' but got '{resolved_config['examples_dir']}'"
+
+
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
     """
     Test that the sync discovery mode correctly calculates prompts_dir path

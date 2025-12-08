@@ -537,7 +537,14 @@ def construct_paths(
                     resolved_config["code_dir"] = str(gen_path.parent)
             
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
-            resolved_config["examples_dir"] = str(Path(output_paths_str.get("example_output_path", "examples")).parent)
+            # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+            # If it ends with / or has no file extension, treat as directory; otherwise use parent
+            example_path_str = output_paths_str.get("example_output_path", "examples")
+            example_path = Path(example_path_str)
+            if example_path_str.endswith('/') or '.' not in example_path.name:
+                resolved_config["examples_dir"] = example_path_str.rstrip('/')
+            else:
+                resolved_config["examples_dir"] = str(example_path.parent)
 
         except Exception as e:
             console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
@@ -835,7 +842,14 @@ def construct_paths(
     resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
-    resolved_config["examples_dir"] = str(Path(resolved_config.get("example_output_path", "examples")).parent)
+    # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+    # If it ends with / or has no file extension, treat as directory; otherwise use parent
+    example_path_str = resolved_config.get("example_output_path", "examples")
+    example_path = Path(example_path_str)
+    if example_path_str.endswith('/') or '.' not in example_path.name:
+        resolved_config["examples_dir"] = example_path_str.rstrip('/')
+    else:
+        resolved_config["examples_dir"] = str(example_path.parent)
 
 
     return resolved_config, input_strings, output_file_paths_str_return, language
