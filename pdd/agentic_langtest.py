@@ -7,16 +7,41 @@ from pathlib import Path
 def _which(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
-def _find_project_root(start_path: str) -> Path:
+def _find_project_root(start_path: str, boundary: Path | None = None) -> Path:
     """
     Find the project root by searching for common project files.
+
+    Args:
+        start_path: The path to start searching from (typically a test file).
+        boundary: Optional boundary path that the search will not traverse above.
+                  Defaults to the current working directory to prevent escaping
+                  into parent projects.
+
+    Returns:
+        The path to the project root, or the start_path's parent directory if
+        no project root markers are found within the boundary.
     """
+    if boundary is None:
+        boundary = Path.cwd().resolve()
+    else:
+        boundary = boundary.resolve()
+
     p = Path(start_path).resolve()
+    start_parent = p.parent  # Fallback if nothing found
+
     while p != p.parent:
+        # Stop if we've reached or passed the boundary
+        if p == boundary or boundary not in p.parents and p != boundary:
+            # Check boundary itself before giving up
+            if any((boundary / f).exists() for f in ["build.gradle", "build.gradle.kts", "pom.xml", "package.json", "jest.config.js"]):
+                return boundary
+            break
+
         if any((p / f).exists() for f in ["build.gradle", "build.gradle.kts", "pom.xml", "package.json", "jest.config.js"]):
             return p
         p = p.parent
-    return Path(start_path).resolve().parent
+
+    return start_parent
 
 def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
     """
