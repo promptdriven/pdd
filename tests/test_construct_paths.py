@@ -838,6 +838,37 @@ def test_construct_paths_sync_discovery_requires_basename(tmpdir):
     assert 'Basename must be provided' in str(excinfo.value)
 
 
+def test_construct_paths_sync_discovery_examples_dir_from_directory_path(tmpdir):
+    """
+    Test that examples_dir is correctly resolved when example_output_path
+    is a directory path (e.g., 'context/') rather than a file path.
+
+    This is a regression test for the bug where Path('context/').parent
+    incorrectly evaluates to '.' instead of 'context'.
+    """
+    input_file_paths = {}  # No inputs for sync discovery mode
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {'basename': 'my_module', 'language': 'python'}
+
+    # Mock output paths where example_output_path is a DIRECTORY, not a file
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "backend" / "functions" / "my_module.py"),
+        "test_output_path": str(tmpdir / "backend" / "tests" / "test_my_module.py"),
+        "example_output_path": "context/",  # Directory path, not file path!
+    }
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # The bug: Path('context/').parent == '.' but we want 'context'
+    assert resolved_config["examples_dir"] == "context", \
+        f"Expected 'context' but got '{resolved_config['examples_dir']}'"
+
+
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
     """
     Test that the sync discovery mode correctly calculates prompts_dir path
@@ -2030,3 +2061,46 @@ def test_language_detection_without_pdd_path_fallback(tmpdir):
         # Restore original PDD_PATH
         if original_pdd_path:
             os.environ['PDD_PATH'] = original_pdd_path
+
+
+def test_construct_paths_sync_discovery_custom_prompts_dir(tmpdir):
+    """
+    Regression test: sync discovery mode should respect prompts_dir from .pddrc context config.
+
+    Bug: When prompts_dir is set in .pddrc (e.g., prompts_dir: "prompts/backend"),
+    sync discovery mode was ignoring it and hardcoding "prompts" instead.
+    """
+    input_file_paths = {}
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {"basename": "admin_get_users"}
+
+    mock_output_paths = {
+        "generate_output_path": "/project/backend/functions/admin_get_users.py",
+        "test_output_path": "/project/backend/tests/test_admin_get_users.py",
+        "example_output_path": "/project/context/admin_get_users_example.py",
+    }
+
+    # Mock context config with CUSTOM prompts_dir (the bug scenario)
+    mock_context_config = {
+        "generate_output_path": "backend/functions/",
+        "prompts_dir": "prompts/backend",  # Custom subdirectory
+    }
+
+    mock_cwd = Path("/project")
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'backend': {'defaults': mock_context_config}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='backend'), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config), \
+         patch('pdd.construct_paths.Path.cwd', return_value=mock_cwd):
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # prompts_dir MUST respect the context config, not hardcode "prompts"
+    assert resolved_config["prompts_dir"] == "prompts/backend", \
+        f"Expected prompts_dir='prompts/backend' from context config, got '{resolved_config['prompts_dir']}'"
