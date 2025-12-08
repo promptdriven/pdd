@@ -443,6 +443,12 @@ def update_main(
                     time=time
                 )
 
+            # Defense-in-depth: validate prompt is not empty before writing
+            if not modified_prompt or not modified_prompt.strip():
+                raise ValueError(
+                    "Update produced an empty prompt. The LLM may have failed to generate a valid response."
+                )
+
             with open(output_file_paths["output"], "w") as f:
                 f.write(modified_prompt)
 
