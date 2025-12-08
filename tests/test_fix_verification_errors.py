@@ -299,14 +299,13 @@ def test_fix_llm_invoke_failure(mock_rprint):
 
 
 @patch('pdd.fix_verification_errors.rprint')
-def test_parsing_verification_llm_returns_unparseable_string(mock_rprint):
-    """Tests verification result being an unparseable string instead of Pydantic object."""
+def test_parsing_verification_llm_returns_non_pydantic(mock_rprint):
+    """Tests verification result being a non-Pydantic object (llm_invoke should always return Pydantic when specified)."""
     mock_load_template = MagicMock(side_effect=["find_template", "fix_template"])
     mock_llm_invoke = MagicMock(return_value={
-        'result': 'Some random text from LLM that is not VerificationOutput.', # Not a Pydantic object
+        'result': 'Some random text from LLM that is not VerificationOutput.',
         'cost': 0.01,
         'model_name': 'model-A',
-        'result_text': 'Some random text from LLM that is not VerificationOutput.' # Simulate llm_invoke providing raw text
     })
 
     with patch('pdd.fix_verification_errors.load_prompt_template', mock_load_template), \
@@ -318,38 +317,11 @@ def test_parsing_verification_llm_returns_unparseable_string(mock_rprint):
 
     assert result == expected_parse_error_return(cost=0.01, model='model-A')
     mock_llm_invoke.assert_called_once()
-    # This test now expects the specific error from failing to parse the string as XML
+    # Now expects the generic error since we no longer do XML fallback parsing
     mock_rprint.assert_any_call(
-        "[bold red]Error:[/bold red] Could not find or parse integer value from <issues_count> tag in string response."
+        "[bold red]Error:[/bold red] Verification LLM call did not return the expected structured output."
     )
-    # Check that the generic parsing error message is NOT called for this specific case
-    generic_error_call = call("[bold red]Error:[/bold red] Verification LLM call did not return the expected structured output (e.g., parsing failed).")
-    assert generic_error_call not in mock_rprint.call_args_list
 
-
-@patch('pdd.fix_verification_errors.rprint')
-def test_parsing_verification_invalid_issues_count_value(mock_rprint):
-    """Tests verification result with non-integer issues_count."""
-    mock_load_template = MagicMock(side_effect=["find_template", "fix_template"])
-    mock_llm_invoke = MagicMock(return_value={
-        'result': '<issues_count>abc</issues_count><details>details</details>',
-        'cost': 0.01,
-        'model_name': 'model-A'
-    })
-
-    with patch('pdd.fix_verification_errors.load_prompt_template', mock_load_template), \
-         patch('pdd.fix_verification_errors.llm_invoke', mock_llm_invoke):
-        result = fix_verification_errors(
-            program=STD_PROGRAM, prompt=STD_PROMPT, code=STD_CODE, output=STD_OUTPUT,
-            strength=STD_STRENGTH
-        )
-
-    assert result == expected_parse_error_return(cost=0.01, model='model-A')
-    # Check that the specific error message was printed (due to \d+ not matching "abc")
-    mock_rprint.assert_any_call("[bold red]Error:[/bold red] Could not find or parse integer value from <issues_count> tag in string response.")
-    # Ensure the warning message was NOT printed in this case
-    warning_call = call("[yellow]Warning:[/yellow] Could not find <issues_count> tag in verification result. Assuming 0 issues.")
-    assert warning_call not in mock_rprint.call_args_list
 
 @patch('pdd.fix_verification_errors.rprint')
 def test_parsing_verification_no_details_tag(mock_rprint):
@@ -372,7 +344,7 @@ def test_parsing_verification_no_details_tag(mock_rprint):
     assert result['explanation'] is None
     assert result['total_cost'] == 0.01
     mock_llm_invoke.assert_called_once()
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] <issues_count> is 2, but <details> field is empty or missing. Treating as no actionable issues found.")
+    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] issues_count is 2, but details field is empty or missing. Treating as no actionable issues found.")
 
 
 @patch('pdd.fix_verification_errors.rprint')
@@ -396,17 +368,17 @@ def test_parsing_verification_empty_details_tag(mock_rprint):
     assert result['explanation'] is None
     assert result['total_cost'] == 0.01
     mock_llm_invoke.assert_called_once()
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] <issues_count> is 1, but <details> field is empty or missing. Treating as no actionable issues found.")
+    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] issues_count is 1, but details field is empty or missing. Treating as no actionable issues found.")
 
 
 @patch('pdd.fix_verification_errors.rprint')
-def test_parsing_fix_llm_returns_unparseable_string(mock_rprint):
-    """Tests fix result being an unparseable string instead of Pydantic object."""
+def test_parsing_fix_llm_returns_non_pydantic(mock_rprint):
+    """Tests fix result being a non-Pydantic object (llm_invoke should always return Pydantic when specified)."""
     mock_load_template = MagicMock(side_effect=["find_template", "fix_template"])
     verification_details_text = "Issue details for fix parsing test"
     mock_llm_invoke = MagicMock(side_effect=[
         {'result': VerificationOutput(issues_count=1, details=verification_details_text), 'cost': 0.01, 'model_name': 'model-A'},
-        {'result': 'Unparseable string for fix', 'cost': 0.02, 'model_name': 'model-B', 'result_text': 'Unparseable string for fix'}
+        {'result': 'Unparseable string for fix', 'cost': 0.02, 'model_name': 'model-B'}
     ])
 
     with patch('pdd.fix_verification_errors.load_prompt_template', mock_load_template), \
@@ -423,62 +395,10 @@ def test_parsing_fix_llm_returns_unparseable_string(mock_rprint):
     assert result['total_cost'] == 0.01 + 0.02
     assert result['model_name'] == 'model-B'
     mock_rprint.assert_any_call(
-        "[bold red]Error:[/bold red] Fix generation LLM call did not return the expected structured output (e.g., parsing failed)."
+        "[bold red]Error:[/bold red] Fix generation LLM call did not return the expected structured output."
     )
-    mock_rprint.assert_any_call(f"  [dim]Expected type:[/dim] {FixerOutput} or str (with XML tags)") # Updated expected type
+    mock_rprint.assert_any_call(f"  [dim]Expected type:[/dim] {FixerOutput}")
     mock_rprint.assert_any_call(f"  [dim]Received type:[/dim] {type('string')}")
-
-
-@patch('pdd.fix_verification_errors.rprint')
-def test_parsing_fix_missing_code_tag(mock_rprint):
-    """Tests fix result missing the fixed_code tag."""
-    mock_load_template = MagicMock(side_effect=["find_template", "fix_template"])
-    mock_llm_invoke = MagicMock(side_effect=[
-        # Verification output is a string that needs to be parsed by the string fallback
-        {'result': VerificationOutput(issues_count=1, details="Issue details"), 'cost': 0.01, 'model_name': 'model-A'},
-        # Fix output is a string missing fixed_code
-        {'result': '<fixed_program>fixed program</fixed_program><explanation>Fix explanation</explanation>', 'cost': 0.02, 'model_name': 'model-B'}
-    ])
-
-    with patch('pdd.fix_verification_errors.load_prompt_template', mock_load_template), \
-         patch('pdd.fix_verification_errors.llm_invoke', mock_llm_invoke):
-        result = fix_verification_errors(
-            program=STD_PROGRAM, prompt=STD_PROMPT, code=STD_CODE, output=STD_OUTPUT,
-            strength=STD_STRENGTH, verbose=True # Enable verbose for warning check
-        )
-
-    assert result['fixed_program'] == "fixed program"
-    assert result['fixed_code'] == STD_CODE # Should revert to original
-    assert result['explanation'] == "<verification_details>Issue details</verification_details>\n<fix_explanation>Fix explanation</fix_explanation>"
-    assert result['verification_issues_count'] == 1
-    assert result['total_cost'] == 0.03
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find or parse <fixed_code> tag in fix result string. Using original code module.")
-
-@patch('pdd.fix_verification_errors.rprint')
-def test_parsing_fix_missing_explanation_tag(mock_rprint):
-    """Tests fix result missing the explanation tag."""
-    mock_load_template = MagicMock(side_effect=["find_template", "fix_template"])
-    mock_llm_invoke = MagicMock(side_effect=[
-        # Verification output is a string that needs to be parsed by the string fallback
-        {'result': VerificationOutput(issues_count=1, details="Issue details"), 'cost': 0.01, 'model_name': 'model-A'},
-        # Fix output is a string missing explanation
-        {'result': '<fixed_program>fixed program</fixed_program><fixed_code>fixed code</fixed_code>', 'cost': 0.02, 'model_name': 'model-B'}
-    ])
-
-    with patch('pdd.fix_verification_errors.load_prompt_template', mock_load_template), \
-         patch('pdd.fix_verification_errors.llm_invoke', mock_llm_invoke):
-        result = fix_verification_errors(
-            program=STD_PROGRAM, prompt=STD_PROMPT, code=STD_CODE, output=STD_OUTPUT,
-            strength=STD_STRENGTH, verbose=True # Enable verbose for warning check
-        )
-
-    expected_explanation = "<verification_details>Issue details</verification_details>\n<fix_explanation>[Fix explanation not provided by LLM]</fix_explanation>"
-    assert result['fixed_program'] == "fixed program"
-    assert result['fixed_code'] == "fixed code"
-    assert result['explanation'] == expected_explanation
-    assert result['verification_issues_count'] == 1
-    assert result['total_cost'] == 0.03
-    mock_rprint.assert_any_call("[yellow]Warning:[/yellow] Could not find or parse <explanation> tag in fix result string. Using default explanation.")
 
 
 @patch('pdd.fix_verification_errors.rprint')

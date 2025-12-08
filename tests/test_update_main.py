@@ -186,7 +186,7 @@ def test_update_main_with_git_no_input_code(
     assert result == ("updated prompt from git", 0.654321, "git-model")
     mock_open_file.assert_called_once_with("updated_prompt_git.prompt", "w")
 
-def test_update_main_with_both_git_and_input_code_raises_valueerror(
+def test_update_main_with_both_git_and_input_code_returns_none(
     mock_ctx,
     minimal_input_files,
     mock_construct_paths,
@@ -194,26 +194,27 @@ def test_update_main_with_both_git_and_input_code_raises_valueerror(
     mock_git_update
 ):
     """
-    Test that providing both --git and an input_code_file raises ValueError.
+    Test that providing both --git and an input_code_file returns None.
+    Per the spec, errors return None instead of sys.exit(1) to allow
+    orchestrating code (TUI apps, sync commands) to handle errors gracefully.
     """
     # Arrange
     mock_ctx.params["quiet"] = True  # so no output from rprint
     git = True  # also specifying input_code_file
-    with pytest.raises(SystemExit) as e:
-        # Act
-        update_main(
-            ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
-            modified_code_file=minimal_input_files["modified_code_file"],
-            input_code_file=minimal_input_files["input_code_file"],  # This triggers the error
-            output=None,
-            use_git=git
-        )
+
+    # Act
+    result = update_main(
+        ctx=mock_ctx,
+        input_prompt_file=minimal_input_files["input_prompt_file"],
+        modified_code_file=minimal_input_files["modified_code_file"],
+        input_code_file=minimal_input_files["input_code_file"],  # This triggers the error
+        output=None,
+        use_git=git
+    )
 
     # Assert
-    # The function calls sys.exit(1) on ValueError, so we catch SystemExit
-    assert e.type == SystemExit
-    assert e.value.code == 1  # usage error
+    # The function returns None on ValueError to allow orchestrator to handle gracefully
+    assert result is None
 
 @patch('pdd.update_main.resolve_prompt_code_pair')
 def test_update_main_regeneration_mode(
@@ -273,25 +274,27 @@ def test_update_main_handles_unexpected_exception_gracefully(
     mock_open_file
 ):
     """
-    Test that an unexpected exception triggers sys.exit(1) and prints an error message.
+    Test that an unexpected exception returns None and prints an error message.
+    Per the spec, errors return None instead of sys.exit(1) to allow
+    orchestrating code (TUI apps, sync commands) to handle errors gracefully.
     """
     mock_ctx.params["quiet"] = True
 
     # Force an unexpected exception in construct_paths or subsequent code
     mock_construct_paths.side_effect = Exception("Something went wrong")
 
-    with pytest.raises(SystemExit) as exit_info:
-        update_main(
-            ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
-            modified_code_file=minimal_input_files["modified_code_file"],
-            input_code_file=minimal_input_files["input_code_file"],
-            output=None,
-            use_git=False
-        )
+    # Act
+    result = update_main(
+        ctx=mock_ctx,
+        input_prompt_file=minimal_input_files["input_prompt_file"],
+        modified_code_file=minimal_input_files["modified_code_file"],
+        input_code_file=minimal_input_files["input_code_file"],
+        output=None,
+        use_git=False
+    )
 
-    assert exit_info.type == SystemExit
-    assert exit_info.value.code == 1
+    # Assert - function returns None on errors to allow orchestrator to handle gracefully
+    assert result is None
 
     # The open should never be called because we failed early
     mock_open_file.assert_not_called()

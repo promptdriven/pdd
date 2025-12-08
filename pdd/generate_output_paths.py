@@ -3,7 +3,6 @@ import logging
 from typing import Dict, List, Optional
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Configuration Data ---
@@ -390,6 +389,9 @@ def generate_output_paths(
 
 # --- Example Usage (for testing) ---
 if __name__ == '__main__':
+    # Configure logging for standalone execution
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
     # Mock inputs
     mock_basename = "my_module"
     mock_language = "python"
