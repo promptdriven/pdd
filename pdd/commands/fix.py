@@ -115,4 +115,4 @@ def fix(
         return result, total_cost, model_name
     except Exception as exception:
         handle_error(exception, "fix", ctx.obj.get("quiet", False))
-        return None
+        ctx.exit(1)
