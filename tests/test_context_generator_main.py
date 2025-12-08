@@ -81,19 +81,23 @@ def test_context_generator_main_no_output(mock_ctx):
 def test_context_generator_main_error(mock_ctx):
     """
     Test case for context_generator_main when an error occurs.
+    Per the spec, errors should return an error tuple instead of sys.exit(1)
+    to allow orchestrators to handle errors gracefully.
     """
     with patch('pdd.context_generator_main.construct_paths') as mock_construct_paths, \
          patch('pdd.context_generator_main.context_generator') as mock_context_generator:
-        
+
         # Mock construct_paths to raise an exception
         mock_construct_paths.side_effect = Exception("File not found")
-        
-        # Call the function and expect sys.exit(1)
-        with pytest.raises(SystemExit) as pytest_wrapped_e:
-            context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", "output/example_code.py")
-        
-        assert pytest_wrapped_e.type == SystemExit
-        assert pytest_wrapped_e.value.code == 1
+
+        # Call the function and expect error tuple return
+        result = context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", "output/example_code.py")
+
+        # Should return error tuple: ("", 0.0, "Error: <message>")
+        assert result[0] == ""
+        assert result[1] == 0.0
+        assert "Error:" in result[2]
+        assert "File not found" in result[2]
 
 def test_context_generator_main_quiet_mode(mock_ctx):
     """
