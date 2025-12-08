@@ -1,5 +1,11 @@
 ## v0.0.79 (2025-12-08)
 
+### Deps
+
+- **Textual Dependency in pyproject.toml:** Added `textual` to `pyproject.toml` dependencies. This was previously added to `requirements.txt` in v0.0.77 for the Textual TUI feature but was missing from the package manifest, causing installation issues when installing via `pip install pdd-cli`.
+
+Thanks to James Levine for reporting this issue!
+
 ## v0.0.78 (2025-12-08)
 
 ### Fix
