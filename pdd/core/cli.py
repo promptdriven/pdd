@@ -86,6 +86,9 @@ class PDDCLI(click.Group):
         exception_to_handle = None
         try:
             result = super().invoke(ctx)
+        except KeyboardInterrupt as e:
+            # Handle keyboard interrupt (Ctrl+C) gracefully
+            exception_to_handle = e
         except SystemExit as e:
             # Let successful exits (code 0) pass through, but handle error exits
             if e.code == 0 or e.code is None:
