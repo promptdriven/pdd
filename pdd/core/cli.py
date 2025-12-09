@@ -2,8 +2,11 @@
 Main CLI class and entry point logic.
 """
 import os
+import sys
+import io
+import re
 import click
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, TextIO
 
 from .. import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
 from ..auto_update import auto_update
@@ -12,6 +15,56 @@ from ..install_completion import get_local_pdd_path
 from .errors import console, handle_error, clear_core_dump_errors
 from .utils import _first_pending_command, _should_show_onboarding_reminder
 from .dump import _write_core_dump
+
+
+def _strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes from text for clean log output."""
+    # Pattern matches ANSI escape sequences
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+    return ansi_escape.sub('', text)
+
+
+class OutputCapture:
+    """Captures terminal output while still displaying it normally.
+
+    This class acts as a "tee" - it writes to both the original stream
+    and a buffer for later retrieval.
+    """
+
+    def __init__(self, original_stream: TextIO):
+        self.original_stream = original_stream
+        self.buffer = io.StringIO()
+
+    def write(self, text: str) -> int:
+        # Write to original stream so output is still displayed
+        result = self.original_stream.write(text)
+        # Also capture to buffer
+        try:
+            self.buffer.write(text)
+        except Exception:
+            # If buffer write fails, don't break the original output
+            pass
+        return result
+
+    def flush(self):
+        self.original_stream.flush()
+        try:
+            self.buffer.flush()
+        except Exception:
+            pass
+
+    def isatty(self):
+        """Delegate to original stream."""
+        return self.original_stream.isatty()
+
+    def fileno(self):
+        """Delegate to original stream."""
+        return self.original_stream.fileno()
+
+    def get_captured_output(self) -> str:
+        """Retrieve all captured output."""
+        return self.buffer.getvalue()
+
 
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
@@ -34,6 +87,9 @@ class PDDCLI(click.Group):
         exception_to_handle = None
         try:
             result = super().invoke(ctx)
+        except KeyboardInterrupt as e:
+            # Handle keyboard interrupt (Ctrl+C) gracefully
+            exception_to_handle = e
         except SystemExit as e:
             # Let successful exits (code 0) pass through, but handle error exits
             if e.code == 0 or e.code is None:
@@ -79,7 +135,37 @@ class PDDCLI(click.Group):
             if not invoked_subcommands and isinstance(ctx.obj, dict):
                 invoked_subcommands = ctx.obj.get("invoked_subcommands", []) or []
             total_cost = 0.0
-            _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
+
+            # Collect terminal output if capture was enabled
+            terminal_output = None
+            if ctx.obj.get("core_dump"):
+                stdout_capture = ctx.obj.get("_stdout_capture")
+                stderr_capture = ctx.obj.get("_stderr_capture")
+                if stdout_capture or stderr_capture:
+                    # Combine stdout and stderr
+                    captured_parts = []
+                    if stdout_capture:
+                        stdout_text = stdout_capture.get_captured_output()
+                        if stdout_text:
+                            # Strip ANSI codes for clean output
+                            clean_stdout = _strip_ansi_codes(stdout_text)
+                            captured_parts.append(f"=== STDOUT ===\n{clean_stdout}")
+                    if stderr_capture:
+                        stderr_text = stderr_capture.get_captured_output()
+                        if stderr_text:
+                            # Strip ANSI codes for clean output
+                            clean_stderr = _strip_ansi_codes(stderr_text)
+                            captured_parts.append(f"=== STDERR ===\n{clean_stderr}")
+
+                    terminal_output = "\n\n".join(captured_parts) if captured_parts else ""
+
+                    # Restore original streams
+                    if stdout_capture:
+                        sys.stdout = stdout_capture.original_stream
+                    if stderr_capture:
+                        sys.stderr = stderr_capture.original_stream
+
+            _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost, terminal_output)
         except Exception:
             # Never let core-dump logic itself crash the CLI
             pass
@@ -213,6 +299,15 @@ def cli(
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump
+
+    # Set up terminal output capture if core_dump is enabled
+    if core_dump:
+        stdout_capture = OutputCapture(sys.stdout)
+        stderr_capture = OutputCapture(sys.stderr)
+        sys.stdout = stdout_capture
+        sys.stderr = stderr_capture
+        ctx.obj["_stdout_capture"] = stdout_capture
+        ctx.obj["_stderr_capture"] = stderr_capture
 
     # Suppress verbose if quiet is enabled
     if quiet:
@@ -359,8 +454,37 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
 
+    # Collect terminal output if capture was enabled
+    terminal_output = None
+    if ctx.obj.get("core_dump"):
+        stdout_capture = ctx.obj.get("_stdout_capture")
+        stderr_capture = ctx.obj.get("_stderr_capture")
+        if stdout_capture or stderr_capture:
+            # Combine stdout and stderr
+            captured_parts = []
+            if stdout_capture:
+                stdout_text = stdout_capture.get_captured_output()
+                if stdout_text:
+                    # Strip ANSI codes for clean output
+                    clean_stdout = _strip_ansi_codes(stdout_text)
+                    captured_parts.append(f"=== STDOUT ===\n{clean_stdout}")
+            if stderr_capture:
+                stderr_text = stderr_capture.get_captured_output()
+                if stderr_text:
+                    # Strip ANSI codes for clean output
+                    clean_stderr = _strip_ansi_codes(stderr_text)
+                    captured_parts.append(f"=== STDERR ===\n{clean_stderr}")
+
+            terminal_output = "\n\n".join(captured_parts) if captured_parts else ""
+
+            # Restore original streams
+            if stdout_capture:
+                sys.stdout = stdout_capture.original_stream
+            if stderr_capture:
+                sys.stderr = stderr_capture.original_stream
+
     # Finally, write a core dump if requested
-    _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
+    _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost, terminal_output)
     fatal = ctx.obj.get("_fatal_exception") if isinstance(ctx.obj, dict) else None
     if fatal:
         ctx.exit(1)
