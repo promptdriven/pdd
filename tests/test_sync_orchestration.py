@@ -1289,3 +1289,138 @@ async def test_tui_request_confirmation_completes_without_hanging():
             "BUG: Confirmation was never completed. "
             "The ConfirmScreen was never shown or never returned a result."
         )
+
+
+# --- Regression Tests ---
+
+class TestGenerateClearsStaleRunReport:
+    """
+    Regression test for bug: After code regeneration, sync skips crash/verify validation
+    because stale run_report from old code still exists with exit_code=0.
+
+    Bug scenario:
+    1. Module was previously synced (has run_report with exit_code=0)
+    2. Code file is deleted
+    3. Sync runs generate to recreate code
+    4. BUG: Old run_report causes sync to skip crash/verify
+    5. FIX: Generate should delete run_report to force validation
+    """
+
+    @pytest.fixture
+    def generate_test_env(self, tmp_path):
+        """Sets up environment to test generate operation's run_report handling."""
+        import os
+        import json
+
+        # Change to temp directory
+        original_cwd = os.getcwd()
+        os.chdir(tmp_path)
+
+        # Create directory structure
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "context").mkdir()
+        pdd_meta_dir = tmp_path / ".pdd" / "meta"
+        pdd_meta_dir.mkdir(parents=True)
+
+        # Create prompt file
+        (tmp_path / "prompts" / "test_unit_python.prompt").write_text("Create add function")
+
+        # Create stale run_report (simulating previous successful sync)
+        run_report_file = pdd_meta_dir / "test_unit_python_run.json"
+        run_report_file.write_text(json.dumps({
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "coverage": 95.0
+        }))
+
+        yield {
+            'tmp_path': tmp_path,
+            'meta_dir': pdd_meta_dir,
+            'run_report_file': run_report_file,
+        }
+
+        # Restore original cwd
+        os.chdir(original_cwd)
+
+    def test_generate_deletes_stale_run_report(self, generate_test_env):
+        """
+        After generate operation completes, any existing run_report should be deleted
+        to force crash/verify validation of the newly generated code.
+        """
+        from pdd.sync_orchestration import sync_orchestration
+        from pdd.sync_determine_operation import SyncDecision
+
+        tmp_path = generate_test_env['tmp_path']
+        run_report_file = generate_test_env['run_report_file']
+
+        # Verify run_report exists before test
+        assert run_report_file.exists(), "Setup failed: run_report should exist before generate"
+
+        # Mock dependencies to isolate the generate operation behavior
+        # IMPORTANT: Also patch META_DIR to use the test's temp directory
+        meta_dir = generate_test_env['meta_dir']
+        with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_app_class, \
+             patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp, \
+             patch('pdd.sync_orchestration.META_DIR', meta_dir):
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure path mocks
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'test_unit_python.prompt',
+                'code': tmp_path / 'src' / 'test_unit.py',
+                'example': tmp_path / 'context' / 'test_unit_example.py',
+                'test': tmp_path / 'tests' / 'test_test_unit.py'
+            }
+
+            # Create code file so workflow can progress
+            (tmp_path / 'src' / 'test_unit.py').write_text("# generated code")
+
+            # Configure generate to succeed
+            mock_code_gen.return_value = {'success': True, 'cost': 0.05, 'model': 'mock-model'}
+
+            # Configure sync_determine_operation to return generate then all_synced
+            mock_determine.side_effect = [
+                SyncDecision(operation='generate', reason='Code missing'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            # Configure SyncApp mock to run worker synchronously
+            def run_worker_sync(self):
+                try:
+                    return self.worker_func()
+                except Exception as e:
+                    return {"success": False, "errors": [str(e)]}
+
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.run = lambda: run_worker_sync(instance)
+                instance.worker_exception = None
+                return instance
+
+            mock_app_class.side_effect = store_worker_func
+
+            # Run sync
+            result = sync_orchestration(
+                basename="test_unit",
+                language="python",
+                prompts_dir="prompts"
+            )
+
+        # THE KEY ASSERTION: run_report should be deleted after generate
+        assert not run_report_file.exists(), (
+            "REGRESSION BUG: run_report should be deleted after generate operation "
+            "to force crash/verify validation of newly generated code. "
+            "Without this, sync incorrectly skips validation because old run_report "
+            "shows exit_code=0 from previous (now stale) code."
+        )

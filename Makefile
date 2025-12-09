@@ -51,7 +51,8 @@ help:
 	@echo "  make publish                 - Build & upload current version"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make publish-public-cap      - Copy artifacts to CAP public repo only"
-	@echo "  make release                 - Bump version and build package"
+	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
+	@echo "  make release                 - Bump version and build package (runs check-deps first)"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
@@ -551,7 +552,11 @@ publish:
 	@$(MAKE) build
 	@$(MAKE) publish-public publish-public-cap
 
-release:
+# Check that pyproject.toml dependencies match requirements.txt
+check-deps:
+	@python scripts/check_deps.py
+
+release: check-deps
 	@echo "Preparing release"
 	@CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
 	CURRENT_TAG="v$$CURRENT_VERSION"; \

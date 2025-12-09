@@ -9,9 +9,9 @@ from .modify import split, change, update
 from .maintenance import sync, auto_deps, setup
 from .analysis import detect_change, conflicts, bug, crash, trace
 from .misc import preprocess
+from .report import report_core
 from .templates import templates_group
 from .utility import install_completion_cmd, verify
-from .report import report_core
 
 def register_commands(cli: click.Group) -> None:
     """Register all subcommands with the main CLI group."""

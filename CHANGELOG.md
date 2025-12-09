@@ -1,4 +1,39 @@
+## v0.0.80 (2025-12-09)
+
+### Feat
+
+- implement `report-core` command for streamlined bug reporting with core dumps; enhance core dump functionality to include file tracking and terminal output in GitHub issues
+- add performance optimization and prompt caching checklists to documentation for reducing cold-start times and LLM costs
+- add check-deps target to Makefile for dependency synchronization; update dependencies in pyproject.toml and requirements.txt
+
+### Fix
+
+- update temperature range in documentation and validation to allow values between 0 and 2; enhance workflow completion checks to ensure proper validation of generated code
+- ensure stale run_report is deleted after code generation to enforce crash/verify validation; add regression test to confirm behavior
+- add missing 'textual' dependency to pyproject.toml to resolve installation issues
+
+## v0.0.79 (2025-12-08)
+
+### Deps
+
+- **Textual Dependency in pyproject.toml:** Added `textual` to `pyproject.toml` dependencies. This was previously added to `requirements.txt` in v0.0.77 for the Textual TUI feature but was missing from the package manifest, causing installation issues when installing via `pip install pdd-cli`.
+
+Thanks to James Levine for reporting this issue!
+
 ## v0.0.78 (2025-12-08)
+
+### Fix
+
+- **Path Resolution for `examples_dir`:** Fixed a bug where `examples_dir` was incorrectly resolved when `example_output_path` was a directory path (e.g., `context/`) rather than a file path. Previously, `Path('context/').parent` would incorrectly evaluate to `.` instead of `context`. The fix now detects directory paths (ending with `/` or having no file extension) and preserves them correctly.
+
+- **Custom `prompts_dir` from Context Config:** Fixed sync discovery mode to respect `prompts_dir` from `.pddrc` context configuration. Previously, the code hardcoded `"prompts"` even when a custom subdirectory like `prompts/backend` was specified in the context config.
+
+- **Empty Prompt Validation in Update:** Added defense-in-depth validation to prevent writing empty prompts. The `update_prompt` module now validates that the LLM returns a non-empty `modified_prompt` (minimum 10 characters via Pydantic), and `update_main` double-checks before writing to disk.
+
+### Tests
+
+- Added regression test `test_construct_paths_sync_discovery_examples_dir_from_directory_path` to verify correct `examples_dir` resolution when `example_output_path` is a directory.
+- Added regression test `test_construct_paths_sync_discovery_custom_prompts_dir` to ensure `prompts_dir` respects `.pddrc` context configuration.
 
 ## v0.0.77 (2025-12-07)
 

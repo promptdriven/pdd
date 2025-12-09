@@ -65,6 +65,7 @@ class OutputCapture:
         """Retrieve all captured output."""
         return self.buffer.getvalue()
 
+
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 

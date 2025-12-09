@@ -1704,7 +1704,7 @@ def llm_invoke(
                     and model_lower_for_call.startswith('gpt-5')
                 ):
                     if verbose:
-                        logger.info(f"[INFO] Calling OpenAI Responses API for {model_name_litellm}...")
+                        logger.info(f"[INFO] Calling LiteLLM Responses API for {model_name_litellm}...")
                     try:
                         # Build input text from messages
                         if isinstance(formatted_messages, list) and formatted_messages and isinstance(formatted_messages[0], dict):
@@ -1716,11 +1716,39 @@ def llm_invoke(
                         # Derive effort mapping already computed in time_kwargs
                         reasoning_param = time_kwargs.get("reasoning")
 
-                        # Optional text settings; keep simple
+                        # Build text.format block for structured output
+                        # Default to plain text format
                         text_block = {"format": {"type": "text"}}
 
-                        # If structured output requested, attempt JSON schema via Pydantic
-                        # GPT-5 Responses API does not support temperature; omit it here.
+                        # If structured output requested, use text.format with json_schema
+                        # This is the correct way to enforce structured output via litellm.responses()
+                        if output_pydantic or output_schema:
+                            try:
+                                if output_pydantic:
+                                    schema = output_pydantic.model_json_schema()
+                                    name = output_pydantic.__name__
+                                else:
+                                    schema = output_schema
+                                    name = "response"
+
+                                # Add additionalProperties: false for strict mode (required by OpenAI)
+                                schema['additionalProperties'] = False
+
+                                # Use text.format with json_schema for structured output
+                                text_block = {
+                                    "format": {
+                                        "type": "json_schema",
+                                        "name": name,
+                                        "strict": True,
+                                        "schema": schema,
+                                    }
+                                }
+                                if verbose:
+                                    logger.info(f"[INFO] Using structured output via text.format for Responses API")
+                            except Exception as schema_e:
+                                logger.warning(f"[WARN] Failed to derive JSON schema: {schema_e}. Proceeding with plain text format.")
+
+                        # Build kwargs for litellm.responses()
                         responses_kwargs = {
                             "model": model_name_litellm,
                             "input": input_text,
@@ -1731,73 +1759,27 @@ def llm_invoke(
                         if reasoning_param is not None:
                             responses_kwargs["reasoning"] = reasoning_param
 
-                        if output_pydantic or output_schema:
-                            try:
-                                if output_pydantic:
-                                    schema = output_pydantic.model_json_schema()
-                                    name = output_pydantic.__name__
-                                else:
-                                    schema = output_schema
-                                    name = "response"
+                        # Call litellm.responses() which handles the API interaction
+                        resp = litellm.responses(**responses_kwargs)
 
-                                if _openai_responses_supports_response_format():
-                                    responses_kwargs["response_format"] = {
-                                        "type": "json_schema",
-                                        "json_schema": {
-                                            "name": name,
-                                            "schema": schema,
-                                            "strict": True,
-                                        },
-                                    }
-                                    # When enforcing JSON schema, omit text formatting
-                                    responses_kwargs.pop("text", None)
-                                else:
-                                    if verbose:
-                                        logger.info("[INFO] OpenAI SDK lacks Responses.response_format; will validate JSON client-side.")
-                            except Exception as schema_e:
-                                logger.warning(f"[WARN] Failed to derive JSON schema: {schema_e}. Proceeding without structured response_format.")
-
-                        # Initialize OpenAI client with explicit key if provided
+                        # Extract text result from response
+                        result_text = None
                         try:
-                            from openai import OpenAI as _OpenAIClient
+                            # LiteLLM responses return output as a list of items
+                            for item in resp.output:
+                                if getattr(item, 'type', None) == 'message' and hasattr(item, 'content') and item.content:
+                                    for content_item in item.content:
+                                        if hasattr(content_item, 'text'):
+                                            result_text = content_item.text
+                                            break
+                                    if result_text:
+                                        break
                         except Exception:
-                            _OpenAIClient = None
-                        if _OpenAIClient is None:
-                            raise RuntimeError("OpenAI SDK not available to call Responses API.")
-
-                        api_key_to_use = litellm_kwargs.get("api_key") or os.getenv("OPENAI_API_KEY")
-                        client = _OpenAIClient(api_key=api_key_to_use) if api_key_to_use else _OpenAIClient()
-
-                        # Make the Responses API call, with graceful fallback if SDK
-                        # doesn't support certain newer kwargs (e.g., response_format)
-                        try:
-                            resp = client.responses.create(**responses_kwargs)
-                        except TypeError as te:
-                            msg = str(te)
-                            if 'response_format' in responses_kwargs and ('unexpected keyword argument' in msg or 'got an unexpected keyword argument' in msg):
-                                logger.warning("[WARN] OpenAI SDK doesn't support response_format; retrying without it.")
-                                responses_kwargs.pop('response_format', None)
-                                resp = client.responses.create(**responses_kwargs)
-                            else:
-                                raise
-
-                        # Extract text result
-                        result_text = getattr(resp, "output_text", None)
-                        if result_text is None:
-                            try:
-                                # Fallback parse
-                                outputs = getattr(resp, "output", []) or getattr(resp, "outputs", [])
-                                if outputs:
-                                    first = outputs[0]
-                                    content = getattr(first, "content", [])
-                                    if content and hasattr(content[0], "text"):
-                                        result_text = content[0].text
-                            except Exception:
-                                result_text = None
+                            result_text = None
 
                         # Calculate cost using usage + CSV rates
-                        usage = getattr(resp, "usage", None)
                         total_cost = 0.0
+                        usage = getattr(resp, "usage", None)
                         if usage is not None:
                             in_tok = getattr(usage, "input_tokens", 0) or 0
                             out_tok = getattr(usage, "output_tokens", 0) or 0
@@ -1805,13 +1787,49 @@ def llm_invoke(
                             out_rate = model_info.get('output', 0.0) or 0.0
                             total_cost = (in_tok * in_rate + out_tok * out_rate) / 1_000_000.0
 
+                        # Parse result if Pydantic output requested
                         final_result = None
                         if output_pydantic and result_text:
                             try:
                                 final_result = output_pydantic.model_validate_json(result_text)
                             except Exception as e:
-                                logger.error(f"[ERROR] Pydantic parse failed on Responses output: {e}")
-                                final_result = result_text
+                                # With structured output, parsing should succeed
+                                # But if it fails, try JSON repair as fallback
+                                logger.warning(f"[WARN] Pydantic parse failed on Responses output: {e}. Attempting JSON repair...")
+
+                                # Try extracting from fenced JSON blocks first
+                                fenced = _extract_fenced_json_block(result_text)
+                                candidates: List[str] = []
+                                if fenced:
+                                    candidates.append(fenced)
+                                else:
+                                    candidates.extend(_extract_balanced_json_objects(result_text))
+
+                                # Also try the raw text as-is after stripping fences
+                                cleaned = result_text.strip()
+                                if cleaned.startswith("```json"):
+                                    cleaned = cleaned[7:]
+                                elif cleaned.startswith("```"):
+                                    cleaned = cleaned[3:]
+                                if cleaned.endswith("```"):
+                                    cleaned = cleaned[:-3]
+                                cleaned = cleaned.strip()
+                                if cleaned and cleaned not in candidates:
+                                    candidates.append(cleaned)
+
+                                parse_succeeded = False
+                                for cand in candidates:
+                                    try:
+                                        final_result = output_pydantic.model_validate_json(cand)
+                                        parse_succeeded = True
+                                        logger.info(f"[SUCCESS] JSON repair succeeded for Responses output")
+                                        break
+                                    except Exception:
+                                        continue
+
+                                if not parse_succeeded:
+                                    logger.error(f"[ERROR] All JSON repair attempts failed for Responses output. Original error: {e}")
+                                    final_result = f"ERROR: Failed to parse structured output from Responses API. Raw: {repr(result_text)[:200]}"
                         else:
                             final_result = result_text
 
