@@ -202,6 +202,11 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
             -   If `RunReport.exit_code != 0` → **`crash`**
             -   If last fingerprint command != `verify` and `skip_verify=False` → **`verify`**
             -   Else → **`test`**
+        -   If `code`, `example`, AND `test` all exist but workflow is incomplete → apply same gating:
+            -   If no `RunReport` → **`crash`** (validate regenerated code works)
+            -   If `RunReport.exit_code != 0` → **`crash`** (code crashed, needs fix)
+            -   If last fingerprint command not in ['verify', 'test', 'fix', 'update'] and `skip_verify=False` → **`verify`**
+            -   Otherwise continue to "all required files exist" check
         -   If all required files exist considering skip flags → **`nothing`**.
         -   **Skip Flags**: When `skip_tests=True`, test files are not required. When `skip_verify=True`, verification operations are not required.
         -   **Operation names**: Use `nothing` for in-sync; use `all_synced` specifically when coverage is below target but tests are skipped.
@@ -352,7 +357,10 @@ The `SyncDecision` object returned by this function will be logged by the orches
 Add and use these helpers in the implementation to reflect the above logic:
 - `validate_expected_files(fingerprint, paths) -> Dict[str, bool]`: Determine which files should exist based on non-null fingerprint hashes and whether they actually exist
 - `_handle_missing_expected_files(...) -> SyncDecision`: Map missing-file scenarios to the appropriate recovery operation (`generate`, `auto-deps`, `example`, `test`, or `nothing` if `--skip-tests`)
-- `_is_workflow_complete(paths, skip_tests, skip_verify) -> bool`: True when all required files for the current flags exist
+- `_is_workflow_complete(paths, skip_tests, skip_verify, basename=None, language=None) -> bool`: True when ALL of these are satisfied:
+          1. All required files exist (code, example, test unless skip_tests)
+          2. run_report exists with exit_code == 0 (code runs successfully)
+          3. fingerprint.command indicates verify has been done (unless skip_verify) - must be in ['verify', 'test', 'fix', 'update']
 - `_check_example_success_history(basename, language) -> bool`: Whether the example has run successfully before (to prefer `fix` over `crash` on runtime errors)
 
 This enables users to run `pdd sync --log` to understand the complete decision history and troubleshoot any issues.
