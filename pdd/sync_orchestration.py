@@ -573,6 +573,9 @@ def sync_orchestration(
                                     result = (new_content, 0.0, 'no-changes')
                         elif operation == 'generate':
                             result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt']), output=str(pdd_files['code']), original_prompt_file_path=None, force_incremental_flag=False)
+                            # Clear stale run_report so crash/verify is required for newly generated code
+                            run_report_file = META_DIR / f"{basename}_{language}_run.json"
+                            run_report_file.unlink(missing_ok=True)
                         elif operation == 'example':
                             result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['example']))
                         elif operation == 'crash':

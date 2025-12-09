@@ -118,9 +118,16 @@ def unfinished_prompt(
         )
 
         # Step 3: Extract and return results
-        result: PromptAnalysis = response['result']
+        result = response['result']
         total_cost = response['cost']
         model_name = response['model_name']
+
+        # Defensive type checking: ensure we got a PromptAnalysis, not a raw string
+        if not isinstance(result, PromptAnalysis):
+            raise TypeError(
+                f"Expected PromptAnalysis from llm_invoke, got {type(result).__name__}. "
+                f"This typically indicates JSON parsing failed. Value: {repr(result)[:200]}"
+            )
 
         if verbose:
            rprint("[green]Analysis complete![/green]")
