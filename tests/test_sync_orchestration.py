@@ -1424,3 +1424,122 @@ class TestGenerateClearsStaleRunReport:
             "Without this, sync incorrectly skips validation because old run_report "
             "shows exit_code=0 from previous (now stale) code."
         )
+
+
+# --- Pytest Error Parsing Regression Tests ---
+
+class TestPytestErrorParsing:
+    """
+    Regression tests for pytest error parsing bug.
+
+    Bug: sync_orchestration.py didn't parse "N errors" from pytest output.
+    When pytest reports "1 passed, 10 errors", the sync recorded:
+      tests_passed=1, tests_failed=0 (missing errors!)
+
+    Fix: Added error parsing in _execute_tests_and_create_run_report() to
+    count pytest ERRORS (fixture/setup failures) as part of tests_failed.
+    """
+
+    def test_execute_tests_counts_pytest_errors(self, tmp_path, monkeypatch):
+        """
+        Regression test: Verify _execute_tests_and_create_run_report counts pytest ERRORS.
+
+        This test creates a file with a broken fixture that causes pytest to report
+        ERRORS (not failures). The production code must count these errors.
+
+        Before fix: tests_failed=0 (BUG - errors not counted)
+        After fix: tests_failed>=1 (errors added to failed count)
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Change cwd to tmp_path so relative_to() works in the production code
+        monkeypatch.chdir(tmp_path)
+
+        # Create a test file with a broken fixture (same pattern as admin_get_users bug)
+        test_file = tmp_path / "test_broken_fixture.py"
+        test_file.write_text('''
+import pytest
+from unittest.mock import patch
+
+@pytest.fixture
+def mock_nonexistent():
+    """This fixture will ERROR because the module doesn't exist."""
+    with patch('nonexistent_module_abc123.nonexistent_attr') as m:
+        yield m
+
+def test_uses_broken_fixture(mock_nonexistent):
+    """This test will ERROR during fixture setup."""
+    assert True
+
+def test_that_passes():
+    """This test passes normally."""
+    assert True
+''')
+
+        # Call the ACTUAL production function
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="test_broken_fixture",
+            language="python",
+            target_coverage=0.0
+        )
+
+        # Verify pytest detected the error (exit_code should be non-zero)
+        assert report.exit_code != 0, f"Pytest should return non-zero on errors, got {report.exit_code}"
+
+        # KEY ASSERTION: errors must be counted in tests_failed
+        # Before the fix, this would be 0 (BUG)
+        # After the fix, this should be >= 1 (errors counted)
+        assert report.tests_failed >= 1, (
+            f"Pytest ERRORS must be counted as failures. "
+            f"Got tests_passed={report.tests_passed}, tests_failed={report.tests_failed}. "
+            f"Expected tests_failed >= 1 because fixture setup error should count."
+        )
+
+    def test_execute_tests_counts_both_failures_and_errors(self, tmp_path, monkeypatch):
+        """
+        Verify that both FAILED and ERROR are counted together.
+
+        Pytest output like "1 failed, 2 errors" should result in tests_failed=3.
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Change cwd to tmp_path so relative_to() works in the production code
+        monkeypatch.chdir(tmp_path)
+
+        test_file = tmp_path / "test_mixed_failures.py"
+        test_file.write_text('''
+import pytest
+from unittest.mock import patch
+
+@pytest.fixture
+def mock_nonexistent():
+    with patch('nonexistent_module_xyz789.nonexistent_attr') as m:
+        yield m
+
+def test_error_from_fixture(mock_nonexistent):
+    """This will ERROR (fixture setup fails)."""
+    assert True
+
+def test_assertion_failure():
+    """This will FAIL (assertion error)."""
+    assert False, "Intentional failure"
+
+def test_passes():
+    """This passes."""
+    assert True
+''')
+
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="test_mixed",
+            language="python",
+            target_coverage=0.0
+        )
+
+        # Should have: 1 passed, 1 failed, 1 error
+        # tests_failed should be 2 (1 failed + 1 error)
+        assert report.tests_passed == 1, f"Expected 1 passed, got {report.tests_passed}"
+        assert report.tests_failed >= 2, (
+            f"Expected tests_failed >= 2 (1 failed + 1 error), got {report.tests_failed}"
+        )
