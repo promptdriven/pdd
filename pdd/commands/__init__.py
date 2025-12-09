@@ -9,6 +9,7 @@ from .modify import split, change, update
 from .maintenance import sync, auto_deps, setup
 from .analysis import detect_change, conflicts, bug, crash, trace
 from .misc import preprocess
+from .report import report_core
 from .templates import templates_group
 from .utility import install_completion_cmd, verify
 
@@ -30,6 +31,7 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(crash)
     cli.add_command(trace)
     cli.add_command(preprocess)
+    cli.add_command(report_core)
     cli.add_command(install_completion_cmd, name="install_completion")
     cli.add_command(verify)
     
