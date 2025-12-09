@@ -449,3 +449,43 @@ def test_terminal_output_in_issue_markdown(tmp_path):
     # Should show truncated output
     assert "=== STDOUT ===" in body_truncated
 
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main', side_effect=KeyboardInterrupt())
+def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_path, runner):
+    """Test that core dump is written when KeyboardInterrupt (Ctrl+C) occurs."""
+    import json
+
+    # Create a test prompt file
+    test_prompt = tmp_path / "test.prompt"
+    test_prompt.write_text("Test prompt for keyboard interrupt")
+
+    # Change to temp directory
+    os.chdir(tmp_path)
+
+    # Run with --core-dump and simulate keyboard interrupt
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--core-dump",
+            "generate",
+            str(test_prompt),
+        ],
+    )
+
+    # Command should exit with error code due to interrupt
+    assert result.exit_code != 0
+
+    # But core dump should still be written
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    assert len(core_dumps) >= 1, "Core dump should be created even on KeyboardInterrupt"
+
+    # Verify core dump contains the error
+    core_dump_data = json.loads(core_dumps[0].read_text())
+    errors = core_dump_data.get('errors', [])
+
+    # Should have recorded the KeyboardInterrupt
+    assert len(errors) > 0, "KeyboardInterrupt should be recorded in core dump errors"
+    assert any('KeyboardInterrupt' in str(err.get('type', '')) for err in errors), \
+        "Error type should include KeyboardInterrupt"
+
