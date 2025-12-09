@@ -556,7 +556,7 @@ This is particularly useful in:
 PDD uses a large language model to generate and manipulate code. The `--strength` and `--temperature` options allow you to control the model's output:
 
 - Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance models with better capabilities (selected by ELO rating), while lower values (closer to 0.0) select more cost-effective models.
-- Temperature: Controls the randomness of the output. Higher values increase diversity but may lead to less coherent results, while lower values produce more focused and deterministic outputs.
+- Temperature: Controls the randomness of the output (valid range: 0.0 to 2.0). Higher values increase diversity but may lead to less coherent results, while lower values produce more focused and deterministic outputs.
 - Time: (Optional, controlled by `--time FLOAT`) For models supporting reasoning, this scales the allocated reasoning resources (e.g., tokens or effort level) between minimum (0.0) and maximum (1.0), with a default of 0.25.
 
 When running in local mode, PDD uses LiteLLM to select and interact with language models based on a configuration file that includes:
