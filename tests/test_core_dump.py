@@ -488,4 +488,3 @@ def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_pa
     assert len(errors) > 0, "KeyboardInterrupt should be recorded in core dump errors"
     assert any('KeyboardInterrupt' in str(err.get('type', '')) for err in errors), \
         "Error type should include KeyboardInterrupt"
-

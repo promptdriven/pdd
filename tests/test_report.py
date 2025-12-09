@@ -1,6 +1,4 @@
-import os
 import json
-import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -8,18 +6,16 @@ import pytest
 from click.testing import CliRunner
 
 from pdd.cli import cli
-from pdd.core.dump import _build_issue_markdown, _github_config, _post_issue_to_github, _create_gist_with_files
-from pdd.commands.report import report_core # Import the command directly
 
 # Helper to create a dummy core dump file
 def create_dummy_core_dump(directory, filename="pdd-core-12345.json", content=None):
     if content is None:
         content = {"metadata": {"version": "test", "timestamp": "2025-01-01T00:00:00Z"}, "files": []}
-    
+
     # Ensure directory exists
     dump_dir = Path(directory) / ".pdd" / "core_dumps"
     dump_dir.mkdir(parents=True, exist_ok=True)
-    
+
     dump_path = dump_dir / filename
     dump_path.write_text(json.dumps(content))
     return dump_path
