@@ -186,7 +186,13 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
             failed_match = re.search(r'(\d+) failed', stdout)
             if failed_match:
                 tests_failed = int(failed_match.group(1))
-        
+
+        # Parse errors (fixture/setup failures) - add to failed count
+        if 'error' in stdout:
+            error_match = re.search(r'(\d+) error', stdout)
+            if error_match:
+                tests_failed += int(error_match.group(1))
+
         coverage_match = re.search(r'TOTAL.*?(\d+)%', stdout)
         if not coverage_match:
             coverage_match = re.search(r'(\d+)%\s*$', stdout, re.MULTILINE)
