@@ -1,3 +1,17 @@
+## v0.0.80 (2025-12-09)
+
+### Feat
+
+- implement `report-core` command for streamlined bug reporting with core dumps; enhance core dump functionality to include file tracking and terminal output in GitHub issues
+- add performance optimization and prompt caching checklists to documentation for reducing cold-start times and LLM costs
+- add check-deps target to Makefile for dependency synchronization; update dependencies in pyproject.toml and requirements.txt
+
+### Fix
+
+- update temperature range in documentation and validation to allow values between 0 and 2; enhance workflow completion checks to ensure proper validation of generated code
+- ensure stale run_report is deleted after code generation to enforce crash/verify validation; add regression test to confirm behavior
+- add missing 'textual' dependency to pyproject.toml to resolve installation issues
+
 ## v0.0.79 (2025-12-08)
 
 ### Deps
