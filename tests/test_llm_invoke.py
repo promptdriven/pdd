@@ -891,4 +891,111 @@ def test_smart_unescape_code_only_structural():
     try:
         ast.parse(result)
     except SyntaxError as e:
-        pytest.fail(f"Result should be valid Python, got SyntaxError: {e}") 
+        pytest.fail(f"Result should be valid Python, got SyntaxError: {e}")
+
+
+# --- Tests for OpenAI Responses API Malformed JSON Handling ---
+# These tests verify the bug where malformed JSON from the Responses API
+# causes a raw string to be returned instead of a Pydantic model.
+
+
+def create_mock_openai_responses_api_response(output_text, input_tokens=10, output_tokens=10):
+    """Helper to create a mock OpenAI Responses API response object.
+
+    This mimics the structure returned by litellm.responses(), which has:
+    - output: list of items, where message items have content with text
+    - usage: token usage info
+    """
+    mock_resp = MagicMock()
+
+    # Create the nested structure: output[].content[].text
+    mock_content_item = MagicMock()
+    mock_content_item.text = output_text
+
+    mock_message_item = MagicMock()
+    mock_message_item.type = 'message'
+    mock_message_item.content = [mock_content_item]
+
+    mock_resp.output = [mock_message_item]
+
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = input_tokens
+    mock_usage.output_tokens = output_tokens
+    mock_resp.usage = mock_usage
+
+    return mock_resp
+
+
+def test_llm_invoke_responses_api_malformed_json_should_not_return_string(mock_load_models, mock_set_llm_cache):
+    """Test that when OpenAI Responses API returns malformed JSON,
+    it should NOT return a raw string - it should either:
+    1. Repair the JSON and return a valid Pydantic object, OR
+    2. Raise a clear exception
+
+    This test will FAIL until the fix is implemented (TDD red phase).
+    """
+    model_key_name = "OPENAI_API_KEY"
+
+    # Malformed JSON - missing comma between fields (same error as in regression log)
+    malformed_json = '{"reasoning":"The snippet is incomplete" "is_finished": false}'
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        # Mock litellm.responses to return malformed JSON
+        mock_responses_return = create_mock_openai_responses_api_response(malformed_json)
+
+        with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return) as mock_responses:
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_cost = 0.0001
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Test prompt {text}",
+                        input_json={"text": "test"},
+                        strength=0.5,  # Low strength selects gpt-5-nano
+                        temperature=0.0,
+                        verbose=False,
+                        output_pydantic=SampleOutputModel
+                    )
+
+                    # EXPECTED BEHAVIOR AFTER FIX:
+                    # The result should NEVER be a raw string when output_pydantic is specified.
+                    # It should either be:
+                    # 1. A valid Pydantic object (if JSON was repaired), or
+                    # 2. An error string starting with "ERROR:" (existing error convention)
+
+                    result = response['result']
+
+                    # This assertion will FAIL until we fix the bug
+                    # Currently it returns the raw malformed JSON string
+                    assert not isinstance(result, str) or result.startswith("ERROR:"), \
+                        f"Bug detected: Responses API returned raw malformed JSON string instead of " \
+                        f"Pydantic object or error. Got: {type(result).__name__} = {repr(result)[:100]}"
+
+
+def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, mock_set_llm_cache):
+    """Test that valid JSON from OpenAI Responses API is parsed correctly."""
+    model_key_name = "OPENAI_API_KEY"
+
+    # Valid JSON that matches SampleOutputModel
+    valid_json = '{"field1": "test_value", "field2": 42}'
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        # Mock litellm.responses to return valid JSON
+        mock_responses_return = create_mock_openai_responses_api_response(valid_json)
+
+        with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return) as mock_responses:
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_cost = 0.0001
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Test prompt {text}",
+                        input_json={"text": "test"},
+                        strength=0.5,
+                        temperature=0.0,
+                        verbose=False,
+                        output_pydantic=SampleOutputModel
+                    )
+
+                    # Valid JSON should parse correctly
+                    assert isinstance(response['result'], SampleOutputModel)
+                    assert response['result'].field1 == "test_value"
+                    assert response['result'].field2 == 42

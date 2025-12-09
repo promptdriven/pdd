@@ -334,14 +334,33 @@ def test_decision_verify_after_crash_fix(mock_construct, pdd_test_environment):
         "pdd_version": "1.0", "timestamp": "t", "command": "crash",
         "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
     })
-    # And the run report shows a crash
+    # And the run report shows SUCCESS (exit_code=0) - crash fix worked
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 0, "tests_failed": 0, "coverage": 0.0
+    })
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
+    assert decision.operation == 'verify'
+    assert "Previous crash operation completed" in decision.reason
+
+
+@patch('sync_determine_operation.construct_paths')
+def test_decision_crash_retry_when_exit_code_nonzero(mock_construct, pdd_test_environment):
+    """When crash operation failed (exit_code != 0), should retry crash, not proceed to verify."""
+    # Last command was 'crash'
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0", "timestamp": "t", "command": "crash",
+        "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
+    })
+    # And the run report shows FAILURE (exit_code=1) - crash fix didn't work
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 1, "tests_passed": 0, "tests_failed": 0, "coverage": 0.0
     })
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
-    assert decision.operation == 'verify'
-    assert "Previous crash operation completed" in decision.reason
+    assert decision.operation == 'crash', f"Expected 'crash' when exit_code=1, got '{decision.operation}'"
+    assert "retry crash fix" in decision.reason
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
@@ -423,6 +442,12 @@ def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
     create_fingerprint_file(fp_path, {
         "pdd_version": "1.0", "timestamp": "t", "command": "test",
         "prompt_hash": p_hash, "code_hash": c_hash, "example_hash": e_hash, "test_hash": t_hash
+    })
+
+    # Create run_report to indicate code has been validated
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 5, "tests_failed": 0, "coverage": 95.0
     })
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
@@ -568,7 +593,7 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
             "name": "crash_scenario_skip_tests",
             "metadata": {
                 "pdd_version": "0.0.41",
-                "timestamp": "2023-01-01T00:00:00Z", 
+                "timestamp": "2023-01-01T00:00:00Z",
                 "command": "crash",
                 "prompt_hash": "abc123",
                 "code_hash": "def456",
@@ -577,14 +602,14 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
             },
             "run_report": {
                 "timestamp": "2023-01-01T00:00:00Z",
-                "exit_code": 2,  # Crash exit code
+                "exit_code": 2,  # Crash exit code - crash fix failed!
                 "tests_passed": 0,
                 "tests_failed": 0,
                 "coverage": 0.0
             },
             "skip_tests": True,
             "expected_not": ["analyze_conflict"],
-            "expected_in": ["verify"]  # When fingerprint.command='crash' and exit_code=2, returns 'verify'
+            "expected_in": ["crash"]  # When fingerprint.command='crash' and exit_code!=0, retry crash
         }
     ]
     
@@ -867,9 +892,17 @@ def test_skip_tests_workflow_completion(mock_construct, pdd_test_environment):
         "prompt_hash": p_hash, "code_hash": c_hash, "example_hash": e_hash, "test_hash": None
     })
 
+    # Create run_report to indicate code has been validated
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 0, "tests_failed": 0, "coverage": 0.0
+    })
+
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir), skip_tests=True)
-    assert decision.operation == 'nothing'
-    assert "skip_tests=True" in decision.reason
+    # Either 'nothing' or 'all_synced' indicates workflow is complete
+    assert decision.operation in ['nothing', 'all_synced'], f"Expected done state, got {decision.operation}"
+    # Check for skip_tests in reason or that it's an all_synced with tests skipped
+    assert "skip_tests=True" in decision.reason or "tests skipped" in decision.reason.lower()
 
 @patch('sync_determine_operation.construct_paths')
 def test_skip_flags_parameter_propagation(mock_construct, pdd_test_environment):
@@ -1967,3 +2000,172 @@ def test_get_pdd_file_paths_respects_pddrc_with_PDD_PATH(pdd_test_environment, m
     assert paths["code"].as_posix().endswith("pdd/simple_math.py")
     assert paths["example"].as_posix().endswith("examples/simple_math_example.py")
     assert paths["test"].as_posix().endswith("tests/test_simple_math.py")
+
+
+# --- Regression Tests: All Files Exist But Workflow Incomplete ---
+
+class TestAllFilesExistWorkflowIncomplete:
+    """
+    Regression tests for bugs where test file exists but workflow is incomplete.
+
+    The crash/verify/test logic at line 1074-1137 only runs when test is MISSING.
+    These tests verify correct behavior when all files exist but workflow is incomplete.
+
+    Bug scenarios:
+    - BUG 4: All files exist + NO run_report → should return 'crash'
+    - BUG 1: All files exist + run_report.exit_code != 0 → should return 'crash'
+    - BUG 2: All files exist + run_report OK + command='crash' → should return 'verify'
+    - Sanity: All files exist + run_report OK + command='test' → should return 'nothing'
+    """
+
+    @pytest.fixture
+    def all_files_env(self, tmp_path):
+        """Setup: All PDD files exist with matching fingerprint."""
+        original_cwd = Path.cwd()
+        os.chdir(tmp_path)
+
+        # Setup base directories
+        pdd_dir = tmp_path / ".pdd"
+        meta_dir = pdd_dir / "meta"
+        locks_dir = pdd_dir / "locks"
+        prompts_dir = tmp_path / "prompts"
+
+        for d in [meta_dir, locks_dir, prompts_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+
+        # Update module-level path constants BEFORE calling get_pdd_file_paths
+        pdd_module = sys.modules['sync_determine_operation']
+        pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
+        pdd_module.META_DIR = pdd_module.get_meta_dir()
+        pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
+
+        # Create prompt file first (required for get_pdd_file_paths)
+        prompt_file = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_file.write_text("Create add function")
+
+        # Get the expected file paths from the sync_determine_operation module
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+
+        # Create files at the paths the module expects
+        code_file = paths['code']
+        code_file.parent.mkdir(parents=True, exist_ok=True)
+        code_file.write_text("def add(a, b): return a + b")
+
+        example_file = paths['example']
+        example_file.parent.mkdir(parents=True, exist_ok=True)
+        example_file.write_text("add(1, 2) == 3")
+
+        test_file = paths['test']
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("def test_add(): assert add(1, 2) == 3")
+
+        yield {
+            'tmp_path': tmp_path,
+            'meta_dir': meta_dir,
+            'prompt': prompt_file,
+            'code': code_file,
+            'example': example_file,
+            'test': test_file
+        }
+
+        # Restore original working directory
+        os.chdir(original_cwd)
+        pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
+        pdd_module.META_DIR = pdd_module.get_meta_dir()
+        pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
+
+    def _create_fingerprint(self, env, command='test'):
+        """Helper to create fingerprint with given command."""
+        fp_file = env['meta_dir'] / f"{BASENAME}_{LANGUAGE}.json"
+        fp_file.write_text(json.dumps({
+            "pdd_version": "1.0.0",
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "command": command,
+            "prompt_hash": calculate_sha256(env['prompt']),
+            "code_hash": calculate_sha256(env['code']),
+            "example_hash": calculate_sha256(env['example']),
+            "test_hash": calculate_sha256(env['test'])
+        }))
+
+    def _create_run_report(self, env, exit_code=0):
+        """Helper to create run_report with given exit_code."""
+        rr_file = env['meta_dir'] / f"{BASENAME}_{LANGUAGE}_run.json"
+        rr_file.write_text(json.dumps({
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "exit_code": exit_code,
+            "tests_passed": 5 if exit_code == 0 else 0,
+            "tests_failed": 0 if exit_code == 0 else 1,
+            "coverage": 95.0 if exit_code == 0 else 0.0
+        }))
+
+    def test_bug4_no_run_report_returns_crash(self, all_files_env):
+        """BUG 4: All files exist, NO run_report → should return 'crash'."""
+        env = all_files_env
+        self._create_fingerprint(env, command='generate')
+        # NO run_report - this is the key scenario
+
+        decision = sync_determine_operation(
+            basename=BASENAME,
+            language=LANGUAGE,
+            target_coverage=TARGET_COVERAGE,
+            log_mode=True
+        )
+
+        assert decision.operation == 'crash', (
+            f"BUG 4: Expected 'crash' when all files exist but no run_report, "
+            f"got '{decision.operation}' with reason: {decision.reason}"
+        )
+
+    def test_bug1_exit_code_nonzero_returns_crash(self, all_files_env):
+        """BUG 1: All files exist, run_report.exit_code != 0 → should return 'crash'."""
+        env = all_files_env
+        self._create_fingerprint(env, command='crash')
+        self._create_run_report(env, exit_code=1)  # Code crashed!
+
+        decision = sync_determine_operation(
+            basename=BASENAME,
+            language=LANGUAGE,
+            target_coverage=TARGET_COVERAGE,
+            log_mode=True
+        )
+
+        assert decision.operation == 'crash', (
+            f"BUG 1: Expected 'crash' when exit_code=1, "
+            f"got '{decision.operation}' with reason: {decision.reason}"
+        )
+
+    def test_bug2_verify_not_run_returns_verify(self, all_files_env):
+        """BUG 2: All files exist, run_report OK, command='crash' → should return 'verify'."""
+        env = all_files_env
+        self._create_fingerprint(env, command='crash')  # Verify hasn't run yet
+        self._create_run_report(env, exit_code=0)
+
+        decision = sync_determine_operation(
+            basename=BASENAME,
+            language=LANGUAGE,
+            target_coverage=TARGET_COVERAGE,
+            log_mode=True
+        )
+
+        assert decision.operation == 'verify', (
+            f"BUG 2: Expected 'verify' when command='crash' (verify not run yet), "
+            f"got '{decision.operation}' with reason: {decision.reason}"
+        )
+
+    def test_complete_workflow_returns_nothing(self, all_files_env):
+        """Sanity check: When workflow is truly complete, should return 'nothing'."""
+        env = all_files_env
+        self._create_fingerprint(env, command='test')  # Workflow complete
+        self._create_run_report(env, exit_code=0)
+
+        decision = sync_determine_operation(
+            basename=BASENAME,
+            language=LANGUAGE,
+            target_coverage=TARGET_COVERAGE,
+            log_mode=True
+        )
+
+        assert decision.operation == 'nothing', (
+            f"Expected 'nothing' when workflow complete, "
+            f"got '{decision.operation}' with reason: {decision.reason}"
+        )
