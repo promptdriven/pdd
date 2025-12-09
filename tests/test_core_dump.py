@@ -284,3 +284,168 @@ def test_core_dump_handles_binary_files(tmp_path):
 
     assert file_contents[binary_file_key] == "<binary>"
 
+
+def test_terminal_output_captured_in_core_dump(tmp_path):
+    """Test that terminal output (stdout/stderr) is captured and included in core dump."""
+    import json
+    from pdd.core.dump import _write_core_dump
+    from pdd.core.cli import OutputCapture
+    import sys
+
+    # Create mock context with output capture
+    mock_ctx = MagicMock()
+
+    # Set up output capture similar to how the CLI does it
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    stdout_capture = OutputCapture(original_stdout)
+    stderr_capture = OutputCapture(original_stderr)
+
+    # Write some test output to the captures
+    stdout_capture.write("Test stdout output\n")
+    stdout_capture.write("More stdout\n")
+    stderr_capture.write("Test stderr output\n")
+
+    # Prepare terminal output string like the CLI does
+    captured_parts = []
+    stdout_text = stdout_capture.get_captured_output()
+    if stdout_text:
+        captured_parts.append(f"=== STDOUT ===\n{stdout_text}")
+    stderr_text = stderr_capture.get_captured_output()
+    if stderr_text:
+        captured_parts.append(f"=== STDERR ===\n{stderr_text}")
+    terminal_output = "\n\n".join(captured_parts)
+
+    mock_ctx.obj = {
+        'core_dump': True,
+        'core_dump_files': set(),
+        'force': False,
+        'strength': 0.75,
+        'temperature': 0.0,
+        'time': 0.25,
+        'verbose': False,
+        'quiet': True,
+        'local': False,
+        'context': None,
+        'output_cost': None,
+        'review_examples': False
+    }
+
+    os.chdir(tmp_path)
+
+    # Write core dump with terminal output
+    _write_core_dump(mock_ctx, [('result', 0.5, 'test-model')], ['test'], 0.5, terminal_output)
+
+    # Find the generated core dump
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    assert len(core_dumps) == 1
+
+    # Read and verify content
+    core_dump_data = json.loads(core_dumps[0].read_text())
+
+    # Check that terminal output is included
+    assert 'terminal_output' in core_dump_data
+    captured_output = core_dump_data['terminal_output']
+
+    assert "=== STDOUT ===" in captured_output
+    assert "Test stdout output" in captured_output
+    assert "More stdout" in captured_output
+    assert "=== STDERR ===" in captured_output
+    assert "Test stderr output" in captured_output
+
+
+def test_terminal_output_included_in_gist(tmp_path):
+    """Test that terminal output is added as a separate file in GitHub gist."""
+    import json
+    from pdd.core.dump import _create_gist_with_files
+    from unittest.mock import patch, MagicMock
+
+    # Create a payload with terminal output
+    payload = {
+        "schema_version": 1,
+        "pdd_version": "1.0.0",
+        "timestamp_utc": "20231201T120000Z",
+        "terminal_output": "Test terminal output\nLine 2\nLine 3",
+        "file_contents": {
+            "test.py": "print('hello')"
+        }
+    }
+
+    core_path = tmp_path / "test-core.json"
+    core_path.write_text(json.dumps(payload))
+
+    # Mock the requests.post call
+    with patch('pdd.core.dump.requests.post') as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.json.return_value = {"html_url": "https://gist.github.com/test123"}
+        mock_post.return_value = mock_response
+
+        # Call the function
+        gist_url = _create_gist_with_files("test_token", payload, core_path)
+
+        # Verify gist was created
+        assert gist_url == "https://gist.github.com/test123"
+
+        # Verify the POST request
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args.kwargs
+        gist_data = call_kwargs['json']
+
+        # Check that terminal_output.txt is in the gist files
+        assert 'terminal_output.txt' in gist_data['files']
+        assert gist_data['files']['terminal_output.txt']['content'] == "Test terminal output\nLine 2\nLine 3"
+
+        # Check other expected files
+        assert 'core-dump.json' in gist_data['files']
+
+
+def test_terminal_output_in_issue_markdown(tmp_path):
+    """Test that terminal output is included in the issue markdown."""
+    from pdd.core.dump import _build_issue_markdown
+
+    payload = {
+        "schema_version": 1,
+        "pdd_version": "1.0.0",
+        "timestamp_utc": "20231201T120000Z",
+        "argv": ["generate", "test.prompt"],
+        "cwd": str(tmp_path),
+        "platform": {"system": "Linux", "release": "5.10", "python": "3.9.0"},
+        "invoked_subcommands": ["generate"],
+        "total_cost": 0.5,
+        "steps": [],
+        "errors": [],
+        "environment": {},
+        "file_contents": {},
+        "terminal_output": "=== STDOUT ===\nGenerating code...\nDone!\n\n=== STDERR ===\nWarning: something happened"
+    }
+
+    core_path = tmp_path / "test-core.json"
+
+    # Test without gist (full output)
+    title, body = _build_issue_markdown(payload, "Test description", core_path, None, [], truncate_files=False)
+
+    assert "## Terminal Output" in body
+    assert "=== STDOUT ===" in body
+    assert "Generating code..." in body
+    assert "=== STDERR ===" in body
+    assert "Warning: something happened" in body
+
+    # Test with gist (link to gist)
+    title, body_gist = _build_issue_markdown(
+        payload, "Test description", core_path, None, [],
+        truncate_files=False, gist_url="https://gist.github.com/test123"
+    )
+
+    assert "## Terminal Output" in body_gist
+    assert "https://gist.github.com/test123" in body_gist
+    assert "terminal_output.txt" in body_gist
+
+    # Test with truncation (for browser mode)
+    title, body_truncated = _build_issue_markdown(payload, "Test description", core_path, None, [], truncate_files=True)
+
+    assert "## Terminal Output" in body_truncated
+    # Should show truncated output
+    assert "=== STDOUT ===" in body_truncated
+

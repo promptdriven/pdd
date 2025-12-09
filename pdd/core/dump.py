@@ -21,6 +21,7 @@ def _write_core_dump(
     normalized_results: List[Any],
     invoked_subcommands: List[str],
     total_cost: float,
+    terminal_output: Optional[str] = None,
 ) -> None:
     """Write a JSON core dump for this run if --core-dump is enabled."""
     if not ctx.obj.get("core_dump"):
@@ -160,6 +161,7 @@ def _write_core_dump(
             "errors": get_core_dump_errors(),
             "environment": interesting_env,
             "file_contents": file_contents,
+            "terminal_output": terminal_output,
         }
 
         dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -251,6 +253,13 @@ def _create_gist_with_files(token: str, payload: Dict[str, Any], core_path: Path
             safe_filename = filename.replace("/", "_").replace("\\", "_")
             gist_files[safe_filename] = {
                 "content": content if not content.startswith("<") else f"# {content}"
+            }
+
+        # Add terminal output as a separate file if available
+        terminal_output = payload.get("terminal_output")
+        if terminal_output:
+            gist_files["terminal_output.txt"] = {
+                "content": terminal_output
             }
 
         # Create the gist
@@ -425,6 +434,36 @@ def _build_issue_markdown(
             lines.append(tb)
             lines.append("```")
             lines.append("")
+
+    # Add terminal output section if available
+    terminal_output = payload.get("terminal_output")
+    if terminal_output:
+        lines.append("## Terminal Output")
+        lines.append("")
+        if gist_url:
+            # Link to gist for full output
+            lines.append(f"**Full terminal output is available in the Gist:** [{gist_url}]({gist_url})")
+            lines.append("")
+            lines.append("(See `terminal_output.txt` in the gist)")
+            lines.append("")
+        elif truncate_files:
+            # Truncate for browser mode
+            MAX_OUTPUT_CHARS = 500
+            lines.append("```text")
+            if len(terminal_output) > MAX_OUTPUT_CHARS:
+                lines.append(terminal_output[:MAX_OUTPUT_CHARS])
+                lines.append(f"\n... (truncated, {len(terminal_output)} total chars)")
+            else:
+                lines.append(terminal_output)
+            lines.append("```")
+            lines.append("")
+        else:
+            # Include full output for API mode
+            lines.append("```text")
+            lines.append(terminal_output)
+            lines.append("```")
+            lines.append("")
+
     if attachments:
         lines.append("## Attachments (local paths)")
         lines.append("")
