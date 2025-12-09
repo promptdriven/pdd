@@ -9,7 +9,7 @@
         'existing_code' - A string containing the existing code that was generated from the original prompt.
         'language' - A string that is the language type (e.g. python, bash) of file that will be outputed by the LLM.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
-        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
+        'temperature' - A float between 0 and 2 that is the temperature of the LLM model to use. Default is 0.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME. This value influences how llm_invoke interprets reasoning effort based on model capabilities (e.g., 'budget' or 'effort' reasoning_types).
         'force_incremental' - A boolean that forces the use of incremental patching even if the diff analyzer suggests full regeneration. Default is False.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.

@@ -530,7 +530,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
   # 1b. Generate with env var output path (via envonly context)
   log "1b. Testing 'generate' with environment variable output path"
   ENV_OUT_DIR="env_out_generate"
-  mkdir "$ENV_OUT_DIR"
+  mkdir -p "$ENV_OUT_DIR"
   export PDD_GENERATE_OUTPUT_PATH="$ENV_OUT_DIR/" # Trailing slash indicates directory
   # Use envonly context so env vars take precedence (no context paths)
   run_pdd_command --local --context envonly generate "$PROMPTS_PATH/$MATH_PROMPT" # No --output
