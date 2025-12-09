@@ -427,6 +427,7 @@ The orchestrator should include test execution functionality to create proper Ru
 
 After successful operations, the orchestrator should validate results:
 
+- **After 'generate' operations**: Delete any stale run_report file to force crash/verify validation of the newly generated code against existing examples. This prevents the sync from incorrectly skipping validation when old run_report data exists from a previous code generation.
 - **After 'crash' operations**: Re-run the example program to verify the crash is fixed and update run reports with actual execution results
 - **After 'fix' operations**: Execute tests to verify fixes worked and update run reports with current test status
 - **After 'test' operations**: Execute generated tests to create initial run reports for failure detection in subsequent sync runs
