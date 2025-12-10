@@ -872,9 +872,72 @@ def test_auto_deps_cycle_detection_logic():
     assert len(recent_auto_deps_edge) == 2, "Should detect cycle with exactly 2 auto-deps"
     
     # Test non-cycle case: single auto-deps should not trigger
-    operation_history_normal = ['generate', 'example', 'auto-deps'] 
+    operation_history_normal = ['generate', 'example', 'auto-deps']
     recent_auto_deps_normal = [op for op in operation_history_normal[-3:] if op == 'auto-deps']
     assert len(recent_auto_deps_normal) == 1, "Should not detect cycle with single auto-deps"
+
+
+# ============================================================================
+# Bug Fix Tests
+# ============================================================================
+
+def test_default_strength_uses_constant():
+    """BUG TEST: sync_orchestration should use DEFAULT_STRENGTH (0.75), not 0.5."""
+    import inspect
+    from pdd.sync_orchestration import sync_orchestration
+    from pdd import DEFAULT_STRENGTH
+
+    sig = inspect.signature(sync_orchestration)
+    strength_param = sig.parameters.get('strength')
+
+    assert strength_param is not None, "strength parameter should exist"
+    assert strength_param.default == DEFAULT_STRENGTH, \
+        f"BUG: strength default is {strength_param.default}, should be {DEFAULT_STRENGTH}"
+
+
+def test_boolean_false_is_not_none_bug():
+    """Demonstrate the bug: False is not None evaluates to True."""
+    result_tuple = (False, "", "", 1, 0.1, "model")
+
+    # This is the buggy check
+    buggy_success = result_tuple[0] is not None  # True! BUG!
+
+    # This is the correct check
+    correct_success = bool(result_tuple[0])  # False, correct
+
+    assert buggy_success == True, "Demonstrating the bug exists"
+    assert correct_success == False, "Demonstrating the fix works"
+
+
+def test_fix_main_false_return_detected_as_failure(orchestration_fixture, tmp_path):
+    """BUG TEST: When fix_main returns (False, ...), orchestrator should detect failure."""
+    import os
+    os.chdir(tmp_path)
+
+    # Create required files
+    (tmp_path / "prompts").mkdir(exist_ok=True)
+    (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+    (tmp_path / "pdd").mkdir(exist_ok=True)
+    (tmp_path / "pdd" / "calc.py").write_text("# code")
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "tests" / "test_calc.py").write_text("# test")
+    (tmp_path / "examples").mkdir(exist_ok=True)
+    (tmp_path / "examples" / "calc_example.py").write_text("# example")
+
+    mocks = orchestration_fixture
+    mocks['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # fix_main returns False as first element (failure)
+    mocks['fix_main'].return_value = (False, "", "", 3, 0.15, "gpt-4")
+
+    result = sync_orchestration(basename="calc", language="python")
+
+    # Should detect as failure, not success
+    assert 'fix' not in result.get('operations_completed', []), \
+        "BUG: fix_main returned False but was marked as completed"
 
 
 def test_auto_deps_cycle_detection_implementation():

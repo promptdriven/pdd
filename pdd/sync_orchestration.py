@@ -45,6 +45,7 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
+from . import DEFAULT_STRENGTH
 
 # --- Mock Helper Functions ---
 
@@ -319,7 +320,7 @@ def sync_orchestration(
     skip_tests: bool = False,
     log: bool = False,
     force: bool = False,
-    strength: float = 0.5,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time_param: float = 0.25,
     verbose: bool = False,
@@ -694,7 +695,7 @@ def sync_orchestration(
                             current_cost_ref[0] += result.get('cost', 0.0)
                         elif isinstance(result, tuple) and len(result) >= 3:
                             if operation == 'test': success = pdd_files['test'].exists()
-                            else: success = result[0] is not None
+                            else: success = bool(result[0])
                             cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
                             current_cost_ref[0] += cost
                         else:

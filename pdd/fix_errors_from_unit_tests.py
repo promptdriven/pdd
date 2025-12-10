@@ -244,10 +244,10 @@ def fix_errors_from_unit_tests(
         if verbose:
             console.print(f"[bold red]{error_msg}[/bold red]")
         write_to_error_file(error_file, error_msg)
-        return False, False, "", "", "", 0.0, ""
+        return False, False, "", "", "", 0.0, f"Error: ValidationError - {str(e)[:100]}"
     except Exception as e:
         error_msg = f"Error in fix_errors_from_unit_tests: {str(e)}"
         if verbose:
             console.print(f"[bold red]{error_msg}[/bold red]")
         write_to_error_file(error_file, error_msg)
-        return False, False, "", "", "", 0.0, ""
+        return False, False, "", "", "", 0.0, f"Error: {type(e).__name__}"
