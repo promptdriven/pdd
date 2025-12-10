@@ -295,7 +295,7 @@ def fix_error_loop(unit_test_file: str,
     
     # Determine success state immediately
     success = (fails == 0 and errors == 0 and warnings == 0)
-    
+
     # Track if tests were initially passing
     initially_passing = success
 
@@ -426,7 +426,7 @@ def fix_error_loop(unit_test_file: str,
         try:
             # Format the log for the LLM
             formatted_log = format_log_for_output(log_structure)
-            
+
             updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                 unit_test_contents,
                 code_contents,
