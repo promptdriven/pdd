@@ -746,8 +746,10 @@ def sync_orchestration(
                              pass
                     
                     if success and operation == 'fix':
-                        # If fix successful, assume passed. Else re-run.
-                        pass # (Logic simplified for brevity, real impl should keep it) 
+                        # Re-run tests to update run_report after successful fix
+                        # This prevents infinite loop by updating the state machine
+                        if pdd_files['test'].exists():
+                            _execute_tests_and_create_run_report(pdd_files['test'], basename, language, target_coverage) 
                     
                     if not success:
                         errors.append(f"Operation '{operation}' failed.")
