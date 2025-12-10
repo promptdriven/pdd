@@ -548,6 +548,73 @@ def test_func():
     # 5. Run second time -> SHOULD PASS
     # If module caching was active (old behavior), this would fail again.
     fails_2, errors_2, warnings_2, logs_2 = run_pytest_on_file(str(test_file))
-    
+
     assert fails_2 == 0, f"Test should have passed after update. Logs:\n{logs_2}"
+
+
+# ============================================================================
+# Bug Fix Tests - Model Name in Error Log
+# ============================================================================
+
+def test_error_log_includes_model_name(setup_files):
+    """BUG TEST: Error log should include model name for each fix attempt."""
+    files = setup_files
+
+    expected_model = "gpt-4-turbo"
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
+        mock_pytest.return_value = (1, 0, 0, "test failed")
+
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (False, False, "", "", "Analysis text", 0.1, expected_model)
+
+            fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=1,
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False
+            )
+
+    error_log_content = files["error_log"].read_text()
+    assert expected_model in error_log_content, \
+        f"BUG: Model name '{expected_model}' not in error log"
+
+
+def test_error_log_contains_analysis_and_model(setup_files):
+    """BUG TEST: Error log should have BOTH analysis AND model name."""
+    files = setup_files
+
+    analysis_text = "The test failed because X"
+    model_name = "claude-3-opus"
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
+        mock_pytest.return_value = (1, 0, 0, "pytest output")
+
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (False, False, "", "", analysis_text, 0.1, model_name)
+
+            fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="prompt.txt",
+                prompt="Test",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=1,
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False
+            )
+
+    content = files["error_log"].read_text()
+    assert analysis_text in content, "Analysis text missing"
+    assert model_name in content, "BUG: Model name was not included in log"
 

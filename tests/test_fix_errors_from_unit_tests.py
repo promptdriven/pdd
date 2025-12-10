@@ -97,7 +97,16 @@ def test_missing_prompt_templates(temp_error_file, mock_load_prompt_template):
         temperature=0.5
     )
 
-    assert result == (False, False, "", "", "", 0.0, "")
+    # Result should indicate failure with an error indicator
+    update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, cost, model_name = result
+    assert update_unit_test is False
+    assert update_code is False
+    assert fixed_unit_test == ""
+    assert fixed_code == ""
+    assert analysis == ""
+    assert cost == 0.0
+    # Now returns error indicator instead of empty string
+    assert "Error" in model_name, f"Expected error indicator, got: {model_name}"
 
 def test_llm_invoke_error(temp_error_file, mock_llm_invoke, mock_load_prompt_template):
     mock_llm_invoke.side_effect = Exception("LLM API error")
@@ -112,7 +121,16 @@ def test_llm_invoke_error(temp_error_file, mock_llm_invoke, mock_load_prompt_tem
         temperature=0.5
     )
 
-    assert result == (False, False, "", "", "", 0.0, "")
+    # Result should indicate failure with an error indicator
+    update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, cost, model_name = result
+    assert update_unit_test is False
+    assert update_code is False
+    assert fixed_unit_test == ""
+    assert fixed_code == ""
+    assert analysis == ""
+    assert cost == 0.0
+    # Now returns error indicator instead of empty string
+    assert "Error" in model_name, f"Expected error indicator, got: {model_name}"
 
 def test_invalid_error_file_path(mock_llm_invoke, mock_load_prompt_template, capsys):
     invalid_path = "/nonexistent/directory/errors.log"
@@ -475,3 +493,69 @@ class TestGetExtension:
     kwargs = second_call_args.kwargs
     assert kwargs['input_json']['unit_test_fix'] == analysis_result
     assert kwargs['output_pydantic'] == CodeFix
+
+
+# ============================================================================
+# Bug Fix Tests - Silent Exception Swallowing
+# ============================================================================
+
+def test_llm_exception_returns_error_indicator(temp_error_file, mock_llm_invoke, mock_load_prompt_template):
+    """BUG TEST: LLM exceptions should return distinguishable error, not silent tuple."""
+    mock_load_prompt_template.return_value = "mock template"
+    mock_llm_invoke.side_effect = RuntimeError("All candidate models failed")
+
+    result = fix_errors_from_unit_tests(
+        unit_test="def test_foo(): pass",
+        code="def foo(): pass",
+        prompt="Write a function",
+        error="AssertionError: expected 1",
+        error_file=temp_error_file,
+        strength=0.7,
+        temperature=0.0
+    )
+
+    _, _, _, _, _, _, model_name = result
+
+    # Should indicate error occurred, not be empty string
+    assert model_name != "", "BUG: model_name is empty on error"
+    assert "Error" in model_name, \
+        f"model_name should indicate error, got: {model_name}"
+
+
+def test_validation_error_returns_error_indicator(temp_error_file, mock_llm_invoke, mock_load_prompt_template):
+    """BUG TEST: ValidationError should return distinguishable error indicator."""
+    from pydantic import ValidationError
+
+    mock_load_prompt_template.return_value = "mock template"
+
+    # First call succeeds, second raises ValidationError
+    mock_llm_invoke.side_effect = [
+        {'result': "Analysis output", 'cost': 0.001, 'model_name': "gpt-4"},
+        ValidationError.from_exception_data("CodeFix", [])
+    ]
+
+    result = fix_errors_from_unit_tests(
+        unit_test="def test_foo(): pass",
+        code="def foo(): pass",
+        prompt="Write a function",
+        error="AssertionError",
+        error_file=temp_error_file,
+        strength=0.7,
+        temperature=0.0
+    )
+
+    _, _, _, _, _, _, model_name = result
+    assert "Error" in model_name, "ValidationError should produce error indicator"
+
+
+def test_error_indicator_distinguishable_from_success():
+    """Verify error indicator is distinguishable from normal success cases."""
+    # Normal success case
+    success_model_name = "gpt-4"
+
+    # Error case (after fix)
+    error_model_name = "Error: RuntimeError"
+
+    # Callers can check
+    assert not success_model_name.startswith("Error:")
+    assert error_model_name.startswith("Error:")
