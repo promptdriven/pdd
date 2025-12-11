@@ -977,6 +977,16 @@ EOSCRIPT
   fi
 fi
 
+# Use verified file for subsequent tests (better coverage)
+if [ -f "$VERIFY_CODE_OUTPUT" ]; then
+    cp "$VERIFY_CODE_OUTPUT" "$MATH_SCRIPT"
+    log "Adopted verified_simple_math.py as simple_math.py for subsequent tests"
+elif [ -f "$ORIGINAL_MATH_SCRIPT" ]; then
+    # Fallback for individual test runs where verify didn't run
+    cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
+    log "Restored original simple_math.py (verified file not available)"
+fi
+
 # 8. Parameterized generate (-e/--env)
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
   log "8. Testing parameterized 'generate' with -e/--env"
