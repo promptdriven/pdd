@@ -110,7 +110,7 @@ def run_pytest_and_capture_output(test_file: str) -> dict:
         # If return code is 2, it indicates a pytest error
         if return_code == 2:
             errors = 1
-        
+
         return {
             "test_file": test_file,
             "test_results": [

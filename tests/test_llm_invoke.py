@@ -5,7 +5,7 @@ import os
 import pandas as pd
 import json # Added for Pydantic parsing tests
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 from pydantic import BaseModel, ValidationError
 from collections import namedtuple
 from pdd.llm_invoke import llm_invoke
@@ -999,3 +999,85 @@ def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, 
                     assert isinstance(response['result'], SampleOutputModel)
                     assert response['result'].field1 == "test_value"
                     assert response['result'].field2 == 42
+
+
+# --- Tests for Per-Model Vertex AI Location Override ---
+
+def test_vertex_location_override_from_csv(mock_set_llm_cache):
+    """Test that per-model location in CSV overrides VERTEX_LOCATION env var."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        # Create mock model with location='us-central1'
+        mock_data = [{
+            'provider': 'Google',
+            'model': 'vertex_ai/deepseek-ai/deepseek-r1-0528-maas',
+            'input': 0.55, 'output': 2.19,
+            'coding_arena_elo': 1391,
+            'structured_output': False,
+            'base_url': '',
+            'api_key': 'VERTEX_CREDENTIALS',
+            'reasoning_type': 'none',
+            'max_reasoning_tokens': 0,
+            'location': 'us-central1'  # Per-model location override
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        # Set env vars - VERTEX_LOCATION is 'global' but should be overridden
+        env_vars = {
+            'VERTEX_CREDENTIALS': '/fake/path.json',
+            'VERTEX_PROJECT': 'test-project',
+            'VERTEX_LOCATION': 'global'  # This should be overridden by CSV
+        }
+
+        with patch.dict(os.environ, env_vars):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                # Use mock_open for proper file context manager behavior
+                m = mock_open(read_data='{}')
+                with patch('builtins.open', m):
+                    with patch('pdd.llm_invoke.json.load', return_value={}):
+                        llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                # Assert vertex_location was set to 'us-central1', not 'global'
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('vertex_location') == 'us-central1'
+
+
+def test_vertex_location_fallback_when_empty(mock_set_llm_cache):
+    """Test that empty location in CSV falls back to VERTEX_LOCATION env var."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        # Create mock model with NO location (empty string)
+        mock_data = [{
+            'provider': 'Google',
+            'model': 'vertex_ai/gemini-2.5-flash',
+            'input': 0.15, 'output': 0.6,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'VERTEX_CREDENTIALS',
+            'reasoning_type': 'effort',
+            'max_reasoning_tokens': 0,
+            'location': ''  # Empty - should fall back to env var
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        env_vars = {
+            'VERTEX_CREDENTIALS': '/fake/path.json',
+            'VERTEX_PROJECT': 'test-project',
+            'VERTEX_LOCATION': 'global'  # Should use this when CSV location is empty
+        }
+
+        with patch.dict(os.environ, env_vars):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                m = mock_open(read_data='{}')
+                with patch('builtins.open', m):
+                    with patch('pdd.llm_invoke.json.load', return_value={}):
+                        llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                # Assert vertex_location falls back to env var 'global'
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('vertex_location') == 'global'
