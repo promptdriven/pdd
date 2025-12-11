@@ -550,7 +550,8 @@ def sync_orchestration(
                         verbose=verbose, quiet=quiet, output_cost=output_cost,
                         review_examples=review_examples, local=local, budget=budget - current_cost_ref[0],
                         max_attempts=max_attempts, target_coverage=target_coverage,
-                        confirm_callback=get_confirm_callback()
+                        confirm_callback=get_confirm_callback(),
+                        context=context_override
                     )
                     
                     result = {}
