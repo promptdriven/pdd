@@ -548,6 +548,160 @@ def test_func():
     # 5. Run second time -> SHOULD PASS
     # If module caching was active (old behavior), this would fail again.
     fails_2, errors_2, warnings_2, logs_2 = run_pytest_on_file(str(test_file))
-    
+
     assert fails_2 == 0, f"Test should have passed after update. Logs:\n{logs_2}"
+
+
+# ============================================================================
+# Bug Fix Tests - Model Name in Error Log
+# ============================================================================
+
+def test_error_log_includes_model_name(setup_files):
+    """BUG TEST: Error log should include model name for each fix attempt."""
+    files = setup_files
+
+    expected_model = "gpt-4-turbo"
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
+        mock_pytest.return_value = (1, 0, 0, "test failed")
+
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (False, False, "", "", "Analysis text", 0.1, expected_model)
+
+            fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="prompt.txt",
+                prompt="Test prompt",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=1,
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False
+            )
+
+    error_log_content = files["error_log"].read_text()
+    assert expected_model in error_log_content, \
+        f"BUG: Model name '{expected_model}' not in error log"
+
+
+def test_error_log_contains_analysis_and_model(setup_files):
+    """BUG TEST: Error log should have BOTH analysis AND model name."""
+    files = setup_files
+
+    analysis_text = "The test failed because X"
+    model_name = "claude-3-opus"
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
+        mock_pytest.return_value = (1, 0, 0, "pytest output")
+
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            mock_fix.return_value = (False, False, "", "", analysis_text, 0.1, model_name)
+
+            fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="prompt.txt",
+                prompt="Test",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=1,
+                budget=10.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=False
+            )
+
+    content = files["error_log"].read_text()
+    assert analysis_text in content, "Analysis text missing"
+    assert model_name in content, "BUG: Model name was not included in log"
+
+
+# ============================================================================
+# Bug Fix Tests - Run Report Integration (Infinite Fix Loop Prevention)
+# ============================================================================
+
+def test_run_report_discrepancy_causes_infinite_loop_bug(setup_files):
+    """
+    BUG REPRODUCTION: Demonstrates the infinite fix loop bug.
+
+    When sync_orchestration's run_report shows tests_failed > 0,
+    but fix_error_loop's own run_pytest_on_file returns 0 failures,
+    fix_error_loop incorrectly returns success=True, cost=0.0.
+
+    This causes sync_orchestration to think fix succeeded, but tests
+    still fail, triggering an infinite loop.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
+        # Simulate the discrepancy: run_pytest_on_file returns 0 failures
+        # (even though sync_orchestration's run_report showed 3 failures)
+        mock_pytest.return_value = (0, 0, 0, "All tests passed")
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            agentic_fallback=False
+        )
+
+    # BUG DOCUMENTED: Returns success=True, cost=0.0 without invoking LLM
+    # This is correct behavior IF tests genuinely pass, but when there's
+    # a discrepancy with the caller's run_report, it causes infinite loops
+    assert success is True
+    assert cost == 0.0
+    assert model == ""
+
+
+# ============================================================================
+# Bug Fix Tests - Context Override in Sync Orchestration
+# ============================================================================
+
+def test_sync_orchestration_passes_context_to_mock_context():
+    """
+    BUG FIX TEST: sync_orchestration._create_mock_context must include
+    context parameter so that downstream commands (fix_main, etc.) receive
+    the correct .pddrc context.
+
+    The bug was that --context backend was passed to sync_orchestration but
+    not forwarded to _create_mock_context, causing fix_main to use 'default'
+    context instead of 'backend', resulting in wrong file paths and infinite loops.
+    """
+    from pdd.sync_orchestration import _create_mock_context
+
+    # Test that context is properly passed to the mock context
+    ctx = _create_mock_context(
+        force=False,
+        strength=0.5,
+        context='backend'
+    )
+
+    # The context should be available in ctx.obj
+    assert ctx.obj.get('context') == 'backend', \
+        "BUG: context not passed to _create_mock_context - this causes infinite fix loops!"
+
+    # Also test with None (should work for backward compatibility)
+    ctx_none = _create_mock_context(force=False, strength=0.5)
+    assert ctx_none.obj.get('context') is None
+
+
+def test_sync_orchestration_context_none_by_default():
+    """
+    Verify that when context is not provided, it defaults to None
+    (which allows construct_paths to auto-detect based on current directory).
+    """
+    from pdd.sync_orchestration import _create_mock_context
+
+    ctx = _create_mock_context(force=False)
+    assert ctx.obj.get('context') is None
 

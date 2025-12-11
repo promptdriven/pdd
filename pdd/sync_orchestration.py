@@ -45,6 +45,7 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
+from . import DEFAULT_STRENGTH
 
 # --- Mock Helper Functions ---
 
@@ -186,7 +187,13 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
             failed_match = re.search(r'(\d+) failed', stdout)
             if failed_match:
                 tests_failed = int(failed_match.group(1))
-        
+
+        # Parse errors (fixture/setup failures) - add to failed count
+        if 'error' in stdout:
+            error_match = re.search(r'(\d+) error', stdout)
+            if error_match:
+                tests_failed += int(error_match.group(1))
+
         coverage_match = re.search(r'TOTAL.*?(\d+)%', stdout)
         if not coverage_match:
             coverage_match = re.search(r'(\d+)%\s*$', stdout, re.MULTILINE)
@@ -313,7 +320,7 @@ def sync_orchestration(
     skip_tests: bool = False,
     log: bool = False,
     force: bool = False,
-    strength: float = 0.5,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time_param: float = 0.25,
     verbose: bool = False,
@@ -543,7 +550,8 @@ def sync_orchestration(
                         verbose=verbose, quiet=quiet, output_cost=output_cost,
                         review_examples=review_examples, local=local, budget=budget - current_cost_ref[0],
                         max_attempts=max_attempts, target_coverage=target_coverage,
-                        confirm_callback=get_confirm_callback()
+                        confirm_callback=get_confirm_callback(),
+                        context=context_override
                     )
                     
                     result = {}
@@ -688,7 +696,7 @@ def sync_orchestration(
                             current_cost_ref[0] += result.get('cost', 0.0)
                         elif isinstance(result, tuple) and len(result) >= 3:
                             if operation == 'test': success = pdd_files['test'].exists()
-                            else: success = result[0] is not None
+                            else: success = bool(result[0])
                             cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
                             current_cost_ref[0] += cost
                         else:
@@ -739,8 +747,10 @@ def sync_orchestration(
                              pass
                     
                     if success and operation == 'fix':
-                        # If fix successful, assume passed. Else re-run.
-                        pass # (Logic simplified for brevity, real impl should keep it) 
+                        # Re-run tests to update run_report after successful fix
+                        # This prevents infinite loop by updating the state machine
+                        if pdd_files['test'].exists():
+                            _execute_tests_and_create_run_report(pdd_files['test'], basename, language, target_coverage) 
                     
                     if not success:
                         errors.append(f"Operation '{operation}' failed.")

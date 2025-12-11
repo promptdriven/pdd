@@ -1466,7 +1466,14 @@ def llm_invoke(
             if is_vertex_model and api_key_name_from_csv == 'VERTEX_CREDENTIALS':
                 credentials_file_path = os.getenv("VERTEX_CREDENTIALS") # Path from env var
                 vertex_project_env = os.getenv("VERTEX_PROJECT")
-                vertex_location_env = os.getenv("VERTEX_LOCATION")
+                # Check for per-model location override, fall back to env var
+                model_location = model_info.get('location')
+                if pd.notna(model_location) and str(model_location).strip():
+                    vertex_location_env = str(model_location).strip()
+                    if verbose:
+                        logger.info(f"[INFO] Using per-model location override: '{vertex_location_env}' for model '{model_name_litellm}'")
+                else:
+                    vertex_location_env = os.getenv("VERTEX_LOCATION")
 
                 if credentials_file_path and vertex_project_env and vertex_location_env:
                     try:
@@ -1515,9 +1522,16 @@ def llm_invoke(
                     
                     # If this model is Vertex AI AND uses a direct API key string (not VERTEX_CREDENTIALS from CSV),
                     # also pass project and location from env vars.
-                    if is_vertex_model: 
+                    if is_vertex_model:
                         vertex_project_env = os.getenv("VERTEX_PROJECT")
-                        vertex_location_env = os.getenv("VERTEX_LOCATION")
+                        # Check for per-model location override, fall back to env var
+                        model_location = model_info.get('location')
+                        if pd.notna(model_location) and str(model_location).strip():
+                            vertex_location_env = str(model_location).strip()
+                            if verbose:
+                                logger.info(f"[INFO] Using per-model location override: '{vertex_location_env}' for model '{model_name_litellm}'")
+                        else:
+                            vertex_location_env = os.getenv("VERTEX_LOCATION")
                         if vertex_project_env and vertex_location_env:
                             litellm_kwargs["vertex_project"] = vertex_project_env
                             litellm_kwargs["vertex_location"] = vertex_location_env
@@ -1595,6 +1609,27 @@ def llm_invoke(
                         }
                     
                     litellm_kwargs["response_format"] = response_format
+
+                    # LM Studio requires "json_schema" format, not "json_object"
+                    # Use extra_body to bypass litellm.drop_params stripping the schema
+                    if is_lm_studio and response_format and response_format.get("type") == "json_object":
+                        schema = response_format.get("response_schema", {})
+                        lm_studio_response_format = {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "response",
+                                "strict": True,
+                                "schema": schema
+                            }
+                        }
+                        # Use extra_body to bypass drop_params - passes directly to API
+                        litellm_kwargs["extra_body"] = {"response_format": lm_studio_response_format}
+                        # Remove from regular response_format to avoid conflicts
+                        if "response_format" in litellm_kwargs:
+                            del litellm_kwargs["response_format"]
+                        if verbose:
+                            logger.info(f"[INFO] Using extra_body for LM Studio response_format to bypass drop_params")
+
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
                     # And potentially enable client-side validation:

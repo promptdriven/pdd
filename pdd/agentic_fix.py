@@ -298,7 +298,7 @@ def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         ["codex", "exec", "--skip-git-repo-check", full],
         ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", full],
     ]
-    per_attempt = max(12, min(45, total_timeout // 2))
+    per_attempt = 300
     last = None
     for args in variants:
         try:
@@ -338,7 +338,7 @@ def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, lab
     variants = [
         ["claude", "-p", "--dangerously-skip-permissions", full],
     ]
-    per_attempt = max(8, min(30, total_timeout // 2))
+    per_attempt = 300
     last: Optional[subprocess.CompletedProcess] = None
     for args in variants:
         try:
@@ -378,7 +378,7 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
     variants = [
         ["gemini", "-p", full],
     ]
-    per_attempt = max(12, min(45, total_timeout // 2))
+    per_attempt = 300
     last = None
     for args in variants:
         try:
