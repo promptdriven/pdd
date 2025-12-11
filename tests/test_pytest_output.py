@@ -109,25 +109,24 @@ def test_run_pytest_and_capture_output_with_warnings() -> None:
 
 
 # Test cases for save_output_to_json
-def test_save_output_to_json_successful() -> None:
+def test_save_output_to_json_successful(tmp_path) -> None:
     """Test case: successful save to JSON."""
-    output_file = os.path.join(OUTPUT_DIR, "pytest_output.json")
+    output_file = tmp_path / "pytest_output.json"
     test_data = {"test": "data"}
-    save_output_to_json(test_data, output_file)
-    assert os.path.exists(output_file)
+    save_output_to_json(test_data, str(output_file))
+    assert output_file.exists()
     with open(output_file, "r") as f:
         loaded_data = json.load(f)
     assert loaded_data == test_data
-    os.remove(output_file)
 
 
-def test_save_output_to_json_exception(capsys) -> None:
+def test_save_output_to_json_exception(tmp_path, capsys) -> None:
     """Test case: exception during save to JSON."""
     # Mock the json.dump function to raise an exception
     with patch("json.dump", side_effect=Exception("Test Exception")):
-        output_file = os.path.join(OUTPUT_DIR, "pytest_output.json")
+        output_file = tmp_path / "pytest_output.json"
         test_data = {"test": "data"}
-        save_output_to_json(test_data, output_file)
+        save_output_to_json(test_data, str(output_file))
         captured = capsys.readouterr()
         assert "Error saving output to JSON: Test Exception" in captured.out
 

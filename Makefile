@@ -611,6 +611,8 @@ publish-public:
 	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_REPO_DIR)/docs/
 	@echo "Copying prompting guide to public repo"
 	@cp docs/prompting_guide.md $(PUBLIC_PDD_REPO_DIR)/docs/
+	@echo "Copying onboarding guide to public repo"
+	@cp docs/ONBOARDING.md $(PUBLIC_PDD_REPO_DIR)/docs/
 	@echo "Copying goldilocks prompt image to public repo"
 	@cp docs/goldilocks_prompt.jpeg $(PUBLIC_PDD_REPO_DIR)/docs/
 	@echo "Copying demo video to public repo"
@@ -729,6 +731,8 @@ publish-public-cap:
 	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
 	@echo "Copying prompting guide to CAP public repo"
 	@cp docs/prompting_guide.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
+	@echo "Copying onboarding guide to CAP public repo"
+	@cp docs/ONBOARDING.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
 	@echo "Copying goldilocks prompt image to CAP public repo"
 	@cp docs/goldilocks_prompt.jpeg $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
 	@echo "Copying demo video to CAP public repo"

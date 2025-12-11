@@ -100,6 +100,8 @@ def format_log_for_output(log_structure):
         # Fix attempt with XML tags
         if iteration.get("fix_attempt"):
             formatted_text += f"<fix_attempt iteration={iteration['number']}>\n"
+            if iteration.get("model_name"):
+                formatted_text += f"Model: {iteration['model_name']}\n"
             formatted_text += f"{iteration['fix_attempt']}\n"
             formatted_text += "</fix_attempt>\n\n"
         
@@ -293,7 +295,7 @@ def fix_error_loop(unit_test_file: str,
     
     # Determine success state immediately
     success = (fails == 0 and errors == 0 and warnings == 0)
-    
+
     # Track if tests were initially passing
     initially_passing = success
 
@@ -424,7 +426,7 @@ def fix_error_loop(unit_test_file: str,
         try:
             # Format the log for the LLM
             formatted_log = format_log_for_output(log_structure)
-            
+
             updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                 unit_test_contents,
                 code_contents,
@@ -439,6 +441,7 @@ def fix_error_loop(unit_test_file: str,
             
             # Update the fix attempt in the structured log
             log_structure["iterations"][-1]["fix_attempt"] = analysis
+            log_structure["iterations"][-1]["model_name"] = model_name
         except Exception as e:
             rprint(f"[red]Error during fix_errors_from_unit_tests call:[/red] {e}")
             break

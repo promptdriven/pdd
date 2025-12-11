@@ -1,16 +1,59 @@
+## v0.0.81 (2025-12-11)
+
+### Feat
+
+- implement fallback mechanism for verified file in regression tests to enhance test coverage
+- add onboarding guide to public and CAP repositories in the publish process
+- add location column to LLM model configuration CSV for enhanced model invocation context
+- add LLM model configuration CSV and implement per-model location override in invocation logic; enhance tests for location handling
+- add model range calculation to improve strength sampling; refactor main function to utilize calculated midpoints for model invocations
+
+### Fix
+
+- pass context parameter to sync_orchestration to prevent infinite loops; add tests for context handling and bug reproduction scenarios
+- add regression tests to ensure run_report is updated after successful fix operations; prevent infinite fix loops by verifying test file existence before updating run_report
+- clean up whitespace in error handling and logging functions; improve clarity in sync orchestration logic for test execution
+- include model name in error logs for fix attempts; update error handling to return distinguishable error indicators in unit tests
+- enhance pytest output parsing to count errors as failures; add regression tests to verify correct error handling in test execution
+
 ## v0.0.80 (2025-12-09)
 
 ### Feat
 
-- implement `report-core` command for streamlined bug reporting with core dumps; enhance core dump functionality to include file tracking and terminal output in GitHub issues
-- add performance optimization and prompt caching checklists to documentation for reducing cold-start times and LLM costs
-- add check-deps target to Makefile for dependency synchronization; update dependencies in pyproject.toml and requirements.txt
+- **`report-core` Command:** New `pdd report-core` command for streamlined bug reporting. Automatically finds the most recent core dump, creates GitHub issues with terminal output and tracked file contents, and supports both browser-based (default) and API-based submission (`--api` flag). API mode creates private GitHub Gists containing all relevant files and links them in the issue body. Authenticates via standard methods: `gh` CLI, `GITHUB_TOKEN`, `GH_TOKEN`, or `PDD_GITHUB_TOKEN` environment variables. 
+
+- **Core Dump Enhancements:** Core dumps now capture terminal output (stdout/stderr) with ANSI code stripping for clean logs. File tracking includes content of all files read/written during execution, plus auto-inclusion of relevant `.pdd/meta/` files and PDD config files. Added `OutputCapture` class that acts as a tee to capture output while still displaying it normally. 
+
+Thanks to Jiamin Cai for your contributions on the report core and core dump enhancements!
+
+- **Dependency Synchronization Tooling:** Added `make check-deps` target with `scripts/check_deps.py` to verify that `pyproject.toml` dependencies match `requirements.txt`. The `make release` target now runs this check automatically before version bumping.
+
+- **Documentation Checklists:** Added comprehensive checklists for performance optimization (`docs/checklists/performance-optimization.md`) targeting cold-start reduction from ~1.5s to ~0.3-0.4s, and prompt caching implementation (`docs/checklists/prompt-caching-implementation.md`) for reducing LLM costs.
 
 ### Fix
 
-- update temperature range in documentation and validation to allow values between 0 and 2; enhance workflow completion checks to ensure proper validation of generated code
-- ensure stale run_report is deleted after code generation to enforce crash/verify validation; add regression test to confirm behavior
-- add missing 'textual' dependency to pyproject.toml to resolve installation issues
+- **Workflow Completion Validation:** Fixed a critical bug where newly generated code would incorrectly be marked as "workflow complete" without crash/verify validation. `_is_workflow_complete()` now requires that `run_report` exists with `exit_code == 0`, and verifies that the `verify` or `test` command has been executed (unless `skip_verify` is set). This prevents the sync workflow from prematurely declaring success.
+
+- **Stale Run Report Cleanup:** After code generation (`generate` operation), the stale `run_report` file is now deleted. This ensures crash/verify validation is always required for freshly generated code, closing a gap where old validation results could incorrectly pass new code.
+
+- **Crash Retry on Failure:** Fixed bug where failed crash fixes (exit_code != 0) would incorrectly proceed to verify. Now properly retries the crash operation when the fix didn't work.
+
+- **Temperature Range Validation:** Updated validation to allow temperature values between 0 and 2 (was incorrectly limited to 0-1). Error messages updated to reflect correct ranges: "Strength and time must be between 0 and 1. Temperature must be between 0 and 2."
+
+- **LiteLLM Responses API:** Switched GPT-5 calls from direct OpenAI API to LiteLLM's `responses()` function for better abstraction. Fixed structured output handling to use `text.format` with `json_schema` and added `additionalProperties: false` for strict mode compliance. Added JSON repair fallback for Pydantic parsing failures.
+
+### Deps
+
+- Added `python-dotenv==1.1.0`, `PyYAML==6.0.1`, `jsonschema==4.23.0`, and `z3-solver` to main dependencies
+- Moved `httpx==0.28.1` to dev dependencies
+- Reorganized `requirements.txt` with clear production/dev sections
+
+### Tests
+
+- Added comprehensive test coverage for core dump file tracking and terminal output capture
+- Added tests for `report-core` command including gist creation and GitHub issue posting
+- Added regression tests for workflow completion checks ensuring generated code requires validation
+- Expanded sync determine operation tests for crash retry and verify completion scenarios
 
 ## v0.0.79 (2025-12-08)
 
