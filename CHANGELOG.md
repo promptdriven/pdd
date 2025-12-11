@@ -2,19 +2,20 @@
 
 ### Feat
 
-- implement fallback mechanism for verified file in regression tests to enhance test coverage
-- add onboarding guide to public and CAP repositories in the publish process
-- add location column to LLM model configuration CSV for enhanced model invocation context
-- add LLM model configuration CSV and implement per-model location override in invocation logic; enhance tests for location handling
-- add model range calculation to improve strength sampling; refactor main function to utilize calculated midpoints for model invocations
+- **LLM Location Override:** Added `location` column to `data/llm_model.csv` enabling per-model Vertex AI region configuration. Models like `deepseek-r1-0528-maas` can now specify a region (e.g., `us-central1`) that overrides the default `VERTEX_LOCATION` environment variable. The `llm_invoke` module detects and uses this per-model location for both credential-based and API-key-based Vertex AI calls.
+- **LM Studio JSON Schema Support:** Added `extra_body` workaround for LM Studio to properly pass `json_schema` response format, bypassing LiteLLM's `drop_params` behavior that was stripping the schema.
+- **Regression Test Fallback:** Regression tests now copy the verified output file for subsequent tests when available, with automatic fallback to the original file when the verify step hasn't run.
+- **Onboarding Guide Publishing:** Added onboarding guide to public and CAP repositories in the publish process.
+- **Model Range Calculation:** Added midpoint calculation for strength sampling to improve model invocation distribution.
 
 ### Fix
 
-- pass context parameter to sync_orchestration to prevent infinite loops; add tests for context handling and bug reproduction scenarios
-- add regression tests to ensure run_report is updated after successful fix operations; prevent infinite fix loops by verifying test file existence before updating run_report
-- clean up whitespace in error handling and logging functions; improve clarity in sync orchestration logic for test execution
-- include model name in error logs for fix attempts; update error handling to return distinguishable error indicators in unit tests
-- enhance pytest output parsing to count errors as failures; add regression tests to verify correct error handling in test execution
+- **Infinite Fix Loop Prevention:** Fixed critical bug where `sync_orchestration` failed to pass the `context` parameter to nested operations, causing infinite loops when context-specific configuration was needed. Added explicit test re-execution after successful fix operations to update `run_report` state.
+- **Run Report Stale State Bug:** After a successful fix operation, the orchestrator now explicitly re-runs tests via `_execute_tests_and_create_run_report()` to update the state machine. Previously, stale `run_report` data caused the sync to incorrectly repeat fix operations.
+- **Pytest Error Parsing:** Fixed `_execute_tests_and_create_run_report()` to count pytest ERRORS (fixture/setup failures) in addition to FAILURES. Previously, output like "1 passed, 10 errors" was incorrectly recorded as `tests_failed=0`.
+- **Boolean False Detection Bug:** Changed `result[0] is not None` to `bool(result[0])` when checking fix operation success. Previously, `fix_main` returning `(False, ...)` was incorrectly treated as success because `False is not None` evaluates to `True`.
+- **Default Strength Constant:** Changed hardcoded `strength=0.5` default to use `DEFAULT_STRENGTH` constant (0.75) for consistency.
+- **Model Name in Error Logs:** Fix attempt logs now include the model name used. Error handling returns distinguishable error indicators (e.g., `"Error: ValidationError - ..."`) instead of empty strings.
 
 ## v0.0.80 (2025-12-09)
 
