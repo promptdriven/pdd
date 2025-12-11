@@ -1606,3 +1606,199 @@ def test_passes():
         assert report.tests_failed >= 2, (
             f"Expected tests_failed >= 2 (1 failed + 1 error), got {report.tests_failed}"
         )
+
+
+# --- Run Report Update After Fix Regression Tests ---
+
+class TestRunReportUpdateAfterFix:
+    """
+    Regression tests for bug: run_report not updated after successful fix operation.
+
+    Bug scenario:
+    1. sync_determine_operation sees test failures in run_report → returns 'fix'
+    2. fix operation runs and succeeds
+    3. BUG: run_report was NOT updated after fix (stub just did `pass`)
+    4. Next iteration: sync_determine_operation sees same failures → returns 'fix' again
+    5. Loop repeats 5 times until infinite loop detection breaks
+
+    Fix: After successful fix operation, call _execute_tests_and_create_run_report()
+    to update the run_report with new test results.
+    """
+
+    def test_fix_operation_updates_run_report(self, orchestration_fixture, tmp_path):
+        """
+        Regression test: After successful fix, run_report should be updated.
+
+        This test verifies that _execute_tests_and_create_run_report is called
+        after a successful fix operation to prevent infinite fix loops.
+        """
+        import os
+        from pathlib import Path
+
+        os.chdir(tmp_path)
+
+        # Create required files
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        test_file = tmp_path / "tests" / "test_calc.py"
+        test_file.write_text("def test_add(): assert True")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        # Sequence: fix succeeds, then all_synced
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='Test failures detected'),
+            SyncDecision(operation='all_synced', reason='All synced after fix'),
+        ]
+
+        # fix_main returns success
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        # Mock _execute_tests_and_create_run_report to track if it's called after fix
+        with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests:
+            # Configure path mock to return our test file
+            mocks['get_pdd_file_paths'].return_value = {
+                'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+                'code': tmp_path / 'pdd' / 'calc.py',
+                'example': tmp_path / 'examples' / 'calc_example.py',
+                'test': test_file
+            }
+
+            result = sync_orchestration(basename="calc", language="python")
+
+        # KEY ASSERTION: _execute_tests_and_create_run_report should be called after fix
+        assert mock_exec_tests.called, (
+            "REGRESSION BUG: _execute_tests_and_create_run_report was not called after "
+            "successful fix operation. This causes infinite fix loops because run_report "
+            "is not updated with new test results."
+        )
+
+        # Verify fix was marked as completed
+        assert 'fix' in result.get('operations_completed', []), (
+            "Fix operation should be in completed operations"
+        )
+
+    def test_fix_operation_skips_test_update_when_test_file_missing(self, orchestration_fixture, tmp_path):
+        """
+        Verify that run_report update is skipped when test file doesn't exist.
+
+        This prevents errors when fix is run but no test file has been generated yet.
+        """
+        import os
+
+        os.chdir(tmp_path)
+
+        # Create required files but NOT the test file
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+        # Note: NOT creating test file
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='Test failures detected'),
+            SyncDecision(operation='all_synced', reason='Done'),
+        ]
+
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        # Configure path mock - test file path that doesn't exist
+        test_file_path = tmp_path / 'tests' / 'test_calc.py'
+        mocks['get_pdd_file_paths'].return_value = {
+            'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+            'code': tmp_path / 'pdd' / 'calc.py',
+            'example': tmp_path / 'examples' / 'calc_example.py',
+            'test': test_file_path  # This path doesn't exist
+        }
+
+        with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests:
+            result = sync_orchestration(basename="calc", language="python")
+
+        # Should NOT call _execute_tests_and_create_run_report when test file is missing
+        assert not mock_exec_tests.called, (
+            "Should not call _execute_tests_and_create_run_report when test file doesn't exist"
+        )
+
+        # But fix should still complete successfully
+        assert result['success'] is True
+        assert 'fix' in result.get('operations_completed', [])
+
+    def test_infinite_fix_loop_prevented_by_run_report_update(self, orchestration_fixture, tmp_path):
+        """
+        Integration test: Verify that the fix prevents infinite fix loops.
+
+        Before the fix:
+        - fix → run_report unchanged → fix → run_report unchanged → ... (5 times)
+
+        After the fix:
+        - fix → run_report updated → all_synced (or next appropriate operation)
+        """
+        import os
+        import json
+        from pathlib import Path
+
+        os.chdir(tmp_path)
+
+        # Create required files
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        test_file = tmp_path / "tests" / "test_calc.py"
+        test_file.write_text("def test_add(): assert True")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True, exist_ok=True)
+
+        # Create initial run_report with failures (what triggers 'fix' operation)
+        run_report = {
+            "timestamp": "2023-01-01T00:00:00Z",
+            "exit_code": 1,
+            "tests_passed": 10,
+            "tests_failed": 3,  # These failures trigger 'fix'
+            "coverage": 80.0
+        }
+        (tmp_path / ".pdd" / "meta" / "calc_python_run.json").write_text(json.dumps(run_report))
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        # The fix should only need one 'fix' operation, then progress to all_synced
+        # (because run_report gets updated after fix)
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='3 test failures detected'),
+            SyncDecision(operation='all_synced', reason='All tests pass after fix'),
+        ]
+
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        mocks['get_pdd_file_paths'].return_value = {
+            'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+            'code': tmp_path / 'pdd' / 'calc.py',
+            'example': tmp_path / 'examples' / 'calc_example.py',
+            'test': test_file
+        }
+
+        result = sync_orchestration(basename="calc", language="python", max_attempts=3)
+
+        # Should complete with just 1 fix operation (not 5 due to infinite loop)
+        assert result['success'] is True
+        assert result['operations_completed'].count('fix') == 1, (
+            f"Expected exactly 1 fix operation, got {result['operations_completed'].count('fix')}. "
+            "If more than 1, the infinite loop prevention may not be working."
+        )
