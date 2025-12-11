@@ -872,9 +872,72 @@ def test_auto_deps_cycle_detection_logic():
     assert len(recent_auto_deps_edge) == 2, "Should detect cycle with exactly 2 auto-deps"
     
     # Test non-cycle case: single auto-deps should not trigger
-    operation_history_normal = ['generate', 'example', 'auto-deps'] 
+    operation_history_normal = ['generate', 'example', 'auto-deps']
     recent_auto_deps_normal = [op for op in operation_history_normal[-3:] if op == 'auto-deps']
     assert len(recent_auto_deps_normal) == 1, "Should not detect cycle with single auto-deps"
+
+
+# ============================================================================
+# Bug Fix Tests
+# ============================================================================
+
+def test_default_strength_uses_constant():
+    """BUG TEST: sync_orchestration should use DEFAULT_STRENGTH (0.75), not 0.5."""
+    import inspect
+    from pdd.sync_orchestration import sync_orchestration
+    from pdd import DEFAULT_STRENGTH
+
+    sig = inspect.signature(sync_orchestration)
+    strength_param = sig.parameters.get('strength')
+
+    assert strength_param is not None, "strength parameter should exist"
+    assert strength_param.default == DEFAULT_STRENGTH, \
+        f"BUG: strength default is {strength_param.default}, should be {DEFAULT_STRENGTH}"
+
+
+def test_boolean_false_is_not_none_bug():
+    """Demonstrate the bug: False is not None evaluates to True."""
+    result_tuple = (False, "", "", 1, 0.1, "model")
+
+    # This is the buggy check
+    buggy_success = result_tuple[0] is not None  # True! BUG!
+
+    # This is the correct check
+    correct_success = bool(result_tuple[0])  # False, correct
+
+    assert buggy_success == True, "Demonstrating the bug exists"
+    assert correct_success == False, "Demonstrating the fix works"
+
+
+def test_fix_main_false_return_detected_as_failure(orchestration_fixture, tmp_path):
+    """BUG TEST: When fix_main returns (False, ...), orchestrator should detect failure."""
+    import os
+    os.chdir(tmp_path)
+
+    # Create required files
+    (tmp_path / "prompts").mkdir(exist_ok=True)
+    (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+    (tmp_path / "pdd").mkdir(exist_ok=True)
+    (tmp_path / "pdd" / "calc.py").write_text("# code")
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "tests" / "test_calc.py").write_text("# test")
+    (tmp_path / "examples").mkdir(exist_ok=True)
+    (tmp_path / "examples" / "calc_example.py").write_text("# example")
+
+    mocks = orchestration_fixture
+    mocks['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # fix_main returns False as first element (failure)
+    mocks['fix_main'].return_value = (False, "", "", 3, 0.15, "gpt-4")
+
+    result = sync_orchestration(basename="calc", language="python")
+
+    # Should detect as failure, not success
+    assert 'fix' not in result.get('operations_completed', []), \
+        "BUG: fix_main returned False but was marked as completed"
 
 
 def test_auto_deps_cycle_detection_implementation():
@@ -1423,4 +1486,319 @@ class TestGenerateClearsStaleRunReport:
             "to force crash/verify validation of newly generated code. "
             "Without this, sync incorrectly skips validation because old run_report "
             "shows exit_code=0 from previous (now stale) code."
+        )
+
+
+# --- Pytest Error Parsing Regression Tests ---
+
+class TestPytestErrorParsing:
+    """
+    Regression tests for pytest error parsing bug.
+
+    Bug: sync_orchestration.py didn't parse "N errors" from pytest output.
+    When pytest reports "1 passed, 10 errors", the sync recorded:
+      tests_passed=1, tests_failed=0 (missing errors!)
+
+    Fix: Added error parsing in _execute_tests_and_create_run_report() to
+    count pytest ERRORS (fixture/setup failures) as part of tests_failed.
+    """
+
+    def test_execute_tests_counts_pytest_errors(self, tmp_path, monkeypatch):
+        """
+        Regression test: Verify _execute_tests_and_create_run_report counts pytest ERRORS.
+
+        This test creates a file with a broken fixture that causes pytest to report
+        ERRORS (not failures). The production code must count these errors.
+
+        Before fix: tests_failed=0 (BUG - errors not counted)
+        After fix: tests_failed>=1 (errors added to failed count)
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Change cwd to tmp_path so relative_to() works in the production code
+        monkeypatch.chdir(tmp_path)
+
+        # Create a test file with a broken fixture (same pattern as admin_get_users bug)
+        test_file = tmp_path / "test_broken_fixture.py"
+        test_file.write_text('''
+import pytest
+from unittest.mock import patch
+
+@pytest.fixture
+def mock_nonexistent():
+    """This fixture will ERROR because the module doesn't exist."""
+    with patch('nonexistent_module_abc123.nonexistent_attr') as m:
+        yield m
+
+def test_uses_broken_fixture(mock_nonexistent):
+    """This test will ERROR during fixture setup."""
+    assert True
+
+def test_that_passes():
+    """This test passes normally."""
+    assert True
+''')
+
+        # Call the ACTUAL production function
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="test_broken_fixture",
+            language="python",
+            target_coverage=0.0
+        )
+
+        # Verify pytest detected the error (exit_code should be non-zero)
+        assert report.exit_code != 0, f"Pytest should return non-zero on errors, got {report.exit_code}"
+
+        # KEY ASSERTION: errors must be counted in tests_failed
+        # Before the fix, this would be 0 (BUG)
+        # After the fix, this should be >= 1 (errors counted)
+        assert report.tests_failed >= 1, (
+            f"Pytest ERRORS must be counted as failures. "
+            f"Got tests_passed={report.tests_passed}, tests_failed={report.tests_failed}. "
+            f"Expected tests_failed >= 1 because fixture setup error should count."
+        )
+
+    def test_execute_tests_counts_both_failures_and_errors(self, tmp_path, monkeypatch):
+        """
+        Verify that both FAILED and ERROR are counted together.
+
+        Pytest output like "1 failed, 2 errors" should result in tests_failed=3.
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Change cwd to tmp_path so relative_to() works in the production code
+        monkeypatch.chdir(tmp_path)
+
+        test_file = tmp_path / "test_mixed_failures.py"
+        test_file.write_text('''
+import pytest
+from unittest.mock import patch
+
+@pytest.fixture
+def mock_nonexistent():
+    with patch('nonexistent_module_xyz789.nonexistent_attr') as m:
+        yield m
+
+def test_error_from_fixture(mock_nonexistent):
+    """This will ERROR (fixture setup fails)."""
+    assert True
+
+def test_assertion_failure():
+    """This will FAIL (assertion error)."""
+    assert False, "Intentional failure"
+
+def test_passes():
+    """This passes."""
+    assert True
+''')
+
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="test_mixed",
+            language="python",
+            target_coverage=0.0
+        )
+
+        # Should have: 1 passed, 1 failed, 1 error
+        # tests_failed should be 2 (1 failed + 1 error)
+        assert report.tests_passed == 1, f"Expected 1 passed, got {report.tests_passed}"
+        assert report.tests_failed >= 2, (
+            f"Expected tests_failed >= 2 (1 failed + 1 error), got {report.tests_failed}"
+        )
+
+
+# --- Run Report Update After Fix Regression Tests ---
+
+class TestRunReportUpdateAfterFix:
+    """
+    Regression tests for bug: run_report not updated after successful fix operation.
+
+    Bug scenario:
+    1. sync_determine_operation sees test failures in run_report → returns 'fix'
+    2. fix operation runs and succeeds
+    3. BUG: run_report was NOT updated after fix (stub just did `pass`)
+    4. Next iteration: sync_determine_operation sees same failures → returns 'fix' again
+    5. Loop repeats 5 times until infinite loop detection breaks
+
+    Fix: After successful fix operation, call _execute_tests_and_create_run_report()
+    to update the run_report with new test results.
+    """
+
+    def test_fix_operation_updates_run_report(self, orchestration_fixture, tmp_path):
+        """
+        Regression test: After successful fix, run_report should be updated.
+
+        This test verifies that _execute_tests_and_create_run_report is called
+        after a successful fix operation to prevent infinite fix loops.
+        """
+        import os
+        from pathlib import Path
+
+        os.chdir(tmp_path)
+
+        # Create required files
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        test_file = tmp_path / "tests" / "test_calc.py"
+        test_file.write_text("def test_add(): assert True")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        # Sequence: fix succeeds, then all_synced
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='Test failures detected'),
+            SyncDecision(operation='all_synced', reason='All synced after fix'),
+        ]
+
+        # fix_main returns success
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        # Mock _execute_tests_and_create_run_report to track if it's called after fix
+        with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests:
+            # Configure path mock to return our test file
+            mocks['get_pdd_file_paths'].return_value = {
+                'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+                'code': tmp_path / 'pdd' / 'calc.py',
+                'example': tmp_path / 'examples' / 'calc_example.py',
+                'test': test_file
+            }
+
+            result = sync_orchestration(basename="calc", language="python")
+
+        # KEY ASSERTION: _execute_tests_and_create_run_report should be called after fix
+        assert mock_exec_tests.called, (
+            "REGRESSION BUG: _execute_tests_and_create_run_report was not called after "
+            "successful fix operation. This causes infinite fix loops because run_report "
+            "is not updated with new test results."
+        )
+
+        # Verify fix was marked as completed
+        assert 'fix' in result.get('operations_completed', []), (
+            "Fix operation should be in completed operations"
+        )
+
+    def test_fix_operation_skips_test_update_when_test_file_missing(self, orchestration_fixture, tmp_path):
+        """
+        Verify that run_report update is skipped when test file doesn't exist.
+
+        This prevents errors when fix is run but no test file has been generated yet.
+        """
+        import os
+
+        os.chdir(tmp_path)
+
+        # Create required files but NOT the test file
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+        # Note: NOT creating test file
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='Test failures detected'),
+            SyncDecision(operation='all_synced', reason='Done'),
+        ]
+
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        # Configure path mock - test file path that doesn't exist
+        test_file_path = tmp_path / 'tests' / 'test_calc.py'
+        mocks['get_pdd_file_paths'].return_value = {
+            'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+            'code': tmp_path / 'pdd' / 'calc.py',
+            'example': tmp_path / 'examples' / 'calc_example.py',
+            'test': test_file_path  # This path doesn't exist
+        }
+
+        with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests:
+            result = sync_orchestration(basename="calc", language="python")
+
+        # Should NOT call _execute_tests_and_create_run_report when test file is missing
+        assert not mock_exec_tests.called, (
+            "Should not call _execute_tests_and_create_run_report when test file doesn't exist"
+        )
+
+        # But fix should still complete successfully
+        assert result['success'] is True
+        assert 'fix' in result.get('operations_completed', [])
+
+    def test_infinite_fix_loop_prevented_by_run_report_update(self, orchestration_fixture, tmp_path):
+        """
+        Integration test: Verify that the fix prevents infinite fix loops.
+
+        Before the fix:
+        - fix → run_report unchanged → fix → run_report unchanged → ... (5 times)
+
+        After the fix:
+        - fix → run_report updated → all_synced (or next appropriate operation)
+        """
+        import os
+        import json
+        from pathlib import Path
+
+        os.chdir(tmp_path)
+
+        # Create required files
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        test_file = tmp_path / "tests" / "test_calc.py"
+        test_file.write_text("def test_add(): assert True")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True, exist_ok=True)
+
+        # Create initial run_report with failures (what triggers 'fix' operation)
+        run_report = {
+            "timestamp": "2023-01-01T00:00:00Z",
+            "exit_code": 1,
+            "tests_passed": 10,
+            "tests_failed": 3,  # These failures trigger 'fix'
+            "coverage": 80.0
+        }
+        (tmp_path / ".pdd" / "meta" / "calc_python_run.json").write_text(json.dumps(run_report))
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        # The fix should only need one 'fix' operation, then progress to all_synced
+        # (because run_report gets updated after fix)
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='3 test failures detected'),
+            SyncDecision(operation='all_synced', reason='All tests pass after fix'),
+        ]
+
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        mocks['get_pdd_file_paths'].return_value = {
+            'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+            'code': tmp_path / 'pdd' / 'calc.py',
+            'example': tmp_path / 'examples' / 'calc_example.py',
+            'test': test_file
+        }
+
+        result = sync_orchestration(basename="calc", language="python", max_attempts=3)
+
+        # Should complete with just 1 fix operation (not 5 due to infinite loop)
+        assert result['success'] is True
+        assert result['operations_completed'].count('fix') == 1, (
+            f"Expected exactly 1 fix operation, got {result['operations_completed'].count('fix')}. "
+            "If more than 1, the infinite loop prevention may not be working."
         )
