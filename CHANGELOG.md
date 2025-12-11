@@ -1,3 +1,21 @@
+## v0.0.81 (2025-12-11)
+
+### Feat
+
+- implement fallback mechanism for verified file in regression tests to enhance test coverage
+- add onboarding guide to public and CAP repositories in the publish process
+- add location column to LLM model configuration CSV for enhanced model invocation context
+- add LLM model configuration CSV and implement per-model location override in invocation logic; enhance tests for location handling
+- add model range calculation to improve strength sampling; refactor main function to utilize calculated midpoints for model invocations
+
+### Fix
+
+- pass context parameter to sync_orchestration to prevent infinite loops; add tests for context handling and bug reproduction scenarios
+- add regression tests to ensure run_report is updated after successful fix operations; prevent infinite fix loops by verifying test file existence before updating run_report
+- clean up whitespace in error handling and logging functions; improve clarity in sync orchestration logic for test execution
+- include model name in error logs for fix attempts; update error handling to return distinguishable error indicators in unit tests
+- enhance pytest output parsing to count errors as failures; add regression tests to verify correct error handling in test execution
+
 ## v0.0.80 (2025-12-09)
 
 ### Feat
