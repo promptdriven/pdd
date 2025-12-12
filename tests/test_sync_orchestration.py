@@ -1608,6 +1608,155 @@ def test_passes():
         )
 
 
+# --- Coverage Target Selection Regression Tests ---
+
+class TestCoverageTargetSelection:
+    """Regression tests for selecting the correct `--cov` target."""
+
+    def test_execute_tests_uses_code_file_stem_when_not_package(self, tmp_path, monkeypatch):
+        """
+        Regression test: when the code file is not inside a package, `--cov` should
+        use the code file stem (e.g. `admin_get_users`), not a dotted test path like
+        `backend.tests.admin_get_users`.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        monkeypatch.chdir(tmp_path)
+
+        code_file = tmp_path / "backend" / "functions" / "admin_get_users.py"
+        code_file.parent.mkdir(parents=True, exist_ok=True)
+        code_file.write_text("def admin_get_users():\n    return []\n", encoding="utf-8")
+
+        test_file = tmp_path / "backend" / "tests" / "test_admin_get_users.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+
+        seen_cov_args = {"value": None}
+
+        def fake_run(cmd, **kwargs):
+            cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
+            seen_cov_args["value"] = cov_args
+            stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="admin_get_users",
+                language="python",
+                target_coverage=0.0,
+                code_file=code_file,
+            )
+
+        assert report.exit_code == 0
+        assert report.tests_passed == 1
+        assert report.tests_failed == 0
+        assert report.coverage == 100.0
+        assert seen_cov_args["value"] == ["--cov=admin_get_users"]
+
+    def test_execute_tests_uses_dotted_module_when_inside_package(self, tmp_path, monkeypatch):
+        """
+        Regression test: when the code file is inside a Python package, `--cov` should
+        use a dotted module path (e.g. `pdd.my_module`).
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        monkeypatch.chdir(tmp_path)
+
+        package_dir = tmp_path / "pdd"
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "__init__.py").write_text("", encoding="utf-8")
+
+        code_file = package_dir / "my_module.py"
+        code_file.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+
+        test_file = tmp_path / "tests" / "test_my_module.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+
+        seen_cov_args = {"value": None}
+
+        def fake_run(cmd, **kwargs):
+            cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
+            seen_cov_args["value"] = cov_args
+            stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="my_module",
+                language="python",
+                target_coverage=0.0,
+                code_file=code_file,
+            )
+
+        assert report.exit_code == 0
+        assert report.tests_passed == 1
+        assert report.tests_failed == 0
+        assert report.coverage == 100.0
+        assert seen_cov_args["value"] == ["--cov=pdd.my_module"]
+
+    def test_execute_tests_prefers_stem_when_test_imports_stem_even_if_packaged(self, tmp_path, monkeypatch):
+        """
+        Regression test: some projects package the code but tests import via filename stem
+        after modifying `sys.path`. In that case, `--cov` must match the stem import to
+        avoid "module-not-imported" / "no data was collected" coverage failures.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        monkeypatch.chdir(tmp_path)
+
+        (tmp_path / "backend" / "__init__.py").parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "backend" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "backend" / "functions").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "backend" / "functions" / "__init__.py").write_text("", encoding="utf-8")
+
+        code_file = tmp_path / "backend" / "functions" / "admin_get_users.py"
+        code_file.write_text("def admin_get_users():\n    return []\n", encoding="utf-8")
+
+        test_file = tmp_path / "backend" / "tests" / "test_admin_get_users.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "\n".join(
+                [
+                    "import sys",
+                    "from admin_get_users import admin_get_users",
+                    "",
+                    "def test_smoke():",
+                    "    assert admin_get_users() == []",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        seen_cov_args = {"value": None}
+
+        def fake_run(cmd, **kwargs):
+            cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
+            seen_cov_args["value"] = cov_args
+            stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="admin_get_users",
+                language="python",
+                target_coverage=0.0,
+                code_file=code_file,
+            )
+
+        assert report.exit_code == 0
+        assert report.tests_passed == 1
+        assert report.tests_failed == 0
+        assert report.coverage == 100.0
+        assert seen_cov_args["value"] == ["--cov=admin_get_users"]
+
+
 # --- Run Report Update After Fix Regression Tests ---
 
 class TestRunReportUpdateAfterFix:
