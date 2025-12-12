@@ -80,6 +80,7 @@ class RunReport:
     tests_passed: int
     tests_failed: int
     coverage: float
+    test_hash: Optional[str] = None  # Hash of test file when tests were run (for staleness detection)
 
 
 @dataclass
@@ -477,7 +478,8 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
             exit_code=data['exit_code'],
             tests_passed=data['tests_passed'],
             tests_failed=data['tests_failed'],
-            coverage=data['coverage']
+            coverage=data['coverage'],
+            test_hash=data.get('test_hash')  # Optional for backward compatibility
         )
     except (json.JSONDecodeError, KeyError, IOError):
         return None
@@ -702,6 +704,27 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
         run_report = read_run_report(basename, language)
         if not run_report or run_report.exit_code != 0:
             return False
+
+        # Check that run_report corresponds to current test file (staleness detection)
+        # If test file changed since run_report was created, we can't trust the results
+        if not skip_tests and 'test' in paths and paths['test'].exists():
+            current_test_hash = calculate_sha256(paths['test'])
+            if run_report.test_hash and current_test_hash != run_report.test_hash:
+                # run_report was created for a different version of the test file
+                return False
+            if not run_report.test_hash:
+                # Legacy run_report without test_hash - check fingerprint timestamp as fallback
+                fingerprint = read_fingerprint(basename, language)
+                if fingerprint:
+                    # If fingerprint is newer than run_report, run_report might be stale
+                    from datetime import datetime
+                    try:
+                        fp_time = datetime.fromisoformat(fingerprint.timestamp.replace('Z', '+00:00'))
+                        rr_time = datetime.fromisoformat(run_report.timestamp.replace('Z', '+00:00'))
+                        if fp_time > rr_time:
+                            return False  # run_report predates fingerprint, might be stale
+                    except (ValueError, AttributeError):
+                        pass  # If timestamps can't be parsed, skip this check
 
         # Check verify has been done (unless skip_verify)
         # Without this, workflow would be "complete" after crash even though verify hasn't run
@@ -1112,6 +1135,25 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                         'all_files_exist': True,
                         'last_command': fingerprint.command,
                         'workflow_stage': 'verification_pending'
+                    }
+                )
+
+            # Stale run_report detected: _is_workflow_complete returned False but all other conditions passed
+            # This happens when run_report.test_hash doesn't match current test file, or
+            # when fingerprint timestamp > run_report timestamp (legacy detection)
+            # Need to re-run tests to get accurate results
+            if run_report and run_report.exit_code == 0:
+                return SyncDecision(
+                    operation='test',
+                    reason='Run report is stale - need to re-run tests to verify current state',
+                    confidence=0.9,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'all_files_exist': True,
+                        'run_report_stale': True,
+                        'run_report_test_hash': run_report.test_hash,
+                        'workflow_stage': 'revalidation'
                     }
                 )
 

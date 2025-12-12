@@ -34,6 +34,7 @@ from .sync_determine_operation import (
     SyncLock,
     read_run_report,
     estimate_operation_cost,
+    calculate_sha256,  # For test_hash in run_report
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -140,7 +141,10 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
 def _execute_tests_and_create_run_report(test_file: Path, basename: str, language: str, target_coverage: float = 90.0) -> RunReport:
     """Execute tests and create a RunReport with actual results."""
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    
+
+    # Calculate test file hash for staleness detection
+    test_hash = calculate_sha256(test_file) if test_file.exists() else None
+
     try:
         module_name = test_file.name.replace('test_', '').replace('.py', '')
         python_executable = detect_host_python_executable()
@@ -208,7 +212,8 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
             exit_code=exit_code,
             tests_passed=tests_passed,
             tests_failed=tests_failed,
-            coverage=coverage
+            coverage=coverage,
+            test_hash=test_hash  # Include hash for staleness detection
         )
         
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception):
@@ -217,7 +222,8 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
             exit_code=1,
             tests_passed=0,
             tests_failed=1,
-            coverage=0.0
+            coverage=0.0,
+            test_hash=test_hash  # Include hash even on failure
         )
     
     save_run_report(asdict(report), basename, language)
