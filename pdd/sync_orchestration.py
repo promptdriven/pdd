@@ -138,7 +138,97 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
     with open(fingerprint_file, 'w') as f:
         json.dump(asdict(fingerprint), f, indent=2, default=str)
 
-def _execute_tests_and_create_run_report(test_file: Path, basename: str, language: str, target_coverage: float = 90.0) -> RunReport:
+def _python_cov_target_for_code_file(code_file: Path) -> str:
+    """Return a `pytest-cov` `--cov` target for a Python code file.
+
+    - If the file is inside a Python package (directories with `__init__.py`),
+      returns a dotted module path (e.g., `pdd.sync_orchestration`).
+    - Otherwise falls back to the filename stem (e.g., `admin_get_users`).
+    """
+    if code_file.suffix != ".py":
+        return code_file.stem
+
+    package_dir: Optional[Path] = None
+    current = code_file.parent
+    while (current / "__init__.py").exists():
+        package_dir = current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    if package_dir:
+        relative_module = code_file.relative_to(package_dir.parent).with_suffix("")
+        return str(relative_module).replace(os.sep, ".")
+
+    return code_file.stem
+
+
+def _python_cov_target_for_test_and_code(test_file: Path, code_file: Path, fallback: str) -> str:
+    """Choose the best `--cov` target based on how tests import the code.
+
+    In some repos, tests add a directory to `sys.path` and import modules by their
+    filename stem (e.g., `from admin_get_users import ...`) even when the code
+    also lives under a package (e.g., `backend.functions.admin_get_users`).
+
+    Heuristic:
+    - Prefer the code file stem when the test file imports it directly.
+    - Otherwise, prefer the dotted module path derived from the package layout.
+    - Fall back to the provided fallback (usually the basename).
+    """
+
+    def _imports_module(source: str, module: str) -> bool:
+        escaped = re.escape(module)
+        return bool(
+            re.search(rf"^\s*import\s+{escaped}\b", source, re.MULTILINE)
+            or re.search(rf"^\s*from\s+{escaped}\b", source, re.MULTILINE)
+        )
+
+    stem = code_file.stem
+    dotted = _python_cov_target_for_code_file(code_file)
+
+    try:
+        test_source = test_file.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        test_source = ""
+
+    if stem and _imports_module(test_source, stem):
+        return stem
+
+    if dotted and dotted != stem:
+        if _imports_module(test_source, dotted):
+            return dotted
+
+        if "." in dotted:
+            parent = dotted.rsplit(".", 1)[0]
+            # e.g. `from backend.functions import admin_get_users`
+            if re.search(
+                rf"^\s*from\s+{re.escape(parent)}\s+import\s+.*\b{re.escape(stem)}\b",
+                test_source,
+                re.MULTILINE,
+            ):
+                return dotted
+            # e.g. `import backend.functions.admin_get_users`
+            if re.search(
+                rf"^\s*import\s+{re.escape(parent)}\.{re.escape(stem)}\b",
+                test_source,
+                re.MULTILINE,
+            ):
+                return dotted
+
+        return dotted
+
+    return stem or fallback
+
+
+def _execute_tests_and_create_run_report(
+    test_file: Path,
+    basename: str,
+    language: str,
+    target_coverage: float = 90.0,
+    *,
+    code_file: Optional[Path] = None,
+) -> RunReport:
     """Execute tests and create a RunReport with actual results."""
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -148,18 +238,16 @@ def _execute_tests_and_create_run_report(test_file: Path, basename: str, languag
     try:
         module_name = test_file.name.replace('test_', '').replace('.py', '')
         python_executable = detect_host_python_executable()
-        
-        try:
-            base_package = None
-        except:
-            base_package = None
-            
-        if base_package:
-            cov_target = f'{base_package}.{module_name}'
-        else:
-            relative_path = test_file.parent.relative_to(Path.cwd())
-            package_path = str(relative_path).replace(os.sep, '.')
-            cov_target = f'{package_path}.{module_name}' if package_path else module_name
+
+        cov_target = None
+        if language.lower() == "python":
+            if code_file is not None:
+                cov_target = _python_cov_target_for_test_and_code(test_file, code_file, basename or module_name)
+            else:
+                cov_target = basename or module_name
+
+        if not cov_target:
+            cov_target = basename or module_name
         
         # Use clean env without TUI-specific vars
         clean_env = os.environ.copy()
@@ -669,7 +757,13 @@ def sync_orchestration(
                             pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
                             result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False)
                             if pdd_files['test'].exists():
-                                _execute_tests_and_create_run_report(pdd_files['test'], basename, language, target_coverage)
+                                _execute_tests_and_create_run_report(
+                                    pdd_files['test'],
+                                    basename,
+                                    language,
+                                    target_coverage,
+                                    code_file=pdd_files.get("code"),
+                                )
                         elif operation == 'fix':
                             error_file_path = Path("fix_errors.log")
                             # Capture errors (simplified)
@@ -756,7 +850,13 @@ def sync_orchestration(
                         # Re-run tests to update run_report after successful fix
                         # This prevents infinite loop by updating the state machine
                         if pdd_files['test'].exists():
-                            _execute_tests_and_create_run_report(pdd_files['test'], basename, language, target_coverage) 
+                            _execute_tests_and_create_run_report(
+                                pdd_files['test'],
+                                basename,
+                                language,
+                                target_coverage,
+                                code_file=pdd_files.get("code"),
+                            )
                     
                     if not success:
                         errors.append(f"Operation '{operation}' failed.")

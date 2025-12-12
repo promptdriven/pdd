@@ -2104,3 +2104,69 @@ def test_construct_paths_sync_discovery_custom_prompts_dir(tmpdir):
     # prompts_dir MUST respect the context config, not hardcode "prompts"
     assert resolved_config["prompts_dir"] == "prompts/backend", \
         f"Expected prompts_dir='prompts/backend' from context config, got '{resolved_config['prompts_dir']}'"
+
+
+def test_construct_paths_fix_resolves_pddrc_paths_relative_to_pddrc(tmp_path, monkeypatch):
+    """
+    Regression test: `fix` output paths should resolve relative `.pddrc` directories
+    relative to the `.pddrc` location (project root), not relative to the input
+    code file directory.
+
+    Bug: Relative `generate_output_path` / `test_output_path` values like
+    "backend/functions/" and "backend/tests/" were incorrectly joined under the
+    code file directory (e.g. backend/functions/backend/tests/...).
+    """
+    from pdd.construct_paths import construct_paths
+
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / ".pddrc").write_text(
+        '\n'.join(
+            [
+                'version: "1.0"',
+                "contexts:",
+                "  backend:",
+                "    paths:",
+                '      - "backend/**"',
+                "    defaults:",
+                '      generate_output_path: "backend/functions/"',
+                '      test_output_path: "backend/tests/"',
+                '      example_output_path: "context/"',
+                '      prompts_dir: "prompts/backend"',
+                '      default_language: "python"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (tmp_path / "backend" / "functions").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "backend" / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "prompts" / "backend").mkdir(parents=True, exist_ok=True)
+
+    prompt_file = tmp_path / "prompts" / "backend" / "admin_get_users_python.prompt"
+    prompt_file.write_text("prompt", encoding="utf-8")
+    code_file = tmp_path / "backend" / "functions" / "admin_get_users.py"
+    code_file.write_text("def admin_get_users():\n    return []\n", encoding="utf-8")
+    test_file = tmp_path / "backend" / "tests" / "test_admin_get_users.py"
+    test_file.write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+
+    _, _, output_file_paths, language = construct_paths(
+        input_file_paths={
+            "prompt_file": str(prompt_file),
+            "code_file": str(code_file),
+            "unit_test_file": str(test_file),
+        },
+        force=True,
+        quiet=True,
+        command="fix",
+        command_options={"output_test": None, "output_code": None, "output_results": None},
+        create_error_file=True,
+        context_override="backend",
+    )
+
+    assert language == "python"
+    assert output_file_paths["output_code"] == str(tmp_path / "backend" / "functions" / "admin_get_users_fixed.py")
+    assert output_file_paths["output_test"] == str(tmp_path / "backend" / "tests" / "test_admin_get_users_fixed.py")
+    assert output_file_paths["output_results"] == str(
+        tmp_path / "backend" / "functions" / "admin_get_users_fix_results.log"
+    )

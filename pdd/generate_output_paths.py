@@ -182,7 +182,8 @@ def generate_output_paths(
     file_extension: str,
     context_config: Optional[Dict[str, str]] = None,
     input_file_dir: Optional[str] = None,
-    input_file_dirs: Optional[Dict[str, str]] = None
+    input_file_dirs: Optional[Dict[str, str]] = None,
+    config_base_dir: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     Generates the full, absolute output paths for a given PDD command.
@@ -208,8 +209,13 @@ def generate_output_paths(
                        default output files will be placed in this directory instead
                        of the current working directory.
         input_file_dirs: Optional dictionary mapping output keys to specific input
-                        file directories. When provided, each output will use its
-                        corresponding input file directory (e.g., {'output_code': 'src/main/java'}).
+                         file directories. When provided, each output will use its
+                         corresponding input file directory (e.g., {'output_code': 'src/main/java'}).
+        config_base_dir: Optional base directory to resolve relative `.pddrc` and
+                        environment variable output paths. When set, relative
+                        config paths resolve under this directory (typically the
+                        directory containing `.pddrc`) instead of the input file
+                        directory.
 
     Returns:
         A dictionary where keys are the standardized output identifiers
@@ -221,10 +227,12 @@ def generate_output_paths(
     logger.debug(f"User output locations: {output_locations}")
     logger.debug(f"Context config: {context_config}")
     logger.debug(f"Input file dirs: {input_file_dirs}")
+    logger.debug(f"Config base dir: {config_base_dir}")
     logger.debug(f"Basename: {basename}, Language: {language}, Extension: {file_extension}")
 
     context_config = context_config or {}
     input_file_dirs = input_file_dirs or {}
+    config_base_dir_abs = os.path.abspath(config_base_dir) if config_base_dir else None
     result_paths: Dict[str, str] = {}
 
     if not basename:
@@ -292,10 +300,13 @@ def generate_output_paths(
         elif context_path:
             source = "context"
 
-            # For relative context paths and commands that use input_file_dir,
-            # resolve the context path relative to the input file directory
-            if input_file_dir and not os.path.isabs(context_path):
-                context_path = os.path.join(input_file_dir, context_path)
+            # Resolve relative `.pddrc` paths under the config base dir when available.
+            # Fall back to the input file directory for backwards compatibility.
+            if not os.path.isabs(context_path):
+                if config_base_dir_abs:
+                    context_path = os.path.join(config_base_dir_abs, context_path)
+                elif input_file_dir:
+                    context_path = os.path.join(input_file_dir, context_path)
                 logger.debug(f"Resolved relative context path to: {context_path}")
 
             # Check if the context path is a directory
@@ -318,10 +329,13 @@ def generate_output_paths(
         elif env_path:
             source = "environment"
 
-            # For relative env paths and commands that use input_file_dir,
-            # resolve the env path relative to the input file directory
-            if input_file_dir and not os.path.isabs(env_path):
-                env_path = os.path.join(input_file_dir, env_path)
+            # Resolve relative env paths under the config base dir when available.
+            # Fall back to the input file directory for backwards compatibility.
+            if not os.path.isabs(env_path):
+                if config_base_dir_abs:
+                    env_path = os.path.join(config_base_dir_abs, env_path)
+                elif input_file_dir:
+                    env_path = os.path.join(input_file_dir, env_path)
                 logger.debug(f"Resolved relative env path to: {env_path}")
 
             # Check if the environment variable points to a directory
