@@ -1315,18 +1315,69 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             )
     
     else:
-        # Complex Changes (Multiple Files Modified / Conflicts)
-        return SyncDecision(
-            operation='analyze_conflict',
-            reason='Multiple files changed - requires conflict analysis',
-            confidence=0.70,
-            estimated_cost=estimate_operation_cost('analyze_conflict'),
-            details={
-                'decision_type': 'heuristic',
-                'changed_files': changes,
-                'num_changes': len(changes)
-            }
-        )
+        # Complex Changes (Multiple Files Modified)
+        # CRITICAL: Only treat as conflict if prompt changed along with derived artifacts
+        # If only derived artifacts changed (code, example, test), this is NOT a conflict
+        # per PDD doctrine - all are derived from the unchanged prompt
+
+        if 'prompt' in changes:
+            # True conflict: prompt (source of truth) changed along with derived artifacts
+            return SyncDecision(
+                operation='analyze_conflict',
+                reason='Prompt and derived files changed - requires conflict analysis',
+                confidence=0.70,
+                estimated_cost=estimate_operation_cost('analyze_conflict'),
+                details={
+                    'decision_type': 'heuristic',
+                    'changed_files': changes,
+                    'num_changes': len(changes),
+                    'prompt_changed': True
+                }
+            )
+        else:
+            # Only derived artifacts changed - prompt (source of truth) is unchanged
+            # Continue workflow from where it was interrupted
+
+            # If code changed, need to re-verify
+            if 'code' in changes:
+                return SyncDecision(
+                    operation='verify',
+                    reason='Derived files changed (prompt unchanged) - verify code works',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('verify'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_files': changes,
+                        'num_changes': len(changes),
+                        'prompt_changed': False,
+                        'workflow_stage': 'continue_after_interruption'
+                    }
+                )
+            # If only example/test changed
+            elif 'example' in changes:
+                return SyncDecision(
+                    operation='verify',
+                    reason='Example changed (prompt unchanged) - verify example runs',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('verify'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_files': changes,
+                        'prompt_changed': False
+                    }
+                )
+            elif 'test' in changes:
+                return SyncDecision(
+                    operation='test',
+                    reason='Test changed (prompt unchanged) - run tests',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_files': changes,
+                        'prompt_changed': False
+                    }
+                )
     
     # Fallback - should not reach here normally
     return SyncDecision(
