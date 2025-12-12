@@ -780,9 +780,10 @@ def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
     assert decision.operation == 'analyze_conflict'
-    assert "Multiple files changed" in decision.reason
+    assert "Prompt and derived files changed" in decision.reason
     assert "prompt" in decision.details['changed_files']
     assert "code" in decision.details['changed_files']
+    assert decision.details.get('prompt_changed') == True
 
 
 # --- Part 3: `analyze_conflict_with_llm` ---
@@ -2169,3 +2170,68 @@ class TestAllFilesExistWorkflowIncomplete:
             f"Expected 'nothing' when workflow complete, "
             f"got '{decision.operation}' with reason: {decision.reason}"
         )
+
+
+# --- Part 6: PDD Doctrine - Derived Artifacts Tests ---
+
+@patch('sync_determine_operation.construct_paths')
+def test_no_conflict_when_only_derived_artifacts_change(mock_construct, pdd_test_environment):
+    """
+    Test that when only derived artifacts (code + example) change but prompt is UNCHANGED,
+    this should NOT be treated as a conflict per PDD doctrine.
+
+    PDD Doctrine: Prompt is the source of truth. Code, example, and test are derived artifacts.
+    If prompt is unchanged, changes to derived artifacts are NOT conflicts - they're
+    interrupted workflows that should continue.
+
+    Bug: sync_determine_operation returns 'analyze_conflict' when len(changes) > 1,
+    without checking if prompt is in the changes list.
+    """
+    prompts_dir = pdd_test_environment / "prompts"
+
+    # Create all files with specific content
+    prompt_content = "unchanged prompt content"
+    code_content = "modified code content"
+    example_content = "modified example content"
+
+    prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+    create_file(pdd_test_environment / f"{BASENAME}.py", code_content)
+    create_file(pdd_test_environment / f"{BASENAME}_example.py", example_content)
+
+    mock_construct.return_value = (
+        {},
+        {},
+        {'generate_output_path': str(pdd_test_environment / f"{BASENAME}.py")},
+        LANGUAGE
+    )
+
+    # Create fingerprint where:
+    # - prompt_hash MATCHES current file (prompt unchanged)
+    # - code_hash DIFFERS from current file (code changed)
+    # - example_hash DIFFERS from current file (example changed)
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0",
+        "timestamp": "2024-01-01T00:00:00",
+        "command": "verify",
+        "prompt_hash": prompt_hash,  # MATCHES - prompt unchanged
+        "code_hash": "old_code_hash_differs",  # DIFFERS - code changed
+        "example_hash": "old_example_hash_differs",  # DIFFERS - example changed
+        "test_hash": None
+    })
+
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+
+    # KEY ASSERTION: Should NOT return analyze_conflict when prompt is unchanged
+    assert decision.operation != 'analyze_conflict', \
+        f"Should not return analyze_conflict when only derived artifacts changed. " \
+        f"Got: {decision.operation}, reason: {decision.reason}, details: {decision.details}"
+
+    # Should continue the workflow with an appropriate operation (not conflict)
+    # verify is appropriate since code/example changed and need validation
+    assert decision.operation in ['verify', 'crash', 'update'], \
+        f"Expected workflow continuation operation, got: {decision.operation}"
+
+    # If details are provided, verify prompt was not flagged as changed
+    if decision.details:
+        assert decision.details.get('prompt_changed', False) == False, \
+            "prompt_changed should be False when only derived artifacts changed"
