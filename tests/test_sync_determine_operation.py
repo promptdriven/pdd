@@ -2235,3 +2235,236 @@ def test_no_conflict_when_only_derived_artifacts_change(mock_construct, pdd_test
     if decision.details:
         assert decision.details.get('prompt_changed', False) == False, \
             "prompt_changed should be False when only derived artifacts changed"
+
+
+# =============================================================================
+# Stale Run Report Regression Tests
+# =============================================================================
+# Bug Summary (discovered in admin_get_users):
+# - pdd sync returns 'nothing' when run_report is stale (older than fingerprint)
+# - run_report shows tests_failed=0 but actual tests have failures
+# - The fingerprint.test_hash was updated but run_report was NOT invalidated
+
+
+class TestStaleRunReportRegression:
+    """
+    Regression tests for stale run_report bug.
+
+    Bug scenario:
+    - run_report.timestamp: 2025-12-10 (old, shows tests_failed=0)
+    - fingerprint.timestamp: 2025-12-12 (new, test_hash was updated)
+    - Actual tests would fail
+    - sync incorrectly returned 'nothing'
+    """
+
+    def test_stale_run_report_detected_when_test_hash_differs(self, pdd_test_environment):
+        """
+        Sync should detect stale run_report and NOT return 'nothing'.
+
+        When fingerprint.test_hash matches current test file but run_report is stale,
+        sync should trigger 'test', not 'nothing'.
+        """
+        tmp_path = pdd_test_environment
+
+        # Create additional directories needed for this test
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        # Create all files
+        prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt\nGenerate a test module")
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example usage")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False")
+
+        # Create STALE run_report (Dec 10, claims tests pass, no test_hash)
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-10T08:33:52.589258+00:00",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 95.0
+        })
+
+        # Create NEWER fingerprint (Dec 12)
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.81",
+            "timestamp": "2025-12-12T00:39:11.061591+00:00",
+            "command": "verify",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        mock_paths = {
+            'prompt': prompt_path,
+            'code': code_path,
+            'example': example_path,
+            'test': test_path,
+        }
+
+        with patch('sync_determine_operation.construct_paths') as mock_construct, \
+             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+            mock_construct.return_value = (
+                {'prompt_file': str(prompt_path)},
+                {'output': str(code_path)},
+                {'output': str(test_path)},
+                {'output': str(example_path)}
+            )
+            mock_get_paths.return_value = mock_paths
+
+            decision = sync_determine_operation(
+                basename=BASENAME,
+                language=LANGUAGE,
+                target_coverage=TARGET_COVERAGE,
+                prompts_dir="prompts",
+                skip_tests=False,
+                skip_verify=False,
+            )
+
+        # FIX: When run_report is stale, sync returns 'test' to re-validate
+        assert decision.operation != 'nothing', (
+            f"Sync returned 'nothing' with stale run_report!\n"
+            f"Expected: 'test' to re-validate\n"
+            f"Actual: '{decision.operation}' - {decision.reason}"
+        )
+
+    def test_workflow_not_complete_when_run_report_is_stale(self, pdd_test_environment):
+        """
+        _is_workflow_complete() should return False when run_report is stale.
+
+        When fingerprint.timestamp > run_report.timestamp, workflow should NOT be complete.
+        """
+        tmp_path = pdd_test_environment
+
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False")
+
+        paths = {
+            'code': code_path,
+            'example': example_path,
+            'test': test_path
+        }
+
+        # STALE run_report (Dec 10)
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-10T08:33:52.589258+00:00",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 0.0
+        })
+
+        # NEWER fingerprint (Dec 12)
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.81",
+            "timestamp": "2025-12-12T00:39:11.061591+00:00",
+            "command": "verify",
+            "prompt_hash": "abc123",
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        result = _is_workflow_complete(
+            paths=paths,
+            skip_tests=False,
+            skip_verify=False,
+            basename=BASENAME,
+            language=LANGUAGE
+        )
+
+        assert result == False, (
+            "_is_workflow_complete() returned True with stale run_report.\n"
+            "run_report.timestamp: 2025-12-10, fingerprint.timestamp: 2025-12-12\n"
+            "The run_report predates the fingerprint, so workflow should not be complete."
+        )
+
+    def test_run_report_tests_failed_triggers_fix(self, pdd_test_environment):
+        """
+        Sanity check: When run_report.tests_failed > 0, sync should return 'fix'.
+        """
+        tmp_path = pdd_test_environment
+
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# prompt")
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False")
+
+        # run_report with tests_failed > 0
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-12T00:00:00.000000+00:00",
+            "exit_code": 1,
+            "tests_passed": 10,
+            "tests_failed": 3,
+            "coverage": 0.0
+        })
+
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.81",
+            "timestamp": "2025-12-12T00:39:11.061591+00:00",
+            "command": "verify",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        mock_paths = {
+            'prompt': prompt_path,
+            'code': code_path,
+            'example': example_path,
+            'test': test_path,
+        }
+
+        with patch('sync_determine_operation.construct_paths') as mock_construct, \
+             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+            mock_construct.return_value = (
+                {'prompt_file': str(prompt_path)},
+                {'output': str(code_path)},
+                {'output': str(test_path)},
+                {'output': str(example_path)}
+            )
+            mock_get_paths.return_value = mock_paths
+
+            decision = sync_determine_operation(
+                basename=BASENAME,
+                language=LANGUAGE,
+                target_coverage=TARGET_COVERAGE,
+                prompts_dir="prompts",
+                skip_tests=False,
+                skip_verify=False,
+            )
+
+        assert decision.operation == 'fix', (
+            f"Expected 'fix' when tests_failed > 0, got '{decision.operation}'"
+        )
