@@ -1,6 +1,7 @@
 import argparse
 import json
 import io
+import re
 import sys
 import pytest
 import subprocess
@@ -10,6 +11,15 @@ import os
 from .python_env_detector import detect_host_python_executable
 
 console = Console()
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text for reliable parsing."""
+    return _ANSI_ESCAPE_RE.sub("", text)
+
 
 class TestResultCollector:
     __test__ = False  # Prevent pytest from collecting this plugin as a test
@@ -99,17 +109,25 @@ def run_pytest_and_capture_output(test_file: str) -> dict:
         stdout = result.stdout
         stderr = result.stderr
         return_code = result.returncode
+        parse_stdout = _strip_ansi(stdout or "")
         
         # Parse the output to extract test results
         # Count passed, failed, and skipped tests from the output
-        passed = stdout.count(" PASSED")
-        failures = stdout.count(" FAILED") + stdout.count(" ERROR")
+        passed = parse_stdout.count(" PASSED")
+        failures = parse_stdout.count(" FAILED") + parse_stdout.count(" ERROR")
         errors = 0  # Will be included in failures for subprocess execution
-        warnings = stdout.count("warning")
+        warnings = parse_stdout.lower().count("warning")
         
         # If return code is 2, it indicates a pytest error
         if return_code == 2:
             errors = 1
+        # Safety net: if parsing missed failures due to formatting (e.g., ANSI colors),
+        # never report a passing result on a non-zero return code.
+        if return_code != 0 and failures == 0 and errors == 0:
+            if return_code == 1:
+                failures = 1
+            else:
+                errors = 1
 
         return {
             "test_file": test_file,
