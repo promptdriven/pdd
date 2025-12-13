@@ -122,6 +122,10 @@ def generate(
             env_vars=env_vars or None,
         )
         return generated_code, total_cost, model_name
+    except click.Abort:
+        # Let user cancellation (e.g., pressing 'no' on overwrite prompt) propagate
+        # to PDDCLI.invoke() for graceful handling (fix for issue #186)
+        raise
     except Exception as exception:
         handle_error(exception, "generate", ctx.obj.get("quiet", False))
         return None
@@ -153,6 +157,8 @@ def example(
             output=output,
         )
         return example_code, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "example", ctx.obj.get("quiet", False))
         return None
@@ -224,6 +230,8 @@ def test(
             merge=merge,
         )
         return test_code, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "test", ctx.obj.get("quiet", False))
         return None

@@ -75,6 +75,8 @@ def sync(
             log=log,
         )
         return str(result), total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None
@@ -128,6 +130,8 @@ def auto_deps(
             force_scan=force_scan
         )
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "auto-deps", ctx.obj.get("quiet", False))
         return None
