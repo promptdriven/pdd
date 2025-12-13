@@ -1,6 +1,7 @@
 # test_construct_paths.py
 
 import pytest
+import click
 from pathlib import Path
 from unittest import mock
 from unittest.mock import patch, MagicMock, ANY
@@ -452,12 +453,11 @@ def test_construct_paths_output_file_exists(tmpdir):
          patch('click.secho') as mock_secho, \
          patch('pdd.construct_paths.console.print') as mock_print: # Patch console print too
 
-        with pytest.raises(SystemExit) as excinfo:
+        with pytest.raises(click.Abort):
             construct_paths(
                 input_file_paths, force, quiet, command, command_options
             )
 
-        assert excinfo.value.code == 1
         mock_confirm.assert_called_once()
         # Check confirmation message style (optional, can be brittle)
         # assert mock_confirm.call_args[0][0].startswith(click.style("Overwrite existing files?", fg="yellow"))

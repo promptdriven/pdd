@@ -85,8 +85,13 @@ class PDDCLI(click.Group):
 
     def invoke(self, ctx):
         exception_to_handle = None
+        user_abort = False  # Flag for user cancellation (fix for issue #186)
         try:
             result = super().invoke(ctx)
+        except click.Abort:
+            # User cancelled (e.g., pressed 'no' on confirmation) - set flag
+            # to exit silently without triggering error reporting
+            user_abort = True
         except KeyboardInterrupt as e:
             # Handle keyboard interrupt (Ctrl+C) gracefully
             exception_to_handle = e
@@ -110,6 +115,10 @@ class PDDCLI(click.Group):
         else:
             # No exception, return normally
             return result
+
+        # Handle user abort outside try block to avoid nested exception issues
+        if user_abort:
+            ctx.exit(1)
 
         # Exception handling for all non-success cases
         # Figure out quiet mode if possible
