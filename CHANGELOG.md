@@ -1,3 +1,18 @@
+## v0.0.82 (2025-12-12)
+
+### Feat
+
+- enhance prompting guide with automatic update propagation via includes; clarify usage patterns and tradeoffs for shared context management
+- update auto_include_LLM prompt to enforce strict XML tag naming rules; enhance test cases to ensure config_base_dir is passed correctly when .pddrc is present
+- enhance path resolution for `.pddrc` configurations; add regression tests for coverage target selection in sync orchestration
+- add ANSI escape sequence handling to pytest output parsing; implement regression tests for color output detection and non-zero return code scenarios
+- implement test_hash for run reports to detect staleness; enhance workflow completion checks and add regression tests for stale report scenarios
+- enhance LLM model configuration with location overrides, improve regression test fallback, and add onboarding guide; fix infinite loop and run report stale state issues
+
+### Refactor
+
+- update conflict analysis logic to differentiate between prompt and derived artifact changes; enhance decision-making process for sync operations
+
 ## v0.0.81 (2025-12-11)
 
 ### Feat
