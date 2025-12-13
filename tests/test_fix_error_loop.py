@@ -1,3 +1,4 @@
+import os
 import shutil
 from pathlib import Path
 import subprocess
@@ -552,6 +553,27 @@ def test_func():
     assert fails_2 == 0, f"Test should have passed after update. Logs:\n{logs_2}"
 
 
+def test_run_pytest_on_file_counts_failures_with_forced_color(tmp_path, monkeypatch):
+    """
+    Regression test: run_pytest_on_file must still detect failures when pytest
+    is configured to emit ANSI color codes (as in the sync TUI environment).
+    """
+    from pdd.fix_error_loop import run_pytest_on_file
+
+    test_file = tmp_path / "test_failure_color_fix_loop.py"
+    test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+
+    existing_addopts = os.environ.get("PYTEST_ADDOPTS", "")
+    addopts = (existing_addopts + " " if existing_addopts else "") + "--color=yes"
+    monkeypatch.setenv("PYTEST_ADDOPTS", addopts)
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    fails, errors, warnings, logs = run_pytest_on_file(str(test_file))
+    if "\x1b[" not in logs:
+        pytest.skip("Pytest did not emit ANSI output even with --color=yes")
+    assert fails == 1
+
+
 # ============================================================================
 # Bug Fix Tests - Model Name in Error Log
 # ============================================================================
@@ -704,4 +726,3 @@ def test_sync_orchestration_context_none_by_default():
 
     ctx = _create_mock_context(force=False)
     assert ctx.obj.get('context') is None
-
