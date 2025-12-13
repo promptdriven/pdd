@@ -33,8 +33,7 @@ from .sync_determine_operation import (
     META_DIR,
     SyncLock,
     read_run_report,
-    estimate_operation_cost,
-    calculate_sha256,  # For test_hash in run_report
+    calculate_sha256,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
