@@ -317,7 +317,8 @@ def test_construct_paths_basename_extraction(tmpdir):
                     file_extension=mock_ext, # Use the extension determined for mocking
                     context_config={},
                     input_file_dir=ANY,
-                    input_file_dirs={}
+                    input_file_dirs={},
+                    config_base_dir=None,
                 )
         # Clean up dummy code file
         if dummy_code and dummy_code.exists():
@@ -755,7 +756,8 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
             file_extension='.py',
             context_config={},
             input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dirs={},
+            config_base_dir=None,
         )
 
 
@@ -1233,7 +1235,8 @@ def test_construct_paths_conflicting_language_specification(tmpdir):
             file_extension='.js',   # Correct extension passed
             context_config={},
             input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dirs={},
+            config_base_dir=None,
         )
         assert output_file_paths['output'] == str(mock_output_path)
 
@@ -1410,7 +1413,8 @@ def test_construct_paths_symbolic_links(tmpdir):
             file_extension='.py',
             context_config={},
             input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dirs={},
+            config_base_dir=None,
         )
 
 # --- Fixture and tests below seem to use tmp_path_factory correctly ---
@@ -1508,7 +1512,8 @@ def test_construct_paths_generate_command(setup_test_files):
         file_extension='.prompt',
         context_config={},
         input_file_dir=ANY,
-        input_file_dirs={}
+        input_file_dirs={},
+        config_base_dir=None,
     )
 
 
@@ -1971,8 +1976,39 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
             file_extension='',  # Makefiles have no extension
             context_config={},
             input_file_dir=ANY,
-                        input_file_dirs=ANY
+            input_file_dirs=ANY,
+            config_base_dir=None,
         )
+
+
+def test_construct_paths_passes_config_base_dir_when_pddrc_present(tmpdir):
+    """Test that construct_paths passes config_base_dir when a .pddrc is found."""
+    tmp_path = Path(str(tmpdir))
+    prompt_file = tmp_path / "my_project_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    from pdd.construct_paths import _find_pddrc_file
+
+    pddrc_path = _find_pddrc_file()
+    assert pddrc_path is not None
+
+    mock_output_paths_dict_str = {"output": str(tmp_path / "output.py")}
+
+    with patch(
+        "pdd.construct_paths.generate_output_paths",
+        return_value=mock_output_paths_dict_str,
+    ) as mock_gen_paths:
+        construct_paths(
+            input_file_paths={"prompt_file": str(prompt_file)},
+            force=True,
+            quiet=True,
+            command="generate",
+            command_options={},
+        )
+
+    assert mock_gen_paths.call_args.kwargs.get("config_base_dir") == str(
+        Path(pddrc_path).parent
+    )
 
 
 # Test context detection functions that were in test_context_detection.py
