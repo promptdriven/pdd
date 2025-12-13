@@ -2,16 +2,28 @@
 
 ### Feat
 
-- enhance prompting guide with automatic update propagation via includes; clarify usage patterns and tradeoffs for shared context management
-- update auto_include_LLM prompt to enforce strict XML tag naming rules; enhance test cases to ensure config_base_dir is passed correctly when .pddrc is present
-- enhance path resolution for `.pddrc` configurations; add regression tests for coverage target selection in sync orchestration
-- add ANSI escape sequence handling to pytest output parsing; implement regression tests for color output detection and non-zero return code scenarios
-- implement test_hash for run reports to detect staleness; enhance workflow completion checks and add regression tests for stale report scenarios
-- enhance LLM model configuration with location overrides, improve regression test fallback, and add onboarding guide; fix infinite loop and run report stale state issues
+- **Stale Run Report Detection:** Added `test_hash` field to `RunReport` dataclass to track which version of the test file produced the test results. The `_is_workflow_complete()` function now compares this hash against the current test file, detecting when run reports are stale. For legacy run reports without `test_hash`, a timestamp-based fallback compares fingerprint vs. run report timestamps. This prevents sync from incorrectly returning "nothing" when tests need re-running.
+
+- **Smart Coverage Target Selection:** Added `_python_cov_target_for_code_file()` and `_python_cov_target_for_test_and_code()` functions in `sync_orchestration.py`. These analyze test file imports to determine the correct `--cov` target for pytest coverage. Handles both package-based imports (e.g., `backend.functions.module_name`) and stem-based imports (e.g., `from module_name import ...`) that add directories to `sys.path`.
+
+- **ANSI Escape Sequence Handling:** Added `_strip_ansi()` function to `pytest_output.py` that removes ANSI color codes before parsing test results. Added safety net: if return code is non-zero but parsing found no failures/errors (due to formatting), at least one failure/error is recorded. Fixes incorrect `tests_failed=0` when pytest output contains color codes.
+
+- **`.pddrc` Path Resolution Fix:** Added `config_base_dir` parameter to `generate_output_paths()`. Relative paths in `.pddrc` configurations now resolve relative to the `.pddrc` file location (not the input file directory). This parameter is passed through `construct_paths()` when `.pddrc` is present.
+
+- **Auto-Include XML Tag Naming Rules:** Updated `auto_include_LLM.prompt` with strict rules for Step 4 output. Wrapper tags must be canonical dotted Python module paths (e.g., `<utils.auth_helpers>`, `<models.user>`), never `*_example` tags. Added inference rules for deriving module paths from context example files and a third example demonstrating proper tag naming.
+
+- **Prompting Guide - Automatic Update Propagation:** Added new section explaining how `<include>` directives automatically propagate changes from included files to all prompts that reference them. Documents use cases (authoritative documentation, shared constraints, interface definitions) and the token-cost tradeoff of large includes.
 
 ### Refactor
 
-- update conflict analysis logic to differentiate between prompt and derived artifact changes; enhance decision-making process for sync operations
+- **Conflict Analysis Logic (PDD Doctrine Fix):** Updated `_perform_sync_analysis()` to differentiate between true conflicts (prompt + derived artifacts changed) and interrupted workflows (only derived artifacts changed). Per PDD doctrine, only changes involving the prompt (source of truth) are conflicts. When only code/example/test changed but prompt is unchanged, sync continues the workflow with `verify` or `test` operations instead of triggering `analyze_conflict`. Added `prompt_changed` field to decision details.
+
+### Tests
+
+- Added 300+ lines of regression tests in `test_sync_determine_operation.py` for stale run report detection, PDD doctrine derived artifacts handling, and conflict analysis edge cases
+- Added coverage target selection tests in `test_sync_orchestration.py` for package-based and stem-based import patterns
+- Added ANSI escape sequence and non-zero return code tests in `test_pytest_output.py`
+- Added `config_base_dir` propagation tests in `test_construct_paths.py`
 
 ## v0.0.81 (2025-12-11)
 
