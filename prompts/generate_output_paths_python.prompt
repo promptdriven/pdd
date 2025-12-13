@@ -1,36 +1,71 @@
-% You are an expert Python software engineer. Your task is to implement a function called `generate_output_paths` that creates appropriate output filenames for different commands in the 'pdd' Python program.
+% You are an expert Python software engineer.
 
-% Inputs: The function should take the following parameters:
-    - `command` (string): The command being executed (e.g., 'generate', 'example', 'test', 'preprocess', 'fix', 'sync', 'change', 'update', 'detect', 'conflicts', 'crash', 'trace', 'bug', 'auto-deps', 'verify', 'split').
-    - `output_locations` (dict): The output dictionary with keys (e.g., 'output', 'output_test') and the value of those options if specified by user.
-    - `basename` (string): The base name of the file.
-    - `language` (string): The programming language of the file.
-    - `file_extension` (string): The file extension to be used.
-    - `context_config` (dict): Optional dictionary with context-specific paths (e.g. from .pddrc).
-    - `input_file_dir` (string): Optional path to the input file's directory used for relative path resolution.
+% Role & Scope
+  Implement `generate_output_paths`, a function that determines absolute output file paths
+  for PDD commands. It centralizes path resolution logic following the precedence order
+  documented in the README. This module is the single source of truth for how output
+  paths are constructed across all PDD commands.
 
-% Outputs: The function should return a dictionary representing the generated output filename(s) with the full path for each of the keys in the `output_locations` dictionary.
+% Reference Documentation
+  The README contains authoritative documentation for:
+  - All supported commands and their output options
+  - Default filename patterns per command
+  - Environment variables (PDD_*_OUTPUT_PATH)
+  - Configuration priority and .pddrc context settings
+  <program_description><include>README.md</include></program_description>
 
-% Here is a detailed description of the program functionality and the many ways output file names can be constructed: <program_description><include>README.md</include></program_description>
+% Function Signature
+  def generate_output_paths(
+      command: str,
+      output_locations: Dict[str, Optional[str]],
+      basename: str,
+      language: str,
+      file_extension: str,
+      context_config: Optional[Dict[str, str]] = None,
+      input_file_dir: Optional[str] = None,
+      input_file_dirs: Optional[Dict[str, str]] = None,
+      config_base_dir: Optional[str] = None,
+  ) -> Dict[str, str]
 
-% Implement the function to handle all these cases efficiently. If the output_location key has a '/' at the end or is the name of a directory, this means it is a directory and the basename should be appended to the end of the directory according to the default naming conventions.
+% Parameter Details (beyond README)
+  - output_locations: Keys use underscores (e.g., 'output_test'); values can be None
+  - input_file_dirs: Per-output-key directory mapping (e.g., {'output_code': 'src/'})
+  - config_base_dir: Base directory for resolving relative .pddrc and env var paths;
+      takes precedence over input_file_dir for config/env resolution
 
-% The function must follow this specific precedence order for determining the output path:
-   1. User-specified path (in `output_locations`)
-   2. Context configuration path (in `context_config`)
-   3. Environment variable
-   4. Default naming convention
+% Output Keys per Command
+  - generate, example, test, preprocess, change, update, detect, conflicts, trace, bug, auto-deps: ['output']
+  - fix: ['output_test', 'output_code', 'output_results']
+  - split: ['output_sub', 'output_modified']
+  - crash: ['output', 'output_program']
+  - verify: ['output_results', 'output_code', 'output_program']
+  - sync: ['generate_output_path', 'test_output_path', 'example_output_path']
 
-% Additionally, if `input_file_dir` is provided, default paths and relative paths from context/env should be resolved relative to that directory.
+% Context Config Key Mapping (implementation detail)
+  Maps command/output_key to context_config lookup key:
+  - generate/output, fix/output_code, most others -> 'generate_output_path'
+  - example/output -> 'example_output_path'
+  - test/output, bug/output, fix/output_test -> 'test_output_path'
+  - crash/* -> None (always use CWD-based defaults, not context paths)
 
-% Ensure the function handles all cases correctly and returns the appropriate filename string, language, and file extension. The function should be robust and able to handle various edge cases, such as missing file extensions or languages.
+% Special Behaviors
+  - example command: Defaults to 'examples/' directory when no config (create if needed)
+  - crash command: Ignores context_config; uses CWD-based defaults only
+  - Directory detection: Paths ending in os.path.sep or existing directories get
+      default filename appended
+  - Relative path resolution: config_base_dir takes precedence over input_file_dir
+      for resolving relative paths from context_config and env vars
 
-% Follow these steps:
-    Step 1. List out all the different ways output locations can be constructed, including the precedence order (User > Context > Env > Default) and how `input_file_dir` affects relative path resolution.
-    Step 2. List out the default naming conventions for all supported commands (including 'change', 'update', 'detect', 'conflicts', 'crash', 'trace', 'bug', 'auto-deps', 'verify').
-    Step 3. List out all the environment variables that can be used to override the default naming conventions.
-    Step 4. Identify potential error cases that need to be handled.
-    Step 5. Write the code that implements the function to implement all these situations efficiently from the above steps.
-    Step 6. Make sure the output dictionary has all the necessary default keys even if they are not specified by the user for the `output_locations` dictionary.
+% Error Handling
+  - Unknown command or missing basename: log error, return empty dict
+  - Path resolution failures: log warning, use relative path as fallback
+  - Directory check failures: log warning, continue with best-effort detection
 
-% Note: For commands like 'fix' and 'split' that have multiple outputs, use underscores in the keys of the `output_locations` dictionary (e.g., 'output_test', 'output_code', 'output_sub', 'output_modified') instead of hyphens.
+% Deliverables
+  Single file with:
+  - Module-level constants: EXAMPLES_DIR = "examples"
+  - Module-level configuration dictionaries: COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES,
+    ENV_VAR_MAP, CONTEXT_CONFIG_MAP
+  - Helper: _get_default_filename(command, output_key, basename, language, file_extension)
+  - Main function: generate_output_paths()
+  - Logging: DEBUG for intermediate decisions, INFO for final determined paths, ERROR for failures

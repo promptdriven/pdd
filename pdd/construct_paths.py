@@ -432,6 +432,7 @@ def construct_paths(
 
     # ------------- Load .pddrc configuration -----------------
     pddrc_config = {}
+    pddrc_path: Optional[Path] = None
     context = None
     context_config = {}
     original_context_config = {}  # Keep track of original context config for sync discovery
@@ -492,6 +493,7 @@ def construct_paths(
                 language="python", # Dummy language
                 file_extension=".py", # Dummy extension
                 context_config=context_config,
+                config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
             )
 
             # Honor .pddrc generate_output_path explicitly for sync discovery (robust to logger source)
@@ -749,6 +751,7 @@ def construct_paths(
             context_config=context_config,
             input_file_dir=input_file_dir,
             input_file_dirs=input_file_dirs,
+            config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
         )
 
         # For sync, explicitly honor .pddrc generate_output_path even if generator logged as 'default'

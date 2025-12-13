@@ -16,17 +16,15 @@ The sync command is the primary command in PDD that automatically executes the c
 
 ## Architecture
 
-This module works in conjunction with `sync_main`, which handles the CLI interface:
+This module works in conjunction with related modules:
 
 - **sync_main**: Handles CLI parameter extraction, validation, language detection, path resolution via `construct_paths()`, and .pddrc configuration management
 - **sync_orchestration**: Focuses solely on workflow orchestration, TUI coordination, and operation execution using the resolved paths provided by sync_main
 - **sync_tui**: Provides the Textual-based TUI components (`SyncApp`, `show_exit_animation`) that display real-time animation and log output
 
-The separation allows sync_main to handle all CLI and configuration concerns while sync_orchestration handles the core workflow logic.
-
 ## Requirements
 
-Create a module with the following main function:
+### Function Signature
 
 ```python
 def sync_orchestration(
@@ -43,7 +41,7 @@ def sync_orchestration(
     skip_tests: bool = False,
     log: bool = False,
     force: bool = False,
-    strength: float = 0.5,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time_param: float = 0.25,
     verbose: bool = False,
@@ -55,289 +53,55 @@ def sync_orchestration(
     context_override: Optional[str] = None,
     confirm_callback: Optional[Callable[[str, str], bool]] = None,
 ) -> Dict[str, Any]:
-    """
-    Orchestrate the complete PDD sync workflow with parallel animation.
-    
-    If log=True, display sync log for this basename instead of running sync.
-    The verbose flag (global option) controls detail level of log output.
-
-    The directory parameters (prompts_dir, code_dir, examples_dir, tests_dir) 
-    specify the base locations for different file types. These are typically
-    resolved by sync_main using construct_paths() based on .pddrc configuration
-    and CLI context settings before being passed to this function.
-    
-    The context_config parameter can provide additional path overrides or
-    configuration settings that affect file resolution.
-    
-    Returns a dictionary with:
-    - 'success': bool indicating overall success
-    - 'operations_completed': List of completed operations
-    - 'skipped_operations': List of operations that were skipped
-    - 'total_cost': float total cost of all operations
-    - 'total_time': float total time elapsed
-    - 'final_state': Dict with final file states
-    - 'errors': List of any errors encountered
-    - 'error': str joined error message (semicolon-separated) or None
-    - 'model_name': str name of the last model used
-    - 'log_entries': List of log entries (when log=True)
-    """
 ```
 
-Here are examples of how to use the internal functions:
-<examples>
-    - Here is how to use the `sync_determine_operation` function:
-      <sync_determine_operation_example>
-        <include>context/sync_determine_operation_example.py</include>
-      </sync_determine_operation_example>
+### Return Value
 
-    - For examples of how to execute core PDD operations, refer to their respective test files included below. These provide the most up-to-date usage patterns.
-      <auto_deps_main_example>
+Returns a dictionary containing:
+- `success`: bool indicating overall success
+- `operations_completed`: List of completed operation names
+- `skipped_operations`: List of skipped operation names
+- `total_cost`: float total cost in dollars
+- `total_time`: float elapsed time in seconds
+- `final_state`: Dict mapping file types to `{exists, path}` info
+- `errors`: List of error messages
+- `error`: Semicolon-joined error string or None
+- `model_name`: Name of the last model used
+- `log_entries`: List of log entries (only when `log=True`)
+
+## Dependencies
+
+<examples>
+    <sync_determine_operation_example>
+        <include>context/sync_determine_operation_example.py</include>
+    </sync_determine_operation_example>
+    <auto_deps_main_example>
         <include>context/auto_deps_main_example.py</include>
-      </auto_deps_main_example>
-      <code_generator_main_example>
+    </auto_deps_main_example>
+    <code_generator_main_example>
         <include>context/code_generator_main_example.py</include>
-      </code_generator_main_example>
-      <context_generator_main_example>
+    </code_generator_main_example>
+    <context_generator_main_example>
         <include>context/context_generator_main_example.py</include>
-      </context_generator_main_example>
-      <crash_main_example>
+    </context_generator_main_example>
+    <crash_main_example>
         <include>context/crash_main_example.py</include>
-      </crash_main_example>
-      <fix_verification_main_example>
+    </crash_main_example>
+    <fix_verification_main_example>
         <include>context/fix_verification_main_example.py</include>
-      </fix_verification_main_example>
-      <cmd_test_main_example>
+    </fix_verification_main_example>
+    <cmd_test_main_example>
         <include>context/cmd_test_main_example.py</include>
-      </cmd_test_main_example>
-      <fix_main_example>
+    </cmd_test_main_example>
+    <fix_main_example>
         <include>context/fix_main_example.py</include>
-      </fix_main_example>
-      <update_main_example>
+    </fix_main_example>
+    <update_main_example>
         <include>context/update_main_example.py</include>
-      </update_main_example>
+    </update_main_example>
 </examples>
 
-## Workflow Orchestration
-
-The module should implement the PDD workflow as described in the whitepaper:
-
-1. **Log Mode Check**: If `--log` flag is set, display sync log and return. The log display should show:
-   - **Normal Mode**: Concise format showing timestamp, operation, reason, cost comparison, success status, and duration
-     ```
-     [2024-01-15 10:30:45] generate    | Code file does not exist | ✓ $0.47 (est: $0.50) | 17.3s
-     [2024-01-15 10:31:03] test        | Progress the workflow    | ✓ $0.62 (est: $0.60) | 23.1s
-     [2024-01-15 10:31:27] fix         | 2 tests failed           | ✗ Error: Budget exceeded
-     ```
-   - **Verbose Mode**: Detailed format including confidence, decision type, model, and details
-     ```
-     [2024-01-15 10:30:45] generate    | Code file does not exist
-       Decision Type: heuristic | Confidence: 1.0
-       Cost: $0.47 (estimated: $0.50) | Model: claude-3-5-sonnet
-       Duration: 17.3s | Budget Remaining: $9.53
-       Details: {"prompt_exists": true, "code_exists": false}
-     ```
-   - Clear indication if no log exists or log is empty
-   - Handle special event entries (lock_acquired, budget_warning, etc.)
-2. **Single Instance Enforcement**: Use `sync_determine_operation` to acquire lock and prevent concurrent runs
-3. **Initial Analysis**: Analyze current file state to determine starting point
-4. **Operation Loop**: Execute operations in sequence until synchronized
-5. **Parallel Animation**: Run `sync_animation` in a separate thread throughout
-6. **Lock Management**: Ensure lock is released on completion or failure
-7. **Error Handling**: Handle failures and retry logic within budget constraints
-8. **Final Reporting**: Summarize results and costs
-
-### Core Workflow Steps
-
-The orchestrator should execute these operations in order as determined by `sync_determine_operation`:
-
-1. **auto-deps**: Find and inject relevant dependencies into the prompt
-2. **generate**: Create or update the code module from the prompt  
-3. **example**: Generate usage example if it doesn't exist or is outdated
-4. **crash**: Fix any runtime errors to make code executable
-5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
-6. **test**: Generate comprehensive unit tests (unless --skip-tests)
-7. **fix**: Resolve any bugs found by unit tests
-8. **update**: Back-propagate any learnings to the prompt file
-
-### Sync Log Format
-
-The sync log should be stored at `.pdd/meta/{basename}_{language}_sync.log` as a JSONL file (one JSON object per line). Each log entry represents a complete operation with both decision and result information:
-
-**Complete Operation Entry**:
-```json
-{
-  "timestamp": "2024-01-15T10:30:45.123Z",
-  "operation": "generate",
-  "reason": "Code file does not exist",
-  "decision_type": "heuristic",
-  "confidence": 1.0,
-  "estimated_cost": 0.50,
-  "actual_cost": 0.47,
-  "success": true,
-  "model": "claude-3-5-sonnet-20241022",
-  "duration": 17.3,
-  "error": null,
-  "details": {
-    "prompt_exists": true,
-    "code_exists": false,
-    "prompt_hash": "abc123...",
-    "fingerprint_found": false,
-    "budget_remaining": 9.53
-  }
-}
-```
-
-**Special Event Entries** (for system events):
-```json
-{
-  "timestamp": "2024-01-15T10:30:44.000Z",
-  "event": "lock_acquired",
-  "details": {"pid": 12345}
-}
-```
-
-The `decision_type` field distinguishes between:
-- `"heuristic"`: Deterministic decisions based on file states
-- `"llm"`: Decisions made using LLM analysis for complex conflicts
-
-This enables users to understand:
-- What operations were performed during each sync
-- Why each operation was chosen with confidence levels
-- The decision-making process (heuristic vs LLM-based)
-- Actual cost vs estimated cost comparison for budget analysis
-- Which models were used for each operation
-- Success/failure status with error details
-- Performance metrics (duration)
-- Budget tracking throughout the sync process
-- Detailed context for debugging complex scenarios
-
-### Handling Skipped Operations
-If `--skip-verify` or `--skip-tests` flags are used, the orchestrator should not simply ignore the step. To ensure the state machine progresses correctly, it should:
-1. Log that the operation was skipped.
-2. Simulate a successful run for that operation by creating a `RunReport` and saving it. This updates the state, allowing `sync_determine_operation` to correctly select the next step.
-3. Handle cascading skip effects:
-   - If `skip_tests` is True, also skip `verify` operations (can't verify without tests)
-   - If `skip_tests` is True, also skip `crash` operations (crash fixes usually require test execution)
-4. Create appropriate dummy RunReports for skipped operations:
-   - For verify operations: Create RunReport with zero test results and appropriate skip reason
-   - For test operations: Create RunReport with perfect coverage assumption when skipped
-   - For crash operations: Create RunReport indicating the operation was skipped due to missing files or test skip requirements
-
-### TUI Animation System
-
-The module uses a Textual-based TUI (Terminal User Interface) for real-time feedback:
-
-1. **SyncApp Architecture**: Instantiate `SyncApp` from `sync_tui` module, passing:
-   - `basename`, `budget`: Module identification and budget limit
-   - `worker_func`: The `sync_worker_logic()` function containing the main workflow loop
-   - Mutable reference lists for state updates (see below)
-   - `stop_event`: threading.Event for coordination
-
-2. **Worker Function Pattern**: Define `sync_worker_logic()` as a nested function that:
-   - Contains the main workflow loop with lock acquisition
-   - Has access to outer scope's mutable state references
-   - Returns the final result dictionary
-   - Is executed by the TUI app in a managed worker thread
-
-3. **Update Animation State**: Use mutable list references to update TUI in real-time:
-   - `function_name_ref`: Current operation being executed (e.g., `["initializing"]`, `["generate"]`, `["synced"]`)
-   - `cost_ref`: Running total of costs (e.g., `[0.0]`)
-   - `prompt_color_ref/code_color_ref/example_color_ref/tests_color_ref`: Visual status indicators
-   - `prompt_path_ref/code_path_ref/example_path_ref/tests_path_ref`: File paths for display
-
-4. **App Reference for Confirmations**: Store app reference in `app_ref` list to allow worker to access `app.request_confirmation()` for user confirmations. Track `user_confirmed_overwrite` to avoid asking for confirmation multiple times within the same sync run.
-
-5. **Confirmation Callback Factory**: Implement `get_confirm_callback()` helper that:
-   - Returns a callback that always returns True if user already confirmed
-   - Otherwise returns a callback that calls `app.request_confirmation()` and remembers the result
-   - Falls back to the provided `confirm_callback` parameter if app is not available
-
-6. **Exit Animation**: After app completes, call `show_exit_animation()` from `sync_tui` (unless quiet mode)
-
-7. **Worker Exception Handling**: After `app.run()` completes, check `app.worker_exception` for any exceptions that occurred in the worker thread. If present, print error message and traceback to stderr, including captured logs for debugging.
-
-### Operation Execution
-
-For each operation:
-
-1. **Determine Next Step**: Call `sync_determine_operation` which returns a `SyncDecision` object containing:
-   - `operation`: The operation to perform ('generate', 'test', 'verify', etc.)
-   - `reason`: Human-readable explanation of why this operation was chosen
-   - `confidence`: Float (0.0-1.0) indicating confidence in the decision
-   - `estimated_cost`: Float representing estimated cost in dollars
-   - `details`: Optional dict with additional context about the decision
-2. **Create Log Entry**: Create initial log entry with:
-   ```python
-   log_entry = create_sync_log_entry(decision, budget - current_cost_ref[0])
-   ```
-3. **Update Animation**: Set `function_name_ref` to the current operation.
-4. **Execute Command**: Run the appropriate PDD `*_main` function, tracking start time.
-5. **Update Log Entry**: After execution, update the entry with actual results:
-   ```python
-   duration = time.time() - start_time
-   update_sync_log_entry(log_entry, {
-       'success': success,
-       'cost': actual_cost,      # Extracted from command result
-       'model': model_name,      # Extracted from command result
-       'error': error_message if not success else None
-   }, duration)
-   append_sync_log(basename, language, log_entry)
-   ```
-6. **Track Results**: Update cost, file paths, and status colors.
-7. **Persist State**: **If the operation was successful, save a new `Fingerprint` to disk.** This updates the state so the next call to `sync_determine_operation` can make a new decision.
-8. **Handle Errors**: Implement retry logic up to `max_attempts` or break the loop on a definitive failure.
-
-### Special Event Logging
-
-The orchestrator should also log important system events:
-
-- **Lock Events**: When sync lock is acquired/released
-- **Budget Warnings**: When budget is running low (< 20% remaining)
-- **Cycle Detection**: When crash-verify loops are detected and broken
-- **Skip Events**: When operations are skipped due to flags
-
-### State and Path Management
-
-The orchestrator should:
-
-- **Construct File Paths**: Use the `get_pdd_file_paths(basename, language, prompts_dir)` helper function to resolve all required file paths, using the provided directory parameters as base paths.
-- **Track File States**: Monitor which files exist and their modification times
-- **Update Animation Colors**: Set colors based on file status:
-  - Green: File exists and up-to-date
-  - Yellow: File being processed
-  - Red: File has errors or missing
-  - Blue: File analysis in progress
-- **Manage Lock Lifecycle**: Ensure sync lock is properly acquired at start and released at end
-- **Handle Lock Failures**: Exit gracefully if another sync is already running
-
-### Error Handling and Recovery
-
-Implement robust error handling:
-
-- **Path Construction Validation**: Validate file paths early and exit gracefully on failures with clear error messages
-- **Lock Acquisition Failure**: Exit immediately with clear message if another sync is running
-- **Budget Constraints**: Stop if total cost exceeds budget
-- **File Validation**: Validate required files exist before operations (especially for crash operations that need both code and example files)
-- **LLM Error Recovery**: Handle LLM failures gracefully, skipping operations when appropriate (e.g., "LLM returned None" errors)
-- **Subprocess Timeout Handling**: Implement timeouts for test execution and example runs to prevent hanging
-- **Actual Error Capture**: For fix operations, capture real test failure information by re-running tests and capturing stdout/stderr output to provide meaningful error context
-- **Return Value Handling**: Handle different return formats from command functions:
-  - Dictionary format: Extract 'success', 'cost', and 'model' fields directly
-  - Tuple format: Treat as successful if no exceptions, extract cost from second-to-last element and model from last element
-  - Ensure fingerprint state is saved after successful operations regardless of return format
-- **Enhanced Cycle Detection**: Detect and break multiple cycle types:
-  - Auto-deps infinite loop: When auto-deps appears 2+ times in last 3 operations, force advance to generate
-  - Crash-verify cycles: Detect alternating crash/verify operations (MAX_CYCLE_REPEATS = 2)
-  - Test-fix cycles: Detect alternating test/fix operations (MAX_CYCLE_REPEATS = 2)
-  - Consecutive fix operations: Break after 5 consecutive fix operations
-  - Consecutive test operations: Break after MAX_CONSECUTIVE_TESTS (3) consecutive test operations
-- **Graceful Degradation**: Continue workflow even if non-critical steps fail
-- **User Feedback**: Provide clear error messages through animation
-- **Lock Cleanup**: Always release lock, even on exceptions or early exits
-
-### Integration with Main Components
-
-The orchestrator should import and use at module level:
+### Module-Level Imports
 
 ```python
 from .sync_tui import SyncApp
@@ -350,7 +114,7 @@ from .sync_determine_operation import (
     META_DIR,
     SyncLock,
     read_run_report,
-    estimate_operation_cost,
+    calculate_sha256,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -361,228 +125,162 @@ from .cmd_test_main import cmd_test_main
 from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
+from .get_run_command import get_run_command_for_file
+from . import DEFAULT_STRENGTH
 ```
 
-Note: The following imports are performed at function scope rather than module level:
-- `from .sync_determine_operation import calculate_current_hashes, Fingerprint` - imported in `_save_operation_fingerprint()`
-- `from .sync_determine_operation import get_extension` - imported at the start of `sync_orchestration()`
-- `from . import __version__` - imported in `_save_operation_fingerprint()`
-- `from .sync_tui import show_exit_animation` - imported conditionally after app.run() completes
+### Function-Scope Imports
 
-### Required Dependencies
+- `calculate_current_hashes`, `Fingerprint` - in `_save_operation_fingerprint()`
+- `datetime, timezone` from datetime - in `_save_operation_fingerprint()`
+- `get_extension` - at the start of `sync_orchestration()`
+- `__version__` - in `_save_operation_fingerprint()`
+- `show_exit_animation` - after `app.run()` completes
+- `shutil` - inside auto-deps operation block
+- `traceback` - in exception handlers
 
-The module requires these additional imports:
+### Standard Library
 
 ```python
-import threading
-import time
-import json
-import datetime
-import subprocess
-import re
-import os
-import sys
-import shutil
-import logging
+import threading, time, json, datetime, subprocess, re, os, sys, logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict
-
 import click
 ```
 
-Note: `shutil` is used for moving temporary files in the auto-deps operation.
+## Workflow Operations
 
-### Module Constants
+The orchestrator executes these operations as determined by `sync_determine_operation`:
 
-```python
-MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts before breaking loop
-```
+1. **auto-deps**: Inject relevant dependencies into the prompt
+2. **generate**: Create or update code from prompt
+3. **example**: Generate usage example
+4. **crash**: Fix runtime errors to make code executable
+5. **verify**: Verify against prompt intent (unless `--skip-verify`)
+6. **test**: Generate unit tests (unless `--skip-tests`)
+7. **fix**: Resolve test failures
+8. **update**: Back-propagate learnings to prompt
 
-### Command Execution Pattern
+Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`, `analyze_conflict`
 
-For each PDD operation, construct appropriate arguments based on the up-to-date usage patterns found in the corresponding test files, which are included in the `<examples>` section of this prompt. The orchestrator is responsible for adapting these examples into robust calls that handle cost tracking, state persistence, and retry logic.
+## Core Behaviors
 
-### Helper Functions for State Management
+### Log Mode
 
-The orchestrator should implement these helper functions for proper state management:
+When `log=True`, display the sync log at `.pdd/meta/{basename}_{language}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
 
-- **load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]**: Load sync log entries from the metadata directory. Returns empty list if file doesn't exist or on parse error.
-- **create_sync_log_entry(decision, budget_remaining: float) -> Dict[str, Any]**: Create initial log entry from decision with all fields (actual results set to None initially)
-- **update_sync_log_entry(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]**: Update log entry with execution results (actual_cost, success, model, duration, error)
-- **append_sync_log(basename: str, language: str, entry: Dict[str, Any])**: Append completed log entry to the sync log file
-- **log_sync_event(basename: str, language: str, event: str, details: Dict[str, Any] = None)**: Log special sync events (lock_acquired, lock_released, budget_exceeded, budget_warning, cycle_detected) to the sync log
-- **save_run_report(report: Dict[str, Any], basename: str, language: str)**: Save RunReport data (as dict, not RunReport object) to enable state progression
-- **_save_operation_fingerprint(basename: str, language: str, operation: str, paths: Dict[str, Path], cost: float, model: str)**: Save fingerprint state after successful operations to update the workflow state machine. Imports `calculate_current_hashes`, `Fingerprint`, and `__version__` at function scope.
-- **_display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]**: Internal function to display formatted sync log when log=True
-- **_create_mock_context(**kwargs) -> click.Context**: Creates a mock Click context object to pass parameters to command functions
+### TUI Integration
 
-### Test Execution Integration
+1. Instantiate `SyncApp` with `worker_func` containing the main workflow loop
+2. Use mutable reference lists (`function_name_ref`, `cost_ref`, `*_color_ref`, `*_path_ref`) and `stop_event` (threading.Event) to coordinate with TUI
+3. Store app reference in `app_ref` list for confirmation dialogs via `app.request_confirmation()`
+4. Track `user_confirmed_overwrite` to avoid repeated confirmation prompts
+5. Call `show_exit_animation()` after completion (unless quiet mode)
+6. After `app.run()` completes, check `app.worker_exception` for worker thread crashes; print error and traceback to stderr
+7. If `app.run()` returns None, return error dict indicating sync was interrupted
 
-The orchestrator should include test execution functionality to create proper RunReports:
+### State Persistence
 
-- **_execute_tests_and_create_run_report(test_file, basename, language, target_coverage)**: Execute pytest with coverage reporting and parse results into RunReport objects. This enables the state machine to detect test failures and trigger fix operations in subsequent sync runs.
+After each successful operation:
+- Save a `Fingerprint` to disk with current file hashes
+- This advances the state machine for subsequent `sync_determine_operation` calls
+
+### Skip Handling
+
+When `skip_verify` or `skip_tests` is set:
+- Log that the operation was skipped
+- Save fingerprint to advance state machine (prevents infinite loops)
+- Cascading: `skip_tests` also skips `verify` and `crash`
 
 ### Post-Operation Validation
 
-After successful operations, the orchestrator should validate results:
+- After **generate**: Delete stale run_report to force re-validation
+- After **crash**: Re-run example to verify fix, update run report
+- After **fix**: Re-run tests to update run report
+- After **test**: Execute tests to create initial run report
 
-- **After 'generate' operations**: Delete any stale run_report file to force crash/verify validation of the newly generated code against existing examples. This prevents the sync from incorrectly skipping validation when old run_report data exists from a previous code generation.
-- **After 'crash' operations**: Re-run the example program to verify the crash is fixed and update run reports with actual execution results
-- **After 'fix' operations**: Execute tests to verify fixes worked and update run reports with current test status
-- **After 'test' operations**: Execute generated tests to create initial run reports for failure detection in subsequent sync runs
+## Helper Functions
 
-### Output Format
+Implement these helpers for state management:
 
-Return comprehensive results:
+- `load_sync_log(basename, language)` - Load JSONL log entries
+- `create_sync_log_entry(decision, budget_remaining)` - Create initial log entry from SyncDecision
+- `update_sync_log_entry(entry, result, duration)` - Add execution results to log entry
+- `append_sync_log(basename, language, entry)` - Append entry to log file
+- `log_sync_event(basename, language, event, details)` - Log system events (lock_acquired, budget_warning, etc.)
+- `save_run_report(report, basename, language)` - Save RunReport dict to enable state progression
+- `_save_operation_fingerprint(basename, language, operation, paths, cost, model)` - Save fingerprint after success
+- `_display_sync_log(basename, language, verbose)` - Format and display sync log
+- `_create_mock_context(**kwargs)` - Create Click context for command execution
+- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None)` - Run pytest with coverage and parse results
+- `_python_cov_target_for_code_file(code_file)` - Determine dotted module path for pytest-cov
+- `_python_cov_target_for_test_and_code(test_file, code_file, fallback)` - Analyze test imports to pick best `--cov` target
+
+## Error Handling
+
+### Path Construction
+
+Use `get_pdd_file_paths()` to resolve file paths. Handle errors gracefully:
+- If `FileNotFoundError` mentions test files, construct default paths and continue (test will be generated)
+- For other path errors, return error dict immediately with clear message
+
+### Cycle Detection
+
+Detect and break infinite loops with these limits:
+- Auto-deps: 2+ occurrences in last 3 operations → force advance to generate
+- Crash-verify alternation: Break after 2 cycles
+- Test-fix alternation: Break after 2 cycles
+- Consecutive fix operations: Break after 5
+- Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
+
+### Budget and Lock Management
+
+- Stop workflow if `total_cost >= budget`
+- Log budget warnings when < 20% remaining
+- Use `SyncLock` context manager; always release on exit
+- Log lock_acquired and lock_released events
+
+### Subprocess Isolation
+
+For test execution and example runs:
+- Remove TUI environment variables (`FORCE_COLOR`, `COLUMNS`)
+- Use `start_new_session=True` to isolate from TUI terminal control
+- Use `stdin=subprocess.DEVNULL` to prevent blocking
+
+### Return Value Parsing
+
+Handle command results in multiple formats:
+- Dict: Extract `success`, `cost`, `model` fields directly
+- Tuple: Cost is second-to-last element, model is last element
+- Save fingerprint after successful operations regardless of format
+
+## Constants
 
 ```python
-{
-    'success': True,
-    'operations_completed': ['auto-deps', 'generate', 'example', 'verify', 'test'],
-    'total_cost': 2.45,
-    'total_time': 120.5,
-    'final_state': {
-        'prompt': {'exists': True, 'path': '...', 'status': 'current'},
-        'code': {'exists': True, 'path': '...', 'status': 'generated'},
-        'example': {'exists': True, 'path': '...', 'status': 'current'},
-        'test': {'exists': True, 'path': '...', 'status': 'passing'}
-    },
-    'errors': [],
-    'skipped_operations': ['verify'] if skip_verify else []
-}
+# Module level
+MAX_CONSECUTIVE_TESTS = 3  # Break after this many consecutive test operations
+
+# Inside sync_worker_logic()
+MAX_CYCLE_REPEATS = 2  # Break crash-verify and test-fix cycles after this many repetitions
 ```
-
-## Implementation Requirements
-
-1. **Lock Management**: Use context managers or try/finally for reliable lock cleanup
-2. **Threading**: Use threading.Thread for animation, threading.Event for coordination
-3. **Context Management**: Create Click context objects for command execution
-4. **Path Resolution**: Use provided directory parameters with pathlib.Path for cross-platform compatibility
-5. **File Operations**: Use pathlib.Path for all file operations
-6. **Cost Tracking**: Accumulate costs from all operations, handling both dict and tuple return formats
-7. **Time Tracking**: Monitor elapsed time for each operation
-8. **Exception Handling**: Catch and handle all operation failures gracefully, always releasing locks
-9. **Return Format Compatibility**: Handle both dictionary and tuple return values from command functions
-10. **Error Recovery**: Handle operation failures gracefully and break workflow loop on definitive failures
-11. **State Persistence**: Always save fingerprint state after successful operations to enable workflow progression
-12. **Version Handling**: Import PDD version dynamically using `from . import __version__` and use it when creating Fingerprint objects for the pdd_version field instead of hardcoding version strings
-13. **Debug Output**: Debug print statements may be included during development but should be configurable or removable for production use
-
-## Dependencies
-
-- Standard library modules (threading, time, pathlib, subprocess, json)
-- Click for context management
-- All PDD command modules for operation execution
-- sync_determine_operation for workflow intelligence
-- sync_animation for user feedback
 
 ## Usage Examples
 
 ```python
-# Basic sync execution
-result = sync_orchestration(
-    basename="calculator",
-    language="python"
-)
+# Basic sync
+result = sync_orchestration(basename="calculator", language="python")
 
 # View sync log
-result = sync_orchestration(
-    basename="calculator",
-    language="python",
-    log=True
-)
+result = sync_orchestration(basename="calculator", language="python", log=True)
 
-# View detailed sync log (with verbose flag)
-result = sync_orchestration(
-    basename="calculator", 
-    language="python",
-    log=True,
-    verbose=True
-)
-
-# Result handling
-if not result['success']:
-    if 'lock_conflict' in result.get('errors', []):
-        print("Another sync is already running for this module")
-        exit(1)
-
-# Advanced sync with custom directories  
+# With custom directories
 result = sync_orchestration(
     basename="data_processor",
     language="python",
     prompts_dir="backend/prompts",
     code_dir="backend/src",
-    examples_dir="backend/examples", 
-    tests_dir="backend/tests",
     budget=15.0,
     target_coverage=95.0,
-    skip_verify=False
 )
 ```
-
-## Main Workflow and Lock Integration
-
-The orchestrator must use the `SyncLock` context manager to ensure only one sync process runs at a time for a given unit. The entire workflow should be wrapped in this lock.
-
-```python
-def sync_orchestration(..., log=False, verbose=False):
-    # Handle log mode first
-    if log:
-        # Code to display the log...
-        return
-
-    try:
-        # The main workflow is wrapped in the SyncLock context manager.
-        # This will raise TimeoutError if the lock is already held.
-        with SyncLock(basename, language) as lock:
-            
-            # 1. Start animation thread here
-            # ...
-
-            # 2. Begin the main workflow loop
-            while True:
-                # 3. Determine the next operation
-                decision = sync_determine_operation(...)
-                
-                # 4. Create log entry with decision info
-                log_entry = create_sync_log_entry(decision, budget - current_cost_ref[0])
-                
-                # 5. Execute the operation and track timing
-                start_time = time.time()
-                # ... execute operation ...
-                
-                # 6. Update log entry with execution results and save
-                duration = time.time() - start_time
-                update_sync_log_entry(log_entry, {
-                    'success': success,
-                    'cost': actual_cost,
-                    'model': model_name,
-                    'error': error_message if not success else None
-                }, duration)
-                append_sync_log(basename, language, log_entry)
-                
-                # 7. Save new state (fingerprint) on success
-                # ...
-
-                # 8. Break loop if finished, in conflict, or on error
-                if decision.operation in ['nothing', 'fail_and_request_manual_merge']:
-                    break
-    
-    except TimeoutError:
-        # Handle the case where the lock could not be acquired
-        return {'success': False, 'errors': ['Another sync process is running.']}
-    
-    except Exception as e:
-        # Handle other unexpected errors
-        # ...
-
-    finally:
-        # 7. Stop animation thread
-        # ...
-
-    # 8. Return final results
-    # ...
-```
-
-The module should be the central coordinator that brings together all PDD components into a seamless, animated workflow that embodies the prompt-driven development philosophy described in the whitepaper.

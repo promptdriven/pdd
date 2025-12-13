@@ -7,18 +7,25 @@
         'test_file' - A string containing the path to the test file.
         '--json-only' - An optional boolean flag. If present, output *only* the JSON to standard output.  Do not print any other messages.
     Command Line Interface Outputs:
-        'pytest.json' - A JSON file containing the output of pytest.  This file is *always* created.
-        Standard Output - If `--json-only` is present, output the JSON data to standard output.  Otherwise, output human-readable information, including pretty-printed test results.
+        'pytest.json' - A JSON file containing the output of pytest. Created only when `--json-only` is NOT specified.
+        Standard Output - If `--json-only` is present, output the JSON data to standard output. Otherwise, output human-readable information, including pretty-printed test results, and save to pytest.json.
 
-% Here is an example of the TestResultCollector plugin used to capture pytest results:
-<pytest_result_collector_example>
-    <include>context/pytest_example.py</include>
-</pytest_result_collector_example>
+% Requirements:
+    Input Validation:
+        - If the test file does not exist, print an error and return an empty result.
+        - If the test file is not a Python file (.py extension), print an error and return an empty result.
+    Timeout:
+        - Test execution should timeout after a reasonable duration (e.g., 5 minutes).
+        - On timeout, return a result indicating the timeout error.
+    Edge Cases:
+        - Handle ANSI escape sequences in pytest output (strip them for reliable parsing).
+        - If pytest returns a non-zero exit code but parsing detects no failures, ensure at least one failure or error is reported.
 
 % This function will do the following:
-    Step 1. Run pytest on the given test file.
-    Step 2. Capture the output of pytest.
-    Step 3. Save the output of pytest to the 'pytest.json' file with the following format:
+    Step 1. Validate that the test file exists and has a .py extension.
+    Step 2. Run pytest on the given test file and capture stdout/stderr.
+    Step 3. Parse the output to extract test counts (passed, failures, errors, warnings).
+    Step 4. Build a result dictionary with the following format:
         {
             "test_file": "path/to/test_file.py",
             "test_results": [
@@ -26,12 +33,16 @@
                     "standard_output": "standard output of the test",
                     "standard_error": "standard error of the test",
                     "return_code": "return code of the test",
-                    "warnings": "warnings of the test",
-                    "errors": "errors of the test",
-                    "failures": "failures of the test",
-                    "passed": "passed of the test",
+                    "warnings": "number of warnings",
+                    "errors": "number of errors",
+                    "failures": "number of failures",
+                    "passed": "number of passed tests",
                 }
             ]
         }
-    Step 4.  If the `--json-only` flag is provided, print *only* the JSON data to standard output.  Do not print any other messages to standard output in this case.
-    Step 5.  If the `--json-only` flag is *not* provided, print a message indicating which file is being tested, pretty-print the captured output to the console, and print a message indicating that the output has been saved to a file.
+    Step 5. If the `--json-only` flag is provided, print *only* the JSON data to standard output. Do not save to file or print any other messages.
+    Step 6. If the `--json-only` flag is *not* provided:
+        - Print a message indicating which file is being tested.
+        - Pretty-print the captured output to the console.
+        - Save the output to 'pytest.json'.
+        - Print a message indicating that the output has been saved.
