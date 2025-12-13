@@ -148,6 +148,17 @@ Guidance: Use these tags sparingly to keep prompts deterministic. Prefer stable 
 
 Use a shared include (e.g., `<include>context/project_preamble.prompt</include>`) at the top of every prompt. You should create this file in your project's `context/` directory to define your "Constitution": consistent coding style (e.g., indentation, naming conventions), preferred linting rules, and forbidden libraries. This ensures all generated code speaks the same language without cluttering individual prompts.
 
+### Automatic Update Propagation via Includes
+
+A key benefit of `<include>` directives is **automatic propagation**: when the included file changes, all prompts that reference it automatically reflect those changes on the next generation—without editing the prompts themselves.
+
+Use this pattern when:
+- **Authoritative documentation exists elsewhere** (e.g., a README that defines environment variables, API contracts, or configuration options). Include it rather than duplicating the content.
+- **Shared constraints evolve** (e.g., coding standards, security policies). A single edit to the preamble file updates all prompts.
+- **Interface definitions change** (e.g., a dependency's example file). Prompts consuming that example stay current.
+
+*Tradeoff:* Large includes consume context tokens. If only a small portion of a file is relevant, consider extracting that portion into a dedicated include file (e.g., `docs/output_conventions.md` rather than the full `README.md`).
+
 ### Positive over Negative Constraints
 
 Models often struggle with negative constraints ("Do not use X"). Instead, phrase requirements positively: instead of "Do not use unassigned variables," prefer "Initialize all variables with default values." This greatly improves reliability.
