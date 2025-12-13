@@ -95,6 +95,8 @@ def verify(
             "attempts": attempts,
         }
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "verify", ctx.obj.get("quiet", False))
         return None

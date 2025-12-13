@@ -409,4 +409,51 @@ def test_cli_result_callback_non_tuple_result_warning():
     assert "Unknown Command 3" not in summary
 
 
+# --- User Cancellation Handling Tests ---
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_user_cancellation_does_not_show_error_message_issue_186(
+    mock_main, mock_auto_update, runner, tmp_path, monkeypatch
+):
+    """
+    When user presses 'no' on overwrite confirmation, should exit cleanly
+    without 'Error during...' message.
+
+    Regression test for GitHub issue #186.
+
+    The bug: construct_paths calls sys.exit(1) on cancel, which PDDCLI.invoke()
+    catches and converts to RuntimeError, triggering handle_error() output.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    # Create prompt file
+    prompt_file = tmp_path / "demo_python.prompt"
+    prompt_file.write_text("// demo_python.prompt\n")
+
+    # Simulate what construct_paths does when user cancels:
+    # 1. Print "Operation cancelled." to stderr
+    # 2. Raise click.Abort() (was sys.exit(1) before fix)
+    def cancel_side_effect(*args, **kwargs):
+        click.secho("Operation cancelled.", fg="red", err=True)
+        raise click.Abort()
+
+    mock_main.side_effect = cancel_side_effect
+
+    result = runner.invoke(cli.cli, ['generate', str(prompt_file)])
+
+    # Should have non-zero exit code
+    assert result.exit_code != 0
+
+    # Should show cancellation message
+    assert 'Operation cancelled' in result.output
+
+    # BUG #186: These assertions should pass but currently FAIL
+    # The error handling shows "Error during 'unknown' command"
+    assert "Error during" not in result.output, \
+        "Bug #186: Cancellation should not show error message"
+    assert "unexpected error" not in result.output.lower(), \
+        "Bug #186: Cancellation should not show 'unexpected error'"
+
+
 # --- install_completion Command Test ---
