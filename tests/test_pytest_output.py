@@ -249,4 +249,76 @@ def test_subprocess_safe_stdin_in_run_pytest_and_capture_output(tmp_path) -> Non
         except ValueError as e:
             pytest.fail(f"Function crashed with ValueError accessing stdin: {e}")
 
+
+# ============================================================================
+# Regression Tests - ANSI / Color Output Parsing
+# ============================================================================
+
+def test_run_pytest_and_capture_output_parses_ansi_failed_output(tmp_path) -> None:
+    """
+    Regression test: when pytest output contains ANSI color codes, we should still
+    count failures correctly.
+    """
+    test_file = tmp_path / "test_failure_color_unit.py"
+    test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+
+    import subprocess
+
+    ansi_stdout = "test_failure_color_unit.py::test_fail \x1b[31mFAILED\x1b[0m [100%]\n"
+    fake_completed = subprocess.CompletedProcess(
+        args=["pytest"], returncode=1, stdout=ansi_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result.get("test_results", [{}])[0]
+    assert results.get("return_code") == 1
+    assert results.get("failures") == 1
+    assert results.get("errors") == 0
+
+
+def test_run_pytest_and_capture_output_counts_failures_with_forced_color(tmp_path, monkeypatch) -> None:
+    """
+    Integration regression: force color output (like the sync TUI) and ensure
+    failures are still detected.
+    """
+    test_file = tmp_path / "test_failure_color_integration.py"
+    test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+
+    existing_addopts = os.environ.get("PYTEST_ADDOPTS", "")
+    addopts = (existing_addopts + " " if existing_addopts else "") + "--color=yes"
+    monkeypatch.setenv("PYTEST_ADDOPTS", addopts)
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    result = run_pytest_and_capture_output(str(test_file))
+    results = result.get("test_results", [{}])[0]
+    stdout = results.get("standard_output", "") or ""
+
+    # Ensure this test exercises the ANSI-colored output path.
+    if "\x1b[" not in stdout:
+        pytest.skip("Pytest did not emit ANSI output even with --color=yes")
+    assert results.get("return_code") == 1
+    assert results.get("failures") == 1
+
+
+def test_run_pytest_and_capture_output_nonzero_returncode_never_looks_passing(tmp_path) -> None:
+    """
+    Safety net: if pytest returns a non-zero exit code but output parsing fails,
+    we should still report a failure/error count > 0.
+    """
+    test_file = tmp_path / "test_nonzero_returncode.py"
+    test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+
+    import subprocess
+
+    fake_completed = subprocess.CompletedProcess(
+        args=["pytest"], returncode=1, stdout="(output omitted)", stderr=""
+    )
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result.get("test_results", [{}])[0]
+    assert results.get("return_code") == 1
+    assert (results.get("failures", 0) + results.get("errors", 0)) > 0
     

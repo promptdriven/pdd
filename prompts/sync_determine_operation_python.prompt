@@ -42,6 +42,7 @@ Create the following `dataclasses` to structure the data:
     -   `tests_passed: int`
     -   `tests_failed: int`
     -   `coverage: float`
+    -   `test_hash: Optional[str]`  # Hash of test file when tests were run (for staleness detection)
 -   `SyncDecision`:
     -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'analyze_conflict', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge')
     -   `reason: str` (A human-readable explanation for the decision)
@@ -97,7 +98,7 @@ Implement the following helper functions:
 
 This is the core function that orchestrates the decision-making process.
 
-`sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False) -> SyncDecision:`
+`sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None) -> SyncDecision:`
 
 **Logic Flow:**
 
@@ -118,7 +119,9 @@ else:
 Log mode performs the complete analysis (reading fingerprints, calculating hashes, checking run reports, and applying decision logic) but without any file modifications or lock coordination.
 2.  **Check Runtime Signals First (updated priority)**:
     -   Read the latest `RunReport` and the last `Fingerprint`.
-    -   If the last fingerprint command was `crash` and `skip_verify=False`, return `verify` immediately (verify the crash fix) before other runtime checks.
+    -   If the last fingerprint command was `crash` and `skip_verify=False`:
+        -   If `run_report.exit_code != 0` → return `crash` (retry the failed crash fix)
+        -   Otherwise → return `verify` (verify the successful crash fix)
     -   If `tests_failed > 0`:
         -   If a test file exists → return `fix`.
         -   If the test file is missing → return `test` to (re)generate tests.
@@ -206,7 +209,12 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
             -   If no `RunReport` → **`crash`** (validate regenerated code works)
             -   If `RunReport.exit_code != 0` → **`crash`** (code crashed, needs fix)
             -   If last fingerprint command not in ['verify', 'test', 'fix', 'update'] and `skip_verify=False` → **`verify`**
+            -   If `RunReport.exit_code == 0` but `_is_workflow_complete` returns False (stale run_report) → **`test`** with `workflow_stage: 'revalidation'` (re-run tests to verify current state)
             -   Otherwise continue to "all required files exist" check
+        -   If `code` does not exist (can occur when fingerprint.code_hash is null, e.g., after auto-deps):
+            -   **CRITICAL**: If `fingerprint.command == 'auto-deps'` → **`generate`** (prevents infinite loop back to auto-deps)
+            -   Otherwise, if prompt has dependencies → **`auto-deps`**
+            -   Otherwise → **`generate`**
         -   If all required files exist considering skip flags → **`nothing`**.
         -   **Skip Flags**: When `skip_tests=True`, test files are not required. When `skip_verify=True`, verification operations are not required.
         -   **Operation names**: Use `nothing` for in-sync; use `all_synced` specifically when coverage is below target but tests are skipped.
@@ -217,8 +225,14 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         -   If only the `code_hash` differs -> **`update`**.
         -   If only the `test_hash` differs -> **`test`** (to run the new tests).
         -   If only the `example_hash` differs -> **`verify`** (to run the new example).
-    -   **Complex Changes (Multiple Files Modified / Conflicts)**:
-        -   Return a decision to run **`analyze_conflict`**. The calling orchestrator will handle this.
+    -   **Complex Changes (Multiple Files Modified)**:
+        -   **CRITICAL**: Only treat as a true conflict if the **prompt** (source of truth) changed along with derived artifacts. If only derived artifacts changed but the prompt is unchanged, this is NOT a conflict per PDD doctrine.
+        -   If `prompt` changed + derived files changed → **`analyze_conflict`** (true conflict requiring LLM analysis)
+        -   If ONLY derived artifacts changed (code, example, test) but prompt is unchanged:
+            -   If `code` changed → **`verify`** (re-verify the modified code works)
+            -   If `example` changed → **`verify`** (verify the modified example runs)
+            -   If `test` changed → **`test`** (run the modified tests)
+            -   Include `workflow_stage: 'continue_after_interruption'` in details
 
     -   **Dependency Heuristics (expanded)**:
         -   Treat these as dependency indicators: XML tags `<include>`, `<web>`, `<shell>` (case-sensitive) or phrases like “auto-deps”, “auto_deps”, “dependencies needed”, “requires dependencies”, “include dependencies” (case-insensitive)
@@ -233,7 +247,7 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         - Hash comparisons (`prompt_changed`, `code_changed`, etc.)
         - Fingerprint state (`fingerprint_found`, `last_command`/`previous_command`)
         - Run report details (`tests_failed`, `coverage`, `exit_code`, timestamps)
-        - Workflow markers like `workflow_stage` (e.g., `crash_validation`, `crash_fix`, `verify_validation`, `test_generation`), `auto_deps_completed`, `no_run_report`, `skip_tests`, `skip_verify`, `has_dependencies`
+        - Workflow markers like `workflow_stage` (e.g., `crash_validation`, `crash_fix`, `crash_retry`, `verify_validation`, `test_generation`, `revalidation`, `post_regeneration_validation`, `verification_pending`, `continue_after_interruption`), `auto_deps_completed`, `no_run_report`, `skip_tests`, `skip_verify`, `has_dependencies`, `run_report_stale`
 
 #### 5. References: Here is how to use the internal modules that are available and must be used in this implementation:
     <internal_modules>
@@ -273,7 +287,7 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
 
 Implement a second function `analyze_conflict_with_llm` to resolve complex sync conflicts using an LLM.
 
-`analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str]) -> SyncDecision:`
+`analyze_conflict_with_llm(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = "prompts", context_override: Optional[str] = None) -> SyncDecision:`
 
 **Logic Flow:**
 
@@ -361,6 +375,10 @@ Add and use these helpers in the implementation to reflect the above logic:
           1. All required files exist (code, example, test unless skip_tests)
           2. run_report exists with exit_code == 0 (code runs successfully)
           3. fingerprint.command indicates verify has been done (unless skip_verify) - must be in ['verify', 'test', 'fix', 'update']
+          4. run_report.test_hash matches current test file hash (staleness check):
+             - If run_report.test_hash exists and differs from current test hash → workflow NOT complete (stale report)
+             - For legacy reports without test_hash, compare fingerprint timestamp vs run_report timestamp as fallback
+             - If fingerprint is newer than run_report, the report may be stale → workflow NOT complete
 - `_check_example_success_history(basename, language) -> bool`: Whether the example has run successfully before (to prefer `fix` over `crash` on runtime errors)
 
 This enables users to run `pdd sync --log` to understand the complete decision history and troubleshoot any issues.

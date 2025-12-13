@@ -317,7 +317,8 @@ def test_construct_paths_basename_extraction(tmpdir):
                     file_extension=mock_ext, # Use the extension determined for mocking
                     context_config={},
                     input_file_dir=ANY,
-                    input_file_dirs={}
+                    input_file_dirs={},
+                    config_base_dir=None,
                 )
         # Clean up dummy code file
         if dummy_code and dummy_code.exists():
@@ -755,7 +756,8 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
             file_extension='.py',
             context_config={},
             input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dirs={},
+            config_base_dir=None,
         )
 
 
@@ -1233,7 +1235,8 @@ def test_construct_paths_conflicting_language_specification(tmpdir):
             file_extension='.js',   # Correct extension passed
             context_config={},
             input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dirs={},
+            config_base_dir=None,
         )
         assert output_file_paths['output'] == str(mock_output_path)
 
@@ -1410,7 +1413,8 @@ def test_construct_paths_symbolic_links(tmpdir):
             file_extension='.py',
             context_config={},
             input_file_dir=ANY,
-            input_file_dirs={}
+            input_file_dirs={},
+            config_base_dir=None,
         )
 
 # --- Fixture and tests below seem to use tmp_path_factory correctly ---
@@ -1508,7 +1512,8 @@ def test_construct_paths_generate_command(setup_test_files):
         file_extension='.prompt',
         context_config={},
         input_file_dir=ANY,
-        input_file_dirs={}
+        input_file_dirs={},
+        config_base_dir=None,
     )
 
 
@@ -1971,8 +1976,39 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
             file_extension='',  # Makefiles have no extension
             context_config={},
             input_file_dir=ANY,
-                        input_file_dirs=ANY
+            input_file_dirs=ANY,
+            config_base_dir=None,
         )
+
+
+def test_construct_paths_passes_config_base_dir_when_pddrc_present(tmpdir):
+    """Test that construct_paths passes config_base_dir when a .pddrc is found."""
+    tmp_path = Path(str(tmpdir))
+    prompt_file = tmp_path / "my_project_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    from pdd.construct_paths import _find_pddrc_file
+
+    pddrc_path = _find_pddrc_file()
+    assert pddrc_path is not None
+
+    mock_output_paths_dict_str = {"output": str(tmp_path / "output.py")}
+
+    with patch(
+        "pdd.construct_paths.generate_output_paths",
+        return_value=mock_output_paths_dict_str,
+    ) as mock_gen_paths:
+        construct_paths(
+            input_file_paths={"prompt_file": str(prompt_file)},
+            force=True,
+            quiet=True,
+            command="generate",
+            command_options={},
+        )
+
+    assert mock_gen_paths.call_args.kwargs.get("config_base_dir") == str(
+        Path(pddrc_path).parent
+    )
 
 
 # Test context detection functions that were in test_context_detection.py
@@ -2104,3 +2140,69 @@ def test_construct_paths_sync_discovery_custom_prompts_dir(tmpdir):
     # prompts_dir MUST respect the context config, not hardcode "prompts"
     assert resolved_config["prompts_dir"] == "prompts/backend", \
         f"Expected prompts_dir='prompts/backend' from context config, got '{resolved_config['prompts_dir']}'"
+
+
+def test_construct_paths_fix_resolves_pddrc_paths_relative_to_pddrc(tmp_path, monkeypatch):
+    """
+    Regression test: `fix` output paths should resolve relative `.pddrc` directories
+    relative to the `.pddrc` location (project root), not relative to the input
+    code file directory.
+
+    Bug: Relative `generate_output_path` / `test_output_path` values like
+    "backend/functions/" and "backend/tests/" were incorrectly joined under the
+    code file directory (e.g. backend/functions/backend/tests/...).
+    """
+    from pdd.construct_paths import construct_paths
+
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / ".pddrc").write_text(
+        '\n'.join(
+            [
+                'version: "1.0"',
+                "contexts:",
+                "  backend:",
+                "    paths:",
+                '      - "backend/**"',
+                "    defaults:",
+                '      generate_output_path: "backend/functions/"',
+                '      test_output_path: "backend/tests/"',
+                '      example_output_path: "context/"',
+                '      prompts_dir: "prompts/backend"',
+                '      default_language: "python"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (tmp_path / "backend" / "functions").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "backend" / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "prompts" / "backend").mkdir(parents=True, exist_ok=True)
+
+    prompt_file = tmp_path / "prompts" / "backend" / "admin_get_users_python.prompt"
+    prompt_file.write_text("prompt", encoding="utf-8")
+    code_file = tmp_path / "backend" / "functions" / "admin_get_users.py"
+    code_file.write_text("def admin_get_users():\n    return []\n", encoding="utf-8")
+    test_file = tmp_path / "backend" / "tests" / "test_admin_get_users.py"
+    test_file.write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+
+    _, _, output_file_paths, language = construct_paths(
+        input_file_paths={
+            "prompt_file": str(prompt_file),
+            "code_file": str(code_file),
+            "unit_test_file": str(test_file),
+        },
+        force=True,
+        quiet=True,
+        command="fix",
+        command_options={"output_test": None, "output_code": None, "output_results": None},
+        create_error_file=True,
+        context_override="backend",
+    )
+
+    assert language == "python"
+    assert output_file_paths["output_code"] == str(tmp_path / "backend" / "functions" / "admin_get_users_fixed.py")
+    assert output_file_paths["output_test"] == str(tmp_path / "backend" / "tests" / "test_admin_get_users_fixed.py")
+    assert output_file_paths["output_results"] == str(
+        tmp_path / "backend" / "functions" / "admin_get_users_fix_results.log"
+    )
