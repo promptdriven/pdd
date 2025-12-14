@@ -282,15 +282,48 @@ run_pdd_expect_fail() {
 
 # --- Portable Timeout Helper ---
 # Prefer GNU timeout if available (macOS installs it as gtimeout via coreutils)
+# Falls back to pure-bash implementation if neither is available
 TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
 run_with_timeout() {
     local duration="$1"; shift
+
     if [ -n "$TIMEOUT_CMD" ]; then
         "$TIMEOUT_CMD" "$duration" "$@"
     else
-        # No timeout available; run command without enforcing a timeout
-        log "No timeout command found; running without timeout: $*"
-        "$@"
+        # Pure-bash timeout fallback for systems without timeout/gtimeout
+        # Parse duration (supports formats: 30, 30s, 5m, 1h)
+        local seconds
+        case "$duration" in
+            *s) seconds="${duration%s}" ;;
+            *m) seconds=$((${duration%m} * 60)) ;;
+            *h) seconds=$((${duration%h} * 3600)) ;;
+            *)  seconds="$duration" ;;
+        esac
+
+        log "Using bash timeout fallback (${seconds}s): $*"
+
+        # Run command in background
+        "$@" &
+        local cmd_pid=$!
+
+        # Wait for command or timeout
+        local elapsed=0
+        while kill -0 "$cmd_pid" 2>/dev/null; do
+            if [ "$elapsed" -ge "$seconds" ]; then
+                kill -TERM "$cmd_pid" 2>/dev/null
+                sleep 1
+                kill -KILL "$cmd_pid" 2>/dev/null
+                wait "$cmd_pid" 2>/dev/null
+                log "Command timed out after ${seconds}s"
+                return 124  # Same exit code as GNU timeout
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+
+        # Command finished before timeout
+        wait "$cmd_pid"
+        return $?
     fi
 }
 
@@ -1055,8 +1088,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "10" ]; then
     # Try to run another sync immediately (should be blocked or handle gracefully)
     sleep 2
     log "Testing concurrent sync execution..."
+    # Temporarily disable set -e to capture exit code (both success and failure are valid outcomes)
+    set +e
     run_with_timeout 15s "$PDD_SCRIPT" --force --output-cost "$REGRESSION_DIR/$COST_FILE" --strength "$STRENGTH" --temperature "$TEMPERATURE" sync "$SIMPLE_BASENAME" >> "$LOG_FILE" 2>&1
     CONCURRENT_EXIT_CODE=$?
+    set -e
     
     if [ $CONCURRENT_EXIT_CODE -eq 0 ]; then
         log "Concurrent sync succeeded (no locking detected)"
