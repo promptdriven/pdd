@@ -19,7 +19,7 @@
      - Logic: Clean `directory_path` quotes. Call `auto_deps_main`.
   3. **setup**:
      - Interface: Match the `setup` command specification in `README.md`.
-     - Logic: Import `install_completion` from `pdd.cli` (to allow mocking/patching) and `_run_setup_utility` from `core.utils`.
+     - Logic: Import `install_completion` from `pdd.cli` inside the function (to allow mocking/patching). Call `_run_setup_utility` from `core.utils`.
      - Run install then setup utility.
 
 % Dependencies

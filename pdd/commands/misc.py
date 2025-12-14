@@ -72,6 +72,8 @@ def preprocess(
             # Unpack the return value from preprocess_main
             processed_prompt, total_cost, model_name = result
             return processed_prompt, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "preprocess", ctx.obj.get("quiet", False))
         return None

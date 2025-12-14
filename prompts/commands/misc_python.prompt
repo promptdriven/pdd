@@ -14,7 +14,12 @@
   - **preprocess**:
     - Interface: Match the `preprocess` command specification in `README.md`.
     - Logic: Call `preprocess_main`.
-    - Return dummy cost tuple for callback compatibility (local op).
+    - Return: Pass through the cost tuple from `preprocess_main`:
+      - Without `--xml`: returns `(prompt, 0.0, "N/A")` (local operation)
+      - With `--xml`: returns actual LLM cost data from `xml_tagger`
+    - Error handling:
+      - Re-raise `click.Abort` for user cancellation
+      - Use `handle_error` for other exceptions
 
 % Dependencies
   <preprocess_main_example>
