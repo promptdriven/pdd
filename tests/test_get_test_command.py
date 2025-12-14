@@ -277,7 +277,7 @@ class TestZ3FormalVerification:
         3. If both fail, None is returned
         """
         try:
-            from z3 import Bool, Implies,And, Not, Solver, sat
+            from z3 import Bool, Implies, And, Not, Solver, sat
         except ImportError:
             pytest.skip("Z3 not installed")
 
