@@ -50,6 +50,8 @@ def split(
             output_modified=output_modified,
         )
         return result_data, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as e:
         handle_error(e, command_name, quiet)
         return None
@@ -120,6 +122,8 @@ def change(
             budget=budget,
         )
         return result_data, total_cost, model_name
+    except click.Abort:
+        raise
     except (click.UsageError, Exception) as e: # Catch specific and general exceptions
         handle_error(e, command_name, quiet)
         return None
@@ -184,6 +188,8 @@ def update(
             extensions=extensions,
         )
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "update", ctx.obj.get("quiet", False))
         return None

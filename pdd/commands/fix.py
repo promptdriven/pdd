@@ -113,6 +113,8 @@ def fix(
             "attempts": attempts,
         }
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "fix", ctx.obj.get("quiet", False))
         ctx.exit(1)
