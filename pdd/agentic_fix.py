@@ -284,19 +284,26 @@ def _run_cli_args_openai(args: List[str], cwd: Path, timeout: int) -> subprocess
 
 def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
-    Try several OpenAI CLI variants (including read-only sandbox) to improve robustness.
+    Try several OpenAI CLI variants to improve robustness.
     Returns the first attempt that yields output or succeeds.
+
+    NOTE: Agents need write access to modify files in agentic mode,
+    so we do not restrict the sandbox.
     """
-    wrapper = (
-        "You must ONLY output corrected file content wrapped EXACTLY between "
-        "the markers I provide. No commentary. "
+    # Write prompt to a temporary file so Codex can run in agentic mode
+    prompt_file = cwd / ".agentic_prompt.txt"
+    prompt_file.write_text(prompt_text, encoding="utf-8")
+
+    # Agentic instruction that tells Codex to read the prompt file and fix
+    agentic_instruction = (
+        f"Read the file {prompt_file} for instructions on what to fix. "
+        "You have full file access to explore and modify files as needed. "
+        "After reading the instructions, fix the failing tests."
     )
-    full = wrapper + "\n\n" + prompt_text
 
     variants = [
-        ["codex", "exec", full],
-        ["codex", "exec", "--skip-git-repo-check", full],
-        ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", full],
+        ["codex", "exec", agentic_instruction],
+        ["codex", "exec", "--skip-git-repo-check", agentic_instruction],
     ]
     per_attempt = 300
     last = None
@@ -327,16 +334,24 @@ def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subproc
 
 def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
-    Anthropic CLI runner (single-variant). Keeps interface uniform with OpenAI/Google.
+    Anthropic CLI runner in agentic mode (without -p flag).
+
+    NOTE: We do NOT use -p (print mode) because it prevents file tool access.
+    Instead, we write the prompt to a file and let Claude read it in agentic mode.
     """
-    wrapper = (
-        "IMPORTANT: You must ONLY output corrected file content wrapped EXACTLY "
-        "between the two markers below. NO commentary, NO extra text.\n"
+    # Write prompt to a temporary file so Claude can run in agentic mode
+    prompt_file = cwd / ".agentic_prompt.txt"
+    prompt_file.write_text(prompt_text, encoding="utf-8")
+
+    # Agentic instruction that tells Claude to read the prompt file and fix
+    agentic_instruction = (
+        f"Read the file {prompt_file} for instructions on what to fix. "
+        "You have full file access to explore and modify files as needed. "
+        "After reading the instructions, fix the failing tests."
     )
-    full = wrapper + "\n" + prompt_text
 
     variants = [
-        ["claude", "-p", "--dangerously-skip-permissions", full],
+        ["claude", "--dangerously-skip-permissions", agentic_instruction],
     ]
     per_attempt = 300
     last: Optional[subprocess.CompletedProcess] = None
@@ -367,16 +382,24 @@ def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess
 
 def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
-    Google CLI runner (single-variant). Accepts prompt text via "-p".
+    Google CLI runner in agentic mode (without -p flag).
+
+    NOTE: We do NOT use -p (pipe mode) because it may prevent tool access.
+    Instead, we write the prompt to a file and let Gemini read it in agentic mode.
     """
-    wrapper = (
-        "IMPORTANT: ONLY output corrected file content wrapped EXACTLY between "
-        "the two markers below. No commentary. No extra text.\n"
+    # Write prompt to a temporary file so Gemini can run in agentic mode
+    prompt_file = cwd / ".agentic_prompt.txt"
+    prompt_file.write_text(prompt_text, encoding="utf-8")
+
+    # Agentic instruction that tells Gemini to read the prompt file and fix
+    agentic_instruction = (
+        f"Read the file {prompt_file} for instructions on what to fix. "
+        "You have full file access to explore and modify files as needed. "
+        "After reading the instructions, fix the failing tests."
     )
-    full = wrapper + "\n" + prompt_text
 
     variants = [
-        ["gemini", "-p", full],
+        ["gemini", agentic_instruction],
     ]
     per_attempt = 300
     last = None
