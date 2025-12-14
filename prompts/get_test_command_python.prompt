@@ -14,13 +14,12 @@
        b) Smart detection via `default_verify_cmd_for()` from `agentic_langtest`
        c) `None` (signals to caller that agentic fallback is needed)
 
-  2) Internal function `_load_language_format() -> dict`:
-     - Loads `$PDD_PATH/data/language_format.csv` into a dictionary keyed by file extension.
-     - Returns the dictionary for lookup operations.
-
-  3) Language resolution:
+  2) Language resolution:
      - If `language` parameter is provided, use it directly.
      - Otherwise, infer the language from the file extension using `get_language()`.
+
+  3) CSV location:
+     - Load from a path relative to the module: `Path(__file__).parent.parent / "data" / "language_format.csv"`
 
 % Dependencies
   <get_language>
@@ -32,15 +31,15 @@
   </agentic_langtest>
 
 % Data Source
-  The file at `$PDD_PATH/data/language_format.csv` is a CSV with columns:
+  The file at `data/language_format.csv` (relative to package root) is a CSV with columns:
   - `extension` (e.g., .py, .ts, .go)
   - `run_test_command` (e.g., "python -m pytest {file} -v", empty for smart detection)
   - (Other columns like `language`, `comment`, `run_command` exist but are not primary for this task)
 
 % Instructions
-  - Use the `csv` module to read the data file safely.
+  - Use the `csv` module to read the data file.
   - Use `pathlib.Path` for file path operations.
   - Extract the file extension from the test file path to perform CSV lookup.
   - When replacing `{file}` placeholder, use the original test_file string as provided.
-  - Include docstrings for all functions.
-  - Handle missing CSV gracefully (the module should not crash if CSV is missing).
+  - Include docstrings for all public functions.
+  - Call `default_verify_cmd_for()` with the language in lowercase.
