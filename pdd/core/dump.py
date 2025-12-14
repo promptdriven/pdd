@@ -31,7 +31,7 @@ def _write_core_dump(
         core_dump_dir = Path.cwd() / ".pdd" / "core_dumps"
         core_dump_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
         dump_path = core_dump_dir / f"pdd-core-{timestamp}.json"
 
         steps: List[Dict[str, Any]] = []
