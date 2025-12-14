@@ -1,11 +1,12 @@
 # tests/test_sync_orchestration.py
 
 import pytest
+import json
 import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call, ANY
 
-from pdd.sync_orchestration import sync_orchestration
+from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
 
 # Test Plan:
@@ -1951,3 +1952,249 @@ class TestRunReportUpdateAfterFix:
             f"Expected exactly 1 fix operation, got {result['operations_completed'].count('fix')}. "
             "If more than 1, the infinite loop prevention may not be working."
         )
+
+
+# --- Multi-Language Test Execution Tests ---
+
+class TestNonPythonFixLoopBug:
+    """Tests that expose the infinite fix loop bug for non-Python languages."""
+
+    @pytest.fixture
+    def multilang_fixture(self, tmp_path, monkeypatch):
+        """Sets up a temporary project directory for multi-language testing."""
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+        (tmp_path / "prompts" / "calculator_typescript.prompt").write_text(
+            "Create a TypeScript calculator."
+        )
+        (tmp_path / "src" / "calculator.ts").write_text(
+            "export function add(a: number, b: number): number { return a + b; }"
+        )
+        (tmp_path / "tests" / "test_calculator.ts").write_text(
+            "import { add } from '../src/calculator'; test('add', () => expect(add(1,2)).toBe(3));"
+        )
+
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    def test_execute_tests_uses_pytest_for_typescript_BUG(self, tmp_path):
+        """
+        BUG DETECTION: _execute_tests_and_create_run_report runs pytest for TypeScript.
+
+        Current behavior (BUG): Always runs pytest regardless of language.
+        Expected behavior: Should use language-appropriate test runner (or return 127).
+
+        This test should FAIL before fix, PASS after.
+        """
+        test_file = tmp_path / "test_calc.ts"
+        test_file.write_text("// TypeScript test file")
+
+        commands_run = []
+
+        def capture_subprocess_run(cmd, *args, **kwargs):
+            # Capture both list commands and shell string commands
+            if isinstance(cmd, list):
+                commands_run.append(('list', cmd))
+            else:
+                commands_run.append(('shell', cmd))
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "Tests passed"
+            result.stderr = ""
+            return result
+
+        with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_subprocess_run):
+            with patch('pdd.sync_orchestration.calculate_sha256', return_value="abc123"):
+                with patch('pdd.sync_orchestration.save_run_report'):
+                    try:
+                        _execute_tests_and_create_run_report(
+                            test_file=test_file,
+                            basename="calc",
+                            language="typescript",
+                            target_coverage=90.0
+                        )
+                    except Exception:
+                        pass
+
+        # Check that pytest is NOT called directly via list command for TypeScript
+        # For TypeScript, it should either:
+        # 1. Use shell command (from get_test_command_for_file)
+        # 2. Return exit_code 127 (no test command available)
+        pytest_list_cmd = any(
+            cmd_type == 'list' and 'pytest' in str(cmd)
+            for cmd_type, cmd in commands_run
+        )
+        assert not pytest_list_cmd, (
+            "BUG DETECTED: _execute_tests_and_create_run_report uses pytest list command for TypeScript. "
+            "Should use language-appropriate test runner or return exit_code 127."
+        )
+
+    def test_fix_operation_uses_simulated_failures_for_non_python_BUG(self, multilang_fixture):
+        """
+        BUG DETECTION: Fix operation writes "Simulated failures" for non-Python languages.
+
+        When tests_failed=0 but exit_code!=0 for TypeScript, the fix operation
+        falls through to "Simulated failures" instead of running actual tests.
+
+        This test should FAIL before fix, PASS after.
+        """
+        tmp_path = multilang_fixture
+        meta_dir = tmp_path / ".pdd" / "meta"
+
+        # Simulate the problematic state: exit_code=4, tests_failed=0
+        run_report_data = {
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "exit_code": 4,
+            "tests_passed": 0,
+            "tests_failed": 0,  # This triggers "Simulated failures"
+            "coverage": 0.0
+        }
+        (meta_dir / "calculator_typescript_run.json").write_text(json.dumps(run_report_data))
+
+        captured_error_content = []
+        original_write_text = Path.write_text
+
+        def capture_write(self, content, *args, **kwargs):
+            if 'fix_errors' in str(self):
+                captured_error_content.append(content)
+            return original_write_text(self, content, *args, **kwargs)
+
+        # Mock everything to focus on the error content issue
+        with patch.object(Path, 'write_text', capture_write):
+            with patch('pdd.sync_orchestration.sync_determine_operation') as mock_decide:
+                # First call returns 'fix', second call returns 'all_synced' to exit
+                mock_decide.side_effect = [
+                    SyncDecision(operation='fix', reason='test', confidence=1.0),
+                    SyncDecision(operation='all_synced', reason='done', confidence=1.0),
+                ]
+                with patch('pdd.sync_orchestration.fix_main') as mock_fix:
+                    mock_fix.return_value = {'success': True, 'cost': 0.01, 'model': 'mock'}
+                    with patch('pdd.sync_orchestration.SyncApp') as mock_app:
+                        # Run worker synchronously
+                        mock_app.side_effect = lambda *a, **kw: type('MockApp', (), {
+                            'worker_func': kw.get('worker_func'),
+                            'run': lambda self: self.worker_func(),
+                            'worker_exception': None,
+                        })()
+
+                        try:
+                            sync_orchestration(
+                                basename="calculator",
+                                language="typescript",
+                                budget=1.0,
+                                quiet=True
+                            )
+                        except Exception:
+                            pass
+
+        # Check if "Simulated failures" was written
+        for content in captured_error_content:
+            assert "Simulated failures" not in content, (
+                "BUG DETECTED: Non-Python fix operation uses 'Simulated failures' "
+                "instead of running actual test command. This causes infinite loop."
+            )
+
+
+class TestLanguageTestCommandResolution:
+    """Tests for language-specific test command resolution."""
+
+    def test_get_test_command_returns_none_for_unknown_language(self):
+        """
+        After fix: get_test_command_for_file should exist and return None
+        for languages without configured test runners.
+        """
+        try:
+            from pdd.get_test_command import get_test_command_for_file
+        except ImportError:
+            pytest.skip("get_test_command module not yet implemented")
+
+        result = get_test_command_for_file("/tmp/test.unknown", "unknown_lang")
+        assert result is None
+
+    def test_get_test_command_returns_pytest_for_python(self):
+        """After fix: Python should use pytest."""
+        try:
+            from pdd.get_test_command import get_test_command_for_file
+        except ImportError:
+            pytest.skip("get_test_command module not yet implemented")
+
+        result = get_test_command_for_file("/tmp/test_foo.py", "python")
+        assert result is not None
+        assert "pytest" in result
+
+
+class TestOutputParsing:
+    """Tests for test output parsing across languages."""
+
+    def test_parse_jest_output(self):
+        """After fix: Should parse Jest output correctly."""
+        try:
+            from pdd.sync_orchestration import _parse_test_output
+        except (ImportError, AttributeError):
+            pytest.skip("_parse_test_output not yet implemented")
+
+        jest_output = """
+        PASS src/calculator.test.ts
+        Tests: 5 passed, 2 failed, 7 total
+        """
+        passed, failed, coverage = _parse_test_output(jest_output, "typescript")
+        assert passed == 5
+        assert failed == 2
+
+    def test_parse_go_test_output(self):
+        """After fix: Should parse go test output correctly."""
+        try:
+            from pdd.sync_orchestration import _parse_test_output
+        except (ImportError, AttributeError):
+            pytest.skip("_parse_test_output not yet implemented")
+
+        go_output = """
+        --- PASS: TestAdd (0.00s)
+        PASS
+        coverage: 85.7% of statements
+        """
+        passed, failed, coverage = _parse_test_output(go_output, "go")
+        assert passed >= 1
+        assert coverage == 85.7
+
+
+# --- Parameter Name Regression Tests ---
+
+def test_update_operation_calls_update_main_with_use_git(orchestration_fixture):
+    """
+    Regression test: Verify that the 'update' operation calls update_main
+    with use_git=True (not git=True).
+
+    This test prevents the bug where sync_orchestration passed 'git=True'
+    instead of 'use_git=True' to update_main, causing:
+        TypeError: update_main() got an unexpected keyword argument 'git'
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_update = orchestration_fixture['update_main']
+
+    # Set up the decision to trigger update operation
+    mock_determine.side_effect = [
+        SyncDecision(operation='update', reason='Code modified, prompt outdated'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Configure update_main to return success
+    mock_update.return_value = {
+        'success': True,
+        'cost': 0.04,
+        'model': 'mock-model'
+    }
+
+    # Act
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # Assert update_main was called with use_git=True (not git=True)
+    mock_update.assert_called_once()
+    call_kwargs = mock_update.call_args.kwargs
+    assert 'use_git' in call_kwargs, "update_main should be called with 'use_git' parameter"
+    assert call_kwargs['use_git'] is True
+    assert 'git' not in call_kwargs, "update_main should NOT be called with 'git' parameter (wrong name)"

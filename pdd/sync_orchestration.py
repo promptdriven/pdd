@@ -220,6 +220,109 @@ def _python_cov_target_for_test_and_code(test_file: Path, code_file: Path, fallb
     return stem or fallback
 
 
+def _parse_test_output(output: str, language: str) -> tuple[int, int, float]:
+    """
+    Parse test output to extract passed/failed/coverage.
+
+    Args:
+        output: Combined stdout/stderr from test runner
+        language: Language name (e.g., 'python', 'typescript', 'go')
+
+    Returns:
+        (tests_passed, tests_failed, coverage)
+    """
+    tests_passed = 0
+    tests_failed = 0
+    coverage = 0.0
+
+    lang = language.lower()
+
+    # Python (pytest)
+    if lang == 'python':
+        if 'passed' in output:
+            passed_match = re.search(r'(\d+) passed', output)
+            if passed_match:
+                tests_passed = int(passed_match.group(1))
+        if 'failed' in output:
+            failed_match = re.search(r'(\d+) failed', output)
+            if failed_match:
+                tests_failed = int(failed_match.group(1))
+        if 'error' in output:
+            error_match = re.search(r'(\d+) error', output)
+            if error_match:
+                tests_failed += int(error_match.group(1))
+        coverage_match = re.search(r'TOTAL.*?(\d+)%', output)
+        if not coverage_match:
+            coverage_match = re.search(r'(\d+)%\s*$', output, re.MULTILINE)
+        if not coverage_match:
+            coverage_match = re.search(r'(\d+(?:\.\d+)?)%', output)
+        if coverage_match:
+            coverage = float(coverage_match.group(1))
+
+    # Jest/Vitest (JavaScript/TypeScript)
+    elif lang in ('javascript', 'typescript', 'typescriptreact'):
+        # "Tests: X passed, Y failed" or "Tests: X passed, Y failed, Z total"
+        match = re.search(r'Tests:\s*(\d+)\s+passed', output)
+        if match:
+            tests_passed = int(match.group(1))
+        match = re.search(r'Tests:.*?(\d+)\s+failed', output)
+        if match:
+            tests_failed = int(match.group(1))
+
+        # Alternative Mocha-style: "X passing, Y failing"
+        if tests_passed == 0:
+            pass_match = re.search(r'(\d+)\s+pass(?:ing)?', output, re.I)
+            if pass_match:
+                tests_passed = int(pass_match.group(1))
+        if tests_failed == 0:
+            fail_match = re.search(r'(\d+)\s+fail(?:ing)?', output, re.I)
+            if fail_match:
+                tests_failed = int(fail_match.group(1))
+
+        # Coverage: "All files | XX.XX |"
+        cov_match = re.search(r'All files[^|]*\|\s*(\d+\.?\d*)', output)
+        if cov_match:
+            coverage = float(cov_match.group(1))
+
+    # Go
+    elif lang == 'go':
+        # Count PASS and FAIL occurrences for individual tests
+        tests_passed = len(re.findall(r'--- PASS:', output))
+        tests_failed = len(re.findall(r'--- FAIL:', output))
+
+        # Fallback: check for overall PASS/FAIL
+        if tests_passed == 0 and 'PASS' in output and 'FAIL' not in output:
+            tests_passed = 1
+        if tests_failed == 0 and 'FAIL' in output:
+            tests_failed = 1
+
+        # coverage: XX.X% of statements
+        cov_match = re.search(r'coverage:\s*(\d+\.?\d*)%', output)
+        if cov_match:
+            coverage = float(cov_match.group(1))
+
+    # Rust (cargo test)
+    elif lang == 'rust':
+        # "test result: ok. X passed; Y failed;"
+        match = re.search(r'(\d+)\s+passed', output)
+        if match:
+            tests_passed = int(match.group(1))
+        match = re.search(r'(\d+)\s+failed', output)
+        if match:
+            tests_failed = int(match.group(1))
+
+    # Fallback: try generic patterns
+    else:
+        pass_match = re.search(r'(\d+)\s+(?:tests?\s+)?pass(?:ed)?', output, re.I)
+        fail_match = re.search(r'(\d+)\s+(?:tests?\s+)?fail(?:ed)?', output, re.I)
+        if pass_match:
+            tests_passed = int(pass_match.group(1))
+        if fail_match:
+            tests_failed = int(fail_match.group(1))
+
+    return tests_passed, tests_failed, coverage
+
+
 def _execute_tests_and_create_run_report(
     test_file: Path,
     basename: str,
@@ -228,91 +331,108 @@ def _execute_tests_and_create_run_report(
     *,
     code_file: Optional[Path] = None,
 ) -> RunReport:
-    """Execute tests and create a RunReport with actual results."""
+    """Execute tests and create a RunReport with actual results.
+
+    Now supports multiple languages by using get_test_command_for_file()
+    to determine the appropriate test runner.
+    """
+    from .get_test_command import get_test_command_for_file
+
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     # Calculate test file hash for staleness detection
     test_hash = calculate_sha256(test_file) if test_file.exists() else None
 
-    try:
-        module_name = test_file.name.replace('test_', '').replace('.py', '')
-        python_executable = detect_host_python_executable()
+    # Use clean env without TUI-specific vars
+    clean_env = os.environ.copy()
+    for var in ['FORCE_COLOR', 'COLUMNS']:
+        clean_env.pop(var, None)
 
-        cov_target = None
-        if language.lower() == "python":
+    try:
+        lang_lower = language.lower()
+
+        # Python: use existing pytest logic with coverage
+        if lang_lower == "python":
+            module_name = test_file.name.replace('test_', '').replace('.py', '')
+            python_executable = detect_host_python_executable()
+
+            cov_target = None
             if code_file is not None:
                 cov_target = _python_cov_target_for_test_and_code(test_file, code_file, basename or module_name)
             else:
                 cov_target = basename or module_name
 
-        if not cov_target:
-            cov_target = basename or module_name
-        
-        # Use clean env without TUI-specific vars
-        clean_env = os.environ.copy()
-        for var in ['FORCE_COLOR', 'COLUMNS']:
-            clean_env.pop(var, None)
-        # start_new_session isolates subprocess from TUI's terminal control
-        result = subprocess.run([
-            python_executable, '-m', 'pytest',
-            str(test_file),
-            '-v',
-            '--tb=short',
-            f'--cov={cov_target}',
-            '--cov-report=term-missing'
-        ], capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
-        
-        exit_code = result.returncode
-        stdout = result.stdout
-        
-        tests_passed = 0
-        tests_failed = 0
-        coverage = 0.0
-        
-        if 'passed' in stdout:
-            passed_match = re.search(r'(\d+) passed', stdout)
-            if passed_match:
-                tests_passed = int(passed_match.group(1))
-        
-        if 'failed' in stdout:
-            failed_match = re.search(r'(\d+) failed', stdout)
-            if failed_match:
-                tests_failed = int(failed_match.group(1))
+            if not cov_target:
+                cov_target = basename or module_name
 
-        # Parse errors (fixture/setup failures) - add to failed count
-        if 'error' in stdout:
-            error_match = re.search(r'(\d+) error', stdout)
-            if error_match:
-                tests_failed += int(error_match.group(1))
+            result = subprocess.run([
+                python_executable, '-m', 'pytest',
+                str(test_file),
+                '-v',
+                '--tb=short',
+                f'--cov={cov_target}',
+                '--cov-report=term-missing'
+            ], capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
 
-        coverage_match = re.search(r'TOTAL.*?(\d+)%', stdout)
-        if not coverage_match:
-            coverage_match = re.search(r'(\d+)%\s*$', stdout, re.MULTILINE)
-        if not coverage_match:
-            coverage_match = re.search(r'(\d+(?:\.\d+)?)%', stdout)
-        
-        if coverage_match:
-            coverage = float(coverage_match.group(1))
-        
+            exit_code = result.returncode
+            stdout = result.stdout + (result.stderr or '')
+            tests_passed, tests_failed, coverage = _parse_test_output(stdout, language)
+
+        else:
+            # Non-Python: use language-appropriate test command
+            test_cmd = get_test_command_for_file(str(test_file), language)
+
+            if test_cmd is None:
+                # No test command available - return report indicating this
+                report = RunReport(
+                    timestamp=timestamp,
+                    exit_code=127,  # Command not found
+                    tests_passed=0,
+                    tests_failed=0,
+                    coverage=0.0,
+                    test_hash=test_hash
+                )
+                save_run_report(asdict(report), basename, language)
+                return report
+
+            # Run the test command
+            result = subprocess.run(
+                test_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                env=clean_env,
+                cwd=str(test_file.parent),
+                stdin=subprocess.DEVNULL,
+                start_new_session=True
+            )
+
+            exit_code = result.returncode
+            stdout = (result.stdout or '') + '\n' + (result.stderr or '')
+
+            # Parse results based on language
+            tests_passed, tests_failed, coverage = _parse_test_output(stdout, language)
+
         report = RunReport(
             timestamp=timestamp,
             exit_code=exit_code,
             tests_passed=tests_passed,
             tests_failed=tests_failed,
             coverage=coverage,
-            test_hash=test_hash  # Include hash for staleness detection
+            test_hash=test_hash
         )
-        
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception):
+
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception) as e:
         report = RunReport(
             timestamp=timestamp,
             exit_code=1,
             tests_passed=0,
             tests_failed=1,
             coverage=0.0,
-            test_hash=test_hash  # Include hash even on failure
+            test_hash=test_hash
         )
-    
+
     save_run_report(asdict(report), basename, language)
     return report
 
@@ -765,26 +885,46 @@ def sync_orchestration(
                                 )
                         elif operation == 'fix':
                             error_file_path = Path("fix_errors.log")
-                            # Capture errors (simplified)
+                            # Capture errors using language-appropriate test command
                             try:
-                                run_report = read_run_report(basename, language)
-                                if run_report and run_report.tests_failed > 0:
-                                     python_executable = detect_host_python_executable()
-                                     # Use clean env without TUI-specific vars
-                                     clean_env = os.environ.copy()
-                                     for var in ['FORCE_COLOR', 'COLUMNS']:
-                                         clean_env.pop(var, None)
-                                     # start_new_session isolates subprocess from TUI's terminal control
-                                     test_result = subprocess.run([python_executable, '-m', 'pytest', str(pdd_files['test']), '-v', '--tb=short'], capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
-                                     error_content = f"Test failures:\n{test_result.stdout}\n{test_result.stderr}"
+                                from .get_test_command import get_test_command_for_file
+                                test_cmd = get_test_command_for_file(str(pdd_files['test']), language)
+
+                                # Use clean env without TUI-specific vars
+                                clean_env = os.environ.copy()
+                                for var in ['FORCE_COLOR', 'COLUMNS']:
+                                    clean_env.pop(var, None)
+
+                                if test_cmd:
+                                    # Run language-appropriate test command
+                                    if language.lower() == 'python':
+                                        # Use pytest directly for Python
+                                        python_executable = detect_host_python_executable()
+                                        test_result = subprocess.run(
+                                            [python_executable, '-m', 'pytest', str(pdd_files['test']), '-v', '--tb=short'],
+                                            capture_output=True, text=True, timeout=300,
+                                            stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
+                                        )
+                                    else:
+                                        # Use shell command for non-Python
+                                        test_result = subprocess.run(
+                                            test_cmd,
+                                            shell=True,
+                                            capture_output=True, text=True, timeout=300,
+                                            stdin=subprocess.DEVNULL, env=clean_env,
+                                            cwd=str(pdd_files['test'].parent),
+                                            start_new_session=True
+                                        )
+                                    error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
                                 else:
-                                     error_content = "Simulated failures"
+                                    # No test command available - trigger agentic fallback with context
+                                    error_content = f"No test command available for {language}. Please run tests manually and provide error output."
                             except Exception as e:
-                                error_content = str(e)
+                                error_content = f"Test execution error: {e}"
                             error_file_path.write_text(error_content)
                             result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=str(pdd_files['test']), error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], auto_submit=True)
                         elif operation == 'update':
-                            result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), git=True)
+                            result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True)
                         else:
                             errors.append(f"Unknown operation {operation}")
                             result = {'success': False}

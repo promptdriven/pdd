@@ -17,6 +17,7 @@ import sys
 @click.option('--max-attempts', default=3, help='Maximum fix attempts')
 @click.option('--budget', default=5.0, help='Maximum cost allowed')
 @click.option('--auto-submit', is_flag=True, help='Auto-submit if tests pass')
+@click.option('--agentic-fallback/--no-agentic-fallback', default=True, help='Enable agentic fallback if primary fix fails')
 @click.pass_context
 def fix_command(ctx, **kwargs):
     """Fix errors in code and unit tests."""
@@ -34,7 +35,8 @@ def fix_command(ctx, **kwargs):
         verification_program=kwargs['verification_program'],
         max_attempts=kwargs['max_attempts'],
         budget=kwargs['budget'],
-        auto_submit=kwargs['auto_submit']
+        auto_submit=kwargs['auto_submit'],
+        agentic_fallback=kwargs['agentic_fallback']
     )
 
     # Handle the results

@@ -57,6 +57,12 @@ def install_completion_cmd(ctx: click.Context):
     show_default=True,
     help="Maximum cost allowed for the verification process.",
 )
+@click.option(
+    "--agentic-fallback/--no-agentic-fallback",
+    is_flag=True,
+    default=True,
+    help="Enable agentic fallback if the primary fix mechanism fails.",
+)
 @click.pass_context
 @track_cost
 def verify(
@@ -69,6 +75,7 @@ def verify(
     output_results: Optional[str],
     max_attempts: int,
     budget: float,
+    agentic_fallback: bool,
 ) -> Optional[Tuple]:
     """Verify code using a verification program."""
     try:
@@ -87,6 +94,7 @@ def verify(
             verification_program=verification_program,
             max_attempts=max_attempts,
             budget=budget,
+            agentic_fallback=agentic_fallback,
         )
         result = {
             "success": success,
@@ -95,6 +103,8 @@ def verify(
             "attempts": attempts,
         }
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "verify", ctx.obj.get("quiet", False))
         return None

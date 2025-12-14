@@ -46,38 +46,16 @@ for case_id in $SYNC_CASES; do
     PID_TO_CASE[$!]="$case_id"
 done
 
+# Wait for each job explicitly to correctly associate PIDs with exit statuses.
+# NOTE: The previous implementation using `wait -n` had a race condition bug where
+# exit statuses could be misattributed when multiple jobs finished close together.
 status=0
-while (( ${#PID_TO_CASE[@]} )); do
-    if wait -n; then
-        case_status=0
-    else
-        case_status=$?
-    fi
-
-    # Identify which PID finished (removed from job list).
-    running_pids="$(jobs -rp)"
-    finished_pid=""
-    for pid in "${!PID_TO_CASE[@]}"; do
-        if ! grep -qx "$pid" <<< "$running_pids"; then
-            finished_pid="$pid"
-            break
-        fi
-    done
-    # Fallback: if grep failed (e.g., last job), pick remaining key.
-    if [[ -z "$finished_pid" ]]; then
-        for pid in "${!PID_TO_CASE[@]}"; do
-            finished_pid="$pid"
-            break
-        done
-    fi
-
-    case_id="${PID_TO_CASE[$finished_pid]}"
-    unset PID_TO_CASE["$finished_pid"]
-
-    if [[ $case_status -eq 0 ]]; then
+for pid in "${!PID_TO_CASE[@]}"; do
+    case_id="${PID_TO_CASE[$pid]}"
+    if wait "$pid"; then
         echo "[sync-regression] Case $case_id completed successfully"
     else
-        echo "[sync-regression] Case $case_id failed (exit $case_status)" >&2
+        echo "[sync-regression] Case $case_id failed (exit $?)" >&2
         status=1
     fi
 done

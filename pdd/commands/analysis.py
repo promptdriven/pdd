@@ -46,6 +46,8 @@ def detect_change(
             output=output,
         )
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "detect", ctx.obj.get("quiet", False))
         return None
@@ -78,6 +80,8 @@ def conflicts(
             verbose=ctx.obj.get("verbose", False),
         )
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "conflicts", ctx.obj.get("quiet", False))
         return None
@@ -126,6 +130,8 @@ def bug(
             language=language,
         )
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "bug", ctx.obj.get("quiet", False))
         return None
@@ -198,6 +204,8 @@ def crash(
         # Return a summary string as the result for track_cost/CLI output
         result = f"Success: {success}, Attempts: {attempts}"
         return result, total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "crash", ctx.obj.get("quiet", False))
         return None
@@ -233,6 +241,8 @@ def trace(
             output=output,
         )
         return str(result), total_cost, model_name
+    except click.Abort:
+        raise
     except Exception as exception:
         handle_error(exception, "trace", ctx.obj.get("quiet", False))
         return None
