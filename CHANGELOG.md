@@ -1,3 +1,26 @@
+## v0.0.83 (2025-12-14)
+
+### Feat
+
+- add example usage for get_test_command module to demonstrate test command resolution for various file types; include handling for agentic fallback scenarios and language overrides
+- introduce get_test_command module to resolve appropriate test commands based on file language; implement CSV-based command lookup and smart detection fallback
+- enhance multi-language test execution support by adding run_test_command to language_format.csv and implementing output parsing for various languages; improve test command resolution and error handling
+- add agentic fallback option to verify and fix commands; enhance user control over fallback behavior in CLI
+- enhance run report detection, coverage target selection, and ANSI output handling; improve .pddrc path resolution and update prompting guide with automatic change propagation
+
+### Fix
+
+- correct formatting in import statement for Z3 library in test_get_test_command.py
+- update parameter name in sync_orchestration to use 'use_git' instead of 'git' for update_main calls; add regression test to prevent future issues
+- resolve race condition in job status handling within sync_regression_parallel.sh; switch to explicit wait for job completion to ensure accurate exit status reporting
+- update timestamp generation in core dump to use local time instead of UTC
+
+### Refactor
+
+- update example output path and adjust strength parameter in .pddrc configuration
+- update CSV file path handling and improve documentation; streamline language resolution process and enhance function docstring requirements
+- replace sys.exit(1) with click.Abort() for user cancellation handling across multiple commands; improve error propagation and user experience
+
 ## v0.0.82 (2025-12-12)
 
 ### Feat
