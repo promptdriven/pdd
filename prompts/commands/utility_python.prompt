@@ -14,9 +14,24 @@
   1. **install_completion**:
      - Interface: Match the `install_completion` command specification in `README.md`.
      - Logic: Call `pdd.cli.install_completion` (via module patch if needed, or direct).
+     - Pass `quiet` parameter from context to `install_completion`.
   2. **verify**:
      - Interface: Match the `verify` command specification in `README.md`.
-     - Logic: Call `fix_verification_main` with loop enabled.
+     - Logic: Call `fix_verification_main` with `loop=True`.
+     - Options:
+       - `--output-code`: Path to save verified code file.
+       - `--output-program`: Path to save verified program file.
+       - `--output-results`: Path to save results log.
+       - `--max-attempts`: Maximum verification attempts (default: 3).
+       - `--budget`: Maximum cost allowed (default: 5.0).
+       - `--agentic-fallback / --no-agentic-fallback`: Enable/disable agentic fallback mode (default: enabled). Pass to `fix_verification_main`.
+     - Apply `@track_cost` decorator.
+     - Handle `click.Abort` by re-raising (do not treat as error via `handle_error`).
+     - Return: Tuple of (result_dict, total_cost, model_name) where result_dict contains:
+       - `success`: bool
+       - `program_code`: str
+       - `code_content`: str
+       - `attempts`: int
 
 % Dependencies
   <install_completion_example>
