@@ -43,6 +43,8 @@
   - Handle `click.UsageError` for conflicting options (template vs prompt file).
   - Ensure env var parsing logic matches the spec (KEY=VALUE or KEY from env).
   - Use `handle_error` for exception management.
+  - Re-raise `click.Abort` exceptions to allow user cancellation (e.g., pressing 'no' on
+    overwrite prompts) to propagate to the parent CLI for graceful handling.
 
 % Deliverables
   - Code: `pdd/commands/generate.py`

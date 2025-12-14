@@ -48,7 +48,12 @@
   </track_cost_example>
 
 % Instructions
-  - Use `handle_error`.
+  - Use `handle_error` for all exceptions except `click.Abort`.
+  - Re-raise `click.Abort` to allow user cancellation to propagate.
+  - Apply `@track_cost` decorator to all commands.
+  - Access context flags via `ctx.obj.get("key", default)`.
+  - Return `Optional[Tuple[result, float, str]]` where float is cost and str is model name.
+  - Return `None` when an error is handled.
 
 % Deliverables
   - Code: `pdd/commands/analysis.py`
