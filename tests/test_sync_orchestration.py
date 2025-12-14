@@ -2160,3 +2160,41 @@ class TestOutputParsing:
         passed, failed, coverage = _parse_test_output(go_output, "go")
         assert passed >= 1
         assert coverage == 85.7
+
+
+# --- Parameter Name Regression Tests ---
+
+def test_update_operation_calls_update_main_with_use_git(orchestration_fixture):
+    """
+    Regression test: Verify that the 'update' operation calls update_main
+    with use_git=True (not git=True).
+
+    This test prevents the bug where sync_orchestration passed 'git=True'
+    instead of 'use_git=True' to update_main, causing:
+        TypeError: update_main() got an unexpected keyword argument 'git'
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_update = orchestration_fixture['update_main']
+
+    # Set up the decision to trigger update operation
+    mock_determine.side_effect = [
+        SyncDecision(operation='update', reason='Code modified, prompt outdated'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Configure update_main to return success
+    mock_update.return_value = {
+        'success': True,
+        'cost': 0.04,
+        'model': 'mock-model'
+    }
+
+    # Act
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # Assert update_main was called with use_git=True (not git=True)
+    mock_update.assert_called_once()
+    call_kwargs = mock_update.call_args.kwargs
+    assert 'use_git' in call_kwargs, "update_main should be called with 'use_git' parameter"
+    assert call_kwargs['use_git'] is True
+    assert 'git' not in call_kwargs, "update_main should NOT be called with 'git' parameter (wrong name)"
