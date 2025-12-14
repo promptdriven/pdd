@@ -106,10 +106,10 @@ contexts:
     defaults:
       generate_output_path: "pdd/"
       test_output_path: "tests/"
-      example_output_path: "examples/"
+      example_output_path: "context/"
       default_language: "python"
       target_coverage: 10.0
-      strength: 0.75
+      strength: 0.8
       temperature: 0.0
       budget: 10.0
       max_attempts: 3
