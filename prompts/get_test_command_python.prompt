@@ -1,0 +1,46 @@
+% You are an expert Python software engineer. Your task is to create a module `get_test_command` that resolves the appropriate test command for a given test file based on its language.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  A utility module responsible for determining the correct test runner command for any given test file. It provides a layered resolution strategy: CSV configuration → smart detection → agentic fallback.
+
+% Requirements
+  1) Function `get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[str]`:
+     - Accepts a path to a test file and an optional language override.
+     - Returns the resolved test command with the `{file}` placeholder replaced by the actual file path, or `None` if no command can be determined.
+     - Resolution order (first match wins):
+       a) CSV `run_test_command` column from `language_format.csv` (if non-empty)
+       b) Smart detection via `default_verify_cmd_for()` from `agentic_langtest`
+       c) `None` (signals to caller that agentic fallback is needed)
+
+  2) Internal function `_load_language_format() -> dict`:
+     - Loads `$PDD_PATH/data/language_format.csv` into a dictionary keyed by file extension.
+     - Returns the dictionary for lookup operations.
+
+  3) Language resolution:
+     - If `language` parameter is provided, use it directly.
+     - Otherwise, infer the language from the file extension using `get_language()`.
+
+% Dependencies
+  <get_language>
+    <include>context/get_language_example.py</include>
+  </get_language>
+
+  <agentic_langtest>
+    <include>context/agentic_langtest_example.py</include>
+  </agentic_langtest>
+
+% Data Source
+  The file at `$PDD_PATH/data/language_format.csv` is a CSV with columns:
+  - `extension` (e.g., .py, .ts, .go)
+  - `run_test_command` (e.g., "python -m pytest {file} -v", empty for smart detection)
+  - (Other columns like `language`, `comment`, `run_command` exist but are not primary for this task)
+
+% Instructions
+  - Use the `csv` module to read the data file safely.
+  - Use `pathlib.Path` for file path operations.
+  - Extract the file extension from the test file path to perform CSV lookup.
+  - When replacing `{file}` placeholder, use the original test_file string as provided.
+  - Include docstrings for all functions.
+  - Handle missing CSV gracefully (the module should not crash if CSV is missing).
