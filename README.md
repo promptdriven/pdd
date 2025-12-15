@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.83-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.76-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.83
+Current version: 0.0.76
 
 To check your installed version, run:
 ```
@@ -506,7 +506,7 @@ Attach that bundle when you open a GitHub issue or send a bug report so maintain
 
 #### `report-core` Command
 
-The `report-core` command helps you report a bug by creating a GitHub issue with the core dump file. It simplifies the reporting process by automatically collecting relevant files and information.
+The `report-core` command helps you report a bug by creating a GitHub issue with the core dump file.
 
 **Usage:**
 ```bash
@@ -514,29 +514,15 @@ pdd report-core [OPTIONS] [CORE_FILE]
 ```
 
 **Arguments:**
-- `CORE_FILE`: The path to the core dump file (e.g., `.pdd/core_dumps/pdd-core-....json`). If omitted, the most recent core dump is used.
+- `CORE_FILE`: The path to the core dump file (e.g., `.pdd/core_dumps/pdd-core-....json`). If omitted, `--latest` must be used.
 
 **Options:**
-- `--api`: Create the issue directly via the GitHub API instead of opening a browser. This enables automatic Gist creation for attached files.
-- `--repo OWNER/REPO`: Override the target repository (default: `promptdriven/pdd`).
-- `--description`, `-d TEXT`: A short description of what went wrong.
+- `--latest`: Use the most recent core dump in `.pdd/core_dumps`.
+- `--describe TEXT`: Short description of what went wrong (will prompt if omitted in interactive mode).
+- `--github`: If configured, automatically create a GitHub issue using this core dump.
+- `--attach PATH`: File(s) to mention as relevant inputs/outputs in the issue body. Can be used multiple times.
 
-**Authentication:**
-
-To use the `--api` flag, you need to be authenticated with GitHub. PDD checks for credentials in the following order:
-
-1.  **GitHub CLI**: `gh auth token` (recommended)
-2.  **Environment Variables**: `GITHUB_TOKEN` or `GH_TOKEN`
-3.  **Legacy**: `PDD_GITHUB_TOKEN`
-
-**File Tracking & Gists:**
-
-When using `--api`, PDD will:
-1.  Collect all relevant files (prompts, code, tests, configs, meta files).
-2.  Create a **private GitHub Gist** containing these files.
-3.  Link the Gist in the created issue.
-
-This ensures that all necessary context is available for debugging while keeping the issue body clean. If you don't use `--api`, files will be truncated to fit within the URL length limits of the browser-based submission.
+To use this command with the `--github` option, you need to set the `PDD_GITHUB_TOKEN` and `PDD_GITHUB_REPO` environment variables. The `PDD_GITHUB_TOKEN` is a personal access token with `repo` scope, and `PDD_GITHUB_REPO` is the name of the repository where you want to create the issue (e.g., `promptdriven/pdd`).
 
 ---
 
@@ -802,6 +788,8 @@ Options:
 - `--output LOCATION`: Specify where to save the generated code. Supports `${VAR}`/`$VAR` expansion from `-e/--env`. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--original-prompt FILENAME`: The original prompt file used to generate the existing code. If not specified, the command automatically uses the last committed version of the prompt file from git.
 - `--incremental`: Force incremental patching even if changes are significant. This option is only valid when an output location is specified and the file exists.
+- `--unit-test FILENAME`: Path to a unit test file. If provided, automatic test discovery is disabled and only the content of this file is included in the prompt, instructing the model to generate code that passes the specified tests.
+- `--exclude-tests`: Do not automatically include test files found in the default tests directory.
 
 **Parameter Variables (-e/--env)**:
 Pass key=value pairs to parameterize a prompt so one prompt can generate multiple variants (e.g., multiple files) by invoking `generate` repeatedly with different values.
