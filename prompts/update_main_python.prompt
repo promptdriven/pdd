@@ -46,11 +46,6 @@
 % - `click.Abort` exceptions in helper functions should be re-raised to stop the repo-wide loop when user cancels.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules. Note that `update_prompt` and `git_update` now accept a `time` parameter.
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:

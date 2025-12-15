@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'crash_main', that will be the CLI wrapper for fixing errors in a code module and its calling program that caused a program to crash. This function will read the necessary files, call the fix_code_module_errors function, and handle the output locations.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. The function defensively ensures `ctx.obj` and `ctx.params` are dictionaries with fallbacks (e.g., `ctx.obj = ctx.obj if isinstance(ctx.obj, dict) else {}`).
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys). The function defensively ensures `ctx.obj` and `ctx.params` are dictionaries with fallbacks (e.g., `ctx.obj = ctx.obj if isinstance(ctx.obj, dict) else {}`).
         - 'prompt_file' (str): Filename of the prompt file that generated the code module.
         - 'code_file' (str): Filename of the code module that caused the crash and will be modified.
         - 'program_file' (str): Filename of the program that was running the code module.
@@ -48,11 +49,6 @@
     - Match the function signature exactly to the inputs listed above (including `strength` and `temperature` as Optional[float] parameters with default None); do not introduce additional CLI parameters unless they are added to this specification.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:
