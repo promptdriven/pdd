@@ -195,6 +195,9 @@ def test_cli_update_command_repo_mode(mock_update_main, mock_auto_update, runner
     assert result.exit_code == 0
     assert result.exception is None
 
+    # Verify the output contains success information
+    assert "Repository update complete." in result.output or "test-model" in result.output or "$0.05" in result.output
+
     # Verify update_main was called with repo=True
     mock_update_main.assert_called_once()
     call_kwargs = mock_update_main.call_args.kwargs
@@ -224,6 +227,9 @@ def test_cli_update_command_single_file_mode(mock_update_main, mock_auto_update,
     # Should succeed
     assert result.exit_code == 0
     assert result.exception is None
+
+    # Verify the output contains success information
+    assert "Generated prompt" in result.output or "test-model" in result.output or "$0.02" in result.output
 
     # Verify update_main was called with the file as modified_code_file and repo=False
     mock_update_main.assert_called_once()

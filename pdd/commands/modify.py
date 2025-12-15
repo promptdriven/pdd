@@ -182,15 +182,19 @@ def update(
     quiet = ctx.obj.get("quiet", False)
     command_name = "update"
     try:
-        # If only one file is provided, it's the modified_code_file for generation
-        if input_prompt_file and not modified_code_file:
+        # In single-file generation mode, when only one positional argument is provided,
+        # it is treated as the code file (not the prompt file). This enables the workflow:
+        # `pdd update <CODE_FILE>` to generate a new prompt for the given code file.
+        # So if input_prompt_file has a value but modified_code_file is None,
+        # we reassign input_prompt_file to actual_modified_code_file.
+        if input_prompt_file is not None and modified_code_file is None:
             actual_modified_code_file = input_prompt_file
             actual_input_prompt_file = None
         else:
             actual_modified_code_file = modified_code_file
             actual_input_prompt_file = input_prompt_file
 
-        is_repo_mode = not actual_input_prompt_file and not actual_modified_code_file
+        is_repo_mode = actual_input_prompt_file is None and actual_modified_code_file is None
 
         if is_repo_mode:
             if any([input_code_file, use_git]):
