@@ -69,7 +69,7 @@ DEFAULT_MOCK_LANGUAGE = "python"
 #
 #    D. File and Path Handling
 #        1.  `test_error_prompt_file_not_found`: `prompt_file` path is invalid.
-#        2.  `test_error_original_prompt_file_not_found`: `original_prompt_file_not_found` is invalid.
+#        2.  `test_error_original_prompt_file_not_found`: `original_prompt_file_path` is invalid.
 #        3.  `test_output_file_creation_and_overwrite`: Test with and without `force=True` when output file exists.
 #
 #    E. Error and Edge Cases
