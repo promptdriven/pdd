@@ -349,3 +349,49 @@ class TestAgenticModeInvocation:
                 assert len(prompt_arg) < 500, \
                     f"Gemini should not receive full prompt via -p flag (got {len(prompt_arg)} chars); " \
                     "use file-based prompt to enable agentic mode"
+
+
+class TestPromptFileHandling:
+    """Tests for secure temp prompt file handling to prevent race conditions."""
+
+    @pytest.fixture
+    def mock_subprocess_run(self):
+        """Mock subprocess.run to capture CLI commands without executing."""
+        with patch('pdd.agentic_fix.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="output", stderr=""
+            )
+            yield mock_run
+
+    def test_no_hardcoded_prompt_filename(self):
+        """
+        Static analysis: source should not use hardcoded '.agentic_prompt.txt'.
+
+        Bug: Hardcoded filename causes race conditions in concurrent execution.
+        """
+        import inspect
+        from pdd.agentic_fix import (
+            _run_anthropic_variants,
+            _run_openai_variants,
+            _run_google_variants
+        )
+
+        for func in [_run_anthropic_variants, _run_openai_variants, _run_google_variants]:
+            source = inspect.getsource(func)
+            assert '".agentic_prompt.txt"' not in source, \
+                f"{func.__name__}: hardcoded '.agentic_prompt.txt' causes race conditions"
+
+    def test_prompt_file_cleaned_up_after_execution(self, mock_subprocess_run, tmp_path):
+        """
+        Behavioral: temp prompt files must be deleted after execution.
+
+        Bug: Leaving files on disk exposes sensitive prompt content.
+        """
+        from pdd.agentic_fix import _run_anthropic_variants
+
+        _run_anthropic_variants("test prompt", tmp_path, 60, "test")
+
+        # No prompt files should remain (any naming pattern)
+        remaining = list(tmp_path.glob("*prompt*"))
+        assert len(remaining) == 0, \
+            f"Temp prompt files should be cleaned up, found: {remaining}"
