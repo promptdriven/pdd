@@ -1,25 +1,53 @@
+## v0.0.84 (2025-12-15)
+
+### Feat
+
+- add agentic fallback prompt for test failure resolution in PDD projects; outline steps for code and test fixes based on prompt specifications
+- implement agentic mode for OpenAI, Anthropic, and Google CLI variants; ensure full file access by removing restrictive flags and add tests to verify correct invocation
+- enhance multi-language test execution with new get_test_command module, improved output parsing, and agentic fallback options; add comprehensive tests and example usage
+
+### Fix
+
+- update command functions to accept optional strength and temperature parameters, ensuring they are resolved correctly from context or defaults; add tests for strength/temperature propagation in sync_orchestration
+- update directory path handling in sync_orchestration to pass the examples directory instead of a glob pattern; add regression test to ensure correct behavior
+
 ## v0.0.83 (2025-12-14)
 
 ### Feat
 
-- add example usage for get_test_command module to demonstrate test command resolution for various file types; include handling for agentic fallback scenarios and language overrides
-- introduce get_test_command module to resolve appropriate test commands based on file language; implement CSV-based command lookup and smart detection fallback
-- enhance multi-language test execution support by adding run_test_command to language_format.csv and implementing output parsing for various languages; improve test command resolution and error handling
-- add agentic fallback option to verify and fix commands; enhance user control over fallback behavior in CLI
-- enhance run report detection, coverage target selection, and ANSI output handling; improve .pddrc path resolution and update prompting guide with automatic change propagation
+- **Multi-Language Test Execution:** Added `pdd/get_test_command.py` module that resolves appropriate test commands based on file language using a three-tier resolution order: (1) CSV `run_test_command` column, (2) smart detection via `default_verify_cmd_for()`, (3) None (triggers agentic fallback). This enables the sync workflow to run tests for TypeScript, Go, Rust, and other languages instead of only Python.
+
+- **Language Format CSV Enhancement:** Added `run_test_command` column to `data/language_format.csv` with language-specific test runners: `python -m pytest {file} -v` for Python, `go test -v {file}` for Go, `cargo test` for Rust, `swift test` for Swift, and `dotnet test` for C#. Supports `{file}` placeholder substitution.
+
+- **Multi-Language Test Output Parsing:** Added `_parse_test_output()` function to `sync_orchestration.py` that extracts passed/failed/coverage metrics from test runner output for Python (pytest), JavaScript/TypeScript (Jest/Vitest/Mocha), Go, and Rust (cargo test), with fallback patterns for other languages.
+
+- **Agentic Fallback CLI Options:** Added `--agentic-fallback/--no-agentic-fallback` flags to the `verify` and `fix` commands, allowing users to control whether the agentic fallback mechanism is invoked when standard fixes fail.
+
+- **Example Usage for get_test_command:** Added `context/get_test_command_example.py` demonstrating test command resolution for various file types including Python, Go, TypeScript, and Rust, with coverage of language override and agentic fallback scenarios.
 
 ### Fix
 
-- correct formatting in import statement for Z3 library in test_get_test_command.py
-- update parameter name in sync_orchestration to use 'use_git' instead of 'git' for update_main calls; add regression test to prevent future issues
-- resolve race condition in job status handling within sync_regression_parallel.sh; switch to explicit wait for job completion to ensure accurate exit status reporting
-- update timestamp generation in core dump to use local time instead of UTC
+- **Race Condition in Parallel Regression Tests:** Fixed a race condition in `tests/sync_regression_parallel.sh` where `wait -n` could misattribute exit statuses when multiple jobs finished close together. Replaced with explicit `wait "$pid"` for each job to ensure accurate pass/fail reporting.
+
+- **Parameter Name Mismatch in sync_orchestration:** Fixed `sync_orchestration.py` to use `use_git` instead of `git` when calling `update_main()`, preventing silent failures when the update operation was invoked. Added regression test to prevent future issues.
+
+- **Core Dump Timestamp:** Updated `pdd/core/dump.py` to use local time instead of UTC for timestamp generation, improving readability of core dump filenames.
+
+- **Z3 Import Formatting:** Corrected import statement formatting for Z3 library in `test_get_test_command.py`.
 
 ### Refactor
 
-- update example output path and adjust strength parameter in .pddrc configuration
-- update CSV file path handling and improve documentation; streamline language resolution process and enhance function docstring requirements
-- replace sys.exit(1) with click.Abort() for user cancellation handling across multiple commands; improve error propagation and user experience
+- **User Cancellation Handling:** Replaced `sys.exit(1)` with `click.Abort()` across all command modules (`analysis.py`, `fix.py`, `generate.py`, `maintenance.py`, `misc.py`, `modify.py`, `utility.py`) for consistent user cancellation handling. Added `except click.Abort: raise` guards to prevent these exceptions from being swallowed by generic error handlers.
+
+- **CSV Path and Documentation:** Updated CSV file path handling in `get_test_command.py` to use `Path(__file__).parent.parent / "data"` pattern. Improved function docstrings with clear resolution order documentation.
+
+### Tests
+
+- Added 398 lines of comprehensive tests in `tests/test_get_test_command.py` covering Python/Go/TypeScript/Rust file handling, resolution order verification, CSV priority over smart detection, language override behavior, and formal verification of resolution logic using Z3 solver.
+
+- Added 249 lines of multi-language test execution tests in `tests/test_sync_orchestration.py` including bug detection tests for non-Python infinite fix loops and TypeScript/Go test runner verification.
+
+- Added CLI tests in `tests/test_core_cli.py` for click.Abort propagation through command handlers.
 
 ## v0.0.82 (2025-12-12)
 
