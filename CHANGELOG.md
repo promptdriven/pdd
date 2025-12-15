@@ -1,3 +1,16 @@
+## v0.0.84 (2025-12-15)
+
+### Feat
+
+- add agentic fallback prompt for test failure resolution in PDD projects; outline steps for code and test fixes based on prompt specifications
+- implement agentic mode for OpenAI, Anthropic, and Google CLI variants; ensure full file access by removing restrictive flags and add tests to verify correct invocation
+- enhance multi-language test execution with new get_test_command module, improved output parsing, and agentic fallback options; add comprehensive tests and example usage
+
+### Fix
+
+- update command functions to accept optional strength and temperature parameters, ensuring they are resolved correctly from context or defaults; add tests for strength/temperature propagation in sync_orchestration
+- update directory path handling in sync_orchestration to pass the examples directory instead of a glob pattern; add regression test to ensure correct behavior
+
 ## v0.0.83 (2025-12-14)
 
 ### Feat
