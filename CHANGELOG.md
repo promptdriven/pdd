@@ -2,14 +2,40 @@
 
 ### Feat
 
-- add agentic fallback prompt for test failure resolution in PDD projects; outline steps for code and test fixes based on prompt specifications
-- implement agentic mode for OpenAI, Anthropic, and Google CLI variants; ensure full file access by removing restrictive flags and add tests to verify correct invocation
-- enhance multi-language test execution with new get_test_command module, improved output parsing, and agentic fallback options; add comprehensive tests and example usage
+- **True Agentic Mode for CLI Agents:** Rewrote `_run_openai_variants()`, `_run_anthropic_variants()`, and `_run_google_variants()` in `pdd/agentic_fix.py` to invoke agents in full agentic mode with file tool access. Previously, agents were invoked in completion/print mode (`-p` flag for Claude and Gemini, `--sandbox read-only` for Codex) which prevented file modifications. Now agents write prompts to temp files and receive instructions to read them, enabling full read/write file access for autonomous fixes.
+
+- **Agentic Fallback Prompt for Test Failures:** Added `prompts/agentic_fix_explore_LLM.prompt` providing structured guidance for agentic fallback when PDD's normal fix loop fails. The prompt explains PDD principles (prompt is source of truth), lists available files, shows previous fix attempts to avoid repetition, and outlines the task workflow for diagnosing and fixing test failures.
+
+- **Strength/Temperature Propagation to Sub-Commands:** Updated `fix_main()`, `crash_main()`, `fix_verification_main()`, `cmd_test_main()`, and `update_main()` to accept optional `strength` and `temperature` parameters. These parameters are resolved with precedence: function parameter → `ctx.obj` → default constant. This enables `sync_orchestration` to pass explicit values that override CLI context defaults.
+
+- **Click Context Parameters Documentation:** Added `context/ctx_obj_params.prompt` documenting the standard `ctx.obj` dictionary keys available in PDD CLI commands (`verbose`, `strength`, `temperature`, `time`, `force`, `quiet`, `context`, `confirm_callback`) and the resolution pattern for optional parameters.
 
 ### Fix
 
-- update command functions to accept optional strength and temperature parameters, ensuring they are resolved correctly from context or defaults; add tests for strength/temperature propagation in sync_orchestration
-- update directory path handling in sync_orchestration to pass the examples directory instead of a glob pattern; add regression test to ensure correct behavior
+- **Auto-Deps Directory Path Bug:** Fixed `sync_orchestration.py` to pass the examples directory path (`examples_dir`) to `auto_deps_main()` instead of a glob pattern (`f"{examples_dir}/*"`). The glob pattern caused `os.path.isdir()` to return `False`, preventing recursive file discovery in subdirectories. Added regression test `test_auto_deps_passes_directory_not_glob_pattern`.
+
+- **Sync Orchestration Parameter Propagation:** Updated all operation calls in `sync_orchestration()` (`crash_main`, `fix_verification_main`, `cmd_test_main`, `fix_main`, `update_main`) to pass `strength=strength` and `temperature=temperature` parameters, ensuring `.pddrc` configuration values propagate correctly through the sync workflow.
+
+### Docs
+
+- **Onboarding Documentation Enhancements:** Updated `docs/ONBOARDING.md` with:
+  - Clarification that developers/contributors must use a Conda environment (not UV) for development
+  - Instructions for creating and activating the `pdd` conda environment
+  - Recommended test execution order: unit tests → regression tests → sync regression tests
+  - Note on API key requirements explaining that some tests require multiple providers (OpenAI + at least one other)
+
+- **Prompt Template Cleanup:** Updated 15+ prompt files to include `ctx_obj_params.prompt` reference for Click context details and removed outdated Click examples to streamline documentation.
+
+### Tests
+
+- Added 156 lines of agentic mode invocation tests in `tests/test_agentic_fix.py` verifying:
+  - Claude is NOT invoked with `-p` flag (which prevents file tool access)
+  - Codex is NOT invoked with `--sandbox read-only` (which prevents file writes)
+  - Gemini is NOT invoked with `-p` flag (which prevents tool access)
+
+- Added 175 lines of strength/temperature propagation tests in `tests/test_sync_orchestration.py` using source code inspection to verify all sub-command calls include `strength=strength` parameter.
+
+- Added 72 lines of `.pddrc` configuration hierarchy tests in `tests/test_construct_paths.py` verifying that `.pddrc` values are used when CLI doesn't pass explicit values, and explicit CLI values override `.pddrc`.
 
 ## v0.0.83 (2025-12-14)
 
