@@ -228,6 +228,8 @@ def update_main(
     use_git: bool = False,
     repo: bool = False,
     extensions: Optional[str] = None,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -241,9 +243,17 @@ def update_main(
     :param use_git: Use Git history to retrieve the original code if True.
     :param repo: If True, run in repository-wide mode.
     :param extensions: Comma-separated string of file extensions to filter by in repo mode.
+    :param strength: Optional strength parameter (overrides ctx.obj if provided).
+    :param temperature: Optional temperature parameter (overrides ctx.obj if provided).
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
+    # Resolve strength/temperature (prefer passed parameters over ctx.obj)
+    resolved_strength = strength if strength is not None else ctx.obj.get("strength", 0.5)
+    resolved_temperature = temperature if temperature is not None else ctx.obj.get("temperature", 0)
+    # Update ctx.obj so internal calls use the resolved values
+    ctx.obj["strength"] = resolved_strength
+    ctx.obj["temperature"] = resolved_temperature
     if repo:
         try:
             # Find the repo root by searching up from the current directory

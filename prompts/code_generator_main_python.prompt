@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, support parameterized prompts via a variables map, generate code using the code_generator or incremental_code_generator function, handle post-process Python hooks, support LLM toggle functionality, and handle the output location.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
    Inputs:
-      - `ctx` (`click.Context`): The Click context object containing CLI options (e.g., temperature, strength, etc.) and parameters. The `time` parameter (e.g., a time budget in seconds) is retrieved from `ctx.obj.get('time', DEFAULT_TIME)`.
+      - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
       - 'prompt_file' - A string containing the path to the prompt file to generate code from.
       - 'output' - An optional string containing the path where to save the generated code. If None, uses default naming convention.
       - 'original_prompt' - An optional string containing the path to the original prompt file used for incremental generation. If None, attempts to use git to find the last committed version.
@@ -20,11 +21,6 @@
             - `str`: The name of the model used.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:

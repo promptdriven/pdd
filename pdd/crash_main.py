@@ -25,7 +25,9 @@ def crash_main(
     loop: bool = False,
     max_attempts: Optional[int] = None,
     budget: Optional[float] = None,
-    agentic_fallback: bool = True
+    agentic_fallback: bool = True,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in a code module and its calling program that caused a crash.
@@ -56,8 +58,8 @@ def crash_main(
     quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False))
     verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False))
 
-    strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
-    temperature = ctx.obj.get("temperature", 0)
+    strength = strength if strength is not None else ctx.obj.get("strength", DEFAULT_STRENGTH)
+    temperature = temperature if temperature is not None else ctx.obj.get("temperature", 0)
     time_param = ctx.obj.get("time", DEFAULT_TIME)
 
     try:

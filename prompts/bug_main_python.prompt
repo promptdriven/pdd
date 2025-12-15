@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'bug_main', that will be the CLI wrapper for generating unit tests based on observed and desired outputs. This function will take the original prompt, code, program, and outputs to generate a unit test that can reproduce and verify the bug fix.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object is expected to potentially contain a 'time' key (e.g., from a global --time option).
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
         - `prompt_file` (str): Filename of the prompt file that generated the code.
         - `code_file` (str): Filename of the code file being tested.
         - `program_file` (str): Filename of the program used to run the code under test.
@@ -35,11 +36,6 @@
     - Save to the resolved output path (creating parent directories if needed). Print model and cost when not quiet, and always print the generated unit test to the console. On failure, print an error (unless quiet) and exit with status code 1.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
 % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:

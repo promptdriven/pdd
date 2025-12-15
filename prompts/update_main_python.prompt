@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, `update_main`, that will be the CLI wrapper for updating prompts based on modified code. This function will read the original prompt file, the modified code file, and optionally the original code file (or use Git history), and update the prompt to reflect the changes in the code. It also supports regeneration (derive prompt from a code file) and repository‑wide updates.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object is expected to provide global options like 'strength', 'temperature', 'verbose', 'quiet', 'force', 'context', 'time', and 'confirm_callback' via `ctx.obj.get(<option_name>, <default_value>)`.
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys and resolution patterns).
         - `input_prompt_file` - An optional string containing the path to the original prompt file. If None, the function operates in regeneration mode (deriving the prompt path from the code file).
         - `modified_code_file` - An optional string containing the path to the modified code file.
         - `input_code_file` - An optional string containing the path to the original code file. If not provided, you must set `use_git=True` to retrieve the original code from Git; otherwise, this is an error for true update mode.
@@ -12,6 +13,8 @@
         - `use_git` - A boolean that is True if Git history should be used to retrieve the original code. Default is False. If `use_git=True`, do not provide `input_code_file`. If `use_git=False`, `input_code_file` is required (for true update).
         - `repo` - A boolean flag. When True (and no file args are provided), operate in repository‑wide mode: scan for code/prompt pairs and update all of them.
         - `extensions` - An optional comma‑separated list of file extensions to filter by in repository‑wide mode (e.g., "py,js,ts").
+        - `strength` - An optional float parameter (see ctx_obj_params.prompt for resolution pattern).
+        - `temperature` - An optional float parameter (see ctx_obj_params.prompt for resolution pattern).
     Outputs:
         - Returns `Optional[Tuple[str, float, str]]`:
             - On success, returns a tuple containing:
@@ -43,11 +46,6 @@
 % - `click.Abort` exceptions in helper functions should be re-raised to stop the repo-wide loop when user cancels.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules. Note that `update_prompt` and `git_update` now accept a `time` parameter.
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:
@@ -68,7 +66,7 @@
 </examples>
 
 % Here is the README for the cli command that has details of how the 'update' command and '--git' sub command work.
-% The `update_main` function should retrieve global options such as 'strength', 'temperature', 'verbose', 'quiet', 'force', 'context', and 'time' from the `ctx.obj` dictionary.
+% Retrieve global options from `ctx.obj` per the included ctx_obj_params.prompt. After resolving strength/temperature, update `ctx.obj` with the resolved values so internal helpers use consistent values.
 % For 'time', retrieve it using `ctx.obj.get('time', DEFAULT_TIME)` and pass to `update_prompt` or `git_update` as a float (reasoning budget) across all paths, including repository‑wide helpers.
 % When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
 % Note: If `--output` is not provided, `update_main` overwrites `input_prompt_file` in place rather than using a default-named file.

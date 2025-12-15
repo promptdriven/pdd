@@ -1,16 +1,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'context_generator_main', that will be the CLI wrapper for generating example code from a prompt file and an existing code file. This function will use 'construct_paths' to resolve and read the prompt and code file contents and to compute output locations; it will then invoke 'context_generator' and handle saving the result.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This context is expected to provide global options like 'strength', 'temperature', 'verbose', 'quiet', 'force', 'time', 'context', and 'confirm_callback'. Resolve them as follows:
-            - `strength = ctx.obj.get('strength', 0.5)`
-            - `temperature = ctx.obj.get('temperature', 0)`
-            - `time = ctx.obj.get('time')`  % Intentionally no default here
-            - `force = ctx.obj.get('force', False)`, `quiet = ctx.obj.get('quiet', False)`, `verbose = ctx.obj.get('verbose', False)`
-            - `context_override = ctx.obj.get('context')` % For passing to construct_paths
-            - `confirm_callback = ctx.obj.get('confirm_callback')` % For construct_paths confirmation handling
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys). Note: `time` has no default here (intentionally).
         - `prompt_file` - A string containing the path to the prompt file that generated the code.
         - `code_file` - A string containing the path to the existing code file.
         - `output` - An optional string containing the path where to save the generated example code. If None, uses default naming convention.
@@ -21,11 +16,6 @@
             - `str`: The name of the model used (or error message on failure).
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules and this main wrapper:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:

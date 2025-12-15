@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write the `auto_deps_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `auto-deps` command.
 
 <include>context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-    - `ctx` (`click.Context`): The Click context object. Read global options from `ctx.obj`, including `force`, `quiet`, `strength`, `temperature`, and `time` (e.g., `time = ctx.obj.get('time', DEFAULT_TIME)`). These are used for path construction and for LLM parameters.
+    - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
     - `prompt_file` (`str`): Path to the input prompt file.
     - `directory_path` (`str`): Path to the directory containing potential dependency files (can include glob patterns, e.g., "context/*_example.py").
     - `auto_deps_csv_path` (`Optional[str]`): Preferred CSV file path for auto-dependency information (passed into path construction; may be overridden by resolved paths).
@@ -54,11 +55,6 @@
         • On any other exception: print a red error message (unless `quiet`) and return an error tuple `("", 0.0, f"Error: {exc}")` instead of calling `sys.exit(1)`. This allows the orchestrator to handle failures gracefully.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:

@@ -1,6 +1,7 @@
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "split_main", that will be the CLI wrapper for splitting a prompt into a sub_prompt and modified_prompt. This function will handle reading the input files, calling the split function, and managing the output locations.
 
 <include>context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Function signature and contract (implementation-aligned):
     Signature:
@@ -15,7 +16,7 @@
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
         - 'input_prompt_file' (`str`): Path to the input prompt file to be split.
         - 'input_code_file' (`str`): Path to the code file generated from the input prompt.
         - 'example_code_file' (`str`): Path to the example code file showing usage.
@@ -30,18 +31,6 @@
                 - 'output_modified': Path where the modified prompt was saved
             - `float`: The total cost of the operation
             - `str`: The model name used
-
-% Context options consumed (from `ctx.obj`):
-    - `force` (bool, default False)
-    - `quiet` (bool, default False) – controls printing with Rich
-    - `strength` (float, default 0.5)
-    - `temperature` (float, default 0)
-    - `time` (Optional[str], default None)
-
-% Example for using the Python Click library:
-        <click_example>
-            <include>context/click_example.py</include>
-        </click_example>
 
 % Here is how to use the internal modules:
     <internal_modules>

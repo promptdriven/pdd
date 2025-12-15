@@ -118,6 +118,8 @@ def fix_verification_main(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     budget: float = DEFAULT_BUDGET,
     agentic_fallback: bool = True,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     CLI wrapper for the 'verify' command. Verifies code correctness by running
@@ -146,9 +148,9 @@ def fix_verification_main(
             - total_cost (float): Total cost incurred.
             - model_name (str): Name of the LLM used.
     """
-    # Extract global options from context
-    strength: float = ctx.obj.get('strength', DEFAULT_STRENGTH)
-    temperature: float = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
+    # Extract global options from context (prefer passed parameters over ctx.obj)
+    strength: float = strength if strength is not None else ctx.obj.get('strength', DEFAULT_STRENGTH)
+    temperature: float = temperature if temperature is not None else ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
     force: bool = ctx.obj.get('force', False)
     quiet: bool = ctx.obj.get('quiet', False)
     verbose: bool = ctx.obj.get('verbose', False)

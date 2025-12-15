@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'preprocess_main', that will be the CLI wrapper for preprocessing prompts. This function will read a prompt file, preprocess its contents using the preprocess function (or XML-tagging flow), and handle the output location.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object will be used to access global options like `force`, `quiet`, `strength`, `temperature`, `verbose`, and `time`.
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
         - 'prompt_file' - A string containing the path to the prompt file to preprocess.
         - 'output' - An optional string containing the path where to save the preprocessed prompt. If None, uses default naming convention.
         - 'xml' - A boolean that is True if XML delimiters should be automatically inserted for better structure. Default is False.
@@ -18,11 +19,6 @@
             - `str`: The name of the model used (primarily by `xml_tagger` if used, "N/A" otherwise).
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:
