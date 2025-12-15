@@ -777,9 +777,9 @@ def sync_orchestration(
                             temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
                             original_content = pdd_files['prompt'].read_text(encoding='utf-8')
                             result = auto_deps_main(
-                                ctx, 
-                                prompt_file=str(pdd_files['prompt']), 
-                                directory_path=f"{examples_dir}/*",
+                                ctx,
+                                prompt_file=str(pdd_files['prompt']),
+                                directory_path=examples_dir,
                                 auto_deps_csv_path="project_dependencies.csv",
                                 output=temp_output,
                                 force_scan=False

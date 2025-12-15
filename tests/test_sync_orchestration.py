@@ -2198,3 +2198,53 @@ def test_update_operation_calls_update_main_with_use_git(orchestration_fixture):
     assert 'use_git' in call_kwargs, "update_main should be called with 'use_git' parameter"
     assert call_kwargs['use_git'] is True
     assert 'git' not in call_kwargs, "update_main should NOT be called with 'git' parameter (wrong name)"
+
+
+def test_auto_deps_passes_directory_not_glob_pattern(orchestration_fixture):
+    """
+    Regression test: auto-deps should pass the examples directory path,
+    not a glob pattern like 'examples/*' which prevents recursive file discovery.
+
+    Bug: sync_orchestration.py was passing `directory_path=f"{examples_dir}/*"` instead
+    of `directory_path=examples_dir`. When `os.path.isdir("examples/*")` is checked,
+    it returns False (since /* is not a real directory), preventing the recursive
+    pattern construction needed for subdirectories.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_auto_deps = mocks['auto_deps_main']
+
+    # Configure auto_deps_main to return a tuple matching the expected return format
+    mock_auto_deps.return_value = ("resolved_content", 0.01, "mock-model")
+
+    # Set up sync decision sequence: auto-deps -> all_synced
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Resolve dependencies'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Run sync orchestration
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        budget=1.0
+    )
+
+    # Verify auto_deps_main was called
+    assert mock_auto_deps.called, "auto_deps_main should have been called"
+
+    # Get the call arguments
+    call_kwargs = mock_auto_deps.call_args.kwargs
+
+    # Assert: directory_path should NOT end with /*
+    directory_path = call_kwargs.get('directory_path', '')
+    assert not directory_path.endswith('/*'), (
+        f"auto_deps_main should be passed a directory path, not a glob pattern. "
+        f"Got: {directory_path!r}"
+    )
+
+    # The directory_path should be a valid directory path (like 'examples' or 'context')
+    # It should NOT contain wildcard characters
+    assert '*' not in directory_path, (
+        f"directory_path should not contain wildcards. Got: {directory_path!r}"
+    )
