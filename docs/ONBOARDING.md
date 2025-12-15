@@ -273,7 +273,22 @@ This allows you to quickly identify which cases are failing and why, so you can 
 
 If you're contributing to the PDD project, follow these additional setup steps to install development dependencies and run tests efficiently.
 
-### 1. Install Development Dependencies
+> **Important: UV vs Conda**
+> - **End users** install PDD via UV: `uv tool install pdd-cli`
+> - **Developers/contributors** must use a **Conda environment** for development
+>
+> UV creates isolated environments per-package (great for production), but development requires a mutable environment where you can modify PDD source code and see changes immediately.
+
+### 1. Create a Conda Environment for Development
+
+**Create and activate the pdd conda environment:**
+```bash
+# Create a new conda environment named 'pdd' with Python 3.11+
+conda create -n pdd python=3.11
+conda activate pdd
+```
+
+### 2. Install Development Dependencies
 
 The project uses optional development dependencies defined in `pyproject.toml` for testing, code quality, and build tools.
 
@@ -341,6 +356,14 @@ xdg-open htmlcov/index.html  # Linux
 ```
 
 ### 4. Run Regression Tests
+
+**Recommended test execution order:**
+Run tests in this order to catch issues early:
+1. **Unit tests first:** `make test` or `pytest -vv tests/`
+2. **Regression tests:** `make regression`
+3. **Sync regression tests:** `make sync-regression` (takes 1-2 hours)
+
+If unit tests fail, fix those before running regression tests.
 
 **Local regression tests:**
 ```bash
@@ -634,6 +657,11 @@ infisical run -- env | grep API_KEY  # If using Infisical
 # OR
 env | grep API_KEY  # If using .env
 ```
+
+**Note on API key requirements for testing:**
+Some tests require multiple API providers. If you only have a single API key (e.g., only Gemini), some tests may fail with errors like "OpenAI API key not found." For full test compatibility, we recommend having API keys for at least:
+- OpenAI (OPENAI_API_KEY)
+- One additional provider (e.g., GEMINI_API_KEY or ANTHROPIC_API_KEY)
 
 ---
 
