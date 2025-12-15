@@ -11,8 +11,8 @@ import sys
 from unittest.mock import patch
 
 
-# Create a directory for test outputs
-OUTPUT_DIR = "output"
+# Create a directory for test outputs (use absolute path for pytest-xdist compatibility)
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 

@@ -12,7 +12,7 @@ import os
 # Or mock within each test as currently done.
 
 # Import after potentially modifying sys.path
-from pdd.construct_paths import construct_paths, list_available_contexts
+from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy
 
 # Helper to create absolute path for comparison
 def resolve_path(relative_path_str, base_dir):
@@ -2206,3 +2206,73 @@ def test_construct_paths_fix_resolves_pddrc_paths_relative_to_pddrc(tmp_path, mo
     assert output_file_paths["output_results"] == str(
         tmp_path / "backend" / "functions" / "admin_get_users_fix_results.log"
     )
+
+
+# =============================================================================
+# Tests for _resolve_config_hierarchy - .pddrc strength/temperature propagation
+# =============================================================================
+
+def test_pddrc_strength_used_when_cli_not_passed():
+    """Bug fix: .pddrc strength (0.8) should be used when CLI doesn't pass strength.
+
+    The fix is in sync_main.py - it no longer passes CLI defaults to command_options.
+    When strength is not in cli_options, .pddrc value should be used.
+    """
+    # Simulate: sync_main now doesn't pass strength when it's the CLI default
+    # So cli_options won't have strength, allowing .pddrc to take precedence
+    cli_options = {
+        # strength NOT included - simulates fixed sync_main.py behavior
+        # temperature NOT included - simulates fixed sync_main.py behavior
+    }
+    context_config = {
+        "strength": 0.8,  # .pddrc value - should be used
+        "temperature": 0.5,
+    }
+    env_vars = {}
+
+    resolved = _resolve_config_hierarchy(cli_options, context_config, env_vars)
+
+    # Now that CLI doesn't pass defaults, .pddrc values should be used
+    assert resolved.get("strength") == 0.8, \
+        f"Expected .pddrc strength 0.8, got {resolved.get('strength')}"
+    assert resolved.get("temperature") == 0.5, \
+        f"Expected .pddrc temperature 0.5, got {resolved.get('temperature')}"
+
+
+def test_cli_strength_overrides_pddrc_when_explicitly_set():
+    """CLI --strength 0.5 should override .pddrc strength: 0.8.
+
+    This test verifies that explicit CLI values still take precedence.
+    """
+    # Simulate: user runs `pdd sync --strength 0.5`
+    # CLI passes explicit value 0.5, .pddrc has 0.8
+    cli_options = {
+        "strength": 0.5,  # Explicit CLI value - should override .pddrc
+    }
+    context_config = {
+        "strength": 0.8,  # .pddrc value
+    }
+    env_vars = {}
+
+    resolved = _resolve_config_hierarchy(cli_options, context_config, env_vars)
+
+    # Explicit CLI value should win
+    assert resolved.get("strength") == 0.5, \
+        f"Expected CLI strength 0.5, got {resolved.get('strength')}"
+
+
+def test_pddrc_strength_used_when_cli_not_in_options():
+    """When CLI doesn't pass strength at all, .pddrc should be used."""
+    cli_options = {
+        "basename": "test",
+        # strength not included
+    }
+    context_config = {
+        "strength": 0.8,
+    }
+    env_vars = {}
+
+    resolved = _resolve_config_hierarchy(cli_options, context_config, env_vars)
+
+    assert resolved.get("strength") == 0.8, \
+        f"Expected .pddrc strength 0.8, got {resolved.get('strength')}"

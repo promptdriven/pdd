@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import difflib
+import tempfile
 from pathlib import Path
 from typing import Tuple, List, Optional, Dict
 from rich.console import Console
@@ -284,34 +285,52 @@ def _run_cli_args_openai(args: List[str], cwd: Path, timeout: int) -> subprocess
 
 def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
-    Try several OpenAI CLI variants (including read-only sandbox) to improve robustness.
+    Try several OpenAI CLI variants to improve robustness.
     Returns the first attempt that yields output or succeeds.
-    """
-    wrapper = (
-        "You must ONLY output corrected file content wrapped EXACTLY between "
-        "the markers I provide. No commentary. "
-    )
-    full = wrapper + "\n\n" + prompt_text
 
-    variants = [
-        ["codex", "exec", full],
-        ["codex", "exec", "--skip-git-repo-check", full],
-        ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", full],
-    ]
-    per_attempt = 300
-    last = None
-    for args in variants:
-        try:
-            _verbose(f"[cyan]OpenAI variant ({label}): {' '.join(args[:-1])} ...[/cyan]")
-            last = _run_cli_args_openai(args, cwd, per_attempt)
-            if (last.stdout or last.stderr) or last.returncode == 0:
-                return last
-        except subprocess.TimeoutExpired:
-            _info(f"[yellow]OpenAI variant timed out: {' '.join(args[:-1])} ...[/yellow]")
-            continue
-    if last is None:
-        return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
-    return last
+    NOTE: Agents need write access to modify files in agentic mode,
+    so we do not restrict the sandbox.
+    """
+    # Write prompt to a unique temp file to avoid race conditions in concurrent execution
+    with tempfile.NamedTemporaryFile(
+        mode='w',
+        suffix='.txt',
+        prefix='.agentic_prompt_',
+        dir=cwd,
+        delete=False,
+        encoding='utf-8'
+    ) as f:
+        f.write(prompt_text)
+        prompt_file = Path(f.name)
+
+    try:
+        # Agentic instruction that tells Codex to read the prompt file and fix
+        agentic_instruction = (
+            f"Read the file {prompt_file} for instructions on what to fix. "
+            "You have full file access to explore and modify files as needed. "
+            "After reading the instructions, fix the failing tests."
+        )
+
+        variants = [
+            ["codex", "exec", agentic_instruction],
+            ["codex", "exec", "--skip-git-repo-check", agentic_instruction],
+        ]
+        per_attempt = 300
+        last = None
+        for args in variants:
+            try:
+                _verbose(f"[cyan]OpenAI variant ({label}): {' '.join(args[:-1])} ...[/cyan]")
+                last = _run_cli_args_openai(args, cwd, per_attempt)
+                if (last.stdout or last.stderr) or last.returncode == 0:
+                    return last
+            except subprocess.TimeoutExpired:
+                _info(f"[yellow]OpenAI variant timed out: {' '.join(args[:-1])} ...[/yellow]")
+                continue
+        if last is None:
+            return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
+        return last
+    finally:
+        prompt_file.unlink(missing_ok=True)
 
 def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     """Subprocess runner for Anthropic commands with common sanitized env."""
@@ -327,31 +346,50 @@ def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subproc
 
 def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
-    Anthropic CLI runner (single-variant). Keeps interface uniform with OpenAI/Google.
-    """
-    wrapper = (
-        "IMPORTANT: You must ONLY output corrected file content wrapped EXACTLY "
-        "between the two markers below. NO commentary, NO extra text.\n"
-    )
-    full = wrapper + "\n" + prompt_text
+    Anthropic CLI runner in agentic mode (without -p flag).
 
-    variants = [
-        ["claude", "-p", "--dangerously-skip-permissions", full],
-    ]
-    per_attempt = 300
-    last: Optional[subprocess.CompletedProcess] = None
-    for args in variants:
-        try:
-            _verbose(f"[cyan]Anthropic variant ({label}): {' '.join(args[:-1])} ...[/cyan]")
-            last = _run_cli_args_anthropic(args, cwd, per_attempt)
-            if last.stdout or last.stderr or last.returncode == 0:
-                return last
-        except subprocess.TimeoutExpired:
-            _info(f"[yellow]Anthropic variant timed out: {' '.join(args[:-1])} ...[/yellow]")
-            continue
-    if last is None:
-        return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
-    return last
+    NOTE: We do NOT use -p (print mode) because it prevents file tool access.
+    Instead, we write the prompt to a file and let Claude read it in agentic mode.
+    """
+    # Write prompt to a unique temp file to avoid race conditions in concurrent execution
+    with tempfile.NamedTemporaryFile(
+        mode='w',
+        suffix='.txt',
+        prefix='.agentic_prompt_',
+        dir=cwd,
+        delete=False,
+        encoding='utf-8'
+    ) as f:
+        f.write(prompt_text)
+        prompt_file = Path(f.name)
+
+    try:
+        # Agentic instruction that tells Claude to read the prompt file and fix
+        agentic_instruction = (
+            f"Read the file {prompt_file} for instructions on what to fix. "
+            "You have full file access to explore and modify files as needed. "
+            "After reading the instructions, fix the failing tests."
+        )
+
+        variants = [
+            ["claude", "--dangerously-skip-permissions", agentic_instruction],
+        ]
+        per_attempt = 300
+        last: Optional[subprocess.CompletedProcess] = None
+        for args in variants:
+            try:
+                _verbose(f"[cyan]Anthropic variant ({label}): {' '.join(args[:-1])} ...[/cyan]")
+                last = _run_cli_args_anthropic(args, cwd, per_attempt)
+                if last.stdout or last.stderr or last.returncode == 0:
+                    return last
+            except subprocess.TimeoutExpired:
+                _info(f"[yellow]Anthropic variant timed out: {' '.join(args[:-1])} ...[/yellow]")
+                continue
+        if last is None:
+            return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
+        return last
+    finally:
+        prompt_file.unlink(missing_ok=True)
 
 def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     """Subprocess runner for Google commands with common sanitized env."""
@@ -367,31 +405,50 @@ def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess
 
 def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
     """
-    Google CLI runner (single-variant). Accepts prompt text via "-p".
-    """
-    wrapper = (
-        "IMPORTANT: ONLY output corrected file content wrapped EXACTLY between "
-        "the two markers below. No commentary. No extra text.\n"
-    )
-    full = wrapper + "\n" + prompt_text
+    Google CLI runner in agentic mode (without -p flag).
 
-    variants = [
-        ["gemini", "-p", full],
-    ]
-    per_attempt = 300
-    last = None
-    for args in variants:
-        try:
-            _verbose(f"[cyan]Google variant ({label}): {' '.join(args)} ...[/cyan]")
-            last = _run_cli_args_google(args, cwd, per_attempt)
-            if (last.stdout or last.stderr) or last.returncode == 0:
-                return last
-        except subprocess.TimeoutExpired:
-            _info(f"[yellow]Google variant timed out: {' '.join(args)} ...[/yellow]")
-            continue
-    if last is None:
-        return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
-    return last
+    NOTE: We do NOT use -p (pipe mode) because it may prevent tool access.
+    Instead, we write the prompt to a file and let Gemini read it in agentic mode.
+    """
+    # Write prompt to a unique temp file to avoid race conditions in concurrent execution
+    with tempfile.NamedTemporaryFile(
+        mode='w',
+        suffix='.txt',
+        prefix='.agentic_prompt_',
+        dir=cwd,
+        delete=False,
+        encoding='utf-8'
+    ) as f:
+        f.write(prompt_text)
+        prompt_file = Path(f.name)
+
+    try:
+        # Agentic instruction that tells Gemini to read the prompt file and fix
+        agentic_instruction = (
+            f"Read the file {prompt_file} for instructions on what to fix. "
+            "You have full file access to explore and modify files as needed. "
+            "After reading the instructions, fix the failing tests."
+        )
+
+        variants = [
+            ["gemini", agentic_instruction],
+        ]
+        per_attempt = 300
+        last = None
+        for args in variants:
+            try:
+                _verbose(f"[cyan]Google variant ({label}): {' '.join(args)} ...[/cyan]")
+                last = _run_cli_args_google(args, cwd, per_attempt)
+                if (last.stdout or last.stderr) or last.returncode == 0:
+                    return last
+            except subprocess.TimeoutExpired:
+                _info(f"[yellow]Google variant timed out: {' '.join(args)} ...[/yellow]")
+                continue
+        if last is None:
+            return subprocess.CompletedProcess(variants[-1], 124, stdout="", stderr="timeout")
+        return last
+    finally:
+        prompt_file.unlink(missing_ok=True)
 
 def _run_testcmd(cmd: str, cwd: Path) -> bool:
     """

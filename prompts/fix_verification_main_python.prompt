@@ -1,152 +1,101 @@
-% You are an expert Python engineer. Your goal is to write a Python function, "fix_verification_main", that will be the CLI wrapper for the "verify" command as described in the README.md. This function will verify the functional correctness of generated code by executing a specified program and using an LLM to judge the program's output against the original prompt's intent. It will handle the verification process using either the fix_verification_errors function or fix_verification_errors_loop function depending on whether the --loop option is used.
+% You are an expert Python engineer. Your goal is to write a Python function `fix_verification_main` that serves as the CLI wrapper for the PDD "verify" command.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
-% Module-Level Constants and Imports:
-   - Import `DEFAULT_STRENGTH` and `DEFAULT_TIME` from the parent package (`.`)
-   - Define local constants: `DEFAULT_TEMPERATURE = 0.0`, `DEFAULT_MAX_ATTEMPTS = 3`, `DEFAULT_BUDGET = 5.0`
-   - Define a constant for the verification program name if needed (e.g., `VERIFICATION_PROGRAM_NAME`)
-   - Configure module-level logging via `logging.getLogger(__name__)`
-   - Use `pathlib.Path` for file path operations (parent directory creation, file writing)
+% Role & Scope
+This module verifies the functional correctness of generated code by:
+1. Executing a specified program
+2. Using an LLM to judge the program's output against the original prompt's intent
+3. Optionally fixing issues through either single-pass or iterative loop verification
 
-% Helper Function - `run_program`:
-   Define a helper function `run_program(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]` that:
-   - Executes the program at `program_path` with optional arguments
-   - Determines interpreter by file extension: `.py` uses `detect_host_python_executable()`, `.js` uses `node`, `.sh` uses `bash`
-   - Sets working directory to the program's parent directory
-   - Sets `PYTHONUNBUFFERED=1` in environment
-   - Uses a 60-second timeout
-   - Always prints command, working directory, and PYTHONPATH using `rich_print` (Note: currently does not respect verbose flag)
-   - For syntax errors in stderr, prefixes with `SYNTAX_ERROR:` and displays in a red panel
-   - Returns `(success, stdout, stderr)` tuple where success is True only if exit code is 0
-   - Handles `FileNotFoundError`, `TimeoutExpired`, and generic exceptions gracefully
+The function delegates to `fix_verification_errors` (single-pass) or `fix_verification_errors_loop` (iterative) depending on the `--loop` option.
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
-            Context parameters used:
-            - strength (float): Model strength parameter, defaults to the global DEFAULT_STRENGTH
-            - temperature (float): Model temperature parameter, defaults to 0
-            - time (float): Time parameter for LLM calls, defaults to the global DEFAULT_TIME
-            - force (bool): Whether to force overwrite existing files
-            - quiet (bool): Whether to suppress output messages
-            - verbose (bool): Whether to enable verbose output for debugging purposes
-        - `prompt_file` (str): The filename of the prompt file that generated the code being verified.
-        - `code_file` (str): The filename of the code file to be verified and potentially fixed.
-        - `program_file` (str): The filename of the executable program to run for verification.
-        - `output_results` (Optional[str]): Path where to save the verification and fixing results log.
-        - `output_code` (Optional[str]): Path where to save the final code file after verification attempts.
-        - `output_program` (Optional[str]): Path where to save the final program file after verification attempts.
-        - `loop` (bool): If True, perform iterative verification with error fixing.
-        - `verification_program` (Optional[str]): Path to a Python program that verifies if the code still runs correctly after modifications. Required if --loop is used.
-        - `max_attempts` (int): Maximum number of verification attempts before giving up. Default is 3.
-        - `budget` (float): Maximum cost allowed for the verification process. Default is $5.0.
-        - `agentic_fallback` (bool): If True, allow an agentic fallback path in loop mode when primary fixing fails. Default is True.
-    Outputs:
-        - Returns a tuple containing:
-            - `bool`: Success status of verification (True if program verified successfully)
-            - `str`: The final program code after verification attempts
-            - `str`: The final code file content after verification attempts
-            - `int`: Total number of attempts made
-            - `float`: Total cost of verification process
-            - `str`: Name of the model used
+% Requirements
 
-% Important Implementation Notes:
-1. File Path Handling and Parameter Passing:
-   - When calling `fix_verification_errors_loop`, pass the *content* of the `prompt_file`, the *path* to the `code_file`, the *path* to the `program_file`, the *path* to the `verification_program`, and the `llm_time` argument using the `time` value from `ctx.obj`. Also pass the path for the `verification_log_file` if provided. Do not pass output file paths to the loop.
-   - It is acceptable (and sometimes useful) to also pass `prompt_file` (its path) to the loop function for downstream logging or fallback mechanisms, in addition to the `prompt` content.
-   - When calling `fix_verification_errors`, read the contents of the files first and pass them as strings (including the combined program output), and pass the `time` value from `ctx.obj`.
-   - Use `construct_paths` to generate default output paths when not explicitly provided. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored, and pass `confirm_callback=ctx.obj.get('confirm_callback')` to support interactive confirmation flows. If `construct_paths` raises an "invalid command" error for `verify`, fall back to manual handling: read input files and derive default paths, including `output_program`. For other `construct_paths` errors, print a formatted error and `sys.exit(1)`.
-   - Ensure the final program content is written to the `output_program` path when one is resolved.
+Functional Requirements:
+1. Support two verification modes: single-pass and iterative loop
+2. Execute programs using appropriate interpreters based on file extension (.py, .js, .sh)
+3. Resolve output paths via `construct_paths` with fallback to manual path derivation
+4. Write output files (code, program, results log) when paths are resolved, regardless of success
+5. Return a tuple with (success, final_program, final_code, attempts, cost, model_name)
 
-2. Error Handling Requirements:
-   - Validate verification program:
-     * Raise `click.UsageError` if `--loop` is used without `--verification-program`
-   - Handle file operations:
-     * Use try/except blocks for file reading/writing
-     * Provide formatted error messages using rich.print
-   - For critical/unrecoverable errors (e.g., invalid command in `construct_paths` without a viable fallback, missing mandatory files), return an error tuple with `success=False` and an error message in the model_name field (e.g., `"FileNotFoundError: {fe}"` or `"Error: {e}"`). This allows orchestrating code (such as `pdd sync`) to handle failures gracefully rather than terminating via `sys.exit(1)`.
-   - Re-raise `click.Abort` exceptions to allow user cancellation to propagate.
-   - For recoverable issues (e.g., LLM call failures), returning partial results with appropriate warnings is acceptable.
+Validation & Error Handling:
+6. Raise `click.UsageError` if `--loop` is used without `--verification-program`
+7. Re-raise `click.Abort` to allow user cancellation to propagate
+8. Return error tuples (success=False, error in model_name field) for unrecoverable errors instead of calling `sys.exit(1)`
+9. Handle file operations with try/except and formatted error messages via rich.print
 
-3. Verification Process:
-   - For `loop=True`:
-     * Call `fix_verification_errors_loop` with all required parameters including `max_attempts`, `budget`, `llm_time` (from `ctx.obj['time']`), and the `verification_log_file` path. Pass through `verbose`, `agentic_fallback`, and default `program_args=[]`.
-     * This handles the entire iterative verification and fixing process.
-   - For `loop=False`:
-     * Execute the `program_file` and capture stdout/stderr. Choose interpreter by extension: `.py` via an environment-aware Python (`detect_host_python_executable()`), `.js` via `node`, `.sh` via `bash`. Implementations may support additional interpreters where available. Set `cwd` to the program directory, set `PYTHONUNBUFFERED=1`, and use a 60s timeout. If stderr contains a Python syntax error, prefix it with `SYNTAX_ERROR:`.
-     * Combine stdout and stderr for verification (prepend a `--- STDERR ---` delimiter only when stderr is present).
-     * Call `fix_verification_errors` once, passing the *content* of the prompt file, the *content* of the code file, the *content* of the program file, the combined program output, and `time`.
-     * If issues are found, it will generate a single round of fixes.
+Output & Logging:
+10. Provide verbose output when enabled: resolved paths, commands, panels for errors/tracebacks
+11. Suppress non-critical output when quiet mode is enabled
+12. Display final summary panel showing status, attempts, cost, model, and saved file paths
+13. In single-pass mode, write a results log with prompt modification time, files, success, issue count, model, cost, explanation, and program output
 
-4. Verbose/Quiet Output:
-   - Add a `verbose` parameter to both function calls.
-   - When `verbose` is True, provide additional debugging information during the verification process, including:
-     * Resolved paths and path resolution method (e.g., "Resolved output paths via construct_paths.")
-     * Invoked command, working directory, and environment hints
-     * Formatted panels for errors and tracebacks
-     * DEBUG-prefixed rich_print statements showing save attempt details (paths, content lengths, success/failure)
-     * Program output in a panel
-     * On failed single-pass, display syntax-highlighted final code and program content
-   - In non-verbose mode, show minimal, single-line warnings on non-zero program exits and critical errors only; do not echo command/cwd/env details or render error panels.
-   - Note: The `run_program` helper currently prints command/cwd/env details regardless of the verbose flag.
-   - When `quiet` is True, suppress all non-critical output; still show fatal errors that precede an exit.
+Success Semantics:
+14. Single-pass: success is True if no issues found OR if fixes are proposed
+15. Loop mode: success is whatever `fix_verification_errors_loop` returns
 
-5. User Feedback:
-   - Use rich.print for formatted output
-   - Show success/failure status
-   - Display total attempts and cost
-   - Show model name used
-   - List saved file paths (including `output_code`, `output_results`, and `output_program`)
-   - Summarize verification results in a final Panel showing: status, attempts, total cost, model used, saved code path (or "N/A"), saved program path (or "N/A"), and results log path (or "N/A")
-   - In single-pass mode, write a "PDD Verify Results (Single Pass)" log with the prompt file's modification time (via `os.path.getmtime(prompt_file)`), files, success, issue count, change flags, model, cost, explanation, and combined program output.
-   - In loop mode, delegate log writing to `fix_verification_errors_loop`; the wrapper only confirms the expected log path.
-   - Note: Output files are written when specified, regardless of verification success, to allow inspection of the final state
+% Dependencies
 
-6. Success Semantics:
-   - Single-pass success is True if either no issues are found, or fixes are proposed (without re-running). For iterative validation and re-runs, use `--loop`.
-   - Loop-mode success is whatever `fix_verification_errors_loop` returns.
+<construct_paths_dependency>
+<include>context/construct_paths_example.py</include>
+</construct_paths_dependency>
 
-7. Return Values:
-   - Return a tuple with (success_status, final_program, final_code, attempts, total_cost, model_name)
+<fix_verification_errors_dependency>
+<include>context/fix_verification_errors_example.py</include>
+</fix_verification_errors_dependency>
 
-<examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
+<fix_verification_errors_loop_dependency>
+<include>context/fix_verification_errors_loop_example.py</include>
+</fix_verification_errors_loop_dependency>
 
-   % Here are examples of how to use internal modules:
-   <internal_example_modules>
-      - Here is an example of how to use the `construct_paths` function:
-      <construct_paths_example>
-      <include>context/construct_paths_example.py</include>
-      </construct_paths_example>
+% Inputs/Outputs
 
-      - Here is an example of how to use the `fix_verification_errors` function:
-      <fix_verification_errors_example>
-      <include>context/fix_verification_errors_example.py</include>
-      </fix_verification_errors_example>
+Inputs:
+- `ctx` (click.Context): Click context (see ctx_obj_params.prompt for available keys)
+- `prompt_file` (str): Path to the prompt file
+- `code_file` (str): Path to the code file to verify
+- `program_file` (str): Path to the program to execute
+- `output_results` (Optional[str]): Path for verification results log
+- `output_code` (Optional[str]): Path for final code file
+- `output_program` (Optional[str]): Path for final program file
+- `loop` (bool): Enable iterative verification mode
+- `verification_program` (Optional[str]): Verification program path (required if loop=True)
+- `max_attempts` (int): Maximum verification attempts (default: 3)
+- `budget` (float): Maximum cost budget (default: $5.0)
+- `agentic_fallback` (bool): Enable agentic fallback in loop mode (default: True)
+- `strength` (Optional[float]): Model strength, overrides ctx.obj if provided
+- `temperature` (Optional[float]): Model temperature, overrides ctx.obj if provided
 
-      - Here is an example of how to use the `fix_verification_errors_loop` function:
-      <fix_verification_errors_loop_example>
-      <include>context/fix_verification_errors_loop_example.py</include>
-      </fix_verification_errors_loop_example>
+Outputs:
+- Tuple[bool, str, str, int, float, str]: (success, final_program, final_code, attempts, total_cost, model_name)
 
-      - Here is how to get the language:
-      <get_language_example>
-      <include>context/get_language_example.py</include>
-      </get_language_example>
-   </internal_example_modules>
-</examples>
+% Instructions
 
-% Here is the pdd README for the 'verify' command that describes how it should work:
-<cli_command_readme>
-   <include>./README.md</include>
-</cli_command_readme>
-8. Output Writing Guarantees and Formatting:
-   - Always attempt to write `output_program`, `output_code`, and `output_results` when their paths are resolved, regardless of success, so users can inspect the final state.
-   - `fix_verification_errors` returns a single string explanation; append it directly to the log (do not iterate or split character-by-character).
+1. Extract parameters from ctx.obj as fallbacks; direct parameters take priority
+2. Validate inputs (loop requires verification_program)
+3. Resolve file paths via `construct_paths`, falling back to manual derivation if "verify" command is not recognized
+4. For single-pass mode:
+   - Execute the program and capture stdout/stderr
+   - Combine output (add "--- STDERR ---" delimiter when stderr present)
+   - Call `fix_verification_errors` with file contents and program output
+   - Determine success based on issues found and fixes proposed
+5. For loop mode:
+   - Call `fix_verification_errors_loop` with paths, content, and budget parameters
+   - Extract results from the returned dictionary
+6. Write output files to resolved paths
+7. Display summary panel and return results tuple
 
-9. Interpreter Extensibility:
-   - The baseline requires `.py`/`.js`/`.sh` handling as above. Implementations may add support for additional extensions/interpreters where appropriate.
+% Module Structure
+
+- Import `DEFAULT_STRENGTH` and `DEFAULT_TIME` from parent package
+- Define constants: `DEFAULT_TEMPERATURE = 0.0`, `DEFAULT_MAX_ATTEMPTS = 3`, `DEFAULT_BUDGET = 5.0`
+- Configure logging via `logging.getLogger(__name__)`
+- Helper function `run_program(program_path, args) -> Tuple[bool, str, str]` for program execution
+- Main function `fix_verification_main` as specified above
+
+% Reference Documentation
+<verify_command_spec>
+<shell>sed -n '/^### 16\. verify$/,/^## /p' README.md | sed '$d'</shell>
+</verify_command_spec>

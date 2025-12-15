@@ -2,9 +2,12 @@
 
 <include>./context/python_preamble.prompt</include>
 
+% Standard ctx.obj parameters (see include for details):
+<include>./context/ctx_obj_params.prompt</include>
+
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. This object provides 'verbose', 'strength', 'temperature', 'time' (a float or None), as well as 'force', 'quiet', 'context' (optional context override), and 'confirm_callback' (optional TUI confirmation callback) via `ctx.obj`.
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt above for available keys).
         - `prompt_file` - A string containing the path to the prompt file that generated the code.
         - `code_file` - A string containing the path to the code file to be tested.
         - `output` - An optional string containing the path where to save the generated test file. If None, use the resolved path from `construct_paths`.
@@ -13,6 +16,8 @@
         - `existing_tests` - An optional string path to an existing test file. Required when using 'coverage_report'. If `merge` is True, output is written to this path.
         - `target_coverage` - An optional float indicating desired coverage. Accepted but not used by the current implementation.
         - `merge` - An optional boolean. If True and 'existing_tests' is provided, write output to 'existing_tests'.
+        - `strength` - An optional float (default None). If provided, overrides the 'strength' value from `ctx.obj`. Used by orchestrators to pass explicit values.
+        - `temperature` - An optional float (default None). If provided, overrides the 'temperature' value from `ctx.obj`. Used by orchestrators to pass explicit values.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`):
             - `str`: The generated unit test code.
@@ -20,6 +25,7 @@
             - `str`: The name of the model used.
 
 % Behavior:
+%  - Resolve `strength` and `temperature` using the pattern described in ctx_obj_params.prompt.
 %  - Build input and output paths, and determine language using `construct_paths`, passing:
 %      input_file_paths: {prompt_file, code_file, and optionally coverage_report, existing_tests}
 %      command_options: {output, language, merge, target_coverage}
@@ -42,11 +48,6 @@
 %  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}")` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:
@@ -66,7 +67,7 @@
    </internal_example_modules>
 </examples>
 
-% Here is the README for the cli command that has details of how the 'test' command works. Be sure to support the necessary global options like verbose, strength, temperature, and time (retrieved from `ctx.obj.get('time')`, where `time` is a float in [0.0–1.0] or None) when calling the `generate_test` and `increase_tests` functions. Also pass `force` and `quiet` to `construct_paths`.
+% Here is the README for the cli command that has details of how the 'test' command works. Be sure to support the global options from ctx.obj when calling `generate_test` and `increase_tests`. Also pass `force` and `quiet` to `construct_paths`.
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>

@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'crash_main', that will be the CLI wrapper for fixing errors in a code module and its calling program that caused a program to crash. This function will read the necessary files, call the fix_code_module_errors function, and handle the output locations.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. The function defensively ensures `ctx.obj` and `ctx.params` are dictionaries with fallbacks (e.g., `ctx.obj = ctx.obj if isinstance(ctx.obj, dict) else {}`).
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys). The function defensively ensures `ctx.obj` and `ctx.params` are dictionaries with fallbacks (e.g., `ctx.obj = ctx.obj if isinstance(ctx.obj, dict) else {}`).
         - 'prompt_file' (str): Filename of the prompt file that generated the code module.
         - 'code_file' (str): Filename of the code module that caused the crash and will be modified.
         - 'program_file' (str): Filename of the program that was running the code module.
@@ -15,6 +16,8 @@
         - 'max_attempts' (Optional[int]): Maximum number of fix attempts before giving up. Only used if loop=True. Default is 3 (only substitute this default when the argument is None so callers can pass falsy-but-valid values).
         - 'budget' (Optional[float]): Maximum cost allowed for the fixing process. Only used if loop=True. Default is $5.0 (apply the default only when the argument is None).
         - 'agentic_fallback' (bool): Enable agentic fallback if the primary fix mechanism fails. Default is True.
+        - 'strength' (Optional[float]): LLM generation strength. Resolved via priority chain if None.
+        - 'temperature' (Optional[float]): LLM temperature. Resolved via priority chain if None.
 
     Outputs:
         - Returns a tuple containing:
@@ -32,8 +35,8 @@
     - Compare final contents with original contents to determine if updates occurred.
     - **Handle cases where the fixing process returns empty strings for the fixed code or program. If an empty string is returned, consider the file not updated, even if the original file was also empty. If output paths are provided, write the original contents to those outputs but still report the file as not updated.**
     - Use both `quiet` and `verbose` from the Click context (check both `ctx.params` and `ctx.obj` with fallback). If `quiet` is True, suppress output. Otherwise, print a concise summary; if `verbose` is True, include additional detail beyond the default summary (for example, expanded file-change diagnostics or intermediate steps).
-    - The default value of `strength` should use the `DEFAULT_STRENGTH` constant imported from the pdd module.
-    - Retrieve `temperature = ctx.obj.get('temperature', 0)` from the Click context, using `0` (deterministic output) as the default fallback for crash fixing operations.
+    - Resolve `strength` using the following priority: (1) explicit `strength` parameter if not None, (2) `ctx.obj.get('strength', ...)`, (3) `DEFAULT_STRENGTH` constant imported from the pdd module.
+    - Resolve `temperature` using the following priority: (1) explicit `temperature` parameter if not None, (2) `ctx.obj.get('temperature', ...)`, (3) `0` (deterministic output) as the default fallback for crash fixing operations.
     - Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)` from the Click context, where `DEFAULT_TIME` is a constant (imported from the pdd module). Pass `time` to `fix_code_module_errors` or `fix_code_loop`.
     - Retrieve `force = ctx.params.get("force", ctx.obj.get("force", False))` from the Click context to support the --force CLI option.
     - **On exceptions, return a failure tuple `(False, "", "", 0, 0.0, error_message_string)` rather than calling `sys.exit(1)`. This allows orchestrators (e.g., the sync command) to handle errors gracefully.** Specific exception handling:
@@ -43,14 +46,9 @@
     - In non-loop mode, treat the operation as successful if the fixing routine completes without raising; success does not imply that files were modified.
     - When using `fix_code_loop`, map its return order `(success, final_program, final_code, attempts, total_cost, model)` to this function's return order `(success, final_code, final_program, attempts, total_cost, model)`.
     - When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored, and pass `confirm_callback=ctx.obj.get('confirm_callback')` to support TUI environments.
-    - Match the function signature exactly to the inputs listed above; do not introduce additional CLI parameters unless they are added to this specification.
+    - Match the function signature exactly to the inputs listed above (including `strength` and `temperature` as Optional[float] parameters with default None); do not introduce additional CLI parameters unless they are added to this specification.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:
@@ -75,4 +73,3 @@
    <include>./README.md</include>
    </cli_command_readme>
 
-% Note: Respect both `quiet` and `verbose` from the Click context. If `quiet` is True, suppress output. Otherwise, print a summary; if `verbose` is True, include additional detail.

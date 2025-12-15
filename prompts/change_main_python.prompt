@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write the `change_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `change` command.
 
 <include>context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function (updated to reflect the current implementation):
     Inputs:
-    - `ctx` (`click.Context`): The Click context object containing CLI options and parameters. The `time` parameter is also retrieved from `ctx.obj`.
+    - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
     - `change_prompt_file` (`str`): Path to the change prompt file.
     - `input_code` (`str`): Path to the input code file or directory (when used with the '--csv' option).
     - `input_prompt_file` (`Optional[str]`): Path to the input prompt file. Optional and not used when '--csv' is specified.
@@ -19,11 +20,6 @@
       - `str`: The name of the model used (may be empty on error).
 
 <examples>
-   % Here is how to use the Python Click library within a function:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Examples of using internal modules:
    <internal_example_modules>
       - Using the `get_extension` function:

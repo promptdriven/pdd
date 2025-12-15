@@ -370,3 +370,22 @@ def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture
         m_open.assert_called_once_with(str(resolved_file), "w", encoding="utf-8")
         handle = m_open()
         handle.write.assert_called_once_with("unit_test_code")
+
+
+def test_cmd_test_main_uses_safe_ctx_obj_access():
+    """
+    Regression: cmd_test_main should not raise KeyError if ctx.obj
+    is missing 'strength' or 'temperature' keys.
+
+    Bug: Direct dict access ctx.obj["strength"] raises KeyError,
+    but ctx.obj.get("strength", DEFAULT) is safe.
+    """
+    import inspect
+
+    source = inspect.getsource(cmd_test_main)
+
+    # Should NOT use direct dict access for strength/temperature
+    assert 'ctx.obj["strength"]' not in source, \
+        "cmd_test_main should use ctx.obj.get('strength', ...) not ctx.obj['strength']"
+    assert 'ctx.obj["temperature"]' not in source, \
+        "cmd_test_main should use ctx.obj.get('temperature', ...) not ctx.obj['temperature']"
