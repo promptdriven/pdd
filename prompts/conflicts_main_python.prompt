@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write the 'conflicts_main' function that will be part of the 'pdd' command-line program. This function will handle the core logic for the 'conflicts' command.
 
 <include>context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-    - 'ctx' (click.Context): The Click context object containing CLI options and parameters.
+    - 'ctx' (click.Context): The Click context object (see ctx_obj_params.prompt for available keys).
     - 'prompt1' (str): Path to the first prompt file.
     - 'prompt2' (str): Path to the second prompt file.
     - 'output' (Optional[str]): Path to save the CSV file containing the conflict analysis results.
@@ -16,11 +17,6 @@
       - str: The name of the model used.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       % Here is an example of how to use the `construct_paths` function:

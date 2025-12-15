@@ -1,10 +1,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'detect_change_main', that will be the CLI wrapper for detecting which prompts need to be changed based on a change description. This function will analyze a list of prompt files and a change description file to determine which prompts need modifications. It should retrieve a `time` parameter from the Click context (`ctx.obj.get('time', DEFAULT_TIME)`) and pass it to the `detect_change` function as a float time budget.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
         - `prompt_files` (List[str]): A list of filenames of prompts that may need to be changed.
         - `change_file` (str): Filename whose content describes the changes that need to be analyzed.
         - `output` (Optional[str]): Optional path where to save the CSV file containing analysis results. If None, uses default naming convention.
@@ -28,11 +29,6 @@
     - Unless `--quiet` is set, print a success summary (model used, total cost) and list detected changes. On error, print a Rich‑styled error and exit with status 1.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:

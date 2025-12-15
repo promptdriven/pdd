@@ -1,6 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a Python function `fix_verification_main` that serves as the CLI wrapper for the PDD "verify" command.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Role & Scope
 This module verifies the functional correctness of generated code by:
@@ -52,7 +53,7 @@ Success Semantics:
 % Inputs/Outputs
 
 Inputs:
-- `ctx` (click.Context): Click context with fallback parameters (strength, temperature, time, force, quiet, verbose, context, confirm_callback)
+- `ctx` (click.Context): Click context (see ctx_obj_params.prompt for available keys)
 - `prompt_file` (str): Path to the prompt file
 - `code_file` (str): Path to the code file to verify
 - `program_file` (str): Path to the program to execute
