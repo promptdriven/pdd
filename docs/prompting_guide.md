@@ -90,8 +90,10 @@ Use clear sections and explicit includes. A recommended structure (matching our 
 1) Role and scope: one short paragraph defining what the module/file is responsible for.
 2) Requirements: numbered bullets for functionality, contracts, errors, validation, logging, performance, security, and any SLOs.
 3) Dependencies: explicit XML tags (one per dependency) with <include> of examples or prompt names.
-4) Instructions: precise input/output specs, class/function responsibilities, edge cases, and testing notes.
+4) Instructions: precise input/output specs, class/function responsibilities, edge cases.
 5) Deliverables: what code artifact(s) to produce and the entry point(s).
+
+**Note:** Tests are generated from the module prompt (via Requirements), so explicit Testing sections are typically unnecessary—well-written Requirements are inherently testable. Use `context/test.prompt` for project-wide test guidance (frameworks, patterns, conventions). See "Command-Specific Context Files" below.
 
 See pdd/pdd/templates/generic/generate_prompt.prompt for a concrete scaffold. For broader principles and guardrails, see pdd/docs/prompt-driven-development-doctrine.md.
 
@@ -171,6 +173,13 @@ LLMs exhibit "middle-loss" – they pay more attention to the **beginning** (rol
 
 Some PDD commands (e.g., `pdd test`, `pdd example`) can automatically include project-specific context files like `context/test.prompt` or `context/example.prompt` during their internal preprocessing. Use these to provide instructions tailored to your project, such as preferred testing frameworks or specific import statements, without modifying the main prompt.
 
+**`context/test.prompt`** is particularly important:
+- Defines testing conventions, frameworks, and patterns for your project
+- Included automatically when running `pdd test` (alongside the module prompt and generated code)
+- Tests accumulate over time via `--merge` as bugs are found
+- Tests persist when the module prompt changes—only code is regenerated, not tests
+- This ensures tests remain stable "permanent assets" while code can be freely regenerated
+
 ---
 
 ## Why PDD Scales to Large Codebases
@@ -181,6 +190,31 @@ Some PDD commands (e.g., `pdd test`, `pdd example`) can automatically include pr
 - Accumulating tests: protect behavior across wide regenerations and refactors; failures localize issues quickly.
 - Single source of truth: prompts unify intent and dependencies, improving cross‑team coordination and reducing drift.
 - Automated Grounding: By feeding successful past generations back into the context, the system stabilizes the code over time, making "regeneration" safe even for complex modules.
+
+### Tests as Generation Context
+
+A key PDD feature: existing tests are automatically included as context when generating code. This means:
+
+- The LLM sees the test file and knows what behaviors must be preserved
+- Generated code is constrained to pass existing tests
+- New tests accumulate over time, progressively constraining future generations
+- This creates a "ratchet effect" - each bug fix adds a test, preventing regression
+
+This is distinct from test *generation*. Tests are generated via `pdd test PROMPT_FILE CODE_FILE`, which uses the module prompt, generated code, and `context/test.prompt` for project-wide guidance. Tests accumulate over time via `--merge` as bugs are found. Requirements in the module prompt implicitly define what to test—each requirement should correspond to at least one test case.
+
+```mermaid
+flowchart LR
+  subgraph Assets
+    P[Module Prompt] --> G[pdd generate]
+    T[Existing Tests] --> G
+    G --> C[Generated Code]
+  end
+
+  subgraph Accumulation
+    BUG[Bug Found] --> NT[New Test Written]
+    NT --> T
+  end
+```
 
 ---
 
@@ -251,7 +285,8 @@ Focus on clarity, measurable outcomes, and determinism:
 - Non‑functional: performance budgets (latency, memory), logging, tracing, security (authn/z, secrets handling), compliance.
 - Edge cases: input validation, missing data, timeouts, network failures, concurrency.
 - Observability: what to log/measure and at what levels; how to verify success in tests.
-- Testing: specify what tests should cover and any golden examples.
+
+**Requirements as Test Specifications:** Each requirement should be testable. When `pdd test` runs, the LLM uses your Requirements to determine what to test. A requirement like "return null for invalid input without throwing" implies a test case. If you can't write a test for a requirement, it's too vague. No separate Testing section is needed—well-written Requirements ARE the test specification.
 
 ---
 
@@ -322,12 +357,21 @@ The PDD workflow (see pdd/docs/whitepaper.md):
 
 Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts are permanent assets (accumulated and versioned).
 
+**Important:** Tests ARE generated from the module prompt (plus code and `context/test.prompt`). The key distinction is their lifecycle:
+- Code is regenerated on prompt changes; tests accumulate and persist
+- Requirements implicitly define test coverage—each requirement implies at least one test
+- Use `context/test.prompt` for project-wide test guidance (frameworks, patterns)
+- Existing tests are included as context during code generation
+- This creates a "ratchet effect" where each new test permanently constrains future generations
+
 ### Workflow Cheatsheet: Features vs. Bugs
 
 | Task Type | Where to Start | The Workflow |
 | :--- | :--- | :--- |
-| **New Feature** | **The Prompt** | 1. Add/Update Requirements in Prompt.<br>2. Regenerate Code.<br>3. Write new Tests to verify. |
-| **Bug Fix** | **The Test File** | 1. Write a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case.<br>3. Regenerate Code to pass the test. |
+| **New Feature** | **The Prompt** | 1. Add/Update Requirements in Prompt.<br>2. Regenerate Code (LLM sees existing tests).<br>3. Write new Tests to verify. |
+| **Bug Fix** | **The Test File** | 1. Write a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case.<br>3. Regenerate Code (LLM sees the new test and must pass it). |
+
+**Key insight:** When you run `pdd generate` after adding a test, the LLM sees that test as context. This means the generated code is constrained to pass it - the test acts as a specification, not just a verification.
 
 **Why?** Features represent *new intent* (Prompt). Bugs represent *missed intent* which must first be captured as a constraint (Test) before refining the definition (Prompt).
 
@@ -402,7 +446,7 @@ PDD‑style prompt (source of truth):
 
 Key differences:
 - Patch prompt constrains a local edit and often asks for a diff. It assumes code is the source of truth.
-- PDD prompt defines the module’s contract, dependencies, and deliverables. It is the source of truth; code and tests are regenerated to match it.
+- PDD prompt defines the module's contract, dependencies, and deliverables. It is the source of truth; code is regenerated to match it, while tests accumulate over time.
 
 ---
 
