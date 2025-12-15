@@ -34,7 +34,9 @@ def fix_main(
     max_attempts: int,
     budget: float,
     auto_submit: bool,
-    agentic_fallback: bool = True
+    agentic_fallback: bool = True,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -103,9 +105,9 @@ def fix_main(
             confirm_callback=ctx.obj.get('confirm_callback')
         )
 
-        # Get parameters from context
-        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
-        temperature = ctx.obj.get('temperature', 0)
+        # Get parameters from context (prefer passed parameters over ctx.obj)
+        strength = strength if strength is not None else ctx.obj.get('strength', DEFAULT_STRENGTH)
+        temperature = temperature if temperature is not None else ctx.obj.get('temperature', 0)
         verbose = ctx.obj.get('verbose', False)
         time = ctx.obj.get('time') # Get time from context
 
