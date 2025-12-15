@@ -23,6 +23,8 @@ def cmd_test_main(
     existing_tests: str | None,
     target_coverage: float | None,
     merge: bool | None,
+    strength: float | None = None,
+    temperature: float | None = None,
 ) -> tuple[str, float, str]:
     """
     CLI wrapper for generating or enhancing unit tests.
@@ -52,8 +54,8 @@ def cmd_test_main(
     input_strings = {}
 
     verbose = ctx.obj["verbose"]
-    strength = ctx.obj["strength"]
-    temperature = ctx.obj["temperature"]
+    strength = strength if strength is not None else ctx.obj["strength"]
+    temperature = temperature if temperature is not None else ctx.obj["temperature"]
     time = ctx.obj.get("time")
 
     if verbose:

@@ -2248,3 +2248,128 @@ def test_auto_deps_passes_directory_not_glob_pattern(orchestration_fixture):
     assert '*' not in directory_path, (
         f"directory_path should not contain wildcards. Got: {directory_path!r}"
     )
+
+
+# =============================================================================
+# Tests for strength/temperature propagation to sub-commands
+# =============================================================================
+
+class TestStrengthTemperaturePropagation:
+    """Bug fix tests: sync_orchestration should pass strength/temperature to sub-commands."""
+
+    def test_fix_verification_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to fix_verification_main.
+
+        The fix_verification_main call should include strength parameter.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        # Get the source code of sync_orchestration function
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find the line containing fix_verification_main call and check surrounding context
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'fix_verification_main(' in line or 'result = fix_verification_main' in line:
+                found_call = True
+                # Check this line and the next few lines for strength parameter
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "fix_verification_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "fix_verification_main call should include 'strength=strength' parameter"
+
+    def test_crash_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to crash_main."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'crash_main(' in line or 'result = crash_main' in line:
+                found_call = True
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "crash_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "crash_main call should include 'strength=strength' parameter"
+
+    def test_fix_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to fix_main."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'fix_main(' in line or 'result = fix_main' in line:
+                found_call = True
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "fix_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "fix_main call should include 'strength=strength' parameter"
+
+    def test_cmd_test_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to cmd_test_main."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'cmd_test_main(' in line or 'result = cmd_test_main' in line:
+                found_call = True
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "cmd_test_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "cmd_test_main call should include 'strength=strength' parameter"
+
+    def test_update_main_call_includes_strength(self):
+        """Bug fix: sync_orchestration should pass strength to update_main."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+        lines = source.split('\n')
+        found_call = False
+        found_strength = False
+
+        for i, line in enumerate(lines):
+            if 'update_main(' in line or 'result = update_main' in line:
+                found_call = True
+                context = '\n'.join(lines[i:i+15])
+                if 'strength=strength' in context:
+                    found_strength = True
+                    break
+
+        assert found_call, "update_main call should exist in sync_orchestration"
+        assert found_strength, \
+            "update_main call should include 'strength=strength' parameter"
