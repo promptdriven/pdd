@@ -83,6 +83,8 @@ def test(
       python test_cli_example.py test prompt.txt my_code.py --coverage-report coverage.xml --existing-tests tests/test_my_code.py --merge
 
     """
+    # Note: strength and temperature parameters can be passed explicitly to override ctx.obj values.
+    # This is useful when orchestrators need to pass specific values.
     generated_tests, total_cost, model_name = cmd_test_main(
         ctx=ctx,
         prompt_file=prompt_file,
@@ -93,6 +95,7 @@ def test(
         existing_tests=existing_tests,
         target_coverage=target_coverage,
         merge=merge,
+        # Optional: pass strength=0.8 or temperature=0.5 to override ctx.obj values
     )
 
     # Provided for demonstration. You can print or further process the returned data.
