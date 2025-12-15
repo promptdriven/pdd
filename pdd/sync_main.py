@@ -235,10 +235,14 @@ def sync_main(
                 "max_attempts": max_attempts,
                 "budget": budget,
                 "target_coverage": target_coverage,
-                "strength": strength,
-                "temperature": temperature,
                 "time": time_param,
             }
+            # Only pass strength/temperature if explicitly set by user (not CLI defaults)
+            # This allows .pddrc values to take precedence when user doesn't pass CLI flags
+            if strength != DEFAULT_STRENGTH:
+                command_options["strength"] = strength
+            if temperature != 0.0:  # 0.0 is the CLI default for temperature
+                command_options["temperature"] = temperature
 
             # Use force=True for path discovery - actual file writes happen in sync_orchestration
             # which will handle confirmations via the TUI's confirm_callback
@@ -256,7 +260,11 @@ def sync_main(
             final_temp = resolved_config.get("temperature", temperature)
             final_max_attempts = resolved_config.get("max_attempts", max_attempts)
             final_target_coverage = resolved_config.get("target_coverage", target_coverage)
-            
+
+            # Update ctx.obj with resolved values so sub-commands inherit them
+            ctx.obj["strength"] = final_strength
+            ctx.obj["temperature"] = final_temp
+
             code_dir = resolved_config.get("code_dir", "src")
             tests_dir = resolved_config.get("tests_dir", "tests")
             examples_dir = resolved_config.get("examples_dir", "examples")
