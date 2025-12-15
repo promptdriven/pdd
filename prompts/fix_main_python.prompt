@@ -2,17 +2,11 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'fix_main', that will be the CLI wrapper for fixing errors in code and unit tests. This function will handle the error fixing process using either the fix_errors_from_unit_tests function or fix_error_loop function depending on whether the --loop option is used.
 
 <include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters.
-            Context parameters used:
-            - strength (float): Model strength parameter, defaults to DEFAULT_STRENGTH
-            - temperature (float): Model temperature parameter, defaults to 0
-            - time (int): Model time parameter (e.g., timeout in seconds), defaults to DEFAULT_TIME
-            - force (bool): Whether to force overwrite existing files
-            - quiet (bool): Whether to suppress output messages
-            - verbose (bool): Whether to enable verbose output for debugging purposes
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
         - `prompt_file` (str): The filename of the prompt file that generated the code under test.
         - `code_file` (str): The filename of the code file to be fixed.
         - `unit_test_file` (str): The filename of the unit test file.
