@@ -7,6 +7,7 @@ from pathlib import Path
 # pylint: disable=redefined-builtin
 from rich import print
 
+from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE
 from .construct_paths import construct_paths
 from .generate_test import generate_test
 from .increase_tests import increase_tests
@@ -54,8 +55,8 @@ def cmd_test_main(
     input_strings = {}
 
     verbose = ctx.obj["verbose"]
-    strength = strength if strength is not None else ctx.obj["strength"]
-    temperature = temperature if temperature is not None else ctx.obj["temperature"]
+    strength = strength if strength is not None else ctx.obj.get("strength", DEFAULT_STRENGTH)
+    temperature = temperature if temperature is not None else ctx.obj.get("temperature", DEFAULT_TEMPERATURE)
     time = ctx.obj.get("time")
 
     if verbose:
