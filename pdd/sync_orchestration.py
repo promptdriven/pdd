@@ -777,9 +777,9 @@ def sync_orchestration(
                             temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
                             original_content = pdd_files['prompt'].read_text(encoding='utf-8')
                             result = auto_deps_main(
-                                ctx, 
-                                prompt_file=str(pdd_files['prompt']), 
-                                directory_path=f"{examples_dir}/*",
+                                ctx,
+                                prompt_file=str(pdd_files['prompt']),
+                                directory_path=examples_dir,
                                 auto_deps_csv_path="project_dependencies.csv",
                                 output=temp_output,
                                 force_scan=False
@@ -861,7 +861,7 @@ def sync_orchestration(
                             if has_crash:
                                 Path("crash.log").write_text(crash_log_content)
                                 try:
-                                    result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log", output=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, max_attempts=max_attempts, budget=budget - current_cost_ref[0])
+                                    result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log", output=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
                                 except Exception as e:
                                     print(f"Crash fix failed: {e}")
                                     skipped_operations.append('crash')
@@ -871,10 +871,10 @@ def sync_orchestration(
                             if not pdd_files['example'].exists():
                                 skipped_operations.append('verify')
                                 continue
-                            result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0])
+                            result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
                         elif operation == 'test':
                             pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
-                            result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False)
+                            result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
                             if pdd_files['test'].exists():
                                 _execute_tests_and_create_run_report(
                                     pdd_files['test'],
@@ -922,9 +922,9 @@ def sync_orchestration(
                             except Exception as e:
                                 error_content = f"Test execution error: {e}"
                             error_file_path.write_text(error_content)
-                            result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=str(pdd_files['test']), error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], auto_submit=True)
+                            result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=str(pdd_files['test']), error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
                         elif operation == 'update':
-                            result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True)
+                            result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
                         else:
                             errors.append(f"Unknown operation {operation}")
                             result = {'success': False}
