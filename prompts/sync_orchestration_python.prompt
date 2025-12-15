@@ -99,6 +99,9 @@ Returns a dictionary containing:
     <update_main_example>
         <include>context/update_main_example.py</include>
     </update_main_example>
+    <get_test_command_example>
+        <include>context/get_test_command_example.py</include>
+    </get_test_command_example>
 </examples>
 
 ### Module-Level Imports
@@ -134,6 +137,7 @@ from . import DEFAULT_STRENGTH
 - `calculate_current_hashes`, `Fingerprint` - in `_save_operation_fingerprint()`
 - `datetime, timezone` from datetime - in `_save_operation_fingerprint()`
 - `get_extension` - at the start of `sync_orchestration()`
+- `get_test_command_for_file` from `.get_test_command` - in `_execute_tests_and_create_run_report()` and fix operation
 - `__version__` - in `_save_operation_fingerprint()`
 - `show_exit_animation` - after `app.run()` completes
 - `shutil` - inside auto-deps operation block
@@ -200,6 +204,10 @@ When `skip_verify` or `skip_tests` is set:
 - After **fix**: Re-run tests to update run report
 - After **test**: Execute tests to create initial run report
 
+### Multi-Language Test Support
+
+For non-Python languages, use `get_test_command_for_file()` to determine the appropriate test runner command (see `get_test_command_example` in dependencies). The `_parse_test_output()` helper parses output from pytest, Jest/Vitest/Mocha, go test, and cargo test.
+
 ## Helper Functions
 
 Implement these helpers for state management:
@@ -213,7 +221,8 @@ Implement these helpers for state management:
 - `_save_operation_fingerprint(basename, language, operation, paths, cost, model)` - Save fingerprint after success
 - `_display_sync_log(basename, language, verbose)` - Format and display sync log
 - `_create_mock_context(**kwargs)` - Create Click context for command execution
-- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None)` - Run pytest with coverage and parse results
+- `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage); supports Python (pytest), JavaScript/TypeScript (Jest/Vitest/Mocha), Go, and Rust (cargo test)
+- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None)` - Run tests with coverage using language-appropriate test command and parse results
 - `_python_cov_target_for_code_file(code_file)` - Determine dotted module path for pytest-cov
 - `_python_cov_target_for_test_and_code(test_file, code_file, fallback)` - Analyze test imports to pick best `--cov` target
 
@@ -265,22 +274,3 @@ MAX_CONSECUTIVE_TESTS = 3  # Break after this many consecutive test operations
 MAX_CYCLE_REPEATS = 2  # Break crash-verify and test-fix cycles after this many repetitions
 ```
 
-## Usage Examples
-
-```python
-# Basic sync
-result = sync_orchestration(basename="calculator", language="python")
-
-# View sync log
-result = sync_orchestration(basename="calculator", language="python", log=True)
-
-# With custom directories
-result = sync_orchestration(
-    basename="data_processor",
-    language="python",
-    prompts_dir="backend/prompts",
-    code_dir="backend/src",
-    budget=15.0,
-    target_coverage=95.0,
-)
-```

@@ -25,7 +25,9 @@
         - `max_attempts` (int): Maximum number of fix attempts before giving up. Only used with --loop. Default is 3.
         - `budget` (float): Maximum cost allowed for fixing process. Only used with --loop. Default is $5.0.
         - `auto_submit` (bool): If True, automatically submits example if all unit tests pass during fix loop.
-        - `agentic_fallback` (Optional[bool]): Whether to enable the CLI agent fallback behavior (default True). Pass through to `fix_error_loop` when supported.
+        - `agentic_fallback` (bool): Whether to enable the CLI agent fallback behavior (default True). Pass through to `fix_error_loop`.
+        - `strength` (Optional[float]): Model strength parameter. If provided, overrides context value. Defaults to None (uses context).
+        - `temperature` (Optional[float]): Model temperature parameter. If provided, overrides context value. Defaults to None (uses context).
 
     Outputs:
         - Returns a tuple containing:
@@ -41,8 +43,8 @@
     - Initialize `analysis_results = None` before the main try block to prevent reference errors (it is only set in non-loop mode).
 
 1.  Parameter Retrieval:
-    - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`.
-    - Retrieve `temperature = ctx.obj.get('temperature', 0)`.
+    - For `strength`: Use the passed parameter if not None, otherwise fall back to `ctx.obj.get('strength', DEFAULT_STRENGTH)`.
+    - For `temperature`: Use the passed parameter if not None, otherwise fall back to `ctx.obj.get('temperature', 0)`.
     - Retrieve `time = ctx.obj.get('time')` (CLI sets DEFAULT_TIME when unset; no import needed here).
     - Retrieve `verbose = ctx.obj.get('verbose', False)`.
     - Retrieve `force = ctx.obj.get('force', False)`.
@@ -50,12 +52,11 @@
     - Retrieve `context = ctx.obj.get('context')` for passing to `construct_paths` as `context_override`.
     - Retrieve `confirm_callback = ctx.obj.get('confirm_callback')` for TUI confirmation support.
     - It is fine to pass `force`/`quiet` directly to `construct_paths` without first storing locals.
-    - Optionally accept `agentic_fallback: bool = True` and pass through to `fix_error_loop` when supported.
+    - Accept `agentic_fallback: bool = True` and pass through to `fix_error_loop`.
 
 2.  File Path Handling and Function Calls:
-    - When calling `fix_error_loop`, pass the original file paths (`code_file`, `unit_test_file`, and `prompt_file`), `prompt` content (from `input_strings`), `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), and `verbose` directly.
-    - When calling `fix_error_loop`, also pass `agentic_fallback` when available.
-    - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths.get('output_results')`, along with `strength`, `temperature`, `time`, and `verbose`. The function returns 7 values: `update_unit_test, update_code, fixed_unit_test, fixed_code, analysis_results, total_cost, model_name`. Determine `success` as `update_unit_test or update_code`, and set `attempts = 1` for non-loop mode.
+    - When calling `fix_error_loop`, pass the original file paths (`code_file`, `unit_test_file`, and `prompt_file`), `prompt` content (from `input_strings`), `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), `verbose`, and `agentic_fallback`.
+    - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths.get('output_results')`, along with `strength`, `temperature`, `time`, and `verbose`. Determine `success` as `update_unit_test or update_code`, and set `attempts = 1` for non-loop mode.
     - In non-loop mode, pre‑validate the provided `error_file` exists before constructing paths; raise `FileNotFoundError` if missing.
     - Call `construct_paths(..., create_error_file=loop, context_override=ctx.obj.get('context'))` so an empty error log is created only during loop mode and the global `--context` is honored.
     - Handle both fixing approaches appropriately based on the `--loop` parameter.
@@ -82,40 +83,19 @@
 
 4.  Auto-submit Functionality:
     When `auto_submit` is True and the fix is successful:
-    a) Authentication:
-        - Get JWT token using `get_jwt_token()`.
-        - Required environment variables:
-            * `NEXT_PUBLIC_FIREBASE_API_KEY`
-            * `GITHUB_CLIENT_ID`
-        - Implementations MAY optionally provide an `app_name` to `get_jwt_token` for telemetry/UX purposes.
-    b) Submission Payload:
-        - Structure: Fields like `prompts`, `code`, `test`, `error`, `example`, and `analysis` are arrays of objects with `content` and `filename` keys.
-        - Input files (`payload["input"]`):
-            * `prompts`: array containing `[{"content": processed_prompt, "filename": basename}]` — preprocess via `preprocess(..., recursive=False, double_curly_brackets=True)` for submission only
-            * `code`: array containing `[{"content": input_strings["code_file"], "filename": basename}]`
-            * `test`: array containing `[{"content": input_strings["unit_test_file"], "filename": basename}]`
-            * `error`: array (if available from `input_strings["error_file"]`)
-            * `example`: array (if `verification_program` specified, read its content and include)
-        - Output files (`payload["output"]`):
-            * `code`: array containing `[{"content": fixed_code, "filename": basename}]`
-            * `test`: array containing `[{"content": fixed_unit_test, "filename": basename}]`
-            * `analysis`: array (if available). Prefer reading from the file at `output_file_paths['output_results']`; if file read fails or path is unavailable, fall back to in‑memory `analysis_results` (with filename `"analysis.log"`).
-        - Metadata:
-            * title: "Auto-submitted fix for {filename}"
-            * description: "Automatically submitted successful code fix"
-            * language: detected from file extension
-            * framework: ""
-            * tags: ["auto-fix", "example"]
-            * isPublic: True
-            * price: 0.0
-    c) Submit to endpoint:
-        - URL: `https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample`
-        - Headers: Authorization with JWT token and `Content-Type: application/json`.
-        - Handle response and provide user feedback.
-
-    d) Scope of auto-submit (guidance):
-        - Trigger auto-submit when the fix operation is successful (i.e., `success` is True), regardless of whether `--loop` mode was used.
-        - The success condition applies to both loop mode (iterative fixing) and non-loop mode (single-pass fixing).
+    a) Authentication: Get JWT token using `get_jwt_token()` (see `<get_jwt_token_example>`).
+    b) Payload structure:
+        - `input.prompts`: `[{"content": preprocess(prompt, recursive=False, double_curly_brackets=True), "filename": basename}]`
+        - `input.code`: `[{"content": input_strings["code_file"], "filename": basename}]`
+        - `input.test`: `[{"content": input_strings["unit_test_file"], "filename": basename}]`
+        - `input.error`: array (if `error_file` in input_strings)
+        - `input.example`: array (if `verification_program` specified)
+        - `output.code`: `[{"content": fixed_code, "filename": basename}]`
+        - `output.test`: `[{"content": fixed_unit_test, "filename": basename}]`
+        - `output.analysis`: array (prefer file at `output_file_paths['output_results']`, fallback to in-memory `analysis_results`)
+        - `metadata`: title, description, language (from extension), framework="", tags=["auto-fix", "example"], isPublic=True, price=0.0
+    c) Submit to `https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample` with Bearer token.
+    d) Trigger auto-submit when `success` is True (both loop and non-loop modes).
 
 5.  Verbose Output:
     - The `verbose` parameter (retrieved from `ctx`) should be passed to both `fix_error_loop` and `fix_errors_from_unit_tests` calls.
@@ -130,11 +110,6 @@
     - Show auto-submit status if enabled.
 
 <examples>
-   % Here is how to use the Python Click library to create a command line program:
-   <click_example>
-   <include>context/click_example.py</include>
-   </click_example>
-
    % Here are examples of how to use internal modules:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:
