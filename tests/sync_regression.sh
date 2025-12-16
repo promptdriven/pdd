@@ -356,22 +356,24 @@ check_sync_files() {
     log "DEBUG: Checking for files in current directory: $(pwd)"
     log "DEBUG: Contents of current directory:"
     ls -la >> "$LOG_FILE" 2>&1 || true
-    log "DEBUG: Contents of pdd/ directory (if exists):"
-    ls -la pdd/ >> "$LOG_FILE" 2>&1 || true
-    
-    # Check generated files exist - handle both possible locations
+    log "DEBUG: Contents of src/ directory (if exists):"
+    ls -la src/ >> "$LOG_FILE" 2>&1 || true
+
+    # Check generated files exist - handle multiple possible locations
     case "$language" in
         "python")
-            # Try both pdd/ subdirectory and root directory (for .pddrc regression context)
-            if [ -f "pdd/${basename}.py" ] && [ -s "pdd/${basename}.py" ]; then
+            # Try src/, pdd/, and root directory (for different .pddrc contexts)
+            if [ -f "src/${basename}.py" ] && [ -s "src/${basename}.py" ]; then
+                check_exists "src/${basename}.py" "Generated Python code"
+            elif [ -f "pdd/${basename}.py" ] && [ -s "pdd/${basename}.py" ]; then
                 check_exists "pdd/${basename}.py" "Generated Python code"
             elif [ -f "${basename}.py" ] && [ -s "${basename}.py" ]; then
                 log "Generated Python code found in root (copying to expected location): ${basename}.py"
-                mkdir -p pdd
-                cp "${basename}.py" "pdd/${basename}.py"
-                check_exists "pdd/${basename}.py" "Generated Python code"
+                mkdir -p src
+                cp "${basename}.py" "src/${basename}.py"
+                check_exists "src/${basename}.py" "Generated Python code"
             else
-                log_error "Generated Python code file not found in pdd/ or root directory"
+                log_error "Generated Python code file not found in src/, pdd/, or root directory"
                 exit 1
             fi
             
