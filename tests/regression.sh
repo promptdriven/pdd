@@ -146,7 +146,7 @@ UPDATED_GIT_PROMPT="updated_git_${MATH_PROMPT}"
 DETECT_CHANGE_FILE="change_description.prompt"
 DETECT_RESULTS_CSV="detect_results.csv"
 CONFLICTS_RESULTS_CSV="conflicts_analysis.csv"
-OTHER_PROMPT="get_extension_python.prompt" # Assumed exists in PROMPTS_PATH
+OTHER_PROMPT="test_other_python.prompt" # Test-specific prompt for detect/conflicts tests
 
 # Trace files
 TRACE_RESULTS_LOG="trace_results.log"
@@ -618,8 +618,14 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
   git init -b main > /dev/null 2>&1
   git config --local user.email "test@example.com"
   git config --local user.name "Test User"
-  # Copy data directory for LLM model CSV access
-  cp -r "$PDD_BASE_DIR/data" .
+  # Copy data directory for LLM model CSV access - check both root and pdd/data locations
+  if [ -d "$PDD_BASE_DIR/data" ]; then
+    cp -r "$PDD_BASE_DIR/data" .
+  elif [ -d "$PDD_BASE_DIR/pdd/data" ]; then
+    cp -r "$PDD_BASE_DIR/pdd/data" data
+  else
+    log "Warning: data directory not found at $PDD_BASE_DIR/data or $PDD_BASE_DIR/pdd/data"
+  fi
   cp "../$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT" # Copy original version
   cp "$PROMPTS_PATH/$MATH_PROMPT" .
   git add "$MATH_SCRIPT" "$MATH_PROMPT"

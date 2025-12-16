@@ -83,6 +83,11 @@ MAKEFILE_PROMPT := $(PROMPTS_DIR)/Makefile_makefile.prompt
 MAKEFILE_OUTPUT := $(STAGING_DIR)/Makefile
 SKIP_MAKEFILE_REGEN ?= 0
 
+# Auto-skip Makefile regeneration if prompt file doesn't exist (e.g., public repo)
+ifeq ($(wildcard $(MAKEFILE_PROMPT)),)
+SKIP_MAKEFILE_REGEN := 1
+endif
+
 # CSV files
 CSV_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_csv.prompt")
 CSV_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_csv.prompt,$(DATA_DIR)/%.csv,$(CSV_PROMPTS))
@@ -685,6 +690,22 @@ publish-public:
 		@echo "Copying package-data files defined in pyproject.toml to public repo"
 		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
 		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
+	@# Copy test prompt for regression tests (from root prompts/ to public repo)
+	@if [ -f "prompts/test_other_python.prompt" ]; then \
+		echo "Copying test prompt for regression tests"; \
+		mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd/prompts; \
+		cp prompts/test_other_python.prompt $(PUBLIC_PDD_REPO_DIR)/pdd/prompts/; \
+	fi
+	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
+	@if [ -d "$(PUBLIC_PDD_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_REPO_DIR)/prompts" ]; then \
+		echo "Creating prompts symlink"; \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && ln -s pdd/prompts prompts; \
+	fi
+	@# Create data symlink for regression tests (data/ -> pdd/data/)
+	@if [ -d "$(PUBLIC_PDD_REPO_DIR)/pdd/data" ] && [ ! -e "$(PUBLIC_PDD_REPO_DIR)/data" ]; then \
+		echo "Creating data symlink for regression tests"; \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && ln -s pdd/data data; \
+	fi
 	@echo "Committing and pushing updates in public repo"
 	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \
@@ -807,6 +828,16 @@ publish-public-cap:
 		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
 			--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
 			--extra-pattern 'prompts/**/*.prompt'
+	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
+	@if [ -d "$(PUBLIC_PDD_CAP_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_CAP_REPO_DIR)/prompts" ]; then \
+		echo "Creating prompts symlink"; \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && ln -s pdd/prompts prompts; \
+	fi
+	@# Create data symlink for regression tests (data/ -> pdd/data/)
+	@if [ -d "$(PUBLIC_PDD_CAP_REPO_DIR)/pdd/data" ] && [ ! -e "$(PUBLIC_PDD_CAP_REPO_DIR)/data" ]; then \
+		echo "Creating data symlink for regression tests"; \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && ln -s pdd/data data; \
+	fi
 	@echo "Committing and pushing updates in CAP public repo"
 	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
 		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \

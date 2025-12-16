@@ -1,0 +1,11 @@
+# Test prompt for regression testing
+# This prompt exists solely to provide a second prompt file for the detect command test
+
+<language>python</language>
+<description>A minimal test module for regression testing</description>
+
+## Purpose
+This is a placeholder prompt used by regression tests that need multiple prompt files.
+
+## Output
+A simple Python function that returns a greeting.
