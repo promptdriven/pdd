@@ -1,3 +1,21 @@
+## v0.0.85 (2025-12-16)
+
+### Feat
+
+- add support for unit test file inclusion and exclusion in code generation; enhance README with new options
+- implement error detection for example outputs and enhance example execution with error handling
+- add filtering to skip __pycache__ directories and .pyc files in summarize_directory; enhance tests to verify correct behavior
+
+### Fix
+
+- correct output formatting in code generation and test files; replace os.remove with Path.unlink for better file handling
+- update PDD_PATH in tests to point to the 'pdd' directory for accurate file resolution
+- update test output directory path to use project root; ensure test file cleanup after execution
+
+### Refactor
+
+- update sync_regression.sh to check for generated Python files in src/ directory, enhancing file location handling and error logging
+
 ## v0.0.84 (2025-12-15)
 
 ### Feat
