@@ -100,7 +100,7 @@ jobs:
           SOURCE="${{ steps.source.outputs.repo }}"
           SAFE_SOURCE="${SOURCE//\//-}"
 
-          git checkout -b "sync/from-$SAFE_SOURCE-${{ github.run_id }}"
+          git checkout -b "sync/from-$SAFE_SOURCE-${{ github.run_id }}-${{ github.run_attempt }}"
 
           echo "${{ steps.changed.outputs.files_b64 }}" | base64 -d | while read -r file; do
             if [ -n "$file" ]; then
@@ -129,7 +129,7 @@ jobs:
           git diff --staged --quiet && exit 0
 
           git commit -m "sync: Import from $SOURCE"
-          git push -u origin "sync/from-$SAFE_SOURCE-${{ github.run_id }}"
+          git push -u origin "sync/from-$SAFE_SOURCE-${{ github.run_id }}-${{ github.run_attempt }}"
 
           gh pr create \
             --title "🔄 Sync from $SOURCE" \
