@@ -2,19 +2,63 @@
 
 ### Feat
 
-- add support for unit test file inclusion and exclusion in code generation; enhance README with new options
-- implement error detection for example outputs and enhance example execution with error handling
-- add filtering to skip __pycache__ directories and .pyc files in summarize_directory; enhance tests to verify correct behavior
+- **Unit Test Inclusion in Code Generation:** Added `--unit-test` and `--exclude-tests` options to the `generate` command. When `--unit-test <file>` is specified, the test file content is included in the prompt wrapped in `<unit_test_content>` tags, enabling the LLM to generate code that passes specific tests. When neither option is provided, PDD automatically discovers and includes test files matching `test_{code_stem}*.py` from the configured `tests_dir`. Use `--exclude-tests` to disable automatic test file discovery.
+
+Many thanks to Jiamin Cai for your contributions on the unit test inclusion feature!
+
+- **Example Error Detection:** Implemented `_detect_example_errors()` and `_run_example_with_error_detection()` in `sync_orchestration.py` to detect true crashes/errors in example outputs. Detects Python tracebacks and ERROR-level log messages while intentionally ignoring HTTP status codes (examples may test error responses) and exception type names in logs (prevents false positives). For server-style examples that block, runs until timeout then analyzes output for errors—no errors means success.
+
+- **Bytecode Filtering in Directory Summarization:** Added filtering to `summarize_directory()` to skip `__pycache__` directories and `.pyc`/`.pyo` bytecode files, preventing noise in directory summaries.
 
 ### Fix
 
-- correct output formatting in code generation and test files; replace os.remove with Path.unlink for better file handling
-- update PDD_PATH in tests to point to the 'pdd' directory for accurate file resolution
-- update test output directory path to use project root; ensure test file cleanup after execution
+- **Update Command Mode Detection:** Fixed the `update` command to properly distinguish between single-file mode and repository-wide mode. When a single positional argument is provided, it's now correctly treated as the code file (not the prompt file), enabling `pdd update <CODE_FILE>` to generate a new prompt. Added validation to prevent mixing file-specific flags (`--git`, `--input-code`) with repository-wide mode, and `--extensions` with single-file mode.
+
+Many thanks to Jiamin Cai for your contributions to the update fix!
+
+- **Output Formatting and File Handling:** Corrected output formatting in code generation and test files. Replaced `os.remove()` with `Path.unlink()` for more robust file handling with pathlib.
+
+- **Test Path Resolution:** Updated `PDD_PATH` in tests to point to the 'pdd' directory for accurate file resolution. Fixed test output directory path to use project root and ensured test file cleanup after execution.
 
 ### Refactor
 
-- update sync_regression.sh to check for generated Python files in src/ directory, enhancing file location handling and error logging
+- **Sync Regression Script:** Updated `sync_regression.sh` to check for generated Python files in the `src/` directory, enhancing file location handling and error logging.
+
+### CI
+
+- **Public Repo Sync Workflow:** Added `.github/workflows/sync-from-public.yml` GitHub Actions workflow to automatically sync changes from public repositories (`promptdriven/pdd` and `promptdriven/pdd_cap`). Creates PRs with changed files from specified patterns (Python modules, tests, configs) and runs tests before PR creation.
+
+### Docs
+
+- **Prompting Guide:** Expanded the prompting guide with improved guidance and examples.
+
+- **README:** Enhanced README with documentation for the new `--unit-test` and `--exclude-tests` options in the `generate` command.
+
+### Tests
+
+- Added 230+ lines of unit test inclusion tests in `tests/test_code_generator_main.py` covering:
+  - Explicit `--unit-test` file inclusion with content wrapped in `<unit_test_content>` tags
+  - Front matter conflict handling (test files that look like they have front matter)
+  - Automatic test file discovery based on code filename pattern
+  - `--exclude-tests` flag preventing automatic inclusion
+  - Explicit unit test file precedence over automatic discovery
+
+- Added 109 lines of example error detection tests in `tests/test_example_error_detection.py` verifying:
+  - Python traceback detection (catches all unhandled exceptions)
+  - ERROR-level log message detection
+  - No false positives for exception names in log messages
+  - No false positives for HTTP status codes
+  - Clean success output handling
+
+- Added 135+ lines of update command tests in `tests/test_commands_modify.py` covering:
+  - Repository-wide mode with no arguments
+  - Single-file mode treating argument as code file
+  - `--extensions` flag validation (repo mode only)
+  - `--git` flag validation (file mode only)
+
+- Enhanced `tests/test_summarize_directory.py` with tests for `__pycache__` and `.pyc` file filtering.
+
+- Enhanced exception handling in `tests/test_insert_includes.py` by mocking file opening.
 
 ## v0.0.84 (2025-12-15)
 
