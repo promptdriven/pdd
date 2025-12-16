@@ -160,6 +160,13 @@ def summarize_directory(
                 if verbose:
                     print(f"[yellow]Skipping directory: {file_path}[/yellow]")
                 continue
+
+            # Skip __pycache__ directories and bytecode files
+            if '__pycache__' in file_path or file_path.endswith(('.pyc', '.pyo')):
+                if verbose:
+                    print(f"[yellow]Skipping bytecode: {file_path}[/yellow]")
+                continue
+
             try:
                 relative_path = os.path.relpath(file_path)
                 normalized_path = normalize_path(relative_path)
