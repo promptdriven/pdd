@@ -49,9 +49,9 @@ if [ "$PROD_CODE_BEFORE" = "NOT_FOUND" ]; then
 fi
 echo "✓ Production code has correct pattern: $PROD_CODE_BEFORE"
 
-# Step 3: Run pdd verify
+# Step 3: Run pdd sync (which includes verify)
 echo ""
-echo "Running pdd verify..."
+echo "Running pdd sync (which triggers verify)..."
 cd "$PROJECT_ROOT"
 
 # Use the local pdd script
@@ -65,8 +65,9 @@ else
 fi
 
 echo "Using PDD command: $PDD_CMD"
-$PDD_CMD --context backend verify get_user_contributions || {
-    echo "Note: verify may exit non-zero during fix iterations"
+echo "Running: $PDD_CMD --context backend --verbose --force sync get_user_contributions"
+$PDD_CMD --context backend --verbose --force sync get_user_contributions || {
+    echo "Note: sync may exit non-zero during fix iterations"
 }
 
 # Step 4: Check results
