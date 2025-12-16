@@ -170,26 +170,53 @@ def update(
 
     1.  **Single-File Mode:** When you provide at least a code file, it updates
         or generates a single prompt.
+        - `pdd update <CODE_FILE>`: Generates a new prompt for the code.
         - `pdd update [PROMPT_FILE] <CODE_FILE>`: Updates prompt based on code.
         - `pdd update [PROMPT_FILE] <CODE_FILE> <ORIGINAL_CODE_FILE>`: Updates prompt using explicit original code.
 
-    2.  **Repository Mode:** When no arguments are provided, it scans the repository
-        for modified files and updates corresponding prompts.
+    2.  **Repository-Wide Mode:** When you provide no file arguments, it scans the
+        entire repository, finds all code/prompt pairs, creates missing prompts,
+        and updates them all based on the latest git changes.
         - `pdd update`: Updates all prompts for modified files in the repo.
     """
+    quiet = ctx.obj.get("quiet", False)
+    command_name = "update"
     try:
+        # In single-file generation mode, when only one positional argument is provided,
+        # it is treated as the code file (not the prompt file). This enables the workflow:
+        # `pdd update <CODE_FILE>` to generate a new prompt for the given code file.
+        # So if input_prompt_file has a value but modified_code_file is None,
+        # we reassign input_prompt_file to actual_modified_code_file.
+        if input_prompt_file is not None and modified_code_file is None:
+            actual_modified_code_file = input_prompt_file
+            actual_input_prompt_file = None
+        else:
+            actual_modified_code_file = modified_code_file
+            actual_input_prompt_file = input_prompt_file
+
+        is_repo_mode = actual_input_prompt_file is None and actual_modified_code_file is None
+
+        if is_repo_mode:
+            if any([input_code_file, use_git]):
+                raise click.UsageError(
+                    "Cannot use file-specific arguments or flags like --git or --input-code in repository-wide mode (when no files are provided)."
+                )
+        elif extensions:
+            raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")
+
         result, total_cost, model_name = update_main(
             ctx=ctx,
-            input_prompt_file=input_prompt_file,
-            modified_code_file=modified_code_file,
+            input_prompt_file=actual_input_prompt_file,
+            modified_code_file=actual_modified_code_file,
             input_code_file=input_code_file,
             output=output,
             use_git=use_git,
+            repo=is_repo_mode,
             extensions=extensions,
         )
         return result, total_cost, model_name
     except click.Abort:
         raise
-    except Exception as exception:
-        handle_error(exception, "update", ctx.obj.get("quiet", False))
+    except (click.UsageError, Exception) as exception:
+        handle_error(exception, command_name, quiet)
         return None

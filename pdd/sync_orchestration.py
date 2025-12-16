@@ -323,6 +323,120 @@ def _parse_test_output(output: str, language: str) -> tuple[int, int, float]:
     return tests_passed, tests_failed, coverage
 
 
+def _detect_example_errors(output: str) -> tuple[bool, str]:
+    """
+    Detect if example output contains error indicators.
+
+    Only detects true crashes/errors:
+    - Python tracebacks (catches ALL unhandled exceptions)
+    - ERROR level log messages
+
+    Intentionally does NOT detect:
+    - HTTP status codes (examples may test error responses)
+    - Individual exception type names (causes false positives, redundant with traceback)
+
+    Returns:
+        (has_errors, error_summary)
+    """
+    error_patterns = [
+        (r'Traceback \(most recent call last\):', 'Python traceback'),
+        (r' - ERROR - ', 'Error log message'),  # Python logging format
+    ]
+
+    errors_found = []
+    for pattern, description in error_patterns:
+        if re.search(pattern, output, re.MULTILINE):
+            errors_found.append(description)
+
+    if errors_found:
+        return True, '; '.join(errors_found)
+    return False, ''
+
+
+def _run_example_with_error_detection(
+    cmd_parts: list[str],
+    env: dict,
+    cwd: str,
+    timeout: int = 60
+) -> tuple[int, str, str]:
+    """
+    Run example file, detecting errors from output.
+
+    For server-style examples that block, this runs until timeout
+    then analyzes output for errors. No errors = success.
+
+    Returns:
+        (returncode, stdout, stderr)
+        - returncode: 0 if no errors detected, positive if errors found or process failed
+    """
+    import threading
+
+    proc = subprocess.Popen(
+        cmd_parts,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        env=env,
+        cwd=cwd,
+        start_new_session=True,
+    )
+
+    stdout_chunks = []
+    stderr_chunks = []
+
+    def read_pipe(pipe, chunks):
+        try:
+            for line in iter(pipe.readline, b''):
+                chunks.append(line)
+        except Exception:
+            pass
+
+    t_out = threading.Thread(target=read_pipe, args=(proc.stdout, stdout_chunks), daemon=True)
+    t_err = threading.Thread(target=read_pipe, args=(proc.stderr, stderr_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    # Wait for process or timeout
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    t_out.join(timeout=2)
+    t_err.join(timeout=2)
+
+    stdout = b''.join(stdout_chunks).decode('utf-8', errors='replace')
+    stderr = b''.join(stderr_chunks).decode('utf-8', errors='replace')
+    combined = stdout + '\n' + stderr
+
+    # Check for errors in output
+    has_errors, error_summary = _detect_example_errors(combined)
+
+    # Determine result:
+    # - Errors in output → failure
+    # - Positive exit code (process failed normally, e.g., sys.exit(1)) → failure
+    # - Negative exit code (killed by signal, e.g., -9 for SIGKILL) → check output
+    # - Zero exit code → success
+    #
+    # IMPORTANT: When we kill the process after timeout, returncode is negative
+    # (the signal number). This is NOT a failure if output has no errors.
+    if has_errors:
+        return 1, stdout, stderr  # Errors detected in output
+    elif proc.returncode is not None and proc.returncode > 0:
+        return proc.returncode, stdout, stderr  # Process exited with error
+    else:
+        # Success cases:
+        # - returncode == 0 (clean exit)
+        # - returncode < 0 (killed by signal, but no errors in output)
+        # - returncode is None (shouldn't happen after wait, but safe fallback)
+        return 0, stdout, stderr
+
+
 def _execute_tests_and_create_run_report(
     test_file: Path,
     basename: str,
@@ -832,13 +946,21 @@ def sync_orchestration(
                                 else:
                                     # Fallback to Python if no run command found
                                     cmd_parts = ['python', example_path]
-                                # start_new_session isolates subprocess from TUI's terminal control
-                                ex_res = subprocess.run(
+                                # Use error-detection runner that handles server-style examples
+                                returncode, stdout, stderr = _run_example_with_error_detection(
                                     cmd_parts,
-                                    capture_output=True, text=True, timeout=60,
-                                    env=env, cwd=str(pdd_files['example'].parent),
-                                    stdin=subprocess.DEVNULL, start_new_session=True
+                                    env=env,
+                                    cwd=str(pdd_files['example'].parent),
+                                    timeout=60
                                 )
+
+                                class ExampleResult:
+                                    def __init__(self, rc, out, err):
+                                        self.returncode = rc
+                                        self.stdout = out
+                                        self.stderr = err
+
+                                ex_res = ExampleResult(returncode, stdout, stderr)
                                 if ex_res.returncode != 0:
                                     has_crash = True
                                     crash_log_content = f"Example failed exit code: {ex_res.returncode}\nSTDOUT:\n{ex_res.stdout}\nSTDERR:\n{ex_res.stderr}\n"
@@ -978,9 +1100,14 @@ def sync_orchestration(
                                  cmd_parts = run_cmd.split()
                              else:
                                  cmd_parts = ['python', example_path]
-                             # start_new_session isolates subprocess from TUI's terminal control
-                             ex_res = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=60, cwd=str(pdd_files['example'].parent), stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
-                             report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), ex_res.returncode, 1 if ex_res.returncode==0 else 0, 0 if ex_res.returncode==0 else 1, 100.0 if ex_res.returncode==0 else 0.0)
+                             # Use error-detection runner that handles server-style examples
+                             returncode, stdout, stderr = _run_example_with_error_detection(
+                                 cmd_parts,
+                                 env=clean_env,
+                                 cwd=str(pdd_files['example'].parent),
+                                 timeout=60
+                             )
+                             report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0)
                              save_run_report(asdict(report), basename, language)
                         except:
                              pass
