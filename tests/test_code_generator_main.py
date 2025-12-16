@@ -981,7 +981,7 @@ def test_front_matter_output_path_with_env_substitution(
 
     output_template_path = temp_dir_setup["tmp_path"] / "templated_outputs" / "${NAME}.py"
     front_matter_prompt = f"""---
-output: \"{output_template_path}\" 
+output: \"{output_template_path}\"
 variables:
   NAME:
     required: true
@@ -1128,7 +1128,7 @@ variables:
     required: false
 discover:
   enabled: true
-  root: \"{root_str}\" 
+  root: \"{root_str}\"
   set:
     DOC_FILES:
       patterns:
@@ -1173,7 +1173,7 @@ def test_front_matter_output_schema_validation_failure(
     schema_output_path = temp_dir_setup["tmp_path"] / "schema_output.json"
     front_matter_prompt = f"""---
 language: json
-output: \"{schema_output_path}\" 
+output: \"{schema_output_path}\"
 output_schema:
   type: object
   required:
