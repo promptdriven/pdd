@@ -11,8 +11,8 @@ import sys
 from unittest.mock import patch
 
 
-# Create a directory for test outputs (use absolute path for pytest-xdist compatibility)
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+# Create a directory for test outputs (use project root output/ directory)
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -88,6 +88,7 @@ def test_run_pytest_and_capture_output_error_test() -> None:
     assert result["test_results"][0]["passed"] == 0
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
+    os.remove(test_file)
 
 
 def test_run_pytest_and_capture_output_with_warnings() -> None:
