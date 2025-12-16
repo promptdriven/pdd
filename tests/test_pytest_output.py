@@ -1,6 +1,7 @@
 import pytest
 import json
 import os
+from pathlib import Path
 from pdd.pytest_output import (
     run_pytest_and_capture_output,
     save_output_to_json,
@@ -35,7 +36,7 @@ def test_run_pytest_and_capture_output_invalid_file_type() -> None:
     create_test_file(test_file, "This is not a Python file.")
     result = run_pytest_and_capture_output(test_file)
     assert result == {}
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 def test_run_pytest_and_capture_output_successful_run() -> None:
@@ -52,7 +53,7 @@ def test_run_pytest_and_capture_output_successful_run() -> None:
     assert result["test_results"][0]["errors"] == 0
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 def test_run_pytest_and_capture_output_failed_test() -> None:
@@ -69,7 +70,7 @@ def test_run_pytest_and_capture_output_failed_test() -> None:
     assert result["test_results"][0]["errors"] == 0
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 def test_run_pytest_and_capture_output_error_test() -> None:
@@ -88,7 +89,7 @@ def test_run_pytest_and_capture_output_error_test() -> None:
     assert result["test_results"][0]["passed"] == 0
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 def test_run_pytest_and_capture_output_with_warnings() -> None:
@@ -106,7 +107,7 @@ def test_run_pytest_and_capture_output_with_warnings() -> None:
         3,
     )  # 3 means warnings were emitted
     assert result["test_results"][0]["warnings"] >= 0  # Check for warnings
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 # Test cases for save_output_to_json

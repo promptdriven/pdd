@@ -388,7 +388,7 @@ def _run_example_with_error_detection(
         try:
             for line in iter(pipe.readline, b''):
                 chunks.append(line)
-        except:
+        except Exception:
             pass
 
     t_out = threading.Thread(target=read_pipe, args=(proc.stdout, stdout_chunks), daemon=True)
