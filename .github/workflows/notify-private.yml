@@ -1,0 +1,16 @@
+name: Notify Private Repo on Merge
+on:
+  push:
+    branches: [main]
+
+jobs:
+  trigger-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger private repo sync
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          repository: gltanaka/pdd
+          event-type: sync-from-public
+          client-payload: '{"source": "${{ github.repository }}", "sha": "${{ github.sha }}"}'
