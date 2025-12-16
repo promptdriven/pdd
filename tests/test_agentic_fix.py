@@ -216,7 +216,7 @@ class TestVerifyAndLog:
 
     def test_verify_and_log_with_javascript(self, tmp_path, monkeypatch):
         """Should use node run command for .js files if node is available."""
-        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent / "pdd"))
 
         # Skip if node is not installed
         if not shutil.which("node"):
@@ -230,7 +230,7 @@ class TestVerifyAndLog:
 
     def test_verify_and_log_fallback_to_python(self, tmp_path, monkeypatch):
         """Should fallback to Python interpreter when no run_command found."""
-        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent / "pdd"))
 
         # Mock get_run_command_for_file to return empty string
         with patch("pdd.agentic_fix.get_run_command_for_file", return_value=""):
