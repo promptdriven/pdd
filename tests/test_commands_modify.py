@@ -152,25 +152,160 @@ def sample_function():
     # In the truncated read it was "my_prompt.py", but input is "my_prompt_python.prompt"
     # If language is python, extension is .py.
     # If prompt file is my_prompt_python.prompt, default output name is my_prompt_python.py.
-    
+
     # Wait, I need to check if the truncated read said "my_prompt.py" or "my_prompt_python.py".
     # The truncated read said:
     # expected_output_path_obj = output_dir / "my_prompt.py"
     # But the prompt file was "my_prompt_python.prompt" in the code I pasted?
     # No, in the truncated read it was:
     # files = create_dummy_files("my_prompt_python.prompt", content=prompt_content)
-    
+
     # If the original test expected "my_prompt.py", maybe I should stick to it?
     # Or maybe the prompt file name was different in the original test?
     # In the truncated read:
     # files = create_dummy_files("my_prompt_python.prompt", content=prompt_content)
-    
+
     # Let's trust the logic: construct_paths uses stem of prompt file if output is a dir.
     # stem of "my_prompt_python.prompt" is "my_prompt_python".
     # So "my_prompt_python.py".
-    
-    # I'll use "my_prompt_python.py" and if it fails I'll adjust.    
-    
+
+    # I'll use "my_prompt_python.py" and if it fails I'll adjust.
+
     assert Path(output_file_paths["output"]) == output_dir / "my_prompt.py"
     # Verify language was detected correctly
     assert language == "python"
+
+
+# --- Tests for update command bug fix (repo mode and single file mode) ---
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.update_main')
+def test_cli_update_command_repo_mode(mock_update_main, mock_auto_update, runner):
+    """
+    Test that 'update' command with no arguments triggers repository-wide mode.
+    This tests the bug fix where repo mode was broken after refactoring.
+    """
+    # Setup mock return value
+    mock_update_main.return_value = ("Repository update complete.", 0.05, "test-model")
+
+    # Run update with no arguments
+    result = runner.invoke(cli.cli, ["update"])
+
+    # Should succeed
+    assert result.exit_code == 0
+    assert result.exception is None
+
+    # Verify the output contains success information
+    assert "Repository update complete." in result.output or "test-model" in result.output or "$0.05" in result.output
+
+    # Verify update_main was called with repo=True
+    mock_update_main.assert_called_once()
+    call_kwargs = mock_update_main.call_args.kwargs
+    assert call_kwargs['repo'] is True
+    assert call_kwargs['input_prompt_file'] is None
+    assert call_kwargs['modified_code_file'] is None
+    assert call_kwargs['input_code_file'] is None
+    mock_auto_update.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.update_main')
+def test_cli_update_command_single_file_mode(mock_update_main, mock_auto_update, runner, create_dummy_files):
+    """
+    Test that 'update' command with a single file argument treats it as the code file
+    to generate a prompt for. This tests the bug fix where single file mode was broken.
+    """
+    # Create a dummy code file
+    files = create_dummy_files("test_code.py", content="def test(): pass")
+
+    # Setup mock return value
+    mock_update_main.return_value = ("Generated prompt", 0.02, "test-model")
+
+    # Run update with single file argument
+    result = runner.invoke(cli.cli, ["update", str(files["test_code.py"])])
+
+    # Should succeed
+    assert result.exit_code == 0
+    assert result.exception is None
+
+    # Verify the output contains success information
+    assert "Generated prompt" in result.output or "test-model" in result.output or "$0.02" in result.output
+
+    # Verify update_main was called with the file as modified_code_file and repo=False
+    mock_update_main.assert_called_once()
+    call_kwargs = mock_update_main.call_args.kwargs
+    assert call_kwargs['repo'] is False
+    assert call_kwargs['input_prompt_file'] is None
+    assert call_kwargs['modified_code_file'] == str(files["test_code.py"])
+    assert call_kwargs['input_code_file'] is None
+    mock_auto_update.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.update_main')
+def test_cli_update_command_extensions_only_in_repo_mode(mock_update_main, mock_auto_update, runner, create_dummy_files):
+    """
+    Test that --extensions flag can only be used in repository-wide mode (no file arguments).
+    This validates the bug fix.
+    """
+    # Create a dummy code file
+    files = create_dummy_files("test_code.py", content="def test(): pass")
+
+    # Try to use --extensions with a file argument (should fail)
+    result = runner.invoke(cli.cli, ["update", "--extensions", "py", str(files["test_code.py"])])
+
+    # Should handle error gracefully
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "Usage Error: --extensions can only be used in repository-wide mode" in result.output
+
+    # update_main should not be called because validation failed
+    mock_update_main.assert_not_called()
+    mock_auto_update.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.update_main')
+def test_cli_update_command_git_not_in_repo_mode(mock_update_main, mock_auto_update, runner):
+    """
+    Test that --git flag cannot be used in repository-wide mode (no file arguments).
+    This validates the bug fix.
+    """
+    # Try to use --git with no file arguments (should fail)
+    result = runner.invoke(cli.cli, ["update", "--git"])
+
+    # Should handle error gracefully
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "Usage Error: Cannot use file-specific arguments or flags like --git" in result.output
+
+    # update_main should not be called because validation failed
+    mock_update_main.assert_not_called()
+    mock_auto_update.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.update_main')
+def test_cli_update_command_repo_mode_with_extensions(mock_update_main, mock_auto_update, runner):
+    """
+    Test that repository-wide mode works correctly with --extensions flag.
+    This tests that the bug fix preserves correct functionality.
+    """
+    # Setup mock return value
+    mock_update_main.return_value = ("Repository update complete.", 0.05, "test-model")
+
+    # Run update in repo mode with extensions filter
+    result = runner.invoke(cli.cli, ["update", "--extensions", "py,js"])
+
+    # Should succeed
+    assert result.exit_code == 0
+    assert result.exception is None
+
+    # Verify update_main was called with repo=True and extensions
+    mock_update_main.assert_called_once()
+    call_kwargs = mock_update_main.call_args.kwargs
+    assert call_kwargs['repo'] is True
+    assert call_kwargs['extensions'] == "py,js"
+    assert call_kwargs['input_prompt_file'] is None
+    assert call_kwargs['modified_code_file'] is None
+    mock_auto_update.assert_called_once()
