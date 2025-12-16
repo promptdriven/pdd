@@ -183,12 +183,14 @@ def test_insert_includes_auto_include_exception(
     """
     Tests that an exception in auto_include is properly captured and re-raised.
     """
-    with pytest.raises(Exception, match="auto_include error"):
-        insert_includes(
-            input_prompt="Some input prompt",
-            directory_path="./test_dir",
-            csv_filename="output/dependencies.csv",
-            strength=0.7,
-            temperature=0.5,
-            verbose=False
-        )
+    m_open = mock_open(read_data="full_path,file_summary,date\n")
+    with patch("builtins.open", m_open):
+        with pytest.raises(Exception, match="auto_include error"):
+            insert_includes(
+                input_prompt="Some input prompt",
+                directory_path="./test_dir",
+                csv_filename="output/dependencies.csv",
+                strength=0.7,
+                temperature=0.5,
+                verbose=False
+            )
