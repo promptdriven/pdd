@@ -372,7 +372,7 @@ def code_generator_main(
                         content = f.read()
                     # If multiple files, label them? Or just concat?
                     # Using code block with file path comment is safer for context.
-                    prompt_content += f"\nFile: {pathlib.Path(tf).name}\n```\n{content}\n```\n"
+                    prompt_content += f"\nFile: {pathlib.Path(tf).name}\n```python\n{content}\n```\n"
                 except Exception as e:
                     console.print(f"[yellow]Warning: Could not read unit test file {tf}: {e}[/yellow]")
             prompt_content += "</unit_test_content>\n"

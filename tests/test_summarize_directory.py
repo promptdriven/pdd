@@ -364,3 +364,68 @@ def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
 
     assert total_cost == 0.02  # Two files summarized
     assert model_name == "TestModel"
+
+
+def test_skips_pycache_directory(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test that files in __pycache__ directories are skipped.
+
+    Bug: Without filtering, .pyc files are opened as UTF-8 text,
+    causing UnicodeDecodeError -> "Error processing file" in CSV.
+    """
+    # Create a regular Python file
+    file1 = tmp_path / "file1.py"
+    file1.write_text("print('Hello')")
+
+    # Create __pycache__ directory with .pyc file
+    pycache = tmp_path / "__pycache__"
+    pycache.mkdir()
+    pyc_file = pycache / "file1.cpython-312.pyc"
+    pyc_file.write_bytes(b'\x00\x00\x00\x00')  # Binary content
+
+    directory_path = str(tmp_path / "**/*")
+
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=directory_path,
+        strength=0.5,
+        temperature=0.7,
+        verbose=False,
+        csv_file=None
+    )
+
+    reader = csv.DictReader(StringIO(csv_output))
+    rows = list(reader)
+
+    # Should only have file1.py, not the .pyc file
+    assert len(rows) == 1
+    assert '__pycache__' not in rows[0]['full_path']
+    assert not rows[0]['full_path'].endswith('.pyc')
+    # Verify it's a successful summary, not an error
+    assert rows[0]['file_summary'] == "This is a summary."
+
+
+def test_skips_pyc_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test that .pyc files are skipped even outside __pycache__."""
+    file1 = tmp_path / "file1.py"
+    file1.write_text("print('Hello')")
+
+    # Create .pyc file in root (edge case)
+    pyc_file = tmp_path / "legacy.pyc"
+    pyc_file.write_bytes(b'\x00\x00\x00\x00')
+
+    directory_path = str(tmp_path / "*")
+
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=directory_path,
+        strength=0.5,
+        temperature=0.7,
+        verbose=False,
+        csv_file=None
+    )
+
+    reader = csv.DictReader(StringIO(csv_output))
+    rows = list(reader)
+
+    # Should only have file1.py
+    assert len(rows) == 1
+    assert rows[0]['full_path'].endswith('.py')
+    assert rows[0]['file_summary'] == "This is a summary."

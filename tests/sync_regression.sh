@@ -356,22 +356,24 @@ check_sync_files() {
     log "DEBUG: Checking for files in current directory: $(pwd)"
     log "DEBUG: Contents of current directory:"
     ls -la >> "$LOG_FILE" 2>&1 || true
-    log "DEBUG: Contents of pdd/ directory (if exists):"
-    ls -la pdd/ >> "$LOG_FILE" 2>&1 || true
-    
-    # Check generated files exist - handle both possible locations
+    log "DEBUG: Contents of src/ directory (if exists):"
+    ls -la src/ >> "$LOG_FILE" 2>&1 || true
+
+    # Check generated files exist - handle multiple possible locations
     case "$language" in
         "python")
-            # Try both pdd/ subdirectory and root directory (for .pddrc regression context)
-            if [ -f "pdd/${basename}.py" ] && [ -s "pdd/${basename}.py" ]; then
+            # Try src/, pdd/, and root directory (for different .pddrc contexts)
+            if [ -f "src/${basename}.py" ] && [ -s "src/${basename}.py" ]; then
+                check_exists "src/${basename}.py" "Generated Python code"
+            elif [ -f "pdd/${basename}.py" ] && [ -s "pdd/${basename}.py" ]; then
                 check_exists "pdd/${basename}.py" "Generated Python code"
             elif [ -f "${basename}.py" ] && [ -s "${basename}.py" ]; then
                 log "Generated Python code found in root (copying to expected location): ${basename}.py"
-                mkdir -p pdd
-                cp "${basename}.py" "pdd/${basename}.py"
-                check_exists "pdd/${basename}.py" "Generated Python code"
+                mkdir -p src
+                cp "${basename}.py" "src/${basename}.py"
+                check_exists "src/${basename}.py" "Generated Python code"
             else
-                log_error "Generated Python code file not found in pdd/ or root directory"
+                log_error "Generated Python code file not found in src/, pdd/, or root directory"
                 exit 1
             fi
             
@@ -490,7 +492,7 @@ contexts:
       default_language: "python"
   regression_pdd:
     defaults:
-      generate_output_path: "pdd/"
+      generate_output_path: "src/"
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
@@ -498,7 +500,7 @@ EOF
 
 # Create directory structure expected by contexts
 log "Creating directory structure for sync tests"
-mkdir -p pdd examples tests context prompts
+mkdir -p src examples tests context prompts
 
 # Create placeholder test files for multi-language calculator (required by multi-language sync)
 # log "Creating placeholder test files for multi-language projects"
@@ -693,7 +695,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     # Test --skip-tests
     log "2b. Testing 'sync --skip-tests'"
     # Clean previous files AND metadata to test fresh generation
-    rm -f "pdd/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "src/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     {
     set +e
@@ -706,9 +708,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     set -e
 }
     # Check what was actually generated (sync may only generate code)
-    if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
+    if [ -f "src/${SIMPLE_BASENAME}.py" ]; then
         log "Code file generated with --skip-tests"
-        check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with --skip-tests"
+        check_exists "src/${SIMPLE_BASENAME}.py" "Generated code with --skip-tests"
     else
         log "No code file generated with --skip-tests (unexpected)"
     fi
@@ -726,7 +728,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     
     # Test both skip options together
     log "2c. Testing 'sync --skip-verify --skip-tests'"
-    rm -f "pdd/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py"
+    rm -f "src/${SIMPLE_BASENAME}.py" "${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     {
     set +e
@@ -738,7 +740,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
     fi
     set -e
 }
-    check_exists "pdd/${SIMPLE_BASENAME}.py" "Generated code with both skip options"
+    check_exists "src/${SIMPLE_BASENAME}.py" "Generated code with both skip options"
     
     # Example file may or may not be generated
     if [ -f "examples/${SIMPLE_BASENAME}_example.py" ]; then
@@ -756,7 +758,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     
     # Test with budget limit
     log "3a. Testing 'sync --budget 2.0'"
-    rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     if run_pdd_command_noexit sync --budget 2.0 --context regression_pdd "$SIMPLE_BASENAME"; then
         log "Validation success: sync --budget 2.0"
@@ -772,7 +774,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     
     # Test with max attempts
     log "3b. Testing 'sync --max-attempts 1'"
-    rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     if run_pdd_command sync --max-attempts 1 "$SIMPLE_BASENAME"; then
         log "Validation success: sync --max-attempts 1"
@@ -783,7 +785,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     
     # Test with target coverage
     log "3c. Testing 'sync --target-coverage 10.0'"
-    rm -f "pdd/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
     rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
     if run_pdd_command sync --target-coverage 10.0 "$SIMPLE_BASENAME"; then
         log "Validation success: sync --target-coverage 10.0"
@@ -1024,7 +1026,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     if [ -f ".pddrc" ] || [ -f "$PDD_BASE_DIR/.pddrc" ]; then
         log "Configuration file detected and being used by PDD"
         # Verify that files are being created in the correct context-specific directories
-        if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
+        if [ -f "src/${SIMPLE_BASENAME}.py" ]; then
             log "Files correctly placed in context-specific directory structure"
             log_timestamped "Validation success: Configuration integration working"
         else
@@ -1066,7 +1068,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
         log_timestamped "[ERROR] Validation failed: Working directory context sync timed out or failed"
         exit 1
     fi
-    if [ -f "pdd/${SIMPLE_BASENAME}.py" ]; then
+    if [ -f "src/${SIMPLE_BASENAME}.py" ]; then
         log "Working directory context integration successful"
         log_timestamped "Validation success: Working directory context working"
     else
