@@ -690,11 +690,16 @@ publish-public:
 		@echo "Copying package-data files defined in pyproject.toml to public repo"
 		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
 		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
-	@# Copy test prompt for regression tests (from root prompts/ to public repo)
+	@# Copy test prompts for regression tests (from root prompts/ to public repo)
 	@if [ -f "prompts/test_other_python.prompt" ]; then \
 		echo "Copying test prompt for regression tests"; \
 		mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd/prompts; \
 		cp prompts/test_other_python.prompt $(PUBLIC_PDD_REPO_DIR)/pdd/prompts/; \
+	fi
+	@if [ -f "prompts/encode_message_python.prompt" ]; then \
+		echo "Copying encode_message prompt for regression tests"; \
+		mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd/prompts; \
+		cp prompts/encode_message_python.prompt $(PUBLIC_PDD_REPO_DIR)/pdd/prompts/; \
 	fi
 	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
 	@if [ -d "$(PUBLIC_PDD_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_REPO_DIR)/prompts" ]; then \
