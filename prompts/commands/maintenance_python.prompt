@@ -12,21 +12,15 @@
 
 % Requirements
   1. **sync**:
-     - Interface: Match the `sync` command specification in `README.md` (including all flags for budget, coverage, etc.).
-     - Logic: Call `sync_main`.
-     - Decorator: Apply `@track_cost` decorator.
-     - Return: `Optional[Tuple[str, float, str]]` (result, cost, model_name) or `None` on error.
-     - Deprecated flag: `--log` (hidden) should emit a yellow warning to stderr and set `dry_run = True`.
+     - Interface: Match the `sync` command specification in `README.md`.
+     - Logic: Call `sync_main` with `@track_cost` decorator.
   2. **auto-deps**:
      - Interface: Match the `auto-deps` command specification in `README.md`.
-     - Logic: Strip quotes from `directory_path` if present (handles incorrectly quoted paths). Call `auto_deps_main`.
-     - Decorator: Apply `@track_cost` decorator.
-     - Return: `Optional[Tuple[str, float, str]]` (result, cost, model_name) or `None` on error.
+     - Logic: Call `auto_deps_main` with `@track_cost` decorator.
   3. **setup**:
      - Interface: Match the `setup` command specification in `README.md`.
-     - Logic: Import the `cli` module inside the function (as `cli_module`) to allow mocking/patching. Call `cli_module.install_completion(quiet=quiet)`, then call `_run_setup_utility` from `core.utils`.
-     - Decorator: No `@track_cost` (no LLM calls).
-     - Return: None (no return value).
+     - Logic: Install shell completion, then run setup utility.
+     - No `@track_cost` (no LLM calls).
 
 % Dependencies
   <sync_main_example>
@@ -40,13 +34,8 @@
   </track_cost_example>
 
 % Instructions
-  - Error handling pattern:
-    - Wrap command logic in try/except.
-    - Re-raise `click.Abort` exceptions without handling.
-    - For other exceptions: call `handle_error(exception, "command-name", ctx.obj.get("quiet", False))`.
-    - Return `None` after handling errors.
-  - Access quiet flag via `ctx.obj.get("quiet", False)` (ctx.obj may be None for setup).
-  - For deprecated flags: emit a warning to stderr indicating the flag is deprecated and what to use instead.
+  - Use `handle_error` for exceptions (re-raise `click.Abort`).
+  - Support deprecated flags with warnings.
 
 % Deliverables
   - Code: `pdd/commands/maintenance.py`
