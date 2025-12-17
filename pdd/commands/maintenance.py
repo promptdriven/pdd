@@ -2,7 +2,6 @@
 Maintenance commands (sync, auto_deps, setup).
 """
 import click
-import warnings
 from typing import Optional, Tuple
 from pathlib import Path
 
