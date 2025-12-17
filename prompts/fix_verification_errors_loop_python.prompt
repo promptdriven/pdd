@@ -1,123 +1,63 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_verification_errors_loop", that will attempt to fix errors in a code file based on the output of an executing program compared against the original prompt's intent, through multiple iterations. The function should include an optional verbose mode for detailed logging. Additionally, the function should track and report detailed statistics about the fixing process, including initial and final verification states, improvements made, and the best iteration. The spec intentionally allows conservative safety checks, flexible logging tag names, and an optional agentic fallback so implementations can evolve without breaking behavior.
+% You are an expert Python Software Engineer. Write a function "fix_verification_errors_loop" that iteratively fixes code errors by comparing program execution output against the original prompt's intent through multiple iterations.
 
 <include>context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
+% Inputs and Outputs:
     Inputs:
         'program_file' - A string containing the path to the Python program file that exercises the code_file according to the prompt's intent.
         'code_file' - A string containing the path to the code file being tested/verified.
         'prompt' - A string containing the prompt that generated the code under test, defining the intended behavior.
-        'verification_program' - An optional string containing the path to a secondary Python program that verifies if the code_file still runs correctly after modifications (e.g., checks for syntax errors or basic functionality). If None or not found, secondary verification is skipped but still logged as skipped.
-        'strength' - A float between or equal to 0 and 1 that represents the strength of the LLM model to use for fixing.
-        'temperature' - A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
+        'verification_program' - A string containing the path to a secondary Python program that verifies if the code_file still runs correctly after modifications. This file must exist; if not found, the function returns failure immediately.
+        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use for fixing.
+        'temperature' - A float between 0 and 1 that represents the temperature parameter for the LLM model.
         'llm_time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
         'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
         'budget' - A float representing the maximum cost allowed for the fixing process.
         'verification_log_file' - A string containing the path where this loop function will write detailed XML-formatted logs for each attempt (default: "verification.log").
-        'output_code_path' - An optional string for a potential output code file path (currently not used by `fix_verification_errors_loop` or the underlying `fix_verification_errors` to save files).
-        'output_program_path' - An optional string for a potential output program file path (currently not used by `fix_verification_errors_loop` or the underlying `fix_verification_errors` to save files).
+        'output_code_path' - An optional string for a potential output code file path (currently unused).
+        'output_program_path' - An optional string for a potential output program file path (currently unused).
         'verbose' - A boolean indicating whether to enable verbose logging (default: False).
         'program_args' - An optional list of strings containing command-line arguments to pass to the 'program_file' when executed.
-        'prompt_file' - Optional string path to the original prompt file; used by agentic fallback flows if enabled.
-        'agentic_fallback' - Optional boolean (default True). If the main loop does not converge, a final automated repair path may be attempted using the prompt/code/test logs.
+        'prompt_file' - A string path to the original prompt file; required for agentic fallback flows.
+        'agentic_fallback' - Optional boolean (default True). If the main loop does not converge, a final automated repair path may be attempted.
     Outputs:
-        'success' - A boolean indicating whether the code was successfully fixed to meet the prompt's intent based on program execution.
-        'final_program' - A string containing the contents of the final program file (potentially modified if `fix_verification_errors` suggests changes).
+        'success' - A boolean indicating whether the code was successfully fixed.
+        'final_program' - A string containing the contents of the final program file.
         'final_code' - A string containing the contents of the final code file.
         'total_attempts' - An integer representing the number of fix attempts made (iterations started).
         'total_cost' - A float representing the total cost of all fix attempts.
         'model_name' - A string representing the name of the LLM model used.
-        Note: 'total_attempts' reflects the number of iterations started; pre-flight budget checks can prevent an iteration from starting.
+        'statistics' - A dictionary containing detailed process statistics:
+            - 'initial_issues': int - Issue count from initial assessment (-1 if error/unknown)
+            - 'final_issues': int - Final issue count (0 if successful, -1 if unknown)
+            - 'best_iteration_num': int - Iteration number with lowest issues (-1 if none)
+            - 'best_iteration_issues': float - Issue count of best iteration (inf if none)
+            - 'improvement_issues': int or 'N/A' - Reduction in issues from initial to final
+            - 'improvement_percent': float or 'N/A' - Percentage improvement toward 0 issues
+            - 'status_message': str - Human-readable status of the process outcome
 
-% Here are examples of how to use internal modules:
+% Dependencies:
 <internal_example_modules>
-    % Here is an example of the fix_verification_errors function that will be used:
     <fix_verification_errors_example>
         <include>context/fix_verification_errors_example.py</include>
     </fix_verification_errors_example>
 </internal_example_modules>
 
-% This function will do the following:
-    Step 1. Remove the existing verification log file specified by 'verification_log_file' if it exists.
-    Step 2. Initialize variables:
-        - Counter for the number of fix attempts.
-        - Total cost accumulator.
-        - Best iteration tracker (This stores the state of the iteration with the minimum number of verification issues found by `fix_verification_errors`. If multiple iterations have the same minimum count, the one with the lowest attempt number is preferred. Store the attempt number, program backup path, code backup path, and the issue count).
-        - A statistics tracker to record the initial verification state, final state, and improvements made during the fixing process.
-        - Optionally detect non-Python targets. For non-Python code, implementations may run a default verification command or directly use an agentic repair path; in all cases, capture and log outputs.
-    Step 3. Determine the initial state:
-        a. Run the `program_file` using `subprocess`, passing the optional `program_args` if provided, to get initial output (capture stdout/stderr). Store this output.
-        b. Append an XML entry to the `verification_log_file` tagged `<InitialState>` containing the timestamp and the captured output. Ensure the output is properly XML-escaped (replace `<`, `>`, `&`, `'`, `"` with `&lt;`, `&gt;`, `&amp;`, `&apos;`, `&quot;`).
-        c. Read the initial contents of the `program_file` and `code_file`.
-        d. Call `fix_verification_errors` with the initial program/code contents, prompt, initial output, strength, temperature, and the llm_time parameter. Store the result (`initial_fix_result`). If the fixer returns an error sentinel (e.g., missing critical fields or `verification_issues_count == -1`), abort gracefully, append a `<FinalActions>` error entry, and return failure with statistics populated.
-        e. Add the cost (`initial_fix_result['total_cost']`) to the total cost accumulator.
-        f. Extract the initial `verification_issues_count` from `initial_fix_result`. Store this in the statistics tracker.
-        g. Initialize the `best_iteration` tracker with attempt 0, initial issue count, and paths to the original files (or temporary copies if modification is possible here). Log the initial issue count.
-        h. If `initial_fix_result['verification_issues_count']` is 0, set overall success flag to True, skip to Step 7 (bypassing the loop).
-    Step 4. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
-        a. Print out to console the current attempt iteration number.
-        b. Before heavy work each iteration, optionally perform a pre-flight budget check; if the current total cost already meets/exceeds the budget, stop without starting a new iteration and record the reason. Otherwise, run the `program_file` using `subprocess`, passing the optional `program_args` if provided, capturing its standard output and standard error into `program_output`.
-        c. Read the current contents of the `program_file` and `code_file` into `program_contents` and `code_contents` respectively.
-        d. Create backup copies of the `program_file` and `code_file` in their respective directories, appending the current iteration number (e.g., `_iteration_{N}`) to the filenames. Store these backup paths.
-        e. Call `fix_verification_errors` with the `program_contents`, `code_contents`, `prompt`, `program_output`, strength, temperature, the llm_time parameter, and verbose flag. Store the returned dictionary (containing 'explanation', 'fixed_program', 'fixed_code', 'total_cost', 'model_name', 'verification_issues_count'). Let's call this `fix_result`.
-        f. Add the returned `cost` (`fix_result['total_cost']`) to the total cost accumulator.
-        g. Prepare an XML block for the current iteration, tagged `<Iteration attempt="{attempt_number}" timestamp="{current_time}">`.
-           - Inside, include tags like `<ProgramOutputBeforeFix>` (containing the XML-escaped `program_output`), `<InputsToFixer>` (containing XML-escaped `program_contents`, `code_contents`, `prompt`, `program_output`), and `<FixerResult>` (containing XML-escaped `explanation`, `fixed_program`, `fixed_code`, and other fields like `total_cost`, `model_name`, `verification_issues_count` as attributes or sub-tags). Remember to escape special XML characters in all embedded text content.
-        h. If the total cost exceeds the `budget` after adding this attempt’s cost, add a `<Status>Budget Exceeded</Status>` tag to the XML block, append the block to `verification_log_file`, set overall success flag to False, and break the loop. (Pre-flight budget checks prior to starting an iteration are also allowed.)
-        i. If `fix_result['verification_issues_count']` is 0:
-           - Add a success marker to the XML block. You may either add `<Status>Success - 0 Issues Found</Status>` or encode success via `verification_issues_count="0"` with a clear success message.
-           - Update the best iteration tracker if this attempt (attempt 0 if initial check) is better than the current best (it should be, with 0 issues).
-           - Write the potentially updated `fix_result['fixed_program']` and `fix_result['fixed_code']` to their respective files.
-           - Append the XML block to `verification_log_file`.
-           - Set the overall success flag to True.
-           - Break the loop.
-        j. Check if changes were suggested by comparing `fix_result['fixed_program']` with `program_contents` and `fix_result['fixed_code']` with `code_contents`. If no effective changes are suggested and secondary verification (if any) passes and issues remain (> 0), add `<Status>No Effective Changes Suggested (Identical Code)</Status>` to the XML block, append, and break the loop. If secondary verification fails, discard changes and continue.
-        k. Define boolean flags `program_updated` and `code_updated` based on the comparison above.
-        l. Add a sub-tag `<FixAttempted>` to the XML block, noting whether program/code fixes were suggested.
+% Behavior:
+All behavior is defined by the test suite. Implement the function to pass all tests in tests/test_fix_verification_errors_loop.py.
 
-        m. Initialize `secondary_verification_passed = True`.  # Assume pass if code not updated
-        n. If `code_updated` is True:
-           * Implementations may either write `fix_result['fixed_code']` to the target file temporarily (restoring on failure) or use a temp file.
-           * Run the secondary `verification_program` against the proposed code change (if provided). Capture its output (`secondary_verification_output`) and determine success/failure.
-           * Set `secondary_verification_passed` based on the outcome.
-           * Add a `<SecondaryVerification>` tag to the XML block containing the outcome, exit code, and the XML-escaped `secondary_verification_output`.
-           * If no `verification_program` is provided or the path is invalid, log a `<SecondaryVerification passed="true">` block with a message indicating the verification was skipped.
+Key behaviors to implement:
+- Input validation (files exist, parameters in range). Return failure with empty statistics if invalid.
+- Initial assessment with early success return when verification_issues_count is 0
+- Main loop with budget and max_attempts limits
+- Secondary verification before applying code changes; discard changes if verification fails
+- Best iteration tracking (only update when secondary verification passes)
+- Error sentinel detection (when fixer returns explanation=None AND model_name=None, abort gracefully)
+- any_verification_passed flag: set True only when code was changed AND secondary verification passed
+- Final success determination: if any_verification_passed is True, return success even without issue improvement
+- XML logging with proper escaping for special characters
+- Non-Python target handling: bypass main loop, use get_language() and default_verify_cmd_for(), invoke agentic fallback
+- Agentic fallback for Python targets on loop failure (when agentic_fallback=True)
 
-        o. If `secondary_verification_passed` is True:
-           * Compare `fix_result['verification_issues_count']` with the issue count of the current best iteration. If the current count is lower, or if it's equal and the current attempt number is lower, update the best iteration tracker with the current attempt number, backup paths (from Step 4d), and issue count.
-           * If `code_updated` is True:
-              - Write the `fix_result['fixed_code']` back to the `code_file`.
-           * If `program_updated` is True:
-              - Write the `fix_result['fixed_program']` back to the `program_file`.
-           * Add `<Status>Changes Applied (Secondary Verification Passed or Not Needed)</Status>` to the XML block.
-        p. Else (`secondary_verification_passed` is False):
-           * Log this event within the current XML iteration block: `<Action>Changes Discarded Due To Secondary Verification Failure</Action>`.
-           * Do not update files or the best iteration tracker.
-
-        q. Append the completed XML block for this iteration to `verification_log_file`.
-        r. Increment the fix attempt counter.
-    Step 5. After the loop finishes (due to success, budget, max attempts, or no changes suggested), determine the final state:
-        a. Check the overall success flag. If True, the current files represent the successful state.
-        b. If the success flag is False, consider the best iteration:
-           - If the best iteration strictly improves over the initial issue count, restore the `program_file` and `code_file` from the backup paths and log `<Action>Restored Best Iteration {best_attempt_number} (Issues: {best_issue_count})</Action>`.
-           - Otherwise, restore the original initial files to ensure a safe final state. Log `<Action>No improvement found or recorded; restoring original state.</Action>`.
-           - Implementations may choose to leave the last attempted state instead; if so, log `<Action>No successful iteration found; final state is from last attempt.</Action>`.
-    Step 6. Read the final contents of `program_file` and `code_file` into `final_program` and `final_code`.
-    Step 7. Calculate and print summary statistics using the tracker, including the initial issue count, final issue count (0 if successful, otherwise the best recorded count or count from the last attempt if no best), best iteration number and its issue count, and overall improvement. It is acceptable to include `status_message`, `improvement_issues`, `improvement_percent`, and best-iteration metadata.
-    Step 8. If the success flag is False and `agentic_fallback` is True (and `prompt_file` is available), you may attempt a final automated repair pass and merge its cost and model attribution into the results, updating `success` and final file contents on success.
-    Step 9. Return the final `success` status flag, `final_program` contents, `final_code` contents, `total_attempts` (iterations started), `total_cost`, and `model_name` (from the last successful `fix_verification_errors` call or the initial one).
-
-% The function should run the `program_file` using `subprocess`, capturing both stdout and stderr. This combined output should be used for logging and as input to the `fix_verification_errors` function.
-
-% Finally, ensure that the function tracks and reports detailed statistics about the fixing process, including:
-    - Initial verification state (based on initial program execution output and initial issue count).
-    - Final verification state (based on the state of the code returned, associated with an issue count of 0 if success is True, otherwise the best recorded issue count).
-    - Improvements made during the process (reduction in deviation from prompt intent and reduction in issue count from initial to best/final).
-    - The best iteration number and its corresponding verification results (issue count). Backup file paths should be logged in the XML iteration entries; including them in the return value is optional.
-    - Overall improvement percentage based on verification success (explicitly defined as reaching 0 issues).
-    - A flexible status vocabulary is allowed in XML logs (e.g., "Changes Applied (Secondary Verification Passed or Not Needed)", "No Effective Changes Suggested (Identical Code)", "Budget Exceeded", "Error Creating Backups", "Error in Fixer Call").
-
-% Robustness guidance (optional but allowed):
-    - Syntax errors in the executed program may be surfaced distinctly (e.g., by prefixing captured output) for easier diagnosis.
-    - A small delay between iterations may be used to mitigate rate limits.
-
+% Deliverables:
+Produce a single Python function `fix_verification_errors_loop` matching the signature above. Ensure all existing tests pass.

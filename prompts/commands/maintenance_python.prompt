@@ -12,15 +12,15 @@
 
 % Requirements
   1. **sync**:
-     - Interface: Match the `sync` command specification in `README.md` (including all flags for budget, coverage, etc.).
-     - Logic: Call `sync_main`.
+     - Interface: Match the `sync` command specification in `README.md`.
+     - Logic: Call `sync_main` with `@track_cost` decorator.
   2. **auto-deps**:
      - Interface: Match the `auto-deps` command specification in `README.md`.
-     - Logic: Clean `directory_path` quotes. Call `auto_deps_main`.
+     - Logic: Call `auto_deps_main` with `@track_cost` decorator.
   3. **setup**:
      - Interface: Match the `setup` command specification in `README.md`.
-     - Logic: Import `install_completion` from `pdd.cli` inside the function (to allow mocking/patching). Call `_run_setup_utility` from `core.utils`.
-     - Run install then setup utility.
+     - Logic: Install shell completion, then run setup utility.
+     - No `@track_cost` (no LLM calls).
 
 % Dependencies
   <sync_main_example>
@@ -34,7 +34,8 @@
   </track_cost_example>
 
 % Instructions
-  - Use `handle_error`.
+  - Use `handle_error` for exceptions (re-raise `click.Abort`).
+  - Support deprecated flags with warnings.
 
 % Deliverables
   - Code: `pdd/commands/maintenance.py`

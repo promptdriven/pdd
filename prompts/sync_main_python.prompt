@@ -20,7 +20,7 @@
         - `skip_verify` (bool): Skip the functional verification step
         - `skip_tests` (bool): Skip unit test generation and fixing
         - `target_coverage` (float): Desired code coverage percentage (default is 90.0)
-        - `log` (bool): If True, display sync logs instead of running the sync (direct function parameter, not from ctx.obj)
+        - `dry_run` (bool): If True, analyze sync state without executing operations (direct function parameter, not from ctx.obj)
 
     Outputs:
         - Returns a tuple containing:
@@ -36,13 +36,13 @@
     - Name the context variable `context_override` to avoid shadowing the built-in
     - Name the time variable `time_param` to avoid shadowing the built-in
 
-2. **Log Mode**:
-    - If `log` is True, the function should display the sync logs for the given basename and then exit.
-    - It should iterate through each detected language, print a header, and call `sync_orchestration` with `log=True`.
-    - In log mode, pass directory parameters (prompts_dir, code_dir, examples_dir, tests_dir), verbose, quiet, and context_override to sync_orchestration.
-    - Use `force=True` when calling construct_paths in log mode to avoid interactive prompts.
+2. **Dry-Run Mode**:
+    - If `dry_run` is True, the function should display the sync analysis for the given basename and then exit.
+    - It should iterate through each detected language, print a header, and call `sync_orchestration` with `dry_run=True`.
+    - In dry-run mode, pass directory parameters (prompts_dir, code_dir, examples_dir, tests_dir), verbose, quiet, and context_override to sync_orchestration.
+    - Use `force=True` when calling construct_paths in dry-run mode to avoid interactive prompts.
     - No other processing, such as budgeting or result aggregation, should occur in this mode.
-    - Return `({}, 0.0, "")` after processing all languages in log mode.
+    - Return `({}, 0.0, "")` after processing all languages in dry-run mode.
 
 3. **Configuration and Path Handling**:
     - The `construct_paths` function handles `.pddrc` configuration files and context-aware settings

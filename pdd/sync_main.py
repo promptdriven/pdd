@@ -84,7 +84,7 @@ def sync_main(
     skip_verify: bool,
     skip_tests: bool,
     target_coverage: float,
-    log: bool,
+    dry_run: bool,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -98,7 +98,7 @@ def sync_main(
         skip_verify: Skip the functional verification step.
         skip_tests: Skip unit test generation and fixing.
         target_coverage: Desired code coverage percentage.
-        log: If True, display sync logs instead of running the sync.
+        dry_run: If True, analyze sync state without executing operations.
 
     Returns:
         A tuple containing the results dictionary, total cost, and primary model name.
@@ -151,10 +151,10 @@ def sync_main(
             f"Expected files with format: '{basename}_<language>.prompt'"
         )
 
-    # 5. Handle --log mode separately
-    if log:
+    # 5. Handle --dry-run mode separately
+    if dry_run:
         if not quiet:
-            rprint(Panel(f"Displaying sync logs for [bold cyan]{basename}[/bold cyan]", title="PDD Sync Log", expand=False))
+            rprint(Panel(f"Displaying sync analysis for [bold cyan]{basename}[/bold cyan]", title="PDD Sync Dry Run", expand=False))
 
         for lang in languages:
             if not quiet:
@@ -189,7 +189,7 @@ def sync_main(
                 code_dir=str(code_dir),
                 examples_dir=str(examples_dir),
                 tests_dir=str(tests_dir),
-                log=True,
+                dry_run=True,
                 verbose=verbose,
                 quiet=quiet,
                 context_override=context_override,
