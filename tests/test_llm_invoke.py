@@ -433,7 +433,8 @@ def test_llm_invoke_auth_error_new_key_retry(mock_load_models, mock_set_llm_cach
     mock_successful_response = create_mock_litellm_response("Success after retry", model_name='gpt-5-nano')
     mock_completion.side_effect = [auth_error, mock_successful_response]
 
-    with patch('builtins.input', mock_input), \
+    with patch('builtins.open', mock_open()), \
+         patch('builtins.input', mock_input), \
          patch('os.environ.__setitem__', mock_setenv), \
          patch('os.environ.__delitem__', mock_delenv), \
          patch('pdd.llm_invoke.litellm.completion', mock_completion), \

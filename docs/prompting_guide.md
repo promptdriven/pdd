@@ -71,31 +71,95 @@ Notes:
 
 ---
 
-## Automated Grounding (In-Context Learning)
+## Automated Grounding (PDD Cloud)
 
-Unlike standard LLM interactions where every request is a blank slate, PDD uses **Automated Grounding** to prevent "implementation drift."
+Unlike standard LLM interactions where every request is a blank slate, PDD Cloud uses **Automated Grounding** to prevent "implementation drift."
 
-*   **How it works:** When you successfully generate or fix a module, PDD records that specific version (the Prompt and the resulting Code).
-*   **The Loop:** When you run `pdd generate` again, the system retrieves the most recent successful version and provides it to the LLM as a "few-shot example."
-*   **The Benefit:** The LLM sees *how* it previously solved the problem. This ensures that re-generations preserve variable naming choices, helper function structures, and stylistic nuances, rather than rewriting the code from scratch in a different style.
+### How It Works
+
+When you run `pdd generate`, the system:
+1. Embeds your prompt into a vector
+2. Searches for similar prompts in the cloud database (cosine similarity)
+3. Auto-injects the closest (prompt, code) pair as a few-shot example
+
+**This is automatic.** You don't configure it. As you edit your prompt:
+- The embedding changes
+- Different examples may be retrieved
+- Generation naturally adapts to your prompt's content
+
+On first generation: Similar existing modules in your project provide grounding.
+On re-generation: Your prior successful generation is typically the closest match.
+
+### Why This Matters for Prompt Writing
+
+- **Your prompt wording affects grounding.** Similar prompts retrieve similar examples.
+- **Implementation patterns are handled automatically.** Grounding provides structural consistency from similar modules (class vs functional, helper patterns, etc.).
+- **Prompts can be minimal.** Focus on requirements; grounding handles implementation patterns.
 
 *Note: This is distinct from "Examples as Interfaces" (which teach how to **use** a dependency). Grounding teaches the model how to **write** the current module.*
+
+> **Local users (no cloud):** Without grounding, prompts must be more detailed—include structural guidance and explicit examples via `<include>`. Use a shared preamble for coding style. The minimal prompt guidance in this document assumes cloud access.
+
+---
+
+## Grounding Overrides: Pin & Exclude (PDD Cloud)
+
+For users with PDD Cloud access, you can override automatic grounding using XML tags:
+
+**`<pin>module_name</pin>`** — Force a specific example to always be included
+- Use case: Ensure a critical module always follows a "golden" pattern
+- Use case: Bootstrap a new module with a specific style
+
+**`<exclude>module_name</exclude>`** — Block a specific example(s) from being retrieved
+- Use case: Escape an old pattern that's pulling generation in the wrong direction
+- Use case: Intentionally break from established patterns for a redesign
+
+These tags are processed by the preprocessor (like `<include>`) and removed before the LLM sees the prompt.
+
+**Most prompts don't need these.** Automatic grounding works well for:
+- Standard modules with similar existing examples
+- Re-generations of established modules
+- Modules following common project patterns
 
 ---
 
 ## Anatomy of a Good PDD Prompt
 
-Use clear sections and explicit includes. A recommended structure (matching our templates) is:
+A well-designed prompt contains **only what can't be handled elsewhere**. With cloud grounding and accumulated tests, prompts can be minimal.
 
-1) Role and scope: one short paragraph defining what the module/file is responsible for.
-2) Requirements: numbered bullets for functionality, contracts, errors, validation, logging, performance, security, and any SLOs.
-3) Dependencies: explicit XML tags (one per dependency) with <include> of examples or prompt names.
-4) Instructions: precise input/output specs, class/function responsibilities, edge cases.
-5) Deliverables: what code artifact(s) to produce and the entry point(s).
+### Required Sections
 
-**Note:** Tests are generated from the module prompt (via Requirements), so explicit Testing sections are typically unnecessary—well-written Requirements are inherently testable. Use `context/test.prompt` for project-wide test guidance (frameworks, patterns, conventions). See "Command-Specific Context Files" below.
+1. **Role and scope** (1-2 sentences): What this module does
+2. **Requirements** (5-10 items): Functional and non-functional specs
+3. **Dependencies** (via `<include>`): Only external or critical interfaces
 
-See pdd/pdd/templates/generic/generate_prompt.prompt for a concrete scaffold. For broader principles and guardrails, see pdd/docs/prompt-driven-development-doctrine.md.
+### Optional Sections
+
+4. **Instructions**: Only if default behavior needs overriding
+5. **Deliverables**: Only if non-obvious
+
+### What NOT to Include
+
+- **Coding style** (naming, formatting, imports) → Handled by shared preamble
+- **Implementation patterns** (class structure, helpers) → Handled by grounding
+- **Every edge case** → Handled by accumulated tests
+- **Implementation steps** → Let the LLM decide (unless critical)
+
+### Target Size: Prompt-to-Code Ratio
+
+Aim for **10-30%** of your expected code size:
+
+| Ratio | Meaning |
+|-------|---------|
+| **< 10%** | Too vague—missing contracts, error handling, or key constraints |
+| **10-30%** | Just right—requirements and contracts without implementation details |
+| **> 50%** | Too detailed—prompt is doing preamble's or grounding's job |
+
+If your prompt exceeds 30%, ask: Am I specifying things that preamble, grounding, or tests should handle?
+
+**Note:** Tests are generated from the module prompt (via Requirements), so explicit Testing sections are unnecessary—well-written Requirements are inherently testable. Use `context/test.prompt` for project-wide test guidance.
+
+See pdd/pdd/templates/generic/generate_prompt.prompt for a concrete scaffold.
 
 ---
 
@@ -140,7 +204,17 @@ The PDD preprocessor supports additional XML‑style tags to keep prompts clean,
   - Behavior: executes during non‑recursive preprocessing; on failure, inserts a bracketed error note.
   - Example: `<web>https://docs.litellm.ai/docs/completion/json_mode</web>`
 
-Guidance: Use these tags sparingly to keep prompts deterministic. Prefer stable inputs and short outputs (e.g., `head -n 20` in `<shell>`) so that regenerated prompts remain consistent across runs.
+> ⚠️ **Warning: Non-Deterministic Tags**
+>
+> `<shell>` and `<web>` introduce **non-determinism**:
+> - `<shell>` output varies by environment (different machines, different results)
+> - `<web>` content changes over time (same URL, different content)
+>
+> **Impact:** Same prompt file → different generations on different machines/times
+>
+> **Prefer instead:** Capture output to a static file, then `<include>` that file. This ensures reproducible regeneration.
+
+Use these tags sparingly. When you must use them, prefer stable commands with bounded output (e.g., `head -n 20` in `<shell>`).
 
 ---
 
@@ -239,6 +313,42 @@ flowchart LR
 
 ---
 
+## The Three Pillars of PDD Generation
+
+Understanding how prompts, grounding, and tests work together is key to writing minimal, effective prompts.
+
+| Pillar | What It Provides | Maintained By |
+|--------|-----------------|---------------|
+| **Prompt** | Requirements and constraints (WHAT) | Developer (explicit) |
+| **Grounding** | Implementation patterns (HOW) | System (automatic, Cloud) |
+| **Tests** | Behavioral correctness | Accumulated over time |
+
+### How They Interact
+
+- **Prompt** defines WHAT → "validate user input, return errors"
+- **Grounding** defines HOW → class structure, helper patterns (from similar modules)
+- **Tests** define CORRECTNESS → edge cases discovered through bugs
+
+### Conflict Resolution
+
+- **Tests override grounding**: If a test requires new behavior, generation must satisfy it
+- **Explicit requirements override grounding**: If prompt says "use functional style", that overrides OOP examples in grounding
+- **Grounding fills gaps**: Everything not specified in prompt or constrained by tests
+
+### Why Prompts Can Be Minimal
+
+You don't need to specify:
+- **Coding style** → preamble provides it
+- **Implementation patterns** → grounding provides them
+- **Edge cases** → tests encode them
+
+You only specify:
+- What the module does
+- What contracts it must satisfy
+- What constraints apply
+
+---
+
 ## Example (Minimal, Python)
 
 This simplified example illustrates a minimal functional prompt:
@@ -279,42 +389,92 @@ This style:
 
 ## Writing Effective Requirements
 
-Focus on clarity, measurable outcomes, and determinism:
+Requirements are the core of your prompt. Everything else is handled automatically by grounding and tests.
 
-- Functional: list behaviors, invariants, and contract boundaries (API shape, props, return types, error codes).
-- Non‑functional: performance budgets (latency, memory), logging, tracing, security (authn/z, secrets handling), compliance.
-- Edge cases: input validation, missing data, timeouts, network failures, concurrency.
-- Observability: what to log/measure and at what levels; how to verify success in tests.
+### Structure (aim for 5-10 items)
 
-**Requirements as Test Specifications:** Each requirement should be testable. When `pdd test` runs, the LLM uses your Requirements to determine what to test. A requirement like "return null for invalid input without throwing" implies a test case. If you can't write a test for a requirement, it's too vague. No separate Testing section is needed—well-written Requirements ARE the test specification.
+1. **Primary function**: What does this module do? (one sentence)
+2. **Input contract**: Types, validation rules, what's accepted
+3. **Output contract**: Types, error conditions, return values
+4. **Key invariants**: What must always be true
+5. **Performance constraints**: If any (latency, memory, complexity)
+6. **Security constraints**: If any (input sanitization, auth requirements)
+
+### Each Requirement Should Be
+
+- **Testable**: If you can't write a test for it, it's too vague
+- **Behavioral**: Describe WHAT, not HOW
+- **Unique**: Don't duplicate what preamble or grounding provides
+
+### Example: Before/After
+
+**Too detailed:**
+```
+1. Create a UserValidator class with validate() method
+2. Use snake_case for all methods          ← belongs in preamble
+3. Import typing at the top                ← belongs in preamble
+4. Add docstrings to all public methods    ← belongs in preamble
+5. Handle null by returning ValidationError
+6. Handle empty string by returning ValidationError
+7. Handle whitespace-only by returning ValidationError
+```
+
+**Just right** (requirements only):
+```
+1. Function: validate_user(input) → ValidationResult
+2. Input: Any type (untrusted user input)
+3. Output: ValidationResult with is_valid bool and errors list
+4. Invalid inputs: null, empty, whitespace-only, malformed
+5. Performance: O(n) in input length
+6. Security: No eval/exec, treat input as untrusted
+```
+
+Style conventions (2-4) belong in a shared preamble. Edge cases (5-7) can be collapsed into a single requirement.
+
+**Requirements as Test Specifications:** Each requirement implies at least one test case. If you can't test a requirement, it's too vague.
 
 ---
 
-## Level of Abstraction (The "Goldilocks" Zone)
+## Prompt Abstraction Level
 
 ![Goldilocks Prompt](goldilocks_prompt.jpeg)
 
 Write prompts at the level of *architecture, contract, and intent*, not line-by-line *implementation details*.
 
-- **Too Vague:** "Create a user page." (Model guesses the requirements; unrepeatable).
-- **Too Detailed:** "Create a class User with a private field _id. In the constructor, set _id. Write a getter..." (Brittle; turns the model into a glorified typist and makes the prompt harder to read/maintain than the code).
+### Heuristics: Are You at the Right Level?
+
+| Indicator | Too Detailed (> 30%) | Too Vague (< 10%) |
+|-----------|----------------------|-------------------|
+| **Content** | Specifying variable names, loop structures | Missing error handling strategy |
+| **Style** | Dictating indentation, imports | No input/output types |
+| **Result** | Prompt harder to maintain than code | Every generation is wildly different |
+
+### If Your Prompt Is Too Long
+
+Ask yourself:
+- **Am I specifying coding style?** → Remove it (preamble handles this)
+- **Am I specifying implementation patterns?** → Remove them (grounding handles this)
+- **Am I listing every edge case?** → Remove them (tests handle this)
+- **Is the module too big?** → Split into multiple prompts
+
+### Examples
+
+- **Too Vague:** "Create a user page." (Model guesses everything; unrepeatable)
+- **Too Detailed:** "Create a class User with a private field _id. In the constructor, set _id. Write a getter..." (Prompt is harder to maintain than code)
 - **Just Right:** "Implement a UserProfile component that displays user details and handles the 'update' action via the API. It must handle loading/error states and match the existing design system."
 
-**Rule of Thumb:** If you are dictating control flow (loops, variable names) for standard logic, you are too deep. If you are omitting error handling or data types for public interfaces, you are too shallow. Focus on **Interfaces**, **Invariants**, and **Outcomes**.
+**Rule of Thumb:** Focus on **Interfaces**, **Invariants**, and **Outcomes**. Let the preamble handle coding style; let grounding handle implementation patterns.
 
 ---
 
-## Dependencies & Composability (Token‑Efficient Examples)
+## Dependencies
 
-- Include only relevant dependencies; more context is not always better.
-- **Examples as Compressed Interfaces:** Real source code is heavy. A 500-line module might have a 50-line usage example. By including only the example, you save ~90% of the tokens while still teaching the model *how* to use the module. This "token compression" is the key to scaling PDD to large, multi-module systems.
-- **Examples as Interfaces:** The minimal runnable example generated by `pdd example` *acts* as the module's interface. Other prompts consume this example (not the full source) to understand how to interact with the module. This stabilizes generation and keeps the context focused.
-- Use XML tags to label each dependency block and `<include>` real files.
-- If a dependency is defined by another prompt, list it under a "Prompt Dependencies" subsection and, where possible, pair it with a corresponding example file from `context/`.
+### When to Use `<include>`
 
-**Tip:** Use `pdd auto-deps` to scan your `examples/` directory and automatically populate relevant dependencies into your prompt.
-
-Example dependency block that composes another module via its example:
+Include dependencies explicitly when:
+- **External libraries** not in your grounding history
+- **Critical interfaces** that must be exact
+- **New modules** with no similar examples in grounding
 
 ```xml
 <billing_service>
@@ -322,7 +482,16 @@ Example dependency block that composes another module via its example:
 </billing_service>
 ```
 
-Composability via Examples (diagram):
+### When to Rely on Grounding
+
+If you've successfully generated code that uses a dependency before, grounding often suffices—the usage pattern is already in the cloud database.
+
+**Prefer explicit `<include>` for:** External APIs, critical contracts, cross-team interfaces
+**Rely on grounding for:** Internal modules with established patterns
+
+### Token Efficiency
+
+Real source code is heavy. A 500-line module might have a 50-line usage example. By including only the example, you save ~90% of tokens. Use `pdd auto-deps` to automatically populate relevant examples.
 
 ```mermaid
 flowchart LR
@@ -374,6 +543,28 @@ Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts a
 **Key insight:** When you run `pdd generate` after adding a test, the LLM sees that test as context. This means the generated code is constrained to pass it - the test acts as a specification, not just a verification.
 
 **Why?** Features represent *new intent* (Prompt). Bugs represent *missed intent* which must first be captured as a constraint (Test) before refining the definition (Prompt).
+
+### When to Update the Prompt (and When Not To)
+
+After a successful fix, ask: "Where should this knowledge live?"
+
+| Knowledge Type | Where It Lives | Update Prompt? |
+|---------------|----------------|----------------|
+| New edge case behavior | Test file | **No** |
+| Implementation pattern fix | Grounding (auto-captured) | **No** |
+| Missing requirement | Prompt | **Yes** |
+| Wrong constraint | Prompt | **Yes** |
+| Security/compliance rule | Prompt or preamble | **Yes** |
+
+**Rule of thumb:** Update the prompt only for **intent changes**:
+- "The module should also handle X" → Add requirement
+- "The constraint was wrong" → Fix requirement
+- "This security rule applies" → Add requirement
+
+**Don't update for implementation fixes:**
+- "There was a bug with null handling" → Add test; grounding captures the fix
+- "The code style was inconsistent" → Update preamble (not prompt)
+- "I prefer different variable names" → Update preamble/prompt
 
 ---
 
@@ -452,14 +643,23 @@ Key differences:
 
 ## Checklist: Before You Run `pdd generate`
 
-- Does the prompt state the module’s role and boundaries clearly?
-- Do you have high test coverage for the existing code? (Regeneration relies on tests to catch regressions).
-- Are functional and non‑functional requirements explicit and testable?
-- Are inputs/outputs and error handling specified?
-- Are dependencies minimal and included explicitly (with `<include>`)?
-- Is there a short, deterministic set of steps?
-- Is there a small example you can generate and run?
-- Did you add any new learnings back into the prompt (after prior runs)?
+### Must Have
+- [ ] Module purpose is clear (1-2 sentences)
+- [ ] Requirements are testable and behavioral (5-10 items)
+- [ ] Dependencies included (if external or critical)
+
+### For Established Modules
+- [ ] Tests exist for known edge cases
+- [ ] Previous generation was successful (grounding will use it)
+
+### For New Modules
+- [ ] Similar modules exist in codebase (grounding will find them)
+- [ ] Or: Consider `<pin>` to reference a template module (Cloud)
+
+### You Don't Need to Specify
+- Coding style (preamble handles this)
+- Implementation patterns (grounding handles this)
+- Every edge case (tests handle this)
 
 ---
 
