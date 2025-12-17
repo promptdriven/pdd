@@ -225,13 +225,13 @@ def test_lock_failure(orchestration_fixture):
     assert any("lock" in err.lower() or "timeout" in err.lower() for err in result['errors'])
     orchestration_fixture['sync_determine_operation'].assert_not_called()
 
-def test_log_mode(orchestration_fixture):
+def test_dry_run_mode(orchestration_fixture):
     """
-    Verifies that log=True calls the log display function and nothing else.
+    Verifies that dry_run=True calls the log display function and nothing else.
     """
     mock_log_display = orchestration_fixture['_display_sync_log']
-    
-    result = sync_orchestration(basename="calculator", language="python", log=True, verbose=True)
+
+    result = sync_orchestration(basename="calculator", language="python", dry_run=True, verbose=True)
 
     mock_log_display.assert_called_once_with("calculator", "python", True)
     assert result == mock_log_display.return_value

@@ -381,4 +381,4 @@ Add and use these helpers in the implementation to reflect the above logic:
              - If fingerprint is newer than run_report, the report may be stale → workflow NOT complete
 - `_check_example_success_history(basename, language) -> bool`: Whether the example has run successfully before (to prefer `fix` over `crash` on runtime errors)
 
-This enables users to run `pdd sync --log` to understand the complete decision history and troubleshoot any issues.
+This enables users to run `pdd sync --dry-run` to understand the complete decision history and troubleshoot any issues.

@@ -39,7 +39,7 @@ def sync_orchestration(
     budget: float = 10.0,
     skip_verify: bool = False,
     skip_tests: bool = False,
-    log: bool = False,
+    dry_run: bool = False,
     force: bool = False,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
@@ -67,7 +67,7 @@ Returns a dictionary containing:
 - `errors`: List of error messages
 - `error`: Semicolon-joined error string or None
 - `model_name`: Name of the last model used
-- `log_entries`: List of log entries (only when `log=True`)
+- `log_entries`: List of log entries (only when `dry_run=True`)
 
 ## Dependencies
 
@@ -170,9 +170,9 @@ Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `erro
 
 ## Core Behaviors
 
-### Log Mode
+### Dry-Run Mode
 
-When `log=True`, display the sync log at `.pdd/meta/{basename}_{language}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
+When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
 
 ### TUI Integration
 
