@@ -1748,6 +1748,53 @@ PY
   fi
 fi
 
+# 20. Unit Test Auto-Discovery Regression
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "20" ]; then
+  log "20. Testing 'generate' unit test auto-discovery effectiveness"
+
+  # Create the unit test file in CURRENT directory (auto-discovery default looks here)
+  # tests_dir defaults to "." (parent of default test_output_path "tests")
+  cat > "test_encode_message.py" << 'EOF'
+from encode_message import encode_message
+
+def test_encode_basic():
+    assert encode_message("hello") == "ifmmp"
+
+def test_encode_abc():
+    assert encode_message("abc") == "bcd"
+
+def test_encode_wrap():
+    assert encode_message("xyz") == "yza"
+EOF
+
+  # 1. Generate WITH --exclude-tests (no test context, expect failure)
+  log "Generating with --exclude-tests (no auto-discovery)..."
+  run_pdd_command generate --exclude-tests --output "encode_message.py" "$PROMPTS_PATH/encode_message_python.prompt"
+  check_exists "encode_message.py" "'generate' with --exclude-tests"
+
+  # Run pytest - expect FAILURE
+  log "Running tests against code generated with --exclude-tests (expecting failure)..."
+  if python -m pytest "test_encode_message.py" -v >> "$LOG_FILE" 2>&1; then
+    log "WARNING: Tests passed with --exclude-tests (unexpected but acceptable)"
+  else
+    log "Tests failed as expected with --exclude-tests (no test context)"
+  fi
+
+  # 2. Generate normally - auto-discovery should find test file (expect success)
+  log "Generating with auto-discovery (default behavior)..."
+  run_pdd_command generate --output "encode_message.py" "$PROMPTS_PATH/encode_message_python.prompt"
+  check_exists "encode_message.py" "'generate' with auto-discovery"
+
+  # Run pytest - expect SUCCESS
+  log "Running tests against code generated with auto-discovery..."
+  if python -m pytest "test_encode_message.py" -v >> "$LOG_FILE" 2>&1; then
+    log "Tests passed with auto-discovery - feature working correctly"
+  else
+    log_error "Tests failed with auto-discovery - feature may be broken"
+    exit 1
+  fi
+fi
+
 # --- Final Summary ---
 log_timestamped "======== Regression Tests Completed (Target: $TARGET_TEST) ========"
 log "----------------------------------------"

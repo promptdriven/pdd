@@ -273,6 +273,7 @@ def fix_verification_errors_loop(
     total_cost = 0.0
     model_name: Optional[str] = None
     overall_success = False
+    any_verification_passed = False  # Track if ANY iteration passed secondary verification
     best_iteration = {
         'attempt': -1, # 0 represents initial state
         'program_backup': None,
@@ -684,6 +685,9 @@ def fix_verification_errors_loop(
 
         # Now, decide outcome based on issue count and verification status
         if secondary_verification_passed:
+            # Only track as "verification passed" if code was actually changed and verified
+            if code_updated:
+                any_verification_passed = True  # Track that at least one verification passed
             # Update best iteration if current attempt is better
             if current_issues_count != -1 and current_issues_count < best_iteration['issues']:
                  if verbose:
@@ -826,8 +830,14 @@ def fix_verification_errors_loop(
                     if verbose:
                         console.print(f"Restored {program_path} from {best_program_path}")
                         console.print(f"Restored {code_path} from {best_code_path}")
-                    # Final issues count is the best achieved count
-                    stats['final_issues'] = best_iteration['issues']
+                    # Only mark as success if verification actually passed
+                    # (best_iteration is only updated when secondary verification passes,
+                    # but we double-check with any_verification_passed for safety)
+                    if any_verification_passed:
+                        stats['final_issues'] = 0
+                        overall_success = True
+                    else:
+                        stats['final_issues'] = best_iteration['issues']
                 else:
                     console.print(f"[bold red]Error: Backup files for best iteration {best_iteration['attempt']} not found! Cannot restore.[/bold red]")
                     final_log_entry += f'  <Error>Backup files for best iteration {best_iteration["attempt"]} not found.</Error>\n'
@@ -840,6 +850,15 @@ def fix_verification_errors_loop(
                 final_log_entry += f'  <Error>Error restoring files from best iteration {best_iteration["attempt"]}: {escape(str(e))}</Error>\n'
                 stats['status_message'] += f' - Error restoring best iteration: {e}'
                 stats['final_issues'] = -1 # Indicate uncertainty
+
+        # If verification passed (even if issue count didn't decrease), consider it success
+        elif any_verification_passed:
+             console.print("[green]Verification passed. Keeping current state.[/green]")
+             final_log_entry += f'  <Action>Verification passed; keeping current state.</Action>\n'
+             # Verification passed = code works, so final issues is effectively 0
+             stats['final_issues'] = 0
+             stats['status_message'] = 'Success - verification passed'
+             overall_success = True
 
         # If no improvement was made or recorded (best is still initial state or worse)
         elif best_iteration['attempt'] <= 0 or best_iteration['issues'] >= initial_issues_val:
