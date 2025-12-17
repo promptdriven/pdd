@@ -645,7 +645,7 @@ def sync_orchestration(
     budget: float = 10.0,
     skip_verify: bool = False,
     skip_tests: bool = False,
-    log: bool = False,
+    dry_run: bool = False,
     force: bool = False,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
@@ -665,7 +665,7 @@ def sync_orchestration(
     # Import get_extension at function scope
     from .sync_determine_operation import get_extension
     
-    if log:
+    if dry_run:
         return _display_sync_log(basename, language, verbose)
 
     # --- Initialize State and Paths ---

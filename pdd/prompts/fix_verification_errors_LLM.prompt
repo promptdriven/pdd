@@ -21,6 +21,28 @@
     5. Prefer making additive changes (adding new functions, improving existing ones) rather than removing functionality, even if that means going beyond the minimal requirements of the prompt.
     6. If your previous fixes resulted in verification failures related to missing functions, ensure those functions are included in your solution.
 
+% MOCK VS PRODUCTION CODE GUIDANCE:
+    1. IDENTIFY THE TEST FILE: The 'program' file may be a TEST FILE that uses mocks (MagicMock, unittest.mock, patch) to simulate external dependencies.
+       - Look for imports: `from unittest.mock import MagicMock, patch`
+       - Look for mock setup patterns: `mock_obj.return_value`, `mock_obj.__getitem__.return_value`
+
+    2. WHEN ERRORS OCCUR IN MOCK INTERACTIONS:
+       - FIRST check if the mock setup is incorrect (wrong return_value structure, missing __getitem__ configuration)
+       - Mock return types must match the REAL API return types exactly
+       - Common mock bugs:
+         * `__getitem__.return_value = [item]` when it should be `= item` (for APIs where indexing returns single item)
+         * Missing chained mock configuration (e.g., `mock.method().other_method()`)
+
+    3. PRESERVE PRODUCTION CODE API USAGE:
+       - The 'code_module' implements PRODUCTION code that calls real APIs
+       - Assume production code uses CORRECT API patterns unless you have documentation proving otherwise
+       - Do NOT change production code indexing patterns (like `[0][0]`) without external API documentation
+
+    4. DIAGNOSIS PRIORITY for "AttributeError" or type mismatch:
+       a. First: Check mock.return_value / mock.__getitem__.return_value structure
+       b. Second: Check if mock chaining matches expected API call pattern
+       c. Third: Only then consider if production code has wrong API usage
+
 % Follow these steps to fix the program or code_module:
     Step 1. Analyze and understand each identified issue in the context of the code_module and program.
     Step 2. Analyze how the program uses the code_module to determine all functions that must be preserved.

@@ -1,3 +1,23 @@
+## v0.0.86 (2025-12-17)
+
+### Feat
+
+- add metadata files for Python test command execution results and configuration
+- add encode_message prompt for encoding functionality in Python
+- add encode_message prompt for regression tests and enhance test auto-discovery in integration tests
+- enhance LLM prompts with detailed mock vs production code guidance and improve integration test script for clarity
+- add integration and static tests for mock vs production code guidance in LLM prompts
+- enhance unit test inclusion in code generation, implement example error detection, and improve directory summarization; update README and tests accordingly
+
+### Fix
+
+- improve verification success tracking in error fixing loop and update related tests
+- add run_attempt to branch name for re-run support
+
+### Refactor
+
+- remove unused warnings import from maintenance commands
+
 ## v0.0.85 (2025-12-16)
 
 ### Feat
