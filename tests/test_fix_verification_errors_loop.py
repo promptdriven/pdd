@@ -1075,3 +1075,195 @@ def test_best_iteration_restored_with_verification_passed(setup_test_environment
     log_content = env["log_file"].read_text()
     assert "Restored Best Iteration" in log_content, \
         "Should have restored the best iteration"
+
+
+# --- Non-Python and Agentic Fallback Test Cases ---
+
+def test_non_python_target_bypasses_loop(setup_test_environment, mocker):
+    """Test that non-Python files bypass main loop and use agentic fallback."""
+    env = setup_test_environment
+
+    # Create a Go file instead of Python
+    go_code_file = env["output_path"] / "code_module.go"
+    go_code_file.write_text("package main\n\nfunc Run() string { return \"INITIAL\" }", encoding="utf-8")
+    env["default_args"]["code_file"] = str(go_code_file)
+
+    # Create a prompt file (required for agentic fallback)
+    prompt_file = env["tmp_path"] / "prompt.txt"
+    prompt_file.write_text("Generate a Go function that returns EXPECTED_OK", encoding="utf-8")
+    env["default_args"]["prompt_file"] = str(prompt_file)
+
+    # Mock get_language to return "go"
+    mock_get_language = mocker.patch(
+        'pdd.fix_verification_errors_loop.get_language',
+        return_value="go"
+    )
+
+    # Mock default_verify_cmd_for to return a command
+    mock_verify_cmd = mocker.patch(
+        'pdd.fix_verification_errors_loop.default_verify_cmd_for',
+        return_value="go test ./..."
+    )
+
+    # Mock subprocess.run for the verification command
+    mock_subprocess_run = mocker.patch(
+        'pdd.fix_verification_errors_loop.subprocess.run',
+        return_value=mocker.Mock(
+            stdout="FAIL: TestRun expected EXPECTED_OK got INITIAL",
+            stderr="",
+            returncode=1
+        )
+    )
+
+    # Mock _safe_run_agentic_fix (called for non-Python targets)
+    mock_agentic = mocker.patch(
+        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(go_code_file)])
+    )
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Verify non-Python path was taken
+    mock_get_language.assert_called_once_with(".go")
+    mock_verify_cmd.assert_called_once_with("go", str(env["verification_file"]))
+    mock_subprocess_run.assert_called_once()
+
+    # Verify agentic fallback was called with correct args
+    mock_agentic.assert_called_once_with(
+        prompt_file=str(prompt_file),
+        code_file=str(go_code_file),
+        unit_test_file=env["default_args"]["verification_program"],
+        error_log_file=env["default_args"]["verification_log_file"],
+    )
+
+    # Verify fix_verification_errors (main loop fixer) was NOT called
+    env["mock_fixer"].assert_not_called()
+
+    # Verify result
+    assert result["success"] is True
+    assert result["total_attempts"] == 1  # Non-Python path sets this to 1
+    assert result["total_cost"] == 0.05
+    assert result["model_name"] == "agentic-cli"
+    assert result["statistics"] == {}  # Non-Python path returns empty statistics
+
+
+def test_agentic_fallback_invoked_on_python_loop_failure(setup_test_environment, mocker):
+    """Test that agentic fallback is invoked when Python loop fails and agentic_fallback=True."""
+    env = setup_test_environment
+    env["default_args"]["agentic_fallback"] = True
+    env["default_args"]["max_attempts"] = 1
+
+    # Create a prompt file (required for agentic fallback)
+    prompt_file = env["tmp_path"] / "prompt.txt"
+    prompt_file.write_text("Make the code return EXPECTED_OK", encoding="utf-8")
+    env["default_args"]["prompt_file"] = str(prompt_file)
+
+    # Mock runner: all runs show failure
+    env["mock_runner"].side_effect = [
+        (0, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG"),  # Initial run
+        (0, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG"),  # Attempt 1 run
+        (1, "Secondary verification failed"),  # Secondary verification FAILS
+    ]
+
+    # Mock fixer: always returns issues > 0
+    env["mock_fixer"].side_effect = [
+        {  # Initial assessment
+            'explanation': ["Initial bug found"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_initial"],
+            'total_cost': 0.001,
+            'model_name': 'model-init',
+            'verification_issues_count': 1,
+        },
+        {  # Attempt 1 fix (suggests change but verification will fail)
+            'explanation': ["Tried to fix"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_fixed"],
+            'total_cost': 0.002,
+            'model_name': 'model-fixer',
+            'verification_issues_count': 1,  # Still has issues
+        }
+    ]
+
+    # Mock _safe_run_agentic_fix (called at end of failed loop)
+    mock_agentic = mocker.patch(
+        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(env["code_file"])])
+    )
+
+    # Update code file to simulate agentic fix
+    def update_code_on_agentic_call(**kwargs):
+        env["code_file"].write_text(env["code_content_fixed"], encoding="utf-8")
+        return (True, "Fixed by agent", 0.05, "agentic-cli", [str(env["code_file"])])
+
+    mock_agentic.side_effect = update_code_on_agentic_call
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Verify agentic fallback was called
+    mock_agentic.assert_called_once_with(
+        prompt_file=str(prompt_file),
+        code_file=str(env["code_file"]),
+        unit_test_file=env["default_args"]["verification_program"],
+        error_log_file=env["default_args"]["verification_log_file"],
+    )
+
+    # Verify result shows success from agentic fallback
+    assert result["success"] is True
+    assert result["total_cost"] == 0.001 + 0.002 + 0.05  # Initial + attempt + agentic
+    assert result["model_name"] == "agentic-cli"  # Model updated to agentic
+
+
+def test_agentic_fallback_not_invoked_when_disabled(setup_test_environment, mocker):
+    """Test that agentic fallback is NOT invoked when agentic_fallback=False."""
+    env = setup_test_environment
+    env["default_args"]["agentic_fallback"] = False
+    env["default_args"]["max_attempts"] = 1
+
+    # Create a prompt file (would be used if agentic fallback ran)
+    prompt_file = env["tmp_path"] / "prompt.txt"
+    prompt_file.write_text("Make the code return EXPECTED_OK", encoding="utf-8")
+    env["default_args"]["prompt_file"] = str(prompt_file)
+
+    # Mock runner: all runs show failure
+    env["mock_runner"].side_effect = [
+        (0, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG"),  # Initial run
+        (0, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG"),  # Attempt 1 run
+        (1, "Secondary verification failed"),  # Secondary verification FAILS
+    ]
+
+    # Mock fixer: always returns issues > 0
+    env["mock_fixer"].side_effect = [
+        {  # Initial assessment
+            'explanation': ["Initial bug found"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_initial"],
+            'total_cost': 0.001,
+            'model_name': 'model-init',
+            'verification_issues_count': 1,
+        },
+        {  # Attempt 1 fix (suggests change but verification will fail)
+            'explanation': ["Tried to fix"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_fixed"],
+            'total_cost': 0.002,
+            'model_name': 'model-fixer',
+            'verification_issues_count': 1,
+        }
+    ]
+
+    # Mock _safe_run_agentic_fix to verify it's NOT called
+    mock_agentic = mocker.patch(
+        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(env["code_file"])])
+    )
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Verify agentic fallback was NOT called
+    mock_agentic.assert_not_called()
+
+    # Verify result shows failure (no agentic fallback to save it)
+    assert result["success"] is False
+    assert result["total_cost"] == 0.001 + 0.002  # Only initial + attempt
+    assert result["model_name"] == 'model-fixer'  # Last model used
