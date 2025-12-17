@@ -282,7 +282,9 @@ def run():
 
     result = fix_verification_errors_loop(**env["default_args"])
 
-    assert result["success"] is False
+    # Attempt 1 passed verification (exit code 0), so success = True
+    # even though issues weren't reduced to 0
+    assert result["success"] is True
     assert result["total_attempts"] == 2 # Reached max attempts
     assert result["total_cost"] == 0.001 + 0.002 + 0.003
     assert result["model_name"] == 'model-fixer2' # Last model used
@@ -309,7 +311,8 @@ def run():
 
 
     assert result["statistics"]["initial_issues"] == 2
-    assert result["statistics"]["final_issues"] == 1 # Best achieved issues
+    # Verification passed, so final_issues = 0 (code works)
+    assert result["statistics"]["final_issues"] == 0
     assert result["statistics"]["best_iteration_num"] == 1
     assert result["statistics"]["best_iteration_issues"] == 1
     # FIX: Assert the actual status message based on code logic
@@ -946,3 +949,129 @@ def test_loop_handles_false_llm_success(setup_test_environment, capsys):
 
 
 # --- End Bug Detection Test Cases ---
+
+
+# --- Verification Pass but No Issue Improvement Bug Test ---
+
+def test_verification_passes_but_issues_unchanged(setup_test_environment):
+    """
+    Regression test for bug: Secondary verification passes but issue count
+    doesn't decrease, incorrectly reports "No improvement found".
+
+    Scenario:
+    - Initial: 1 issue in code
+    - Iteration: LLM changes code but still reports 1 issue
+    - Secondary verification runs (because code_updated=True) and PASSES
+    - Bug: "No improvement" because 1 < 1 is False, best_iteration not updated
+    - Expected: Should recognize that verification passed = success
+    """
+    env = setup_test_environment
+    env["default_args"]["max_attempts"] = 1  # Single attempt for simplicity
+
+    # Mock runner: all runs succeed
+    env["mock_runner"].side_effect = [
+        (0, "Running with test_arg\nProgram output"),  # Initial run
+        (0, "Running with test_arg\nProgram output"),  # Attempt 1 run
+        (0, "Verification passed successfully"),       # Secondary verification PASSES
+    ]
+
+    # Mock fixer:
+    # - Initial: 1 issue, code unchanged
+    # - Attempt 1: 1 issue (SAME!), but code IS changed (triggers verification)
+    env["mock_fixer"].side_effect = [
+        {  # Initial assessment
+            'explanation': ["One issue found"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_initial"],  # No change yet
+            'total_cost': 0.001,
+            'model_name': 'model-init',
+            'verification_issues_count': 1,  # 1 issue initially
+        },
+        {  # Attempt 1 - code changed, verification will run, but issue count same
+            'explanation': ["Applied fix but issue persists"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_fixed"],  # Code IS changed! (triggers verification)
+            'total_cost': 0.002,
+            'model_name': 'model-fixer',
+            'verification_issues_count': 1,  # Same issue count - triggers the bug!
+        }
+    ]
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # KEY ASSERTIONS - these will FAIL with the bug
+    # Bug behavior: success=False, "No improvement found"
+    # Expected: success=True (verification passed, code works!)
+
+    # With current buggy code, best_iteration['attempt'] stays at 0
+    # because 1 < 1 is False, so it's never updated
+    # Then final check: 0 <= 0 is True → "No improvement found"
+
+    assert result["success"] is True, \
+        "Should report success when secondary verification passes, even if issue count unchanged"
+
+    # Check the log doesn't say "No improvement"
+    log_content = env["log_file"].read_text()
+    assert "No improvement found" not in log_content, \
+        "Should not claim 'No improvement' when verification passed"
+
+
+def test_best_iteration_restored_with_verification_passed(setup_test_environment):
+    """
+    Regression test for bug: When initial assessment returns unknown issues (-1),
+    best_iteration is restored but overall_success stays False.
+
+    Scenario:
+    - Initial assessment: verification_issues_count = -1 (unknown/error)
+    - This makes best_iteration['issues'] = float('inf')
+    - Iteration 1: issues = 1, verification PASSES
+    - best_iteration updated (1 < inf), attempt = 1
+    - First condition triggers: 1 > 0 and 1 < inf
+    - Bug: overall_success = False because stats['final_issues'] = 1 != 0
+    - Expected: overall_success = True (restored iteration passed verification)
+    """
+    env = setup_test_environment
+    env["default_args"]["max_attempts"] = 1
+
+    # Mock runner: all runs succeed
+    env["mock_runner"].side_effect = [
+        (0, "Running with test_arg\nProgram output"),  # Initial run
+        (0, "Running with test_arg\nProgram output"),  # Attempt 1 run
+        (0, "Verification passed successfully"),       # Secondary verification PASSES
+    ]
+
+    # Mock fixer:
+    # - Initial: verification_issues_count = -1 (UNKNOWN - triggers the bug!)
+    # - Attempt 1: issues = 1, code changed, verification passes
+    env["mock_fixer"].side_effect = [
+        {  # Initial assessment - UNKNOWN issues count
+            'explanation': ["Error during analysis"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_initial"],
+            'total_cost': 0.001,
+            'model_name': 'model-init',
+            'verification_issues_count': -1,  # UNKNOWN - this triggers the bug!
+        },
+        {  # Attempt 1 - code changed, verification will pass
+            'explanation': ["Applied fix"],
+            'fixed_program': env["program_content"],
+            'fixed_code': env["code_content_fixed"],  # Code IS changed
+            'total_cost': 0.002,
+            'model_name': 'model-fixer',
+            'verification_issues_count': 1,  # LLM still thinks 1 issue
+        }
+    ]
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # KEY ASSERTIONS
+    # Bug behavior: success=False (line 965 sets it because final_issues=1!=0)
+    # Expected: success=True (best iteration passed verification)
+
+    assert result["success"] is True, \
+        "Should report success when restoring best iteration that passed verification"
+
+    # Check the log shows restoration happened
+    log_content = env["log_file"].read_text()
+    assert "Restored Best Iteration" in log_content, \
+        "Should have restored the best iteration"
