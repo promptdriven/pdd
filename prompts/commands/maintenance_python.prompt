@@ -46,7 +46,7 @@
     - For other exceptions: call `handle_error(exception, "command-name", ctx.obj.get("quiet", False))`.
     - Return `None` after handling errors.
   - Access quiet flag via `ctx.obj.get("quiet", False)` (ctx.obj may be None for setup).
-  - For deprecated flags: emit yellow warning to stderr using `click.echo(click.style(..., fg="yellow"), err=True)`.
+  - For deprecated flags: emit a warning to stderr indicating the flag is deprecated and what to use instead.
 
 % Deliverables
   - Code: `pdd/commands/maintenance.py`
