@@ -66,7 +66,7 @@ from pdd import DEFAULT_STRENGTH
 #         exhausted.
 #       - Test handling of failures and exceptions from `sync_orchestration`.
 #     - **Special Modes**:
-#       - Test `--log` mode to ensure it calls the orchestrator with `log=True`
+#       - Test `--dry-run` mode to ensure it calls the orchestrator with `dry_run=True`
 #         and doesn't run a full sync.
 #       - Test `--quiet` mode to ensure no console output is produced.
 #     - **Configuration**:
@@ -181,7 +181,7 @@ def test_sync_success_single_language(mock_project_dir, mock_construct_paths, mo
     
     ctx = create_mock_context({})
     results, total_cost, model = sync_main(
-        ctx, "my_app", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+        ctx, "my_app", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
     )
 
     mock_sync_orchestration.assert_called_once()
@@ -208,7 +208,7 @@ def test_sync_success_multiple_languages(mock_project_dir, mock_construct_paths,
 
     ctx = create_mock_context({})
     results, total_cost, _ = sync_main(
-        ctx, "my_lib", max_attempts=3, budget=5.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+        ctx, "my_lib", max_attempts=3, budget=5.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
     )
 
     assert mock_sync_orchestration.call_count == 2
@@ -234,7 +234,7 @@ def test_sync_no_prompt_files_found(mock_project_dir, mock_construct_paths):
     ctx = create_mock_context({})
     with pytest.raises(click.UsageError, match="No prompt files found for basename 'nonexistent'"):
         sync_main(
-            ctx, "nonexistent", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+            ctx, "nonexistent", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
         )
 
 
@@ -244,7 +244,7 @@ def test_sync_invalid_basename(invalid_name):
     ctx = create_mock_context({})
     with pytest.raises(click.UsageError):
         sync_main(
-            ctx, invalid_name, max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+            ctx, invalid_name, max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
         )
 
 
@@ -254,7 +254,7 @@ def test_sync_invalid_budget_or_attempts(budget, attempts):
     ctx = create_mock_context({})
     with pytest.raises(click.BadParameter):
         sync_main(
-            ctx, "any_name", max_attempts=attempts, budget=budget, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+            ctx, "any_name", max_attempts=attempts, budget=budget, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
         )
 
 
@@ -267,7 +267,7 @@ def test_sync_budget_exhausted(mock_project_dir, mock_construct_paths, mock_sync
 
     ctx = create_mock_context({})
     results, total_cost, _ = sync_main(
-        ctx, "app", max_attempts=3, budget=1.5, skip_verify=False, skip_tests=False, target_coverage=90.0, log=False
+        ctx, "app", max_attempts=3, budget=1.5, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
     )
 
     mock_sync_orchestration.assert_called_once() # Should only be called for python
@@ -281,14 +281,14 @@ def test_sync_budget_exhausted(mock_project_dir, mock_construct_paths, mock_sync
     assert "Budget exhausted" in results["results_by_language"]["typescript"]["error"]
 
 
-def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
-    """Tests that --log mode calls sync_orchestration correctly."""
+def test_sync_dry_run_mode(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Tests that --dry-run mode calls sync_orchestration correctly."""
     (mock_project_dir / "prompts" / "log_test_python.prompt").touch()
     (mock_project_dir / "prompts" / "log_test_typescript.prompt").touch()
 
     ctx = create_mock_context({"verbose": True})
     results, total_cost, model = sync_main(
-        ctx, "log_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=True
+        ctx, "log_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=True
     )
 
     assert mock_sync_orchestration.call_count == 2
@@ -300,7 +300,7 @@ def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchest
             code_dir=str(mock_project_dir / 'src'),
             examples_dir=str(mock_project_dir / 'examples'),
             tests_dir=str(mock_project_dir / 'tests'),
-            log=True,
+            dry_run=True,
             verbose=True,
             quiet=False,
             context_override=None,
@@ -312,7 +312,7 @@ def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchest
             code_dir=str(mock_project_dir / 'src'),
             examples_dir=str(mock_project_dir / 'examples'),
             tests_dir=str(mock_project_dir / 'tests'),
-            log=True,
+            dry_run=True,
             verbose=True,
             quiet=False,
             context_override=None,
@@ -325,29 +325,29 @@ def test_sync_log_mode(mock_project_dir, mock_construct_paths, mock_sync_orchest
     assert results == {}
 
 
-def test_sync_log_mode_respects_force_flag(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
-    """Tests that --log mode properly passes the force flag to construct_paths."""
+def test_sync_dry_run_mode_respects_force_flag(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Tests that --dry-run mode properly passes the force flag to construct_paths."""
     (mock_project_dir / "prompts" / "force_test_python.prompt").touch()
 
     ctx = create_mock_context({"force": True, "verbose": False})
     results, total_cost, model = sync_main(
-        ctx, "force_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, log=True
+        ctx, "force_test", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=True
     )
 
-    # Verify that construct_paths was called with force=True for log mode
+    # Verify that construct_paths was called with force=True for dry-run mode
     mock_construct_paths.assert_called()
     calls = mock_construct_paths.call_args_list
-    
-    # Find the call from log mode (should have force=True)
-    log_mode_call = None
+
+    # Find the call from dry-run mode (should have force=True)
+    dry_run_mode_call = None
     for call in calls:
         args, kwargs = call
         if kwargs.get('force') is True:
-            log_mode_call = call
+            dry_run_mode_call = call
             break
-    
-    assert log_mode_call is not None, "construct_paths should be called with force=True in log mode"
-    
+
+    assert dry_run_mode_call is not None, "construct_paths should be called with force=True in dry-run mode"
+
     assert total_cost == 0.0
     assert model == ""
     assert results == {}
@@ -382,7 +382,7 @@ def test_sync_cli_overrides_defaults(mock_project_dir, mock_construct_paths, moc
     ctx = create_mock_context({"strength": DEFAULT_STRENGTH, "temperature": 0.5, "_cli_set": ["strength", "temperature"]})
     
     sync_main(
-        ctx, "cli_app", max_attempts=5, budget=20.0, skip_verify=True, skip_tests=True, target_coverage=95.0, log=False
+        ctx, "cli_app", max_attempts=5, budget=20.0, skip_verify=True, skip_tests=True, target_coverage=95.0, dry_run=False
     )
 
     mock_sync_orchestration.assert_called_once()
@@ -454,7 +454,7 @@ def test_sync_normal_flow_threads_context_override(mock_project_dir, mock_constr
         skip_verify=False,
         skip_tests=False,
         target_coverage=90.0,
-        log=False,
+        dry_run=False,
     )
 
     # Verify sync_orchestration received the override
