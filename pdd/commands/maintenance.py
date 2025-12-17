@@ -2,6 +2,7 @@
 Maintenance commands (sync, auto_deps, setup).
 """
 import click
+import warnings
 from typing import Optional, Tuple
 from pathlib import Path
 
@@ -41,10 +42,17 @@ from ..core.utils import _run_setup_utility
     help="Desired code coverage percentage.",
 )
 @click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Analyze sync state without executing operations. Shows what sync would do.",
+)
+@click.option(
     "--log",
     is_flag=True,
     default=False,
-    help="Display sync logs instead of running the sync.",
+    hidden=True,
+    help="Deprecated: Use --dry-run instead.",
 )
 @click.pass_context
 @track_cost
@@ -56,6 +64,7 @@ def sync(
     skip_verify: bool,
     skip_tests: bool,
     target_coverage: float,
+    dry_run: bool,
     log: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
@@ -63,6 +72,17 @@ def sync(
 
     BASENAME is the base name of the prompt file (e.g., 'my_module' for 'prompts/my_module_python.prompt').
     """
+    # Handle deprecated --log flag
+    if log:
+        click.echo(
+            click.style(
+                "Warning: --log is deprecated, use --dry-run instead.",
+                fg="yellow"
+            ),
+            err=True
+        )
+        dry_run = True
+
     try:
         result, total_cost, model_name = sync_main(
             ctx=ctx,
@@ -72,7 +92,7 @@ def sync(
             skip_verify=skip_verify,
             skip_tests=skip_tests,
             target_coverage=target_coverage,
-            log=log,
+            dry_run=dry_run,
         )
         return str(result), total_cost, model_name
     except click.Abort:
