@@ -661,7 +661,7 @@ Options:
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
-- `--log`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
+- `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
 
 **Real-time Progress Animation**:
 The sync command provides live visual feedback showing:
@@ -733,14 +733,14 @@ This directory should typically be added to version control (except for lock fil
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
 
 **Sync State Analysis**:
-The sync command maintains detailed decision-making logs which you can view using the `--log` option:
+The sync command maintains detailed decision-making logs which you can view using the `--dry-run` option:
 
 ```bash
 # View current sync state analysis (non-blocking)
-pdd sync --log calculator
+pdd sync --dry-run calculator
 
-# View detailed LLM reasoning for complex scenarios  
-pdd --verbose sync --log calculator
+# View detailed LLM reasoning for complex scenarios
+pdd --verbose sync --dry-run calculator
 ```
 
 **Analysis Contents Include**:
@@ -751,9 +751,9 @@ pdd --verbose sync --log calculator
 - Lock status and potential conflicts
 - State management details
 
-The `--log` option performs live analysis of the current project state, making it safe to run even when another sync operation is in progress. This differs from viewing historical logs - it shows what sync would decide to do right now based on current file states.
+The `--dry-run` option performs live analysis of the current project state, making it safe to run even when another sync operation is in progress. This differs from viewing historical logs - it shows what sync would decide to do right now based on current file states.
 
-Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-file change scenarios and advanced state analysis.
+Use `--verbose` with `--dry-run` to see detailed LLM reasoning for complex multi-file change scenarios and advanced state analysis.
 
 **When to use**: This is the recommended starting point for most PDD workflows. Use sync when you want to ensure all artifacts (code, examples, tests) are up-to-date and synchronized with your prompt files. The command embodies the PDD philosophy by treating the workflow as a batch process that developers can launch and return to later, freeing them from constant supervision.
 
@@ -771,14 +771,14 @@ pdd --force sync --skip-verify --budget 5.0 web_scraper
 # Multi-language sync with fingerprint-based change detection
 pdd --force sync multi_language_module
 
-# View comprehensive sync log with decision analysis
-pdd sync --log factorial_calculator  
+# View comprehensive sync analysis with decision analysis
+pdd sync --dry-run factorial_calculator
 
-# View detailed sync log with LLM reasoning for complex conflict resolution
-pdd --verbose sync --log factorial_calculator
+# View detailed sync analysis with LLM reasoning for complex conflict resolution
+pdd --verbose sync --dry-run factorial_calculator
 
 # Monitor what sync would do without executing (with state analysis)
-pdd sync --log calculator
+pdd sync --dry-run calculator
 
 # Context-aware examples with automatic configuration detection
 cd backend && pdd --force sync calculator     # Uses backend context settings with animation
@@ -2153,10 +2153,10 @@ Here are some common issues and their solutions:
 
 8. **Sync-Specific Issues**:
    - **"Another sync is running"**: Check for stale locks in `.pdd/locks/` directory and remove if process no longer exists
-   - **Complex conflict resolution problems**: Use `pdd --verbose sync --log basename` to see detailed LLM reasoning and decision analysis
+   - **Complex conflict resolution problems**: Use `pdd --verbose sync --dry-run basename` to see detailed LLM reasoning and decision analysis
    - **State corruption or unexpected behavior**: Delete `.pdd/meta/{basename}_{language}.json` to reset fingerprint state
    - **Animation display issues**: Sync operations work in background; animation is visual feedback only and doesn't affect functionality
-   - **Fingerprint mismatches**: Use `pdd sync --log basename` to see what changes were detected and why operations were recommended
+   - **Fingerprint mismatches**: Use `pdd sync --dry-run basename` to see what changes were detected and why operations were recommended
 
 If you encounter persistent issues, consult the PDD documentation or post an issue on GitHub for assistance.
 
