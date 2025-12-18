@@ -389,3 +389,107 @@ def test_cmd_test_main_uses_safe_ctx_obj_access():
         "cmd_test_main should use ctx.obj.get('strength', ...) not ctx.obj['strength']"
     assert 'ctx.obj["temperature"]' not in source, \
         "cmd_test_main should use ctx.obj.get('temperature', ...) not ctx.obj['temperature']"
+
+
+def test_cmd_test_main_uses_pddrc_strength_from_resolved_config():
+    """
+    REGRESSION TEST: cmd_test_main must use strength from resolved_config (pddrc),
+    not just ctx.obj or defaults.
+
+    Bug: strength was resolved BEFORE calling construct_paths, so pddrc values
+    from resolved_config were ignored. generate_test received DEFAULT_STRENGTH
+    instead of pddrc value.
+
+    BEFORE FIX: generate_test called with strength=0.75 (default)
+    AFTER FIX: generate_test called with strength=0.9 (from pddrc via resolved_config)
+    """
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.obj = {
+        "verbose": False,
+        "force": False,
+        "quiet": False,
+        "time": 0.25,
+        # strength/temperature NOT in ctx.obj (simulates CLI not passing --strength)
+    }
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+
+        # resolved_config contains pddrc strength value
+        mock_construct_paths.return_value = (
+            {"strength": 0.9, "temperature": 0.5},  # pddrc values in resolved_config
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": "test_output.py"},
+            "python"
+        )
+        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
+
+        cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="test.prompt",
+            code_file="test.py",
+            output="test_output.py",
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify generate_test was called with pddrc strength (0.9), not default (0.75)
+        mock_generate_test.assert_called_once()
+        call_kwargs = mock_generate_test.call_args.kwargs
+        assert call_kwargs["strength"] == 0.9, \
+            f"Expected pddrc strength 0.9, got {call_kwargs['strength']}"
+        assert call_kwargs["temperature"] == 0.5, \
+            f"Expected pddrc temperature 0.5, got {call_kwargs['temperature']}"
+
+
+def test_cmd_test_main_cli_strength_overrides_pddrc():
+    """
+    Verify that explicit CLI --strength overrides pddrc value.
+
+    When user passes --strength 0.3, that should be used even if pddrc has 0.9.
+    """
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.obj = {
+        "verbose": False,
+        "force": False,
+        "quiet": False,
+        "time": 0.25,
+        "strength": 0.3,  # CLI passed --strength 0.3
+        "temperature": 0.1,
+    }
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+
+        # resolved_config would normally have pddrc value, but CLI should win
+        # However, construct_paths merges CLI > pddrc, so resolved_config
+        # should already have the CLI value
+        mock_construct_paths.return_value = (
+            {"strength": 0.3, "temperature": 0.1},  # CLI values propagated
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": "test_output.py"},
+            "python"
+        )
+        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
+
+        cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="test.prompt",
+            code_file="test.py",
+            output="test_output.py",
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify CLI strength (0.3) was used
+        call_kwargs = mock_generate_test.call_args.kwargs
+        assert call_kwargs["strength"] == 0.3, \
+            f"Expected CLI strength 0.3, got {call_kwargs['strength']}"
