@@ -1,9 +1,0 @@
-{
-  "pdd_version": "0.0.82",
-  "timestamp": "2025-12-14T08:49:10.978056+00:00",
-  "command": "test",
-  "prompt_hash": "c39e0c390d4f91ff45b922587f33c4eb791394e3e07dece4fa1e026ea3ae8030",
-  "code_hash": "d888dfe8b80976b67fc46e9a9bfeee5506b3d2870564b085ab188ff956660b7e",
-  "example_hash": "e41c5ad25fb7e9ab01baf376e17226508365ab4269808f935de4d69b0bbdd4eb",
-  "test_hash": "71b8e36441705c8385fe402bcdd319ae0f5b61aeb41b08f19c4c98da06038060"
-}
