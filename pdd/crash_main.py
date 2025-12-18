@@ -85,6 +85,9 @@ def crash_main(
             context_override=ctx.obj.get('context'),
             confirm_callback=ctx.obj.get('confirm_callback')
         )
+        # Update strength/temperature from resolved config (includes pddrc values)
+        strength = resolved_config.get("strength", strength)
+        temperature = resolved_config.get("temperature", temperature)
 
         prompt_content = input_strings["prompt_file"]
         code_content = input_strings["code_file"]

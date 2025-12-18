@@ -216,6 +216,10 @@ def change_main(
             logger.error(msg, exc_info=True)
             return msg, 0.0, ""
 
+        # Update strength/temperature from resolved config (includes pddrc values)
+        strength = resolved_config.get("strength", strength)
+        temperature = resolved_config.get("temperature", temperature)
+
         # --- 3. Perform Prompt Modification ---
         if use_csv:
             logger.info("Running in CSV mode.")
