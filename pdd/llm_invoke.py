@@ -1556,6 +1556,7 @@ def llm_invoke(
             model_name_lower = str(model_name_litellm).lower()
             provider_lower_for_model = provider.lower()
             is_lm_studio = model_name_lower.startswith('lm_studio/') or provider_lower_for_model == 'lm_studio'
+            is_groq = model_name_lower.startswith('groq/') or provider_lower_for_model == 'groq'
             if is_lm_studio:
                 # Ensure base_url is set (fallback to env LM_STUDIO_API_BASE or localhost)
                 if not litellm_kwargs.get("base_url"):
@@ -1629,6 +1630,31 @@ def llm_invoke(
                             del litellm_kwargs["response_format"]
                         if verbose:
                             logger.info(f"[INFO] Using extra_body for LM Studio response_format to bypass drop_params")
+
+                    # Groq has issues with tool-based structured output - use JSON mode with schema in prompt
+                    if is_groq and response_format:
+                        # Get the schema to include in system prompt
+                        if output_pydantic:
+                            schema = output_pydantic.model_json_schema()
+                        else:
+                            schema = output_schema
+
+                        # Use simple json_object mode (Groq's tool_use often fails)
+                        litellm_kwargs["response_format"] = {"type": "json_object"}
+
+                        # Prepend schema instruction to messages (json module is imported at top of file)
+                        schema_instruction = f"You must respond with valid JSON matching this schema:\n```json\n{json.dumps(schema, indent=2)}\n```\nRespond ONLY with the JSON object, no other text."
+
+                        # Find or create system message to prepend schema
+                        messages_list = litellm_kwargs.get("messages", [])
+                        if messages_list and messages_list[0].get("role") == "system":
+                            messages_list[0]["content"] = schema_instruction + "\n\n" + messages_list[0]["content"]
+                        else:
+                            messages_list.insert(0, {"role": "system", "content": schema_instruction})
+                        litellm_kwargs["messages"] = messages_list
+
+                        if verbose:
+                            logger.info(f"[INFO] Using JSON object mode with schema in prompt for Groq (avoiding tool_use issues)")
 
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
