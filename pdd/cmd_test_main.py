@@ -94,6 +94,9 @@ def cmd_test_main(
             context_override=ctx.obj.get('context'),
             confirm_callback=ctx.obj.get('confirm_callback')
         )
+        # Update strength/temperature from resolved config (includes pddrc values)
+        strength = resolved_config.get("strength", strength)
+        temperature = resolved_config.get("temperature", temperature)
     except click.Abort:
         # User cancelled - re-raise to stop the sync loop
         raise

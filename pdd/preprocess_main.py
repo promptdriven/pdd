@@ -41,8 +41,9 @@ def preprocess_main(
 
         if xml:
             # Use xml_tagger to add XML delimiters
-            strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
-            temperature = ctx.obj.get("temperature", 0.0)
+            # Get strength/temperature from resolved config (includes pddrc values)
+            strength = resolved_config.get("strength", ctx.obj.get("strength", DEFAULT_STRENGTH))
+            temperature = resolved_config.get("temperature", ctx.obj.get("temperature", 0.0))
             verbose = ctx.obj.get("verbose", False)
             time = ctx.obj.get("time", DEFAULT_TIME)
             xml_tagged, total_cost, model_name = xml_tagger(
