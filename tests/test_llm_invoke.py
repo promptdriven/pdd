@@ -1063,7 +1063,7 @@ def test_vertex_location_fallback_when_empty(mock_set_llm_cache):
         # Create mock model with NO location (empty string)
         mock_data = [{
             'provider': 'Google',
-            'model': 'vertex_ai/gemini-2.5-flash',
+            'model': 'vertex_ai/gemini-3-flash-preview',
             'input': 0.15, 'output': 0.6,
             'coding_arena_elo': 1290,
             'structured_output': True,
