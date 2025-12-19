@@ -4,10 +4,10 @@ from typing import Tuple, Optional
 import click
 from rich import print as rprint
 
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .preprocess import preprocess
 from .xml_tagger import xml_tagger
-from . import DEFAULT_TIME, DEFAULT_STRENGTH
 def preprocess_main(
     ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list
 ) -> Tuple[str, float, str]:
@@ -41,11 +41,12 @@ def preprocess_main(
 
         if xml:
             # Use xml_tagger to add XML delimiters
-            # Get strength/temperature from resolved config (includes pddrc values)
-            strength = resolved_config.get("strength", ctx.obj.get("strength", DEFAULT_STRENGTH))
-            temperature = resolved_config.get("temperature", ctx.obj.get("temperature", 0.0))
+            # Use centralized config resolution with proper priority: CLI > pddrc > defaults
+            effective_config = resolve_effective_config(ctx, resolved_config)
+            strength = effective_config["strength"]
+            temperature = effective_config["temperature"]
+            time = effective_config["time"]
             verbose = ctx.obj.get("verbose", False)
-            time = ctx.obj.get("time", DEFAULT_TIME)
             xml_tagged, total_cost, model_name = xml_tagger(
                 prompt,
                 strength,
