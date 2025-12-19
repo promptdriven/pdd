@@ -92,7 +92,7 @@ Trim your `llm_model.csv` accordingly to the models you have. If you only have *
 ```csv
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type
 Google,gpt-4.1-nano,0.1,0.4,1249,,OPENAI_API_KEY,0,True,none
-Google,gemini/gemini-2.5-flash,0.15,0.6,1330,,GEMINI_API_KEY,0,True,effort
+Google,gemini/gemini-3-flash-preview,0.15,0.6,1330,,GEMINI_API_KEY,0,True,effort
 ```
 
 Note: I have **GPT 4.1 Nano** included because it is my default model. However, you can set an env variable to have a different model as default.
