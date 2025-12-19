@@ -26,11 +26,12 @@
 % Error handling behavior:
 % - On invalid inputs or unexpected errors (ValueError, git.InvalidGitRepositoryError, etc.), the function prints a Rich-formatted error message (unless `--quiet`) and returns `None` instead of calling `sys.exit(1)`. This allows orchestrating code (TUI apps, sync commands) to handle errors gracefully.
 % - On `click.Abort` exceptions (user cancellation), the exception is re-raised to propagate the cancellation signal up the call stack.
-% - When calling `construct_paths`, pass `confirm_callback=ctx.obj.get('confirm_callback')` to enable interactive confirmation in TUI/GUI contexts.
+% - When calling `construct_paths`, pass `confirm_callback=ctx.obj.get('confirm_callback')` to enable interactive confirmation in TUI/GUI contexts, and pass `force=ctx.obj.get("force", False)` to respect the force flag.
+% - Defense-in-depth: Before writing the updated prompt to disk, validate that the prompt is not empty (after stripping whitespace). If empty, raise a ValueError with the message "Update produced an empty prompt. The LLM may have failed to generate a valid response."
 
 % Modes the function must support:
 % 1) True update (single file): `input_prompt_file` + `modified_code_file`, and either `use_git=True` or provide `input_code_file`. If `input_prompt_file` is empty (after reading), treat as Generation mode and set `input_prompt="no prompt exists yet, create a new one"` and `input_code=""`. If `--output` is not provided, overwrite `input_prompt_file`.
-% 2) Regeneration (single file): Triggered when `input_prompt_file is None` and `input_code_file is None` (only `modified_code_file` provided). Derive the prompt path as `<base>_<language>.prompt` inside a `prompts/` directory at the repo root (or inside the `output` dir if provided). If `--output` is a specific file path (not a directory), use it directly. Create the directory/file if missing, and generate a prompt by calling `update_prompt` with `input_prompt="no prompt exists yet, create a new one"` and `input_code=""`.
+% 2) Regeneration (single file): Triggered when `input_prompt_file is None` and `input_code_file is None` (only `modified_code_file` provided). Derive the prompt path as `<base>_<language>.prompt` inside a `prompts/` directory at the repo root (or inside the `output` dir if provided). To detect if `--output` is a directory vs. a file path, check `os.path.isdir(output) or output.endswith('/')`. If `--output` is a specific file path (not a directory), use it directly. Create the directory/file if missing, and generate a prompt by calling `update_prompt` with `input_prompt="no prompt exists yet, create a new one"` and `input_code=""`.
 % 3) Repository‑wide mode: when `repo=True` is passed. Recursively scan the repo, create missing prompt files, and update every prompt/code pair. Show a progress bar and summary table of results. Return a summary tuple.
 
 % Repository‑wide specifics:
@@ -68,6 +69,8 @@
 % Here is the README for the cli command that has details of how the 'update' command and '--git' sub command work.
 % Retrieve global options from `ctx.obj` per the included ctx_obj_params.prompt. After resolving strength/temperature, update `ctx.obj` with the resolved values so internal helpers use consistent values.
 % For 'time', retrieve it using `ctx.obj.get('time', DEFAULT_TIME)` and pass to `update_prompt` or `git_update` as a float (reasoning budget) across all paths, including repository‑wide helpers.
+% For 'verbose', retrieve it using `ctx.obj.get("verbose", False)` and pass to `update_prompt` or `git_update`.
+% For 'quiet', retrieve it using `ctx.obj.get("quiet", False)` to control console output suppression.
 % When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
 % Note: If `--output` is not provided, `update_main` overwrites `input_prompt_file` in place rather than using a default-named file.
 % Note: If `use_git` is used, do not provide `input_code_file`; if `use_git` is not used, `input_code_file` must be provided (true update mode).
