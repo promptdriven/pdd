@@ -128,18 +128,9 @@ def cmd_test_main(
         print(f"[bold blue]Language detected:[/bold blue] {language}")
 
     # Determine where the generated tests will be written so we can share it with the LLM
+    # Always use resolved_output since construct_paths handles numbering for test/bug commands
     resolved_output = output_file_paths["output"]
-    if output is None:
-        output_file = resolved_output
-    else:
-        try:
-            is_dir_hint = output.endswith('/')
-        except Exception:
-            is_dir_hint = False
-        if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
-            output_file = resolved_output
-        else:
-            output_file = output
+    output_file = resolved_output
     if merge and existing_tests:
         output_file = existing_tests[0]
 
@@ -202,20 +193,9 @@ def cmd_test_main(
             # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
             return "", 0.0, f"Error: {exception}"
 
-    # Handle output - if output is a directory, use resolved file path from construct_paths
+    # Handle output - always use resolved file path since construct_paths handles numbering
     resolved_output = output_file_paths["output"]
-    if output is None:
-        output_file = resolved_output
-    else:
-        try:
-            is_dir_hint = output.endswith('/')
-        except Exception:
-            is_dir_hint = False
-        # Prefer resolved file if user passed a directory path
-        if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
-            output_file = resolved_output
-        else:
-            output_file = output
+    output_file = resolved_output
     if merge and existing_tests:
         output_file = existing_tests[0] if existing_tests else None
 

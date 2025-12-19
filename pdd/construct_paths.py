@@ -796,7 +796,11 @@ def construct_paths(
          raise # Re-raise the ValueError
 
     # ------------- Step 4: overwrite confirmation ------------
+    # Initialize existing_files before the conditional to avoid UnboundLocalError
+    existing_files: Dict[str, Path] = {}
+
     if command in ["test", "bug"] and not force:
+        # For test/bug commands without --force, create numbered files instead of overwriting
         for key, path in output_paths_resolved.items():
             if path.is_file():
                 base, ext = os.path.splitext(path)
@@ -808,9 +812,7 @@ def construct_paths(
                 output_paths_resolved[key] = new_path
     else:
         # Check if any output *file* exists (operate on Path objects)
-        existing_files: Dict[str, Path] = {}
         for k, p_obj in output_paths_resolved.items():
-            # p_obj = Path(p_val) # Conversion now happens earlier
             if p_obj.is_file():
                 existing_files[k] = p_obj # Store the Path object
 

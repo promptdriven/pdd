@@ -32,7 +32,7 @@ def mock_files_fixture():
         "prompt_file": "fake_prompt_file.prompt",
         "code_file": "fake_code_file.py",
         "output": "fake_test_output.py",
-        "existing_tests": "fake_existing_tests.py",
+        "existing_tests": ["fake_existing_tests.py"],  # Now a list to support multiple test files
         "coverage_report": "fake_coverage_report.xml",
     }
 
@@ -41,7 +41,7 @@ def mock_files_fixture():
 @pytest.mark.parametrize("coverage_report, existing_tests, expect_error", [
     (None, None, False),
     ("fake_coverage_report.xml", None, True),
-    ("fake_coverage_report.xml", "fake_existing_tests.py", False),
+    ("fake_coverage_report.xml", ["fake_existing_tests.py"], False),  # Now a list
 ])
 def test_cmd_test_main_coverage_handling(
     mock_ctx_fixture,
@@ -182,7 +182,8 @@ def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture
     cmd_test_main handles it and returns an error result tuple.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests:
+         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests, \
+         patch("builtins.open", mock_open(read_data="existing test content")) as m_file:
 
         mock_construct_paths.return_value = (
             {},  # resolved_config
@@ -321,13 +322,13 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
             output=None,
             language=None,
             coverage_report=None,
-            existing_tests=[mock_files_fixture["existing_tests"]],
+            existing_tests=mock_files_fixture["existing_tests"],  # Already a list
             target_coverage=None,
             merge=True,
         )
 
-        # The opened file should be the existing_tests path, not the regular output
-        m_file.assert_any_call(mock_files_fixture["existing_tests"], "w", encoding="utf-8")
+        # The opened file should be the first existing_tests path, not the regular output
+        m_file.assert_any_call(mock_files_fixture["existing_tests"][0], "w", encoding="utf-8")
         handle = m_file()
         handle.write.assert_called_once_with("merged_code")
 
