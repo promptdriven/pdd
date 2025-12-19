@@ -11,6 +11,7 @@ import json
 import requests
 import csv
 import importlib.resources
+import shlex
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
@@ -309,24 +310,23 @@ def get_shell_init_file(shell: str) -> str:
     return str(shell_files.get(shell, home / '.bashrc'))
 
 def create_api_env_script(keys: Dict[str, str], shell: str) -> str:
-    """Create shell-appropriate environment script"""
+    """Create shell-appropriate environment script with proper escaping"""
     valid_keys = {k: v for k, v in keys.items() if v}
+    lines = []
     
-    if shell == 'fish':
-        lines = []
-        for key, value in valid_keys.items():
-            lines.append(f'set -gx {key} "{value}"')
-        return '\n'.join(lines) + '\n'
-    elif shell in ['csh', 'tcsh']:
-        lines = []
-        for key, value in valid_keys.items():
-            lines.append(f'setenv {key} "{value}"')
-        return '\n'.join(lines) + '\n'
-    else:  # bash, zsh, ksh, sh and others
-        lines = []
-        for key, value in valid_keys.items():
-            lines.append(f'export {key}="{value}"')
-        return '\n'.join(lines) + '\n'
+    for key, value in valid_keys.items():
+        # shlex.quote is designed for POSIX shells (sh, bash, zsh, ksh)
+        # It also works reasonably well for fish and csh for simple assignments
+        quoted_val = shlex.quote(value)
+        
+        if shell == 'fish':
+            lines.append(f'set -gx {key} {quoted_val}')
+        elif shell in ['csh', 'tcsh']:
+            lines.append(f'setenv {key} {quoted_val}')
+        else:  # bash, zsh, ksh, sh and others
+            lines.append(f'export {key}={quoted_val}')
+            
+    return '\n'.join(lines) + '\n'
 
 def save_configuration(valid_keys: Dict[str, str]) -> Tuple[List[str], bool, Optional[str]]:
     """Save configuration to ~/.pdd/ directory"""
