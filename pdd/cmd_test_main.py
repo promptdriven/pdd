@@ -7,7 +7,7 @@ from pathlib import Path
 # pylint: disable=redefined-builtin
 from rich import print
 
-from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .generate_test import generate_test
 from .increase_tests import increase_tests
@@ -55,9 +55,9 @@ def cmd_test_main(
     input_strings = {}
 
     verbose = ctx.obj["verbose"]
-    strength = strength if strength is not None else ctx.obj.get("strength", DEFAULT_STRENGTH)
-    temperature = temperature if temperature is not None else ctx.obj.get("temperature", DEFAULT_TEMPERATURE)
-    time = ctx.obj.get("time")
+    # Note: strength/temperature will be resolved after construct_paths using resolve_effective_config
+    param_strength = strength  # Store the parameter value for later resolution
+    param_temperature = temperature  # Store the parameter value for later resolution
 
     if verbose:
         print(f"[bold blue]Prompt file:[/bold blue] {prompt_file}")
@@ -94,6 +94,16 @@ def cmd_test_main(
             context_override=ctx.obj.get('context'),
             confirm_callback=ctx.obj.get('confirm_callback')
         )
+        # Use centralized config resolution with proper priority:
+        # CLI > pddrc > defaults
+        effective_config = resolve_effective_config(
+            ctx,
+            resolved_config,
+            param_overrides={"strength": param_strength, "temperature": param_temperature}
+        )
+        strength = effective_config["strength"]
+        temperature = effective_config["temperature"]
+        time = effective_config["time"]
     except click.Abort:
         # User cancelled - re-raise to stop the sync loop
         raise
