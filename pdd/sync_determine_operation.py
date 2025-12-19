@@ -733,6 +733,14 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
             if fingerprint and fingerprint.command not in ['verify', 'test', 'fix', 'update']:
                 return False
 
+        # CRITICAL FIX: Check tests have been run (unless skip_tests)
+        # Without this, workflow would be "complete" after verify even though tests haven't run
+        # This prevents false positive success when skip_verify=True but tests are still required
+        if not skip_tests:
+            fp = read_fingerprint(basename, language)
+            if fp and fp.command not in ['test', 'fix', 'update']:
+                return False
+
     return True
 
 

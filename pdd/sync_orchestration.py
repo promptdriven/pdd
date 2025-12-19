@@ -969,12 +969,15 @@ def sync_orchestration(
                                 else:
                                     # No crash - save run report with exit_code=0 so sync_determine_operation
                                     # knows the example was tested and passed (prevents infinite loop)
+                                    # Include test_hash for staleness detection
+                                    test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                     report = RunReport(
                                         datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                         exit_code=0,
                                         tests_passed=1,
                                         tests_failed=0,
-                                        coverage=0.0
+                                        coverage=0.0,
+                                        test_hash=test_hash
                                     )
                                     save_run_report(asdict(report), basename, language)
                                     skipped_operations.append('crash')
@@ -1107,7 +1110,9 @@ def sync_orchestration(
                                  cwd=str(pdd_files['example'].parent),
                                  timeout=60
                              )
-                             report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0)
+                             # Include test_hash for staleness detection
+                             test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                             report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
                              save_run_report(asdict(report), basename, language)
                         except:
                              pass
