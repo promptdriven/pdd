@@ -11,20 +11,6 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 from click.testing import CliRunner
 
-from pdd import cli
-
-
-@pytest.fixture(autouse=True)
-def set_pdd_path(monkeypatch):
-    """Set PDD_PATH to the pdd package directory for all tests in this module.
-
-    This is required because construct_paths uses PDD_PATH to find the language_format.csv
-    file for language detection.
-    """
-    import pdd
-    pdd_package_dir = Path(pdd.__file__).parent
-    monkeypatch.setenv("PDD_PATH", str(pdd_package_dir))
-
 
 class TestPddrcTrueE2E:
     """
@@ -61,9 +47,10 @@ contexts:
         with patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
             mock_generate_test.return_value = ("generated tests", 0.01, "test-model")
 
+            from pdd import cli
+
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
-                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",  # Use our test context
                 "test",
                 "test.prompt",
@@ -104,9 +91,10 @@ contexts:
         with patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
             mock_generate_test.return_value = ("tests", 0.01, "model")
 
+            from pdd import cli
+
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
-                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "--strength", "0.3",  # CLI override
                 "test",
@@ -141,9 +129,10 @@ contexts:
         with patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
             mock_generate_test.return_value = ("tests", 0.01, "model")
 
+            from pdd import cli
+
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
-                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "test",
                 "test.prompt",
@@ -183,12 +172,12 @@ contexts:
         with patch("pdd.change_main.change_func") as mock_change_func:
             mock_change_func.return_value = ("changed code", 0.01, "model")
 
+            from pdd import cli
+
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
-                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "change",
-                "--manual",  # Use legacy/manual mode
                 "change.prompt",  # CHANGE_PROMPT_FILE
                 "code.py",  # INPUT_CODE
                 "input.prompt",  # INPUT_PROMPT_FILE (positional)
@@ -230,9 +219,10 @@ contexts:
         with patch("pdd.crash_main.fix_code_module_errors") as mock_fix:
             mock_fix.return_value = (False, False, "", "", "", 0.01, "model")
 
+            from pdd import cli
+
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
-                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "crash",
                 "module.prompt",

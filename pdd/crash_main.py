@@ -2,9 +2,9 @@ import sys
 from typing import Tuple, Optional, Dict, Any
 import click
 from rich import print as rprint
-from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from pathlib import Path
 
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .fix_code_loop import fix_code_loop
 # Import fix_code_module_errors conditionally or ensure it's always available
@@ -58,9 +58,9 @@ def crash_main(
     quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False))
     verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False))
 
-    strength = strength if strength is not None else ctx.obj.get("strength", DEFAULT_STRENGTH)
-    temperature = temperature if temperature is not None else ctx.obj.get("temperature", 0)
-    time_param = ctx.obj.get("time", DEFAULT_TIME)
+    # Store parameter values for later resolution
+    param_strength = strength
+    param_temperature = temperature
 
     try:
         input_file_paths = {
@@ -85,9 +85,16 @@ def crash_main(
             context_override=ctx.obj.get('context'),
             confirm_callback=ctx.obj.get('confirm_callback')
         )
-        # Update strength/temperature from resolved config (includes pddrc values)
-        strength = resolved_config.get("strength", strength)
-        temperature = resolved_config.get("temperature", temperature)
+        # Use centralized config resolution with proper priority:
+        # CLI > pddrc > defaults
+        effective_config = resolve_effective_config(
+            ctx,
+            resolved_config,
+            param_overrides={"strength": param_strength, "temperature": param_temperature}
+        )
+        strength = effective_config["strength"]
+        temperature = effective_config["temperature"]
+        time_param = effective_config["time"]
 
         prompt_content = input_strings["prompt_file"]
         code_content = input_strings["code_file"]
