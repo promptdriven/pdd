@@ -1,50 +1,25 @@
-% You are an expert Python engineer. Your goal is to write a Python function, `update_main`, that will be the CLI wrapper for updating prompts based on modified code. This function will read the original prompt file, the modified code file, and optionally the original code file (or use Git history), and update the prompt to reflect the changes in the code. It also supports regeneration (derive prompt from a code file) and repository‑wide updates.
+% You are an expert Python engineer. Write a Python function `update_main` - the CLI wrapper for updating prompts based on modified code. Supports three modes: true update (with original code or git), regeneration (derive prompt from code), and repository-wide updates.
 
 <include>./context/python_preamble.prompt</include>
 <include>./context/ctx_obj_params.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys and resolution patterns).
-        - `input_prompt_file` - An optional string containing the path to the original prompt file. If None, the function operates in regeneration mode (deriving the prompt path from the code file).
-        - `modified_code_file` - An optional string containing the path to the modified code file.
-        - `input_code_file` - An optional string containing the path to the original code file. If not provided, you must set `use_git=True` to retrieve the original code from Git; otherwise, this is an error for true update mode.
-        - `output` - An optional string containing the path (file or directory) where to save the updated prompt. If a directory is provided, the filename is derived. If None, the original prompt file is overwritten in place.
-        - `use_git` - A boolean that is True if Git history should be used to retrieve the original code. Default is False. If `use_git=True`, do not provide `input_code_file`. If `use_git=False`, `input_code_file` is required (for true update).
-        - `repo` - A boolean flag. When True (and no file args are provided), operate in repository‑wide mode: scan for code/prompt pairs and update all of them.
-        - `extensions` - An optional comma‑separated list of file extensions to filter by in repository‑wide mode (e.g., "py,js,ts").
-        - `strength` - An optional float parameter (see ctx_obj_params.prompt for resolution pattern).
-        - `temperature` - An optional float parameter (see ctx_obj_params.prompt for resolution pattern).
-    Outputs:
-        - Returns `Optional[Tuple[str, float, str]]`:
-            - On success, returns a tuple containing:
-                - `str`: The updated prompt.
-                - `float`: The total cost of the operation.
-                - `str`: The name of the model used.
-            - Returns `None` on error (invalid inputs, git repository errors, no scannable files found) to allow calling code (orchestrators, TUI apps) to handle errors gracefully.
+% Inputs: ctx (click.Context), input_prompt_file, modified_code_file, input_code_file, output, use_git, repo, extensions, strength, temperature. See ctx_obj_params.prompt for resolution patterns.
+% Output: Optional[Tuple[str, float, str]] - (prompt, cost, model) on success, None on error.
 
-% Error handling behavior:
-% - On invalid inputs or unexpected errors (ValueError, git.InvalidGitRepositoryError, etc.), the function prints a Rich-formatted error message (unless `--quiet`) and returns `None` instead of calling `sys.exit(1)`. This allows orchestrating code (TUI apps, sync commands) to handle errors gracefully.
-% - On `click.Abort` exceptions (user cancellation), the exception is re-raised to propagate the cancellation signal up the call stack.
-% - When calling `construct_paths`, pass `confirm_callback=ctx.obj.get('confirm_callback')` to enable interactive confirmation in TUI/GUI contexts, and pass `force=ctx.obj.get("force", False)` to respect the force flag.
-% - Defense-in-depth: Before writing the updated prompt to disk, validate that the prompt is not empty (after stripping whitespace). If empty, raise a ValueError with the message "Update produced an empty prompt. The LLM may have failed to generate a valid response."
+% Error handling: Print Rich error (unless quiet) and return None on errors. Re-raise click.Abort. Pass confirm_callback and force from ctx.obj to construct_paths. Validate prompt is non-empty before writing.
 
-% Modes the function must support:
-% 1) True update (single file): `input_prompt_file` + `modified_code_file`, and either `use_git=True` or provide `input_code_file`. If `input_prompt_file` is empty (after reading), treat as Generation mode and set `input_prompt="no prompt exists yet, create a new one"` and `input_code=""`. If `--output` is not provided, overwrite `input_prompt_file`.
-% 2) Regeneration (single file): Triggered when `input_prompt_file is None` and `input_code_file is None` (only `modified_code_file` provided). Derive the prompt path as `<base>_<language>.prompt` inside a `prompts/` directory at the repo root (or inside the `output` dir if provided). To detect if `--output` is a directory vs. a file path, check `os.path.isdir(output) or output.endswith('/')`. If `--output` is a specific file path (not a directory), use it directly. Create the directory/file if missing, and generate a prompt by calling `update_prompt` with `input_prompt="no prompt exists yet, create a new one"` and `input_code=""`.
-% 3) Repository‑wide mode: when `repo=True` is passed. Recursively scan the repo, create missing prompt files, and update every prompt/code pair. Show a progress bar and summary table of results. Return a summary tuple.
+% Modes:
+% 1) True update: input_prompt_file + modified_code_file + (use_git OR input_code_file). Empty prompt → generation mode.
+% 2) Regeneration: Only modified_code_file provided. Derive prompt path via resolve_prompt_code_pair. If --output provided, check `os.path.isdir(output) or output.endswith('/')` to detect directory vs file path.
+% 3) Repo mode (repo=True): Scan repo, create missing prompts, update all pairs with progress bar and summary table.
 
-% Repository‑wide specifics:
-% - Ignore directories: `.git`, `.idea`, `.vscode`, `__pycache__`, `node_modules`, `.venv`, `venv`, `dist`, `build`.
-% - Exclude files that end with `.prompt`, start with `test_`, or end with `_example` (by basename).
-% - Only include files where `get_language()` returns a non-None value (recognized code files).
-% - If `extensions` is provided, only include files whose extension is in that set (case‑insensitive; accepts with or without leading dot).
-% - For each code file, compute the prompt path as `<base>_<language>.prompt` inside the `prompts/` directory at the repo root (or in `output` dir if provided); if the prompt file doesn't exist, create an empty file.
-% - Update strategy per pair: if the code file is untracked in Git OR the prompt file is empty (after stripping whitespace) → call `update_prompt` (generation). Otherwise → call `git_update` (update from git history).
-% - Display a Rich progress bar during processing showing current file, percentage, time remaining, and running total cost.
-% - After processing, display a Rich table summarizing results for each file (prompt path, status, cost, model, error).
-% - Return value for repo mode: `("Repository update complete.", <total_cost>, "<comma-separated sorted models>")`. If no scannable files are found, return `None`.
-% - `click.Abort` exceptions in helper functions should be re-raised to stop the repo-wide loop when user cancels.
+% Repo mode specifics:
+% - Ignore: .git, .idea, .vscode, __pycache__, node_modules, .venv, venv, dist, build
+% - Exclude: *.prompt, test_*, *_example
+% - Only files where get_language() returns non-None
+% - Filter by extensions if provided
+% - Update strategy: untracked/empty prompt → update_prompt, else → git_update
+% - Return: ("Repository update complete.", total_cost, "models") or None if no files
 
 <examples>
    % Here are examples of how to use internal modules. Note that `update_prompt` and `git_update` now accept a `time` parameter.
@@ -66,21 +41,8 @@
    </internal_example_modules>
 </examples>
 
-% Here is the README for the cli command that has details of how the 'update' command and '--git' sub command work.
-% Retrieve global options from `ctx.obj` per the included ctx_obj_params.prompt. After resolving strength/temperature, update `ctx.obj` with the resolved values so internal helpers use consistent values.
-% For 'time', retrieve it using `ctx.obj.get('time', DEFAULT_TIME)` and pass to `update_prompt` or `git_update` as a float (reasoning budget) across all paths, including repository‑wide helpers.
-% For 'verbose', retrieve it using `ctx.obj.get("verbose", False)` and pass to `update_prompt` or `git_update`.
-% For 'quiet', retrieve it using `ctx.obj.get("quiet", False)` to control console output suppression.
-% When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
-% Note: If `--output` is not provided, `update_main` overwrites `input_prompt_file` in place rather than using a default-named file.
-% Note: If `use_git` is used, do not provide `input_code_file`; if `use_git` is not used, `input_code_file` must be provided (true update mode).
+% Retrieve time/verbose/quiet from ctx.obj and pass to update_prompt/git_update. Pass context_override to construct_paths.
+% Without --output, overwrite input_prompt_file in place. use_git and input_code_file are mutually exclusive.
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>
-
-% Example usages to illustrate modes (the CLI maps `--git` → `use_git`):
-% - Regeneration: `pdd update path/to/code.py`
-% - True update with file: `pdd update path/to/prompt.prompt path/to/modified_code.py path/to/original_code.py`
-% - True update with git: `pdd update path/to/prompt.prompt path/to/modified_code.py --git`
-% - Repo mode (all code): `pdd update`
-% - Repo mode (filter): `pdd update --extensions py,js`
