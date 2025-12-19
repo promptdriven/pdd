@@ -5,14 +5,19 @@ import subprocess
 import shutil
 import json
 from datetime import datetime
+from pathlib import Path
 
 from rich import print as rprint
 from rich.console import Console
 
 # Relative import from an internal module.
+from .get_language import get_language
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
-from . import DEFAULT_TIME # Import DEFAULT_TIME
+from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
+from .agentic_fix import run_agentic_fix
+from .agentic_langtest import default_verify_cmd_for
+
 
 console = Console()
 
@@ -20,75 +25,62 @@ def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
     return text.replace("[", "\\[").replace("]", "\\]")
 
-def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
+# ---------- Normalize any agentic return shape to a 4-tuple ----------
+def _normalize_agentic_result(result):
     """
-    Run pytest on the specified test file using subprocess.
+    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
+    """
+    if isinstance(result, tuple):
+        if len(result) == 5:
+            ok, msg, cost, model, changed_files = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), list(changed_files or [])
+        if len(result) == 4:
+            ok, msg, cost, model = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), []
+        if len(result) == 3:
+            ok, msg, cost = result
+            return bool(ok), str(msg), float(cost), "agentic-cli", []
+        if len(result) == 2:
+            ok, msg = result
+            return bool(ok), str(msg), 0.0, "agentic-cli", []
+    # Fallback (shouldn't happen)
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
+
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+    """
+    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
+    """
+    res = run_agentic_fix(
+        prompt_file=prompt_file,
+        code_file=code_file,
+        unit_test_file=unit_test_file,
+        error_log_file=error_log_file,
+    )
+    return _normalize_agentic_result(res)
+# ---------------------------------------------------------------------
+
+
+def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
+    from .pytest_output import run_pytest_and_capture_output
+    """
+    Run pytest on the specified test file using the subprocess-based runner.
     Returns a tuple: (failures, errors, warnings, logs)
     """
-    try:
-        # Try using the pdd pytest-output command first (works with uv tool installs)
-        cmd = ["pdd", "pytest-output", "--json-only", test_file]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # If pdd command failed, try fallback approaches
-        if result.returncode != 0 and ("command not found" in result.stderr.lower() or "not found" in result.stderr.lower()):
-            # Fallback 1: Try direct function call (fastest for development)
-            try:
-                from .pytest_output import run_pytest_and_capture_output
-                pytest_output = run_pytest_and_capture_output(test_file)
-                result_stdout = json.dumps(pytest_output)
-                result = type('MockResult', (), {'stdout': result_stdout, 'stderr': '', 'returncode': 0})()
-            except ImportError:
-                # Fallback 2: Try python -m approach for development installs where pdd isn't in PATH
-                python_executable = detect_host_python_executable()
-                cmd = [python_executable, "-m", "pdd.pytest_output", "--json-only", test_file]
-                result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # Parse the JSON output from stdout
-        try:
-            # Extract just the JSON part from stdout (handles CLI contamination)
-            stdout_clean = result.stdout
-            json_start = stdout_clean.find('{')
-            if json_start == -1:
-                raise json.JSONDecodeError("No JSON found in output", stdout_clean, 0)
-            
-            # Find the end of the JSON object by counting braces
-            brace_count = 0
-            json_end = json_start
-            for i, char in enumerate(stdout_clean[json_start:], json_start):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        json_end = i + 1
-                        break
-            
-            json_str = stdout_clean[json_start:json_end]
-            output = json.loads(json_str)
-            test_results = output.get('test_results', [{}])[0]
-            
-            # Check pytest's return code first
-            return_code = test_results.get('return_code', 1)
-            
-            failures = test_results.get('failures', 0)
-            errors = test_results.get('errors', 0)
-            warnings = test_results.get('warnings', 0)
-
-            if return_code == 2:
-                errors += 1
-            
-            # Combine stdout and stderr from the test results
-            logs = test_results.get('standard_output', '') + '\n' + test_results.get('standard_error', '')
-            
-            return failures, errors, warnings, logs
-            
-        except json.JSONDecodeError:
-            # If JSON parsing fails, return the raw output
-            return 1, 1, 0, f"Failed to parse pytest output:\n{result.stdout}\n{result.stderr}"
-            
-    except Exception as e:
-        return 1, 1, 0, f"Error running pytest: {str(e)}"
+    # Use the subprocess-based runner to avoid module caching issues
+    output_data = run_pytest_and_capture_output(test_file)
+    
+    # Extract results
+    results = output_data.get("test_results", [{}])[0]
+    
+    failures = results.get("failures", 0)
+    errors = results.get("errors", 0)
+    warnings = results.get("warnings", 0)
+    
+    # Combine stdout/stderr for the log
+    logs = (results.get("standard_output", "") or "") + "\n" + (results.get("standard_error", "") or "")
+    
+    return failures, errors, warnings, logs
 
 def format_log_for_output(log_structure):
     """
@@ -108,6 +100,8 @@ def format_log_for_output(log_structure):
         # Fix attempt with XML tags
         if iteration.get("fix_attempt"):
             formatted_text += f"<fix_attempt iteration={iteration['number']}>\n"
+            if iteration.get("model_name"):
+                formatted_text += f"Model: {iteration['model_name']}\n"
             formatted_text += f"{iteration['fix_attempt']}\n"
             formatted_text += "</fix_attempt>\n\n"
         
@@ -132,6 +126,7 @@ def format_log_for_output(log_structure):
 
 def fix_error_loop(unit_test_file: str,
                    code_file: str,
+                   prompt_file: str,
                    prompt: str,
                    verification_program: str,
                    strength: float,
@@ -140,7 +135,8 @@ def fix_error_loop(unit_test_file: str,
                    budget: float,
                    error_log_file: str = "error_log.txt",
                    verbose: bool = False,
-                   time: float = DEFAULT_TIME):
+                   time: float = DEFAULT_TIME,
+                   agentic_fallback: bool = True):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations, 
     counting only the number of times we actually call the LLM fix function. 
@@ -161,7 +157,7 @@ def fix_error_loop(unit_test_file: str,
         error_log_file: Path to file to log errors (default: "error_log.txt").
         verbose: Enable verbose logging (default: False).
         time: Time parameter for the fix_errors_from_unit_tests call.
-
+        agentic_fallback: Whether to trigger cli agentic fallback when fix fails.
     Outputs:
         success: Boolean indicating if the overall process succeeded.
         final_unit_test: String contents of the final unit test file.
@@ -218,7 +214,24 @@ def fix_error_loop(unit_test_file: str,
     iteration = 0
     # Run an initial test to determine starting state
     try:
-        initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file)
+        is_python = str(code_file).lower().endswith(".py")
+        if is_python:
+            initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file)
+        else:
+            # For non-Python files, run the verification program to get an initial error state
+            rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
+            lang = get_language(os.path.splitext(code_file)[1])
+            verify_cmd = default_verify_cmd_for(lang, unit_test_file)
+            if not verify_cmd:
+                raise ValueError(f"No default verification command for language: {lang}")
+            
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL)
+            pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
+            if verify_result.returncode == 0:
+                initial_fails, initial_errors, initial_warnings = 0, 0, 0
+            else:
+                initial_fails, initial_errors, initial_warnings = 1, 0, 0 # Treat any failure as one "fail"
+
         # Store initial state for statistics
         stats = {
             "initial_fails": initial_fails,
@@ -231,14 +244,58 @@ def fix_error_loop(unit_test_file: str,
             "iterations_info": []
         }
     except Exception as e:
-        rprint(f"[red]Error running initial pytest:[/red] {e}")
+        rprint(f"[red]Error running initial test/verification:[/red] {e}")
         return False, "", "", fix_attempts, total_cost, model_name
+
+    # If target is not a Python file, trigger agentic fallback if tests fail
+    if not is_python:
+        if initial_fails > 0 or initial_errors > 0:
+            rprint("[cyan]Non-Python target failed initial verification. Triggering agentic fallback...[/cyan]")
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as f:
+                f.write(pytest_output)
+            
+            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                unit_test_file=unit_test_file,
+                error_log_file=error_log_file,
+            )
+            if agent_changed_files:
+                rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+                for f in agent_changed_files:
+                    rprint(f"  • {f}")
+            final_unit_test = ""
+            final_code = ""
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return success, final_unit_test, final_code, 1, agent_cost, agent_model
+        else:
+            # Non-python tests passed, so we are successful.
+            rprint("[green]Non-Python tests passed. No fix needed.[/green]")
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read final files: {e}[/yellow]")
+            return True, final_unit_test, final_code, 0, 0.0, "N/A"
 
     fails, errors, warnings = initial_fails, initial_errors, initial_warnings
     
     # Determine success state immediately
     success = (fails == 0 and errors == 0 and warnings == 0)
-    
+
     # Track if tests were initially passing
     initially_passing = success
 
@@ -275,9 +332,11 @@ def fix_error_loop(unit_test_file: str,
             
             # Update structured log
             log_structure["iterations"][-1]["post_test_output"] = pytest_output
-            
+
             # Write formatted log to file
-            with open(error_log_file, "w") as elog:
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as elog:
                 elog.write(format_log_for_output(log_structure))
             
             # Set success to True (already determined)
@@ -367,7 +426,7 @@ def fix_error_loop(unit_test_file: str,
         try:
             # Format the log for the LLM
             formatted_log = format_log_for_output(log_structure)
-            
+
             updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                 unit_test_contents,
                 code_contents,
@@ -377,11 +436,12 @@ def fix_error_loop(unit_test_file: str,
                 strength,
                 temperature,
                 verbose=verbose,
-                time=time # Pass time parameter
+                time=time  # Pass time parameter
             )
             
             # Update the fix attempt in the structured log
             log_structure["iterations"][-1]["fix_attempt"] = analysis
+            log_structure["iterations"][-1]["model_name"] = model_name
         except Exception as e:
             rprint(f"[red]Error during fix_errors_from_unit_tests call:[/red] {e}")
             break
@@ -423,7 +483,7 @@ def fix_error_loop(unit_test_file: str,
             # Run the verification:
             try:
                 verify_cmd = [detect_host_python_executable(), verification_program]
-                verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+                verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
                 # Safely handle None for stdout or stderr:
                 verify_stdout = verify_result.stdout or ""
                 verify_stderr = verify_result.stderr or ""
@@ -453,9 +513,11 @@ def fix_error_loop(unit_test_file: str,
             
             # Update post-test output in structured log
             log_structure["iterations"][-1]["post_test_output"] = pytest_output
-            
+
             # Write updated structured log to file after each iteration
-            with open(error_log_file, "w") as elog:
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as elog:
                 elog.write(format_log_for_output(log_structure))
             
             # Update iteration stats with post-fix results
@@ -545,16 +607,57 @@ def fix_error_loop(unit_test_file: str,
     
     # Calculate improvements
     stats["improvement"] = {
-        "fails_reduced": initial_fails - stats["final_fails"],
-        "errors_reduced": initial_errors - stats["final_errors"],
-        "warnings_reduced": initial_warnings - stats["final_warnings"],
-        "percent_improvement": 100 if initial_fails + initial_errors + initial_warnings == 0 else 
-                              (1 - (stats["final_fails"] + stats["final_errors"] + stats["final_warnings"]) / 
+        "fails_reduced": initial_fails - stats['final_fails'],
+        "errors_reduced": initial_errors - stats['final_errors'],
+        "warnings_reduced": initial_warnings - stats['final_warnings'],
+        "percent_improvement": 100 if (initial_fails + initial_errors + initial_warnings) == 0 else 
+                              (1 - (stats['final_fails'] + stats['final_errors'] + stats['final_warnings']) / 
                                    (initial_fails + initial_errors + initial_warnings)) * 100
     }
     
     rprint(f"Improvement: {stats['improvement']['fails_reduced']} fails, {stats['improvement']['errors_reduced']} errors, {stats['improvement']['warnings_reduced']} warnings")
     rprint(f"Overall improvement: {stats['improvement']['percent_improvement']:.2f}%")
+
+    # Agentic fallback at end adds cost & model (normalized)
+    if not success and agentic_fallback and total_cost < budget:
+        # Ensure error_log_file exists before calling agentic fix
+        # Write the current log structure if it hasn't been written yet
+        try:
+            if not os.path.exists(error_log_file) or os.path.getsize(error_log_file) == 0:
+                error_log_path = Path(error_log_file)
+                error_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(error_log_path, "w") as elog:
+                    if log_structure["iterations"]:
+                        elog.write(format_log_for_output(log_structure))
+                    else:
+                        # No iterations ran, write initial state info
+                        elog.write(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings\n")
+                        if 'pytest_output' in locals():
+                            elog.write(f"\n<pytest_output>\n{pytest_output}\n</pytest_output>\n")
+        except Exception as e:
+            rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
+
+        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=unit_test_file,
+            error_log_file=error_log_file,
+        )
+        total_cost += agent_cost
+        if agent_changed_files:
+            rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+            for f in agent_changed_files:
+                rprint(f"  • {f}")
+        if agent_success:
+            model_name = agent_model or model_name
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
+            success = True
 
     return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
 

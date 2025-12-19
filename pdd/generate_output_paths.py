@@ -3,7 +3,6 @@ import logging
 from typing import Dict, List, Optional
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Configuration Data ---
@@ -181,14 +180,18 @@ def generate_output_paths(
     basename: str,
     language: str,
     file_extension: str,
-    context_config: Optional[Dict[str, str]] = None
+    context_config: Optional[Dict[str, str]] = None,
+    input_file_dir: Optional[str] = None,
+    input_file_dirs: Optional[Dict[str, str]] = None,
+    config_base_dir: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     Generates the full, absolute output paths for a given PDD command.
 
-    It prioritizes user-specified paths (--output options), then context 
-    configuration from .pddrc, then environment variables, and finally 
-    falls back to default naming conventions in the current working directory.
+    It prioritizes user-specified paths (--output options), then context
+    configuration from .pddrc, then environment variables, and finally
+    falls back to default naming conventions in the input file's directory
+    (or current working directory if input_file_dir is not provided).
 
     Args:
         command: The PDD command being executed (e.g., 'generate', 'fix').
@@ -202,6 +205,17 @@ def generate_output_paths(
                         used when default patterns require it.
         context_config: Optional dictionary with context-specific paths from .pddrc
                        configuration (e.g., {'generate_output_path': 'src/'}).
+        input_file_dir: Optional path to the input file's directory. When provided,
+                       default output files will be placed in this directory instead
+                       of the current working directory.
+        input_file_dirs: Optional dictionary mapping output keys to specific input
+                         file directories. When provided, each output will use its
+                         corresponding input file directory (e.g., {'output_code': 'src/main/java'}).
+        config_base_dir: Optional base directory to resolve relative `.pddrc` and
+                        environment variable output paths. When set, relative
+                        config paths resolve under this directory (typically the
+                        directory containing `.pddrc`) instead of the input file
+                        directory.
 
     Returns:
         A dictionary where keys are the standardized output identifiers
@@ -212,9 +226,13 @@ def generate_output_paths(
     logger.debug(f"Generating output paths for command: {command}")
     logger.debug(f"User output locations: {output_locations}")
     logger.debug(f"Context config: {context_config}")
+    logger.debug(f"Input file dirs: {input_file_dirs}")
+    logger.debug(f"Config base dir: {config_base_dir}")
     logger.debug(f"Basename: {basename}, Language: {language}, Extension: {file_extension}")
 
     context_config = context_config or {}
+    input_file_dirs = input_file_dirs or {}
+    config_base_dir_abs = os.path.abspath(config_base_dir) if config_base_dir else None
     result_paths: Dict[str, str] = {}
 
     if not basename:
@@ -281,6 +299,16 @@ def generate_output_paths(
         # 2. Check Context Configuration Path (.pddrc)
         elif context_path:
             source = "context"
+
+            # Resolve relative `.pddrc` paths under the config base dir when available.
+            # Fall back to the input file directory for backwards compatibility.
+            if not os.path.isabs(context_path):
+                if config_base_dir_abs:
+                    context_path = os.path.join(config_base_dir_abs, context_path)
+                elif input_file_dir:
+                    context_path = os.path.join(input_file_dir, context_path)
+                logger.debug(f"Resolved relative context path to: {context_path}")
+
             # Check if the context path is a directory
             is_dir = context_path.endswith(os.path.sep) or context_path.endswith('/')
             if not is_dir:
@@ -300,6 +328,16 @@ def generate_output_paths(
         # 3. Check Environment Variable Path
         elif env_path:
             source = "environment"
+
+            # Resolve relative env paths under the config base dir when available.
+            # Fall back to the input file directory for backwards compatibility.
+            if not os.path.isabs(env_path):
+                if config_base_dir_abs:
+                    env_path = os.path.join(config_base_dir_abs, env_path)
+                elif input_file_dir:
+                    env_path = os.path.join(input_file_dir, env_path)
+                logger.debug(f"Resolved relative env path to: {env_path}")
+
             # Check if the environment variable points to a directory
             is_dir = env_path.endswith(os.path.sep)
             if not is_dir:
@@ -331,8 +369,18 @@ def generate_output_paths(
                 final_path = os.path.join(examples_dir, default_filename)
                 logger.debug(f"Using default filename '{default_filename}' in examples directory.")
             else:
-                final_path = default_filename # Relative to CWD initially
-                logger.debug(f"Using default filename '{default_filename}' in current directory.")
+                # First check if there's a specific directory for this output key
+                specific_dir = input_file_dirs.get(output_key)
+                if specific_dir:
+                    final_path = os.path.join(specific_dir, default_filename)
+                    logger.debug(f"Using default filename '{default_filename}' in specific input file directory: {specific_dir}")
+                # Otherwise use the general input file directory if provided
+                elif input_file_dir:
+                    final_path = os.path.join(input_file_dir, default_filename)
+                    logger.debug(f"Using default filename '{default_filename}' in input file directory: {input_file_dir}")
+                else:
+                    final_path = default_filename # Relative to CWD initially
+                    logger.debug(f"Using default filename '{default_filename}' in current directory.")
 
         # Resolve to absolute path
         if final_path:
@@ -355,6 +403,9 @@ def generate_output_paths(
 
 # --- Example Usage (for testing) ---
 if __name__ == '__main__':
+    # Configure logging for standalone execution
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
     # Mock inputs
     mock_basename = "my_module"
     mock_language = "python"

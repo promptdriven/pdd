@@ -2,29 +2,147 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
-from typing import Tuple, Optional, Union
-from . import DEFAULT_TIME # Added DEFAULT_TIME
+from typing import Tuple, Optional, Union, List
+
+# Try to import DEFAULT_TIME, with fallback
+try:
+    from . import DEFAULT_TIME
+except ImportError:
+    DEFAULT_TIME = 0.5
+
+# Try to import agentic modules, with fallbacks
+try:
+    from .agentic_fix import run_agentic_fix
+except ImportError:
+    def run_agentic_fix(**kwargs):
+        return (False, "Agentic fix not available", 0.0, "N/A", [])
+
+try:
+    from .get_language import get_language
+except ImportError:
+    def get_language(ext):
+        return "unknown"
+
+try:
+    from .agentic_langtest import default_verify_cmd_for
+except ImportError:
+    def default_verify_cmd_for(lang, verification_program):
+        return None
+
+def _normalize_agentic_result(result):
+    """
+    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
+    """
+    if isinstance(result, tuple):
+        if len(result) == 5:
+            ok, msg, cost, model, changed_files = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), list(changed_files or [])
+        if len(result) == 4:
+            ok, msg, cost, model = result
+            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), []
+        if len(result) == 3:
+            ok, msg, cost = result
+            return bool(ok), str(msg), float(cost), "agentic-cli", []
+        if len(result) == 2:
+            ok, msg = result
+            return bool(ok), str(msg), 0.0, "agentic-cli", []
+    # Fallback (shouldn't happen)
+    return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
+
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+    """
+    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
+    """
+    if not prompt_file:
+        return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli", []
+    res = run_agentic_fix(
+        prompt_file=prompt_file,
+        code_file=code_file,
+        unit_test_file=unit_test_file,
+        error_log_file=error_log_file,
+    )
+    return _normalize_agentic_result(res)
 
 # Use Rich for pretty printing to the console
-from rich.console import Console
-# Initialize Rich Console
-console = Console(record=True)
-rprint = console.print
+try:
+    from rich.console import Console
+    console = Console(record=True)
+    rprint = console.print
+except ImportError:
+    # Fallback if Rich is not available
+    def rprint(*args, **kwargs):
+        print(*args)
 
 # Use relative import for internal modules
 try:
-    # Attempt relative import for package context
     from .fix_code_module_errors import fix_code_module_errors
 except ImportError:
-    # Fallback for script execution context (e.g., testing)
-    # This assumes fix_code_module_errors.py is in the same directory or Python path
-    # You might need to adjust this based on your project structure during testing
-    print("Warning: Relative import failed. Attempting direct import for fix_code_module_errors.", file=sys.stderr)
-    # Add parent directory to sys.path if necessary for testing outside a package
-    # import sys
-    # sys.path.append(str(Path(__file__).parent.parent)) # Adjust based on structure
-    from fix_code_module_errors import fix_code_module_errors
+    try:
+        from fix_code_module_errors import fix_code_module_errors
+    except ImportError:
+        # Provide a stub that will fail gracefully
+        def fix_code_module_errors(**kwargs):
+            return (False, False, "", "", "Module not available", 0.0, None)
+
+
+class ProcessResult:
+    def __init__(self, returncode, stdout, stderr):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+def run_process_with_output(cmd_args, timeout=300):
+    """
+    Runs a process, streaming stdout/stderr to the console while capturing them.
+    Allows interaction via stdin.
+    """
+    try:
+        proc = subprocess.Popen(
+            cmd_args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
+    except Exception as e:
+        return -1, "", str(e)
+
+    captured_stdout = []
+    captured_stderr = []
+
+    def stream_pipe(pipe, sink, capture_list):
+        while True:
+            try:
+                chunk = pipe.read(1)
+                if not chunk:
+                    break
+                capture_list.append(chunk)
+            except (ValueError, IOError):
+                break
+
+    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout))
+    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr))
+
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        captured_stderr.append(b"\n[Timeout]\n")
+    
+    t_out.join()
+    t_err.join()
+    
+    stdout_str = b"".join(captured_stdout).decode('utf-8', errors='replace')
+    stderr_str = b"".join(captured_stderr).decode('utf-8', errors='replace')
+    
+    return proc.returncode, stdout_str, stderr_str
 
 
 def fix_code_loop(
@@ -37,7 +155,9 @@ def fix_code_loop(
     budget: float,
     error_log_file: str,
     verbose: bool = False,
-    time: float = DEFAULT_TIME,
+    time: float = None,
+    prompt_file: str = "",
+    agentic_fallback: bool = True,
 ) -> Tuple[bool, str, str, int, float, Optional[str]]:
     """
     Attempts to fix errors in a code module through multiple iterations.
@@ -53,6 +173,8 @@ def fix_code_loop(
         error_log_file: Path to the error log file.
         verbose: Enable detailed logging (default: False).
         time: Time limit for the LLM calls (default: DEFAULT_TIME).
+        prompt_file: Path to the prompt file.
+        agentic_fallback: Enable agentic fallback if the primary fix mechanism fails.
 
     Returns:
         Tuple containing the following in order:
@@ -63,15 +185,67 @@ def fix_code_loop(
         - total_cost (float): Total cost of all fix attempts.
         - model_name (str | None): Name of the LLM model used (or None if no LLM calls were made).
     """
-    # --- Start: Modified File Checks ---
+    # Handle default time
+    if time is None:
+        time = DEFAULT_TIME
+    
+    # --- Start: File Checks ---
     if not Path(code_file).is_file():
-        # Raising error for code file is acceptable as it's fundamental
         raise FileNotFoundError(f"Code file not found: {code_file}")
     if not Path(verification_program).is_file():
-        # Handle missing verification program gracefully as per test expectation
         rprint(f"[bold red]Error: Verification program not found: {verification_program}[/bold red]")
         return False, "", "", 0, 0.0, None
-    # --- End: Modified File Checks ---
+    # --- End: File Checks ---
+
+    is_python = str(code_file).lower().endswith(".py")
+    if not is_python:
+        # For non-Python files, run the verification program to get an initial error state
+        rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
+        lang = get_language(os.path.splitext(code_file)[1])
+        verify_cmd = default_verify_cmd_for(lang, verification_program)
+        if not verify_cmd:
+            raise ValueError(f"No default verification command for language: {lang}")
+        
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
+        pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
+        if verify_result.returncode != 0:
+            rprint("[cyan]Non-Python target failed initial verification. Triggering agentic fallback...[/cyan]")
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as f:
+                f.write(pytest_output)
+            
+            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                unit_test_file=verification_program,
+                error_log_file=error_log_file,
+            )
+            final_program = ""
+            final_code = ""
+            try:
+                with open(verification_program, "r") as f:
+                    final_program = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return success, final_program, final_code, 1, agent_cost, agent_model
+        else:
+            rprint("[green]Non-Python tests passed. No fix needed.[/green]")
+            try:
+                final_program = ""
+                final_code = ""
+                with open(verification_program, "r") as f:
+                    final_program = f.read()
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read final files: {e}[/yellow]")
+            return True, final_program, final_code, 0, 0.0, "N/A"
 
     # Step 1: Remove existing error log file
     try:
@@ -83,14 +257,13 @@ def fix_code_loop(
             rprint(f"Error log file not found, no need to remove: {error_log_file}")
     except OSError as e:
         rprint(f"[bold red]Error removing log file {error_log_file}: {e}[/bold red]")
-        # Decide if this is fatal or not; for now, we continue
 
     # Step 2: Initialize variables
     attempts = 0
     total_cost = 0.0
     success = False
     model_name = None
-    history_log = "<history>\n" # Initialize history log XML root
+    history_log = "<history>\n"
 
     # Create initial backups before any modifications
     code_file_path = Path(code_file)
@@ -105,33 +278,41 @@ def fix_code_loop(
             rprint(f"Created initial backups: {original_code_backup}, {original_program_backup}")
     except Exception as e:
         rprint(f"[bold red]Error creating initial backups: {e}[/bold red]")
-        # If backups fail, we cannot guarantee restoration. Return failure.
         return False, "", "", 0, 0.0, None
 
+    # Initialize process for scope
+    process = None
 
     # Step 3: Enter the fixing loop
     while attempts < max_attempts and total_cost <= budget:
-        current_attempt = attempts + 1 # User-facing attempt number (starts at 1)
-        rprint(f"\n[bold cyan]Attempt {current_attempt}/{max_attempts}...[/bold cyan]")
-        attempt_log_entry = f'  <attempt number="{current_attempt}">\n' # Start XML for this attempt
+        # current_attempt is used for logging the current iteration number
+        current_iteration_number = attempts + 1
+        rprint(f"\n[bold cyan]Attempt {current_iteration_number}/{max_attempts}...[/bold cyan]")
+        attempt_log_entry = f'  <attempt number="{current_iteration_number}">\n'
 
         # b. Run the verification program
         if verbose:
             rprint(f"Running verification: {sys.executable} {verification_program}")
 
-        process = subprocess.run(
-            [sys.executable, verification_program],
-            capture_output=True,
-            text=True,
-            encoding='utf-8', # Ensure consistent encoding
-        )
+        try:
+            returncode, stdout, stderr = run_process_with_output(
+                [sys.executable, verification_program],
+                timeout=300
+            )
+            process = ProcessResult(returncode, stdout, stderr)
 
-        verification_status = f"Success (Return Code: {process.returncode})" if process.returncode == 0 else f"Failure (Return Code: {process.returncode})"
-        verification_output = process.stdout or "[No standard output]"
-        verification_error = process.stderr or "[No standard error]"
+            verification_status = f"Success (Return Code: {process.returncode})" if process.returncode == 0 else f"Failure (Return Code: {process.returncode})"
+            verification_output = process.stdout or "[No standard output]"
+            verification_error = process.stderr or "[No standard error]"
+        except Exception as e:
+            verification_status = f"Failure (Exception: {e})"
+            verification_output = "[Exception occurred]"
+            verification_error = str(e)
+            process = ProcessResult(-1, "", str(e))
+
 
         # Add verification results to the attempt log entry
-        attempt_log_entry += f"""\
+        attempt_log_entry += f"""
     <verification>
       <status>{verification_status}</status>
       <output><![CDATA[
@@ -155,7 +336,7 @@ def fix_code_loop(
         current_error_message = verification_error # Use stderr as the primary error source
 
         # Add current error to the attempt log entry
-        attempt_log_entry += f"""\
+        attempt_log_entry += f"""
     <current_error><![CDATA[
 {current_error_message}
 ]]></current_error>
@@ -164,13 +345,13 @@ def fix_code_loop(
         # Check budget *before* making the potentially expensive LLM call for the next attempt
         # (Only check if cost > 0 to avoid breaking before first attempt if budget is 0)
         if total_cost > budget and attempts > 0: # Check after first attempt cost is added
-             rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}) before attempt {current_attempt}. Stopping.[/bold yellow]")
+             rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}) before attempt {current_iteration_number}. Stopping.[/bold yellow]")
              history_log += attempt_log_entry + "    <error>Budget exceeded before LLM call</error>\n  </attempt>\n"
              break
 
         # Check max attempts *before* the LLM call for this attempt
         if attempts >= max_attempts:
-             rprint(f"[bold red]Maximum attempts ({max_attempts}) reached before attempt {current_attempt}. Stopping.[/bold red]")
+             rprint(f"[bold red]Maximum attempts ({max_attempts}) reached before attempt {current_iteration_number}. Stopping.[/bold red]")
              # No need to add to history here, loop condition handles it
              break
 
@@ -178,16 +359,16 @@ def fix_code_loop(
         # Create backup copies for this iteration BEFORE calling LLM
         code_base, code_ext = os.path.splitext(code_file)
         program_base, program_ext = os.path.splitext(verification_program)
-        code_backup_path = f"{code_base}_{current_attempt}{code_ext}"
-        program_backup_path = f"{program_base}_{current_attempt}{program_ext}"
+        code_backup_path = f"{code_base}_{current_iteration_number}{code_ext}"
+        program_backup_path = f"{program_base}_{current_iteration_number}{program_ext}"
 
         try:
             shutil.copy2(code_file, code_backup_path)
             shutil.copy2(verification_program, program_backup_path)
             if verbose:
-                rprint(f"Created backups for attempt {current_attempt}: {code_backup_path}, {program_backup_path}")
+                rprint(f"Created backups for attempt {current_iteration_number}: {code_backup_path}, {program_backup_path}")
         except Exception as e:
-            rprint(f"[bold red]Error creating backups for attempt {current_attempt}: {e}[/bold red]")
+            rprint(f"[bold red]Error creating backups for attempt {current_iteration_number}: {e}[/bold red]")
             history_log += attempt_log_entry + f"    <error>Failed to create backups: {e}</error>\n  </attempt>\n"
             break # Cannot proceed reliably without backups
 
@@ -233,17 +414,17 @@ def fix_code_loop(
             rprint(f"[bold red]Error calling fix_code_module_errors: {e}[/bold red]")
             cost = 0.0 # Assume no cost if the call failed
             # Add error to the attempt log entry
-            attempt_log_entry += f"""\
+            attempt_log_entry += f"""
     <fixing>
       <error>LLM call failed: {e}</error>
     </fixing>
 """
-            # Continue to the next attempt or break if limits reached? Let's break.
             history_log += attempt_log_entry + "  </attempt>\n" # Log the attempt with the LLM error
+            attempts += 1 # Increment attempts even if LLM call failed
             break # Stop if the fixing mechanism itself fails
 
         # Add fixing results to the attempt log entry
-        attempt_log_entry += f"""\
+        attempt_log_entry += f"""
     <fixing>
       <llm_analysis><![CDATA[
 {program_code_fix or "[No analysis provided]"}
@@ -269,11 +450,13 @@ def fix_code_loop(
             rprint(f"[bold red]Error writing to log file {error_log_file}: {e}[/bold red]")
 
 
-        # Add cost and check budget *after* the LLM call
+        # Add cost and increment attempt counter (as per fix report) *before* checking budget
         total_cost += cost
+        attempts += 1 # Moved this line here as per fix report
         rprint(f"Attempt Cost: ${cost:.4f}, Total Cost: ${total_cost:.4f}, Budget: ${budget:.4f}")
+
         if total_cost > budget:
-            rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}) after attempt {current_attempt}. Stopping.[/bold yellow]")
+            rprint(f"[bold yellow]Budget exceeded (${total_cost:.4f} > ${budget:.4f}) after attempt {attempts}. Stopping.[/bold yellow]")
             break # Stop loop
 
         # If LLM suggested no changes but verification failed, stop to prevent loops
@@ -295,8 +478,7 @@ def fix_code_loop(
             success = False # Mark as failed if we can't write updates
             break # Stop if we cannot apply fixes
 
-        # e. Increment attempt counter (used for loop condition)
-        attempts += 1
+        # The original 'attempts += 1' was here. It has been moved earlier.
 
         # Check if max attempts reached after incrementing (for the next loop iteration check)
         if attempts >= max_attempts:
@@ -358,39 +540,53 @@ def fix_code_loop(
         rprint(f"[bold red]Final write to log file {error_log_file} failed: {e}[/bold red]")
 
     # Determine final number of attempts for reporting
-    # If loop finished by verification success (success=True), attempts = attempts made
-    # If loop finished by failure (budget, max_attempts, no_change_needed, error),
-    # the number of attempts *initiated* is 'attempts + 1' unless max_attempts was exactly hit.
-    # The tests seem to expect the number of attempts *initiated*.
-    # Let's refine the calculation slightly for clarity.
-    # 'attempts' holds the count of *completed* loops (0-indexed).
-    # 'current_attempt' holds the user-facing number (1-indexed) of the loop *currently running or just finished*.
+    # The 'attempts' variable correctly counts the number of LLM fix cycles that were initiated.
     final_attempts_reported = attempts
-    if not success:
-        # If failure occurred, it happened *during* or *after* the 'current_attempt' was initiated.
-        # If loop broke due to budget/no_change/error, current_attempt reflects the attempt number where failure occurred.
-        # If loop broke because attempts >= max_attempts, the last valid value for current_attempt was max_attempts.
-        # The number of attempts *tried* is current_attempt.
-        # However, the tests seem aligned with the previous logic. Let's stick to it unless further tests fail.
-        final_attempts_reported = attempts if success else (attempts + 1 if attempts < max_attempts and process.returncode != 0 else attempts)
-        # Re-evaluating the test logic:
-        # - Budget test: attempts=1 when loop breaks, expects 2. (attempts+1) -> 2. Correct.
-        # - Max attempts test: attempts=0 when loop breaks (no change), max_attempts=2, expects <=2. (attempts+1) -> 1. Correct.
-        # - If max_attempts=2 was reached *normally* (failed attempt 1, failed attempt 2), attempts would be 2.
-        #   The logic `attempts + 1 if attempts < max_attempts else attempts` would return 2. Correct.
-        # Let's simplify the return calculation based on 'attempts' which counts completed loops.
-        final_attempts_reported = attempts # Number of fully completed fix cycles
-        if not success and process and process.returncode != 0: # If we failed after at least one verification run
-             # Count the final failed attempt unless success was achieved on the very last possible attempt
-             if attempts < max_attempts:
-                 final_attempts_reported += 1
 
+    if not success and agentic_fallback:
+        # Ensure error_log_file exists before calling agentic fix
+        try:
+            if not os.path.exists(error_log_file) or os.path.getsize(error_log_file) == 0:
+                # Write minimal error log for agentic fix
+                error_log_path = Path(error_log_file)
+                error_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(error_log_path, "w") as elog:
+                    if process:
+                        elog.write(f"Verification failed with return code: {process.returncode}\n")
+                        if process.stdout:
+                            elog.write(f"\nStdout:\n{process.stdout}\n")
+                        if process.stderr:
+                            elog.write(f"\nStderr:\n{process.stderr}\n")
+                    else:
+                        elog.write("No error information available\n")
+        except Exception as e:
+            rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
+
+        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=verification_program,
+            error_log_file=error_log_file,
+        )
+        total_cost += agent_cost
+        if agent_changed_files:
+            rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+            for f in agent_changed_files:
+                rprint(f"  • {f}")
+        if agent_success:
+            model_name = agent_model or model_name
+            try:
+                final_code_content = Path(code_file).read_text(encoding='utf-8')
+                final_program_content = Path(verification_program).read_text(encoding='utf-8')
+            except Exception as e:
+                rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
+            success = True
 
     return (
         success,
         final_program_content,
         final_code_content,
-        final_attempts_reported, # Use the refined calculation
+        final_attempts_reported,
         total_cost,
         model_name,
     )

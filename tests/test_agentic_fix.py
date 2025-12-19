@@ -1,0 +1,397 @@
+import os
+import shutil
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import pandas as pd
+import pytest
+
+from pdd.agentic_fix import run_agentic_fix, _verify_and_log
+
+
+def _df():
+    return pd.DataFrame(
+        [
+            {"provider": "anthropic", "model": "claude-3",   "api_key": "ANTHROPIC_API_KEY"},
+            {"provider": "google",    "model": "gemini-pro", "api_key": "GOOGLE_API_KEY"},
+            {"provider": "openai",    "model": "gpt-4",      "api_key": "OPENAI_API_KEY"},
+        ]
+    )
+
+
+def _prep_files(tmp_path: Path):
+    prompt = tmp_path / "prompt.txt"
+    code   = tmp_path / "code.py"
+    testf  = tmp_path / "test_file.py"
+    err    = tmp_path / "error.log"
+    prompt.write_text("prompt", encoding="utf-8")
+    code.write_text("print('bug')\n", encoding="utf-8")
+    testf.write_text("assert True\n", encoding="utf-8")
+    err.write_text("", encoding="utf-8")
+    return str(prompt), str(code), str(testf), str(err)
+
+
+@pytest.fixture
+def patch_env(monkeypatch):
+    monkeypatch.setenv("PDD_PATH", ".")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
+
+
+def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
+    p_prompt, p_code, p_test, p_err = _prep_files(tmp_path)
+
+    # Force model CSV to our in-test DF
+    monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
+
+    # Minimal prompt template (we just need .format(...) to succeed)
+    monkeypatch.setattr(
+        "pdd.agentic_fix.load_prompt_template",
+        lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}",
+    )
+
+    # Pretend CLIs exist so selection proceeds
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
+
+    # Short-circuit harvest path to succeed — NOTE: correct symbol (no leading underscore)
+    monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+
+    ok, msg, cost, model, changed_files = run_agentic_fix(p_prompt, p_code, p_test, p_err)
+    assert ok is True
+    assert isinstance(changed_files, list)
+    assert "successful" in msg.lower()
+    assert cost > 0.0
+    assert model.startswith("agentic-")
+
+
+def test_run_agentic_fix_handles_no_keys(monkeypatch, tmp_path):
+    p_prompt, p_code, p_test, p_err = _prep_files(tmp_path)
+    # Force model CSV to in-test DF
+    monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
+
+    # Remove all relevant keys
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    ok, msg, cost, model, changed_files = run_agentic_fix(
+        prompt_file=str(p_prompt),
+        code_file=str(p_code),
+        unit_test_file=str(p_test),
+        error_log_file=str(p_err),
+    )
+    assert isinstance(changed_files, list)
+    assert ok is False
+    assert "No configured agent API keys" in msg
+
+
+AGENTS = [
+    ("anthropic", "ANTHROPIC_API_KEY", "claude"),
+    ("google",    "GOOGLE_API_KEY",    "gemini"),  # allow GEMINI_API_KEY alias
+    ("openai",    "OPENAI_API_KEY",    "codex"),
+]
+
+
+def _has_cli(cmd: str) -> bool:
+    return shutil.which(cmd) is not None
+
+
+def _mk_files(tmp_path: Path):
+    p_prompt = tmp_path / "prompt.txt"
+    p_code   = tmp_path / "code.py"
+    p_test   = tmp_path / "test_dummy.py"
+    p_err    = tmp_path / "error.log"
+    p_prompt.write_text("Generate a simple function.", encoding="utf-8")
+    p_code.write_text("def f():\n    return 1/0\n", encoding="utf-8")
+    p_test.write_text("def test_ok(): assert True\n", encoding="utf-8")
+    p_err.write_text("ZeroDivisionError", encoding="utf-8")
+    return p_prompt, p_code, p_test, p_err
+
+
+@pytest.mark.parametrize("provider,env_key,cli", AGENTS)
+def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_path, monkeypatch):
+    # Only run if API key (or Gemini alias for Google) + CLI are present
+    detected_key = os.getenv(env_key)
+    if provider == "google" and not detected_key:
+        detected_key = os.getenv("GEMINI_API_KEY")
+
+    if not detected_key or not _has_cli(cli):
+        pytest.skip(f"{provider} not available (missing API key and/or '{cli}' CLI).")
+
+    # Ensure the model CSV used by the code matches our expected env var names
+    monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
+
+    # Prefer only this provider: drop others
+    for k in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
+        if k != env_key:
+            monkeypatch.delenv(k, raising=False)
+
+    # Re-apply the cached key to the env var our CSV expects
+    if provider == "google":
+        monkeypatch.setenv("GOOGLE_API_KEY", detected_key)
+    else:
+        monkeypatch.setenv(env_key, detected_key)
+
+    monkeypatch.setenv("PDD_PATH", ".")
+    # Keep local verification off (agents may run on remote infra)
+    monkeypatch.setenv("PDD_AGENTIC_VERIFY", "0")
+    monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
+    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", "120")
+    monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", "60")
+
+    p_prompt, p_code, p_test, p_err = _mk_files(tmp_path)
+
+    ok, msg, cost, model, changed_files = run_agentic_fix(
+        prompt_file=str(p_prompt),
+        code_file=str(p_code),
+        unit_test_file=str(p_test),
+        error_log_file=str(p_err),
+    )
+    assert isinstance(changed_files, list)
+
+    # Don't require success; just verify the chosen agent tag
+    assert model.startswith(f"agentic-{provider}")
+
+
+# --- Tests for _verify_and_log with run_command ---
+
+class TestVerifyAndLog:
+    """Tests for _verify_and_log function using run_command from language_format.csv."""
+
+    def test_verify_and_log_disabled(self, tmp_path):
+        """When verification is disabled, should return True immediately."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("raise Exception('fail')")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=False)
+        assert result is True
+
+    def test_verify_and_log_with_verify_cmd(self, tmp_path):
+        """When verify_cmd is provided, should use it instead of run_command."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("print('hello')")
+
+        # Use a command that will succeed
+        result = _verify_and_log(
+            str(test_file),
+            tmp_path,
+            verify_cmd="echo 'success'",
+            enabled=True
+        )
+        assert result is True
+
+    def test_verify_and_log_uses_run_command_for_python(self, tmp_path, monkeypatch):
+        """Should use python run command from CSV for .py files."""
+        # Set up PDD_PATH to point to actual data directory
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+
+        test_file = tmp_path / "example.py"
+        test_file.write_text("print('success')\n")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+        assert result is True
+
+    def test_verify_and_log_detects_failure(self, tmp_path, monkeypatch):
+        """Should detect when script exits with non-zero code."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+
+        test_file = tmp_path / "failing_example.py"
+        test_file.write_text("import sys; sys.exit(1)\n")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+        assert result is False
+
+    def test_verify_and_log_detects_exception(self, tmp_path, monkeypatch):
+        """Should detect when script raises an exception."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent))
+
+        test_file = tmp_path / "crashing_example.py"
+        test_file.write_text("raise ValueError('intentional crash')\n")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+        assert result is False
+
+    def test_verify_and_log_with_javascript(self, tmp_path, monkeypatch):
+        """Should use node run command for .js files if node is available."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent / "pdd"))
+
+        # Skip if node is not installed
+        if not shutil.which("node"):
+            pytest.skip("node not available")
+
+        test_file = tmp_path / "example.js"
+        test_file.write_text("console.log('success');\n")
+
+        result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+        assert result is True
+
+    def test_verify_and_log_fallback_to_python(self, tmp_path, monkeypatch):
+        """Should fallback to Python interpreter when no run_command found."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).parent.parent / "pdd"))
+
+        # Mock get_run_command_for_file to return empty string
+        with patch("pdd.agentic_fix.get_run_command_for_file", return_value=""):
+            test_file = tmp_path / "example.py"
+            test_file.write_text("print('fallback works')\n")
+
+            result = _verify_and_log(str(test_file), tmp_path, verify_cmd=None, enabled=True)
+            assert result is True
+
+
+# --- Tests for agentic mode invocation (TDD: should fail until code is fixed) ---
+
+class TestAgenticModeInvocation:
+    """
+    Tests verifying agents are invoked with full file access, not completion mode.
+
+    These tests check that:
+    1. Claude is NOT invoked with -p flag (which prevents file tool access)
+    2. Codex is NOT invoked with --sandbox read-only (which prevents file writes)
+    3. Gemini is NOT invoked with -p flag (which prevents tool access)
+
+    These tests should FAIL initially (RED phase) and PASS after the fix (GREEN phase).
+    """
+
+    @pytest.fixture
+    def mock_subprocess_run(self):
+        """Mock subprocess.run to capture CLI commands without executing them."""
+        with patch('pdd.agentic_fix.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="<<<BEGIN_FILE:test.py>>>fixed<<<END_FILE:test.py>>>",
+                stderr=""
+            )
+            yield mock_run
+
+    def test_claude_not_in_completion_mode(self, mock_subprocess_run, tmp_path):
+        """
+        Claude should NOT use -p/--print flag with full prompt - it prevents file tool access.
+
+        Current (buggy): ["claude", "-p", "--dangerously-skip-permissions", <full_prompt>]
+        Expected: Claude invoked without -p, so it can use file tools in agentic mode
+
+        When -p (print mode) is used, Claude runs in completion mode and cannot use
+        file tools like Read, Write, Edit, etc. For agentic fix to work, we need
+        Claude to have full file access.
+        """
+        from pdd.agentic_fix import _run_anthropic_variants
+
+        # Call the function with a long prompt (simulating real usage)
+        long_prompt = "Fix this code: " + "x" * 1000  # Simulate a real prompt
+        _run_anthropic_variants(long_prompt, tmp_path, 60, "test")
+
+        # Get the command that was called
+        assert mock_subprocess_run.called, "subprocess.run should have been called"
+        call_args = mock_subprocess_run.call_args[0][0]
+
+        # -p flag is a boolean flag (print mode), NOT an option with a value
+        # Command structure: claude -p --dangerously-skip-permissions <prompt>
+        # The prompt is the LAST argument, not the argument after -p
+        has_p_flag = "-p" in call_args or "--print" in call_args
+
+        if has_p_flag:
+            # In print mode, the prompt is passed as the last positional argument
+            # Check if it's a long embedded prompt (bad) vs a short instruction pointing to a file (ok)
+            last_arg = call_args[-1]
+            assert len(last_arg) < 500, \
+                f"Claude in -p mode receives full prompt as argument (got {len(last_arg)} chars); " \
+                "this prevents file tool access. Remove -p flag to enable agentic mode."
+
+    def test_codex_not_read_only_sandbox(self, mock_subprocess_run, tmp_path):
+        """
+        Codex should NOT have --sandbox read-only in any variant definition.
+
+        Current (buggy) variants in code:
+        1. ["codex", "exec", full]
+        2. ["codex", "exec", "--skip-git-repo-check", full]
+        3. ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", full]  <-- BAD
+
+        The third variant uses read-only which prevents file writes.
+        This test inspects the source code to verify no variants use read-only.
+        """
+        import inspect
+        from pdd.agentic_fix import _run_openai_variants
+
+        # Get the source code of the function
+        source = inspect.getsource(_run_openai_variants)
+
+        # Check that read-only is NOT in the source code
+        assert "read-only" not in source.lower(), \
+            "Codex variants should not include 'read-only' sandbox; " \
+            "agents need write access to modify files"
+
+    def test_gemini_not_in_completion_mode(self, mock_subprocess_run, tmp_path):
+        """
+        Gemini should NOT use -p flag with full prompt - it may prevent tool access.
+
+        Current (buggy): ["gemini", "-p", <full_prompt>]
+        Expected: Gemini invoked without -p, or with -p pointing to a file
+        """
+        from pdd.agentic_fix import _run_google_variants
+
+        # Call with a long prompt
+        long_prompt = "Fix this code: " + "y" * 1000
+        _run_google_variants(long_prompt, tmp_path, 60, "test")
+
+        # Get the command that was called
+        assert mock_subprocess_run.called, "subprocess.run should have been called"
+        call_args = mock_subprocess_run.call_args[0][0]
+
+        # Check: -p flag should NOT be present with a long prompt
+        has_p_flag = "-p" in call_args
+        if has_p_flag:
+            p_index = call_args.index("-p")
+            if p_index + 1 < len(call_args):
+                prompt_arg = call_args[p_index + 1]
+                assert len(prompt_arg) < 500, \
+                    f"Gemini should not receive full prompt via -p flag (got {len(prompt_arg)} chars); " \
+                    "use file-based prompt to enable agentic mode"
+
+
+class TestPromptFileHandling:
+    """Tests for secure temp prompt file handling to prevent race conditions."""
+
+    @pytest.fixture
+    def mock_subprocess_run(self):
+        """Mock subprocess.run to capture CLI commands without executing."""
+        with patch('pdd.agentic_fix.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="output", stderr=""
+            )
+            yield mock_run
+
+    def test_no_hardcoded_prompt_filename(self):
+        """
+        Static analysis: source should not use hardcoded '.agentic_prompt.txt'.
+
+        Bug: Hardcoded filename causes race conditions in concurrent execution.
+        """
+        import inspect
+        from pdd.agentic_fix import (
+            _run_anthropic_variants,
+            _run_openai_variants,
+            _run_google_variants
+        )
+
+        for func in [_run_anthropic_variants, _run_openai_variants, _run_google_variants]:
+            source = inspect.getsource(func)
+            assert '".agentic_prompt.txt"' not in source, \
+                f"{func.__name__}: hardcoded '.agentic_prompt.txt' causes race conditions"
+
+    def test_prompt_file_cleaned_up_after_execution(self, mock_subprocess_run, tmp_path):
+        """
+        Behavioral: temp prompt files must be deleted after execution.
+
+        Bug: Leaving files on disk exposes sensitive prompt content.
+        """
+        from pdd.agentic_fix import _run_anthropic_variants
+
+        _run_anthropic_variants("test prompt", tmp_path, 60, "test")
+
+        # No prompt files should remain (any naming pattern)
+        remaining = list(tmp_path.glob("*prompt*"))
+        assert len(remaining) == 0, \
+            f"Temp prompt files should be cleaned up, found: {remaining}"

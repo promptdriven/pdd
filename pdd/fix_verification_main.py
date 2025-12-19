@@ -3,6 +3,7 @@ import os
 import subprocess
 import click
 import logging
+from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
 # Use Rich for pretty printing to the console
@@ -116,6 +117,9 @@ def fix_verification_main(
     verification_program: Optional[str],  # Only used if loop=True
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     budget: float = DEFAULT_BUDGET,
+    agentic_fallback: bool = True,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     CLI wrapper for the 'verify' command. Verifies code correctness by running
@@ -144,9 +148,9 @@ def fix_verification_main(
             - total_cost (float): Total cost incurred.
             - model_name (str): Name of the LLM used.
     """
-    # Extract global options from context
-    strength: float = ctx.obj.get('strength', DEFAULT_STRENGTH)
-    temperature: float = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
+    # Extract global options from context (prefer passed parameters over ctx.obj)
+    strength: float = strength if strength is not None else ctx.obj.get('strength', DEFAULT_STRENGTH)
+    temperature: float = temperature if temperature is not None else ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
     force: bool = ctx.obj.get('force', False)
     quiet: bool = ctx.obj.get('quiet', False)
     verbose: bool = ctx.obj.get('verbose', False)
@@ -204,7 +208,8 @@ def fix_verification_main(
             quiet=quiet,
             command="verify",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
         output_code_path = output_file_paths.get("output_code")
         output_results_path = output_file_paths.get("output_results")
@@ -213,6 +218,9 @@ def fix_verification_main(
         if verbose:
             rich_print("[dim]Resolved output paths via construct_paths.[/dim]")
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         # If the helper does not understand the "verify" command fall back.
         if "invalid command" in str(e).lower():
@@ -231,7 +239,8 @@ def fix_verification_main(
                     input_strings["program_file"] = f.read()
             except FileNotFoundError as fe:
                 rich_print(f"[bold red]Error:[/bold red] {fe}")
-                sys.exit(1)
+                # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+                return False, "", "", 0, 0.0, f"FileNotFoundError: {fe}"
 
             # Pick or build output paths
             if output_code_path is None:
@@ -253,7 +262,8 @@ def fix_verification_main(
             if verbose:
                 import traceback
                 rich_print(Panel(traceback.format_exc(), title="Traceback", border_style="red"))
-            sys.exit(1)
+            # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+            return False, "", "", 0, 0.0, f"Error: {e}"
 
     # --- Core Logic ---
     success: bool = False
@@ -274,6 +284,7 @@ def fix_verification_main(
                     program_file=program_file,                  # Changed to pass the program_file path
                     code_file=code_file,                        # Changed to pass the code_file path
                     prompt=input_strings["prompt_file"],        # Correctly passing prompt content
+                    prompt_file=prompt_file,
                     verification_program=verification_program,      # Path to the verifier program
                     strength=strength,
                     temperature=temperature,
@@ -284,7 +295,8 @@ def fix_verification_main(
                     # output_code_path should not be passed here
                     # output_program_path should not be passed here
                     verbose=verbose,
-                    program_args=[] # Pass an empty list for program_args
+                    program_args=[], # Pass an empty list for program_args
+                    agentic_fallback=agentic_fallback,
                 )
                 success = loop_results.get('success', False)
                 final_program = loop_results.get('final_program', "") # Use .get for safety
@@ -408,7 +420,9 @@ def fix_verification_main(
         try:
             if verbose:
                 rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write code to: {output_code_path!r}")
-            with open(output_code_path, "w") as f:
+            output_code_path_obj = Path(output_code_path)
+            output_code_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_code_path_obj, "w") as f:
                 f.write(final_code)
             saved_code_path = output_code_path
             if not quiet:
@@ -428,7 +442,9 @@ def fix_verification_main(
         try:
             if verbose:
                 rich_print(f"[cyan bold DEBUG] In fix_verification_main, ATTEMPTING to write program to: {output_program_path!r}")
-            with open(output_program_path, "w") as f:
+            output_program_path_obj = Path(output_program_path)
+            output_program_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_program_path_obj, "w") as f:
                 f.write(final_program)
             saved_program_path = output_program_path
             if not quiet:
@@ -438,7 +454,9 @@ def fix_verification_main(
 
     if not loop and output_results_path:
         try:
-            with open(output_results_path, "w") as f:
+            output_results_path_obj = Path(output_results_path)
+            output_results_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_results_path_obj, "w") as f:
                 f.write(results_log_content)
             saved_results_path = output_results_path
             if not quiet:

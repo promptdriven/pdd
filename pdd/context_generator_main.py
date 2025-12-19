@@ -32,7 +32,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             quiet=ctx.obj.get('quiet', False),
             command="example",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
 
         # Load input files
@@ -83,9 +84,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             with open(final_output_path, 'w') as f:
                 f.write(example_code)
         elif final_output_path and example_code is None:
-            # Log the error but don't crash
-            if not ctx.obj.get('quiet', False):
-                rprint("[bold red]Warning:[/bold red] Example generation failed, skipping file write")
+            # Raise error instead of just warning
+            raise click.UsageError("Example generation failed, no code produced.")
 
         # Provide user feedback
         if not ctx.obj.get('quiet', False):
@@ -108,7 +108,11 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
 
         return example_code, total_cost, model_name
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, f"Error: {e}"

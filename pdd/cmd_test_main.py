@@ -7,6 +7,7 @@ from pathlib import Path
 # pylint: disable=redefined-builtin
 from rich import print
 
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .generate_test import generate_test
 from .increase_tests import increase_tests
@@ -23,6 +24,8 @@ def cmd_test_main(
     existing_tests: list[str] | None,
     target_coverage: float | None,
     merge: bool | None,
+    strength: float | None = None,
+    temperature: float | None = None,
 ) -> tuple[str, float, str]:
     """
     CLI wrapper for generating or enhancing unit tests.
@@ -52,9 +55,9 @@ def cmd_test_main(
     input_strings = {}
 
     verbose = ctx.obj["verbose"]
-    strength = ctx.obj["strength"]
-    temperature = ctx.obj["temperature"]
-    time = ctx.obj.get("time")
+    # Note: strength/temperature will be resolved after construct_paths using resolve_effective_config
+    param_strength = strength  # Store the parameter value for later resolution
+    param_temperature = temperature  # Store the parameter value for later resolution
 
     if verbose:
         print(f"[bold blue]Prompt file:[/bold blue] {prompt_file}")
@@ -88,9 +91,11 @@ def cmd_test_main(
             quiet=ctx.obj["quiet"],
             command="test",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
 
+        # Read multiple existing test files and concatenate their content
         if existing_tests:
             existing_tests_content = ""
             for test_file in existing_tests:
@@ -98,13 +103,26 @@ def cmd_test_main(
                     existing_tests_content += f.read() + "\n"
             input_strings["existing_tests"] = existing_tests_content
 
+        # Use centralized config resolution with proper priority:
+        # CLI > pddrc > defaults
+        effective_config = resolve_effective_config(
+            ctx,
+            resolved_config,
+            param_overrides={"strength": param_strength, "temperature": param_temperature}
+        )
+        strength = effective_config["strength"]
+        temperature = effective_config["temperature"]
+        time = effective_config["time"]
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as exception:
         # Catching a general exception is necessary here to handle a wide range of
         # potential errors during file I/O and path construction, ensuring the
         # CLI remains robust.
         print(f"[bold red]Error constructing paths: {exception}[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, f"Error: {exception}"
 
     if verbose:
         print(f"[bold blue]Language detected:[/bold blue] {language}")
@@ -127,8 +145,8 @@ def cmd_test_main(
 
     if not output_file:
         print("[bold red]Error: Output file path could not be determined.[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, "Error: Output file path could not be determined"
 
     source_file_path_for_prompt = str(Path(code_file).expanduser().resolve())
     test_file_path_for_prompt = str(Path(output_file).expanduser().resolve())
@@ -154,16 +172,16 @@ def cmd_test_main(
             # during the test generation process, which involves external model
             # interactions and complex logic.
             print(f"[bold red]Error generating tests: {exception}[/bold red]")
-            ctx.exit(1)
-            return "", 0.0, ""
+            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+            return "", 0.0, f"Error: {exception}"
     else:
         if not existing_tests:
             print(
                 "[bold red]Error: --existing-tests is required "
                 "when using --coverage-report[/bold red]"
             )
-            ctx.exit(1)
-            return "", 0.0, ""
+            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+            return "", 0.0, "Error: --existing-tests is required when using --coverage-report"
         try:
             unit_test, total_cost, model_name = increase_tests(
                 existing_unit_tests=input_strings["existing_tests"],
@@ -181,8 +199,8 @@ def cmd_test_main(
             # while increasing test coverage, including problems with parsing
             # reports or interacting with the language model.
             print(f"[bold red]Error increasing test coverage: {exception}[/bold red]")
-            ctx.exit(1)
-            return "", 0.0, ""
+            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+            return "", 0.0, f"Error: {exception}"
 
     # Handle output - if output is a directory, use resolved file path from construct_paths
     resolved_output = output_file_paths["output"]
@@ -211,8 +229,8 @@ def cmd_test_main(
         print(f"[bold red]Error: Generated unit test content is empty or whitespace-only.[/bold red]")
         print(f"[bold yellow]Debug: unit_test length: {len(unit_test) if unit_test else 0}[/bold yellow]")
         print(f"[bold yellow]Debug: unit_test content preview: {repr(unit_test[:100]) if unit_test else 'None'}[/bold yellow]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, "Error: Generated unit test content is empty"
     
     try:
         # Ensure parent directory exists
@@ -227,8 +245,8 @@ def cmd_test_main(
         # (e.g., permissions, disk space) that can occur when writing the
         # output file, preventing the program from crashing unexpectedly.
         print(f"[bold red]Error saving tests to file: {exception}[/bold red]")
-        ctx.exit(1)
-        return "", 0.0, ""
+        # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
+        return "", 0.0, f"Error: {exception}"
 
     if verbose:
         print(f"[bold blue]Total cost:[/bold blue] ${total_cost:.6f}")

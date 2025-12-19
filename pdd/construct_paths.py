@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 import os
 from pathlib import Path
-from typing import Dict, Tuple, Any, Optional, List
+from typing import Dict, Tuple, Any, Optional, List, Callable
 import fnmatch
 import logging
 
@@ -125,8 +125,9 @@ def _resolve_config_hierarchy(
     # Configuration keys to resolve
     config_keys = {
         'generate_output_path': 'PDD_GENERATE_OUTPUT_PATH',
-        'test_output_path': 'PDD_TEST_OUTPUT_PATH', 
+        'test_output_path': 'PDD_TEST_OUTPUT_PATH',
         'example_output_path': 'PDD_EXAMPLE_OUTPUT_PATH',
+        'prompts_dir': 'PDD_PROMPTS_DIR',
         'default_language': 'PDD_DEFAULT_LANGUAGE',
         'target_coverage': 'PDD_TEST_COVERAGE_TARGET',
         'strength': None,
@@ -193,6 +194,11 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
     for p in input_files.values():
         if p.suffix == ".prompt":
             return p
+    
+    # Final fallback: Return the first file path available (e.g. for pdd update <code_file>)
+    if input_files:
+        return next(iter(input_files.values()))
+        
     return None
 
 
@@ -427,6 +433,7 @@ def construct_paths(
     command_options: Optional[Dict[str, Any]], # Allow None
     create_error_file: bool = True,  # Added parameter to control error file creation
     context_override: Optional[str] = None,  # Added parameter for context override
+    confirm_callback: Optional[Callable[[str, str], bool]] = None,  # Callback for interactive confirmation
 ) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]:
     """
     High‑level orchestrator that loads inputs, determines basename/language,
@@ -443,6 +450,7 @@ def construct_paths(
 
     # ------------- Load .pddrc configuration -----------------
     pddrc_config = {}
+    pddrc_path: Optional[Path] = None
     context = None
     context_config = {}
     original_context_config = {}  # Keep track of original context config for sync discovery
@@ -503,6 +511,7 @@ def construct_paths(
                 language="python", # Dummy language
                 file_extension=".py", # Dummy extension
                 context_config=context_config,
+                config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
             )
 
             # Honor .pddrc generate_output_path explicitly for sync discovery (robust to logger source)
@@ -537,9 +546,9 @@ def construct_paths(
                 # Fall back to context-aware logic
                 # Use original_context_config to avoid checking augmented config with env vars
                 if original_context_config and any(key.endswith('_output_path') for key in original_context_config):
-                    # For configured contexts, prompts are typically at the same level as output dirs
-                    # e.g., if code goes to "pdd/", prompts should be at "prompts/" (siblings)
-                    resolved_config["prompts_dir"] = "prompts"
+                    # For configured contexts, use prompts_dir from config if provided,
+                    # otherwise default to "prompts" at the same level as output dirs
+                    resolved_config["prompts_dir"] = original_context_config.get("prompts_dir", "prompts")
                     resolved_config["code_dir"] = str(gen_path.parent)
                 else:
                     # For default contexts, maintain relative relationship 
@@ -548,7 +557,14 @@ def construct_paths(
                     resolved_config["code_dir"] = str(gen_path.parent)
             
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
-            resolved_config["examples_dir"] = str(Path(output_paths_str.get("example_output_path", "examples")).parent)
+            # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+            # If it ends with / or has no file extension, treat as directory; otherwise use parent
+            example_path_str = output_paths_str.get("example_output_path", "examples")
+            example_path = Path(example_path_str)
+            if example_path_str.endswith('/') or '.' not in example_path.name:
+                resolved_config["examples_dir"] = example_path_str.rstrip('/')
+            else:
+                resolved_config["examples_dir"] = str(example_path.parent)
 
         except Exception as e:
             console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
@@ -705,6 +721,41 @@ def construct_paths(
         if k.startswith("output") and v is not None # Ensure value is not None
     }
 
+    # Determine input file directory for default output path generation
+    # Only apply for commands that generate/update files based on specific input files
+    # Commands like sync, generate, test, example have their own directory management
+    commands_using_input_dir = {'fix', 'crash', 'verify', 'split', 'change', 'update'}
+    input_file_dir: Optional[str] = None
+    input_file_dirs: Dict[str, Optional[str]] = {}
+    if input_paths and command in commands_using_input_dir:
+        try:
+            # For fix/crash/verify commands, use specific file directories for each output
+            if command in {'fix', 'crash', 'verify'}:
+                # Map output keys to their corresponding input file keys
+                input_key_map = {
+                    'fix': {'output_code': 'code_file', 'output_test': 'unit_test_file', 'output_results': 'code_file'},
+                    'crash': {'output': 'code_file', 'output_program': 'program_file'},
+                    'verify': {'output_code': 'code_file', 'output_program': 'verification_program', 'output_results': 'code_file'},
+                }
+
+                for output_key, input_key in input_key_map.get(command, {}).items():
+                    if input_key in input_paths:
+                        input_file_dirs[output_key] = str(input_paths[input_key].parent)
+
+                # Set default input_file_dir to code_file directory as fallback
+                if 'code_file' in input_paths:
+                    input_file_dir = str(input_paths['code_file'].parent)
+                else:
+                    first_input_path = next(iter(input_paths.values()))
+                    input_file_dir = str(first_input_path.parent)
+            else:
+                # For other commands, use first input path
+                first_input_path = next(iter(input_paths.values()))
+                input_file_dir = str(first_input_path.parent)
+        except (StopIteration, AttributeError):
+            # If no input paths or path doesn't have parent, use None (falls back to CWD)
+            pass
+
     try:
         # generate_output_paths might return Dict[str, str] or Dict[str, Path]
         # Let's assume it returns Dict[str, str] based on verification error,
@@ -716,6 +767,9 @@ def construct_paths(
             language=language,
             file_extension=file_extension,
             context_config=context_config,
+            input_file_dir=input_file_dir,
+            input_file_dirs=input_file_dirs,
+            config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
         )
 
         # For sync, explicitly honor .pddrc generate_output_path even if generator logged as 'default'
@@ -760,29 +814,39 @@ def construct_paths(
             if p_obj.is_file():
                 existing_files[k] = p_obj # Store the Path object
 
-        if existing_files and not force:
-            if not quiet:
-                # Use the Path objects stored in existing_files for resolve()
-                # Print without Rich tags for easier testing
-                paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
-                console.print(
-                    f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
-                    style="warning"
-                )
-            # Use click.confirm for user interaction
+    if existing_files and not force:
+        paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())
+        if not quiet:
+            # Use the Path objects stored in existing_files for resolve()
+            # Print without Rich tags for easier testing
+            console.print(
+                f"Warning: The following output files already exist and may be overwritten:\n{paths_list}",
+                style="warning"
+            )
+
+        # Use confirm_callback if provided (for TUI environments), otherwise use click.confirm
+        if confirm_callback is not None:
+            # Use the provided callback for confirmation (e.g., from Textual TUI)
+            confirm_message = f"The following files will be overwritten:\n{paths_list}\n\nOverwrite existing files?"
+            if not confirm_callback(confirm_message, "Overwrite Confirmation"):
+                raise click.Abort()
+        else:
+            # Use click.confirm for CLI interaction
             try:
                 if not click.confirm(
                     click.style("Overwrite existing files?", fg="yellow"), default=True, show_default=True
                 ):
                     click.secho("Operation cancelled.", fg="red", err=True)
-                    sys.exit(1) # Exit if user chooses not to overwrite
+                    raise click.Abort()
+            except click.Abort:
+                raise  # Let Abort propagate to be handled by PDDCLI.invoke()
             except Exception as e: # Catch potential errors during confirm (like EOFError in non-interactive)
                 if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
                     # Non-interactive environment, default to not overwriting
                     click.secho("Non-interactive environment detected. Use --force to overwrite existing files.", fg="yellow", err=True)
                 else:
                     click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
-                sys.exit(1)
+                raise click.Abort()
 
 
     # ------------- Final reporting ---------------------------
@@ -810,7 +874,14 @@ def construct_paths(
     resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
-    resolved_config["examples_dir"] = str(Path(resolved_config.get("example_output_path", "examples")).parent)
+    # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+    # If it ends with / or has no file extension, treat as directory; otherwise use parent
+    example_path_str = resolved_config.get("example_output_path", "examples")
+    example_path = Path(example_path_str)
+    if example_path_str.endswith('/') or '.' not in example_path.name:
+        resolved_config["examples_dir"] = example_path_str.rstrip('/')
+    else:
+        resolved_config["examples_dir"] = str(example_path.parent)
 
 
     return resolved_config, input_strings, output_file_paths_str_return, language

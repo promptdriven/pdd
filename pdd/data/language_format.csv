@@ -1,71 +1,71 @@
-language,comment,extension
-Python,#,.py
-Java,//,.java
-C++,//,.cpp
-JavaScript,//,.js
-HTML,"<!-- -->",.html
-CSS,"/**/",.css
-Ruby,#,.rb
-PHP,//,.php
-Swift,//,.swift
-Go,//,.go
-Rust,//,.rs
-Kotlin,//,.kt
-TypeScript,//,.ts
-TypeScriptReact,//,.tsx
-C#,//,.cs
-SQL,--,.sql
-Shell,#,.sh
-Bash,#,.sh
-Fish,#,.fish
-Zsh,#,.zsh
-PowerShell,#,.ps1
-Perl,#,.pl
-R,#,.R
-MATLAB,%,.m
-Lua,--,.lua
-Haskell,--,.hs
-Scala,//,.scala
-Groovy,//,.groovy
-Dart,//,.dart
-F#,//,.fs
-YAML,#,.yml
-YAML,#,.yaml
-JSON,del,.json
-JSONL,del,.jsonl
-XML,"<!-- -->",.xml
-Makefile,#,
-CSV,del,.csv
-Markdown,del,.md
-LaTeX,%,.tex
-Assembly,;,.asm
-Fortran,!,.f90
-COBOL,*>,.cob
-Lisp,;,.lisp
-Prolog,%,.pl
-Erlang,%,.erl
-Clojure,;,.clj
-Julia,#,.jl
-Elixir,#,.ex
-Pascal,//,.pas
-VBScript,"'",.vbs
-CoffeeScript,#,.coffee
-Objective-C,//,.m
-Scheme,;,.scm
-Tcl,#,.tcl
-D,//,.d
-Ada,--,.ada
-Nim,#,.nim
-OCaml,"(**)",.ml
-LLM,del,.prompt
-prompt,del,.prompt
-TOML,#,.toml
-Log,del,.log
-reStructuredText,del,.rst
-Text,del,.txt
-INI,;,.ini
-Verilog,//,.v
-Systemverilog,//,.sv
-Prisma,///,.prisma
-Lean,--,.lean
-Agda,--,.agda
+language,comment,extension,run_command,run_test_command
+Python,#,.py,python {file},python -m pytest {file} -v
+Java,//,.java,java {file},
+C++,//,.cpp,,
+JavaScript,//,.js,node {file},
+HTML,"<!-- -->",.html,,
+CSS,"/**/",.css,,
+Ruby,#,.rb,ruby {file},
+PHP,//,.php,php {file},
+Swift,//,.swift,swift {file},swift test
+Go,//,.go,go run {file},go test -v {file}
+Rust,//,.rs,,cargo test
+Kotlin,//,.kt,kotlin {file},
+TypeScript,//,.ts,npx tsx {file},
+TypeScriptReact,//,.tsx,npx tsx {file},
+C#,//,.cs,dotnet run {file},dotnet test
+SQL,--,.sql,,
+Shell,#,.sh,sh {file},
+Bash,#,.sh,bash {file},
+Fish,#,.fish,fish {file},
+Zsh,#,.zsh,zsh {file},
+PowerShell,#,.ps1,pwsh {file},
+Perl,#,.pl,perl {file},
+R,#,.R,Rscript {file},
+MATLAB,%,.m,,
+Lua,--,.lua,lua {file},
+Haskell,--,.hs,runhaskell {file},
+Scala,//,.scala,scala {file},
+Groovy,//,.groovy,groovy {file},
+Dart,//,.dart,dart run {file},
+F#,//,.fs,dotnet fsi {file},
+YAML,#,.yml,,
+YAML,#,.yaml,,
+JSON,del,.json,,
+JSONL,del,.jsonl,,
+XML,"<!-- -->",.xml,,
+Makefile,#,,,
+CSV,del,.csv,,
+Markdown,del,.md,,
+LaTeX,%,.tex,,
+Assembly,;,.asm,,
+Fortran,!,.f90,gfortran -o {file}.out {file} && ./{file}.out,
+COBOL,*>,.cob,,
+Lisp,;,.lisp,sbcl --script {file},
+Prolog,%,.pl,swipl -s {file},
+Erlang,%,.erl,escript {file},
+Clojure,;,.clj,clojure {file},
+Julia,#,.jl,julia {file},
+Elixir,#,.ex,elixir {file},
+Pascal,//,.pas,fpc {file} && ./{file},
+VBScript,"'",.vbs,cscript {file},
+CoffeeScript,#,.coffee,coffee {file},
+Objective-C,//,.m,,
+Scheme,;,.scm,scheme --script {file},
+Tcl,#,.tcl,tclsh {file},
+D,//,.d,rdmd {file},
+Ada,--,.ada,,
+Nim,#,.nim,nim r {file},
+OCaml,"(**)",.ml,ocaml {file},
+LLM,del,.prompt,,
+prompt,del,.prompt,,
+TOML,#,.toml,,
+Log,del,.log,,
+reStructuredText,del,.rst,,
+Text,del,.txt,,
+INI,;,.ini,,
+Verilog,//,.v,,
+Systemverilog,//,.sv,,
+Prisma,///,.prisma,,
+Lean,--,.lean,lean {file},
+Agda,--,.agda,,

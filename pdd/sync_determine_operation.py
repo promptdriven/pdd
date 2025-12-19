@@ -80,6 +80,7 @@ class RunReport:
     tests_passed: int
     tests_failed: int
     coverage: float
+    test_hash: Optional[str] = None  # Hash of test file when tests were run (for staleness detection)
 
 
 @dataclass
@@ -477,7 +478,8 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
             exit_code=data['exit_code'],
             tests_passed=data['tests_passed'],
             tests_failed=data['tests_failed'],
-            coverage=data['coverage']
+            coverage=data['coverage'],
+            test_hash=data.get('test_hash')  # Optional for backward compatibility
         )
     except (json.JSONDecodeError, KeyError, IOError):
         return None
@@ -672,24 +674,74 @@ def _handle_missing_expected_files(
     )
 
 
-def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip_verify: bool = False) -> bool:
+def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip_verify: bool = False,
+                          basename: str = None, language: str = None) -> bool:
     """
     Check if workflow is complete considering skip flags.
-    
+
     Args:
         paths: Dict mapping file types to their expected Path objects
         skip_tests: If True, test files are not required for completion
         skip_verify: If True, verification operations are not required
-    
+        basename: Module basename (required for run_report check)
+        language: Module language (required for run_report check)
+
     Returns:
-        True if all required files exist for the current workflow configuration
+        True if all required files exist AND have been validated (run_report exists)
     """
     required_files = ['code', 'example']
-    
+
     if not skip_tests:
         required_files.append('test')
-        
-    return all(paths[f].exists() for f in required_files)
+
+    # Check all required files exist
+    if not all(paths[f].exists() for f in required_files):
+        return False
+
+    # Also check that run_report exists and code works (exit_code == 0)
+    # Without this, newly generated code would incorrectly be marked as "complete"
+    if basename and language:
+        run_report = read_run_report(basename, language)
+        if not run_report or run_report.exit_code != 0:
+            return False
+
+        # Check that run_report corresponds to current test file (staleness detection)
+        # If test file changed since run_report was created, we can't trust the results
+        if not skip_tests and 'test' in paths and paths['test'].exists():
+            current_test_hash = calculate_sha256(paths['test'])
+            if run_report.test_hash and current_test_hash != run_report.test_hash:
+                # run_report was created for a different version of the test file
+                return False
+            if not run_report.test_hash:
+                # Legacy run_report without test_hash - check fingerprint timestamp as fallback
+                fingerprint = read_fingerprint(basename, language)
+                if fingerprint:
+                    # If fingerprint is newer than run_report, run_report might be stale
+                    from datetime import datetime
+                    try:
+                        fp_time = datetime.fromisoformat(fingerprint.timestamp.replace('Z', '+00:00'))
+                        rr_time = datetime.fromisoformat(run_report.timestamp.replace('Z', '+00:00'))
+                        if fp_time > rr_time:
+                            return False  # run_report predates fingerprint, might be stale
+                    except (ValueError, AttributeError):
+                        pass  # If timestamps can't be parsed, skip this check
+
+        # Check verify has been done (unless skip_verify)
+        # Without this, workflow would be "complete" after crash even though verify hasn't run
+        if not skip_verify:
+            fingerprint = read_fingerprint(basename, language)
+            if fingerprint and fingerprint.command not in ['verify', 'test', 'fix', 'update']:
+                return False
+
+        # CRITICAL FIX: Check tests have been run (unless skip_tests)
+        # Without this, workflow would be "complete" after verify even though tests haven't run
+        # This prevents false positive success when skip_verify=True but tests are still required
+        if not skip_tests:
+            fp = read_fingerprint(basename, language)
+            if fp and fp.command not in ['test', 'fix', 'update']:
+                return False
+
+    return True
 
 
 def check_for_dependencies(prompt_content: str) -> bool:
@@ -835,7 +887,22 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     if run_report:
         # Check if we just completed a crash operation and need verification FIRST
         # This takes priority over test failures because we need to verify the crash fix worked
+        # BUT only proceed to verify if exit_code == 0 (crash fix succeeded)
         if fingerprint and fingerprint.command == 'crash' and not skip_verify:
+            if run_report.exit_code != 0:
+                # Crash fix didn't work - need to re-run crash
+                return SyncDecision(
+                    operation='crash',
+                    reason=f'Previous crash operation failed (exit_code={run_report.exit_code}) - retry crash fix',
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost('crash'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'previous_command': 'crash',
+                        'exit_code': run_report.exit_code,
+                        'workflow_stage': 'crash_retry'
+                    }
+                )
             return SyncDecision(
                 operation='verify',
                 reason='Previous crash operation completed - verify example runs correctly',
@@ -1028,7 +1095,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     if not changes:
         # No Changes (Hashes Match Fingerprint) - Progress workflow with skip awareness
-        if _is_workflow_complete(paths, skip_tests, skip_verify):
+        if _is_workflow_complete(paths, skip_tests, skip_verify, basename, language):
             return SyncDecision(
                 operation='nothing',
                 reason=f'All required files synchronized (skip_tests={skip_tests}, skip_verify={skip_verify})',
@@ -1041,7 +1108,63 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                     'workflow_complete': True
                 }
             )
-        
+
+        # Handle incomplete workflow when all files exist (including test)
+        # This addresses the blind spot where crash/verify/test logic only runs when test is missing
+        if (paths['code'].exists() and paths['example'].exists() and paths['test'].exists()):
+            run_report = read_run_report(basename, language)
+
+            # BUG 4 & 1: No run_report OR crash detected (exit_code != 0)
+            if not run_report or run_report.exit_code != 0:
+                return SyncDecision(
+                    operation='crash',
+                    reason='All files exist but needs validation' +
+                           (' - no run_report' if not run_report else f' - exit_code={run_report.exit_code}'),
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('crash'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'all_files_exist': True,
+                        'run_report_missing': not run_report,
+                        'exit_code': None if not run_report else run_report.exit_code,
+                        'workflow_stage': 'post_regeneration_validation'
+                    }
+                )
+
+            # BUG 2: Verify not run yet (run_report exists, exit_code=0, but command != verify/test)
+            if fingerprint and fingerprint.command not in ['verify', 'test', 'fix', 'update'] and not skip_verify:
+                return SyncDecision(
+                    operation='verify',
+                    reason='All files exist but verification not completed',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('verify'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'all_files_exist': True,
+                        'last_command': fingerprint.command,
+                        'workflow_stage': 'verification_pending'
+                    }
+                )
+
+            # Stale run_report detected: _is_workflow_complete returned False but all other conditions passed
+            # This happens when run_report.test_hash doesn't match current test file, or
+            # when fingerprint timestamp > run_report timestamp (legacy detection)
+            # Need to re-run tests to get accurate results
+            if run_report and run_report.exit_code == 0:
+                return SyncDecision(
+                    operation='test',
+                    reason='Run report is stale - need to re-run tests to verify current state',
+                    confidence=0.9,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'all_files_exist': True,
+                        'run_report_stale': True,
+                        'run_report_test_hash': run_report.test_hash,
+                        'workflow_stage': 'revalidation'
+                    }
+                )
+
         # Progress workflow considering skip flags
         if paths['code'].exists() and not paths['example'].exists():
             return SyncDecision(
@@ -1242,18 +1365,69 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             )
     
     else:
-        # Complex Changes (Multiple Files Modified / Conflicts)
-        return SyncDecision(
-            operation='analyze_conflict',
-            reason='Multiple files changed - requires conflict analysis',
-            confidence=0.70,
-            estimated_cost=estimate_operation_cost('analyze_conflict'),
-            details={
-                'decision_type': 'heuristic',
-                'changed_files': changes,
-                'num_changes': len(changes)
-            }
-        )
+        # Complex Changes (Multiple Files Modified)
+        # CRITICAL: Only treat as conflict if prompt changed along with derived artifacts
+        # If only derived artifacts changed (code, example, test), this is NOT a conflict
+        # per PDD doctrine - all are derived from the unchanged prompt
+
+        if 'prompt' in changes:
+            # True conflict: prompt (source of truth) changed along with derived artifacts
+            return SyncDecision(
+                operation='analyze_conflict',
+                reason='Prompt and derived files changed - requires conflict analysis',
+                confidence=0.70,
+                estimated_cost=estimate_operation_cost('analyze_conflict'),
+                details={
+                    'decision_type': 'heuristic',
+                    'changed_files': changes,
+                    'num_changes': len(changes),
+                    'prompt_changed': True
+                }
+            )
+        else:
+            # Only derived artifacts changed - prompt (source of truth) is unchanged
+            # Continue workflow from where it was interrupted
+
+            # If code changed, need to re-verify
+            if 'code' in changes:
+                return SyncDecision(
+                    operation='verify',
+                    reason='Derived files changed (prompt unchanged) - verify code works',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('verify'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_files': changes,
+                        'num_changes': len(changes),
+                        'prompt_changed': False,
+                        'workflow_stage': 'continue_after_interruption'
+                    }
+                )
+            # If only example/test changed
+            elif 'example' in changes:
+                return SyncDecision(
+                    operation='verify',
+                    reason='Example changed (prompt unchanged) - verify example runs',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('verify'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_files': changes,
+                        'prompt_changed': False
+                    }
+                )
+            elif 'test' in changes:
+                return SyncDecision(
+                    operation='test',
+                    reason='Test changed (prompt unchanged) - run tests',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_files': changes,
+                        'prompt_changed': False
+                    }
+                )
     
     # Fallback - should not reach here normally
     return SyncDecision(

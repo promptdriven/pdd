@@ -2,9 +2,9 @@ import sys
 from typing import Tuple, Optional, Dict, Any
 import click
 from rich import print as rprint
-from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from pathlib import Path
 
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .fix_code_loop import fix_code_loop
 # Import fix_code_module_errors conditionally or ensure it's always available
@@ -24,7 +24,10 @@ def crash_main(
     output_program: Optional[str] = None,
     loop: bool = False,
     max_attempts: Optional[int] = None,
-    budget: Optional[float] = None
+    budget: Optional[float] = None,
+    agentic_fallback: bool = True,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in a code module and its calling program that caused a crash.
@@ -39,6 +42,7 @@ def crash_main(
     :param loop: Enable iterative fixing process.
     :param max_attempts: Maximum number of fix attempts before giving up.
     :param budget: Maximum cost allowed for the fixing process.
+    :param agentic_fallback: Enable agentic fallback if the primary fix mechanism fails.
     :return: A tuple containing:
         - bool: Success status
         - str: The final fixed code module
@@ -54,9 +58,9 @@ def crash_main(
     quiet = ctx.params.get("quiet", ctx.obj.get("quiet", False))
     verbose = ctx.params.get("verbose", ctx.obj.get("verbose", False))
 
-    strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
-    temperature = ctx.obj.get("temperature", 0)
-    time_param = ctx.obj.get("time", DEFAULT_TIME)
+    # Store parameter values for later resolution
+    param_strength = strength
+    param_temperature = temperature
 
     try:
         input_file_paths = {
@@ -78,8 +82,19 @@ def crash_main(
             quiet=quiet,
             command="crash",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
+        # Use centralized config resolution with proper priority:
+        # CLI > pddrc > defaults
+        effective_config = resolve_effective_config(
+            ctx,
+            resolved_config,
+            param_overrides={"strength": param_strength, "temperature": param_temperature}
+        )
+        strength = effective_config["strength"]
+        temperature = effective_config["temperature"]
+        time_param = effective_config["time"]
 
         prompt_content = input_strings["prompt_file"]
         code_content = input_strings["code_file"]
@@ -95,7 +110,8 @@ def crash_main(
         if loop:
             success, final_program, final_code, attempts, cost, model = fix_code_loop(
                 code_file, prompt_content, program_file, strength, temperature,
-                max_attempts or 3, budget or 5.0, error_file, verbose, time_param
+                max_attempts or 3, budget or 5.0, error_file, verbose, time_param,
+                prompt_file=prompt_file, agentic_fallback=agentic_fallback
             )
             # Always set final_code/final_program to something non-empty
             if not final_code:
@@ -162,20 +178,36 @@ def crash_main(
                 if code_updated:
                     rprint(f"[bold]Fixed code saved to:[/bold] {output_code_path_str}")
                 else:
-                    rprint(f"[info]Code file '{Path(code_file).name}' was not modified (but output file was written).[/info]")
+                    rprint(f"[bold]Code saved to:[/bold] {output_code_path_str} [dim](not modified)[/dim]")
             if output_program_path_str:
                 if program_updated:
                     rprint(f"[bold]Fixed program saved to:[/bold] {output_program_path_str}")
                 else:
-                    rprint(f"[info]Program file '{Path(program_file).name}' was not modified (but output file was written).[/info]")
+                    rprint(f"[bold]Program saved to:[/bold] {output_program_path_str} [dim](not modified)[/dim]")
+
+            if verbose:
+                rprint("\n[bold]Verbose diagnostics:[/bold]")
+                rprint(f"  Code file: {code_file}")
+                rprint(f"  Program file: {program_file}")
+                rprint(f"  Code updated: {code_updated}")
+                rprint(f"  Program updated: {program_updated}")
+                rprint(f"  Original code length: {len(original_code_content)} chars")
+                rprint(f"  Final code length: {len(final_code)} chars")
+                rprint(f"  Original program length: {len(original_program_content)} chars")
+                rprint(f"  Final program length: {len(final_program)} chars")
 
         return success, final_code, final_program, attempts, cost, model
 
     except FileNotFoundError as e:
         if not quiet:
             rprint(f"[bold red]Error:[/bold red] Input file not found: {e}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return False, "", "", 0, 0.0, f"FileNotFoundError: {e}"
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not quiet:
             rprint(f"[bold red]An unexpected error occurred:[/bold red] {str(e)}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return False, "", "", 0, 0.0, f"Error: {e}"

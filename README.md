@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.66-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.87-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.66
+Current version: 0.0.87
 
 To check your installed version, run:
 ```
@@ -456,7 +456,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 - **[`update`](#9-update)**: Updates the original prompt file based on modified code.
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description.
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
-- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash.
+- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash. Includes an agentic fallback mode for complex errors.
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line.
 - **[`bug`](#14-bug)**: Generates a unit test based on observed vs. desired program outputs.
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
@@ -481,8 +481,64 @@ These options can be used with any command:
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
+- `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
+- `report-core`: Report a bug by creating a GitHub issue with the core dump file.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
+
+### Core Dump Debug Bundles
+
+If something goes wrong and you want the PDD team to be able to reproduce it, you can run any command with a core dump enabled:
+
+```bash
+pdd --core-dump sync factorial_calculator
+pdd --core-dump crash prompts/calc_python.prompt src/calc.py examples/run_calc.py crash_errors.log
+```
+
+When `--core-dump` is set, PDD:
+
+- Captures the full CLI command and arguments
+- Records relevant logs and internal trace information for that run
+- Bundles the prompt(s), generated code, and key metadata needed to replay the issue
+
+At the end of the run, PDD prints the path to the core dump bundle.  
+Attach that bundle when you open a GitHub issue or send a bug report so maintainers can quickly reproduce and diagnose your problem.
+
+#### `report-core` Command
+
+The `report-core` command helps you report a bug by creating a GitHub issue with the core dump file. It simplifies the reporting process by automatically collecting relevant files and information.
+
+**Usage:**
+```bash
+pdd report-core [OPTIONS] [CORE_FILE]
+```
+
+**Arguments:**
+- `CORE_FILE`: The path to the core dump file (e.g., `.pdd/core_dumps/pdd-core-....json`). If omitted, the most recent core dump is used.
+
+**Options:**
+- `--api`: Create the issue directly via the GitHub API instead of opening a browser. This enables automatic Gist creation for attached files.
+- `--repo OWNER/REPO`: Override the target repository (default: `promptdriven/pdd`).
+- `--description`, `-d TEXT`: A short description of what went wrong.
+
+**Authentication:**
+
+To use the `--api` flag, you need to be authenticated with GitHub. PDD checks for credentials in the following order:
+
+1.  **GitHub CLI**: `gh auth token` (recommended)
+2.  **Environment Variables**: `GITHUB_TOKEN` or `GH_TOKEN`
+3.  **Legacy**: `PDD_GITHUB_TOKEN`
+
+**File Tracking & Gists:**
+
+When using `--api`, PDD will:
+1.  Collect all relevant files (prompts, code, tests, configs, meta files).
+2.  Create a **private GitHub Gist** containing these files.
+3.  Link the Gist in the created issue.
+
+This ensures that all necessary context is available for debugging while keeping the issue body clean. If you don't use `--api`, files will be truncated to fit within the URL length limits of the browser-based submission.
+
+---
 
 ### Context Selection Flags
 
@@ -601,11 +657,11 @@ Arguments:
 
 Options:
 - `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
-- `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $10.0)
+- `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $20.0)
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
-- `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
-- `--log`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
+- `--target-coverage FLOAT`: Desired code coverage percentage (default is 0.0, meaning no coverage target)
+- `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
 
 **Real-time Progress Animation**:
 The sync command provides live visual feedback showing:
@@ -677,14 +733,14 @@ This directory should typically be added to version control (except for lock fil
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
 
 **Sync State Analysis**:
-The sync command maintains detailed decision-making logs which you can view using the `--log` option:
+The sync command maintains detailed decision-making logs which you can view using the `--dry-run` option:
 
 ```bash
 # View current sync state analysis (non-blocking)
-pdd sync --log calculator
+pdd sync --dry-run calculator
 
-# View detailed LLM reasoning for complex scenarios  
-pdd --verbose sync --log calculator
+# View detailed LLM reasoning for complex scenarios
+pdd --verbose sync --dry-run calculator
 ```
 
 **Analysis Contents Include**:
@@ -695,9 +751,9 @@ pdd --verbose sync --log calculator
 - Lock status and potential conflicts
 - State management details
 
-The `--log` option performs live analysis of the current project state, making it safe to run even when another sync operation is in progress. This differs from viewing historical logs - it shows what sync would decide to do right now based on current file states.
+The `--dry-run` option performs live analysis of the current project state, making it safe to run even when another sync operation is in progress. This differs from viewing historical logs - it shows what sync would decide to do right now based on current file states.
 
-Use `--verbose` with `--log` to see detailed LLM reasoning for complex multi-file change scenarios and advanced state analysis.
+Use `--verbose` with `--dry-run` to see detailed LLM reasoning for complex multi-file change scenarios and advanced state analysis.
 
 **When to use**: This is the recommended starting point for most PDD workflows. Use sync when you want to ensure all artifacts (code, examples, tests) are up-to-date and synchronized with your prompt files. The command embodies the PDD philosophy by treating the workflow as a batch process that developers can launch and return to later, freeing them from constant supervision.
 
@@ -715,14 +771,14 @@ pdd --force sync --skip-verify --budget 5.0 web_scraper
 # Multi-language sync with fingerprint-based change detection
 pdd --force sync multi_language_module
 
-# View comprehensive sync log with decision analysis
-pdd sync --log factorial_calculator  
+# View comprehensive sync analysis with decision analysis
+pdd sync --dry-run factorial_calculator
 
-# View detailed sync log with LLM reasoning for complex conflict resolution
-pdd --verbose sync --log factorial_calculator
+# View detailed sync analysis with LLM reasoning for complex conflict resolution
+pdd --verbose sync --dry-run factorial_calculator
 
 # Monitor what sync would do without executing (with state analysis)
-pdd sync --log calculator
+pdd sync --dry-run calculator
 
 # Context-aware examples with automatic configuration detection
 cd backend && pdd --force sync calculator     # Uses backend context settings with animation
@@ -746,6 +802,8 @@ Options:
 - `--output LOCATION`: Specify where to save the generated code. Supports `${VAR}`/`$VAR` expansion from `-e/--env`. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--original-prompt FILENAME`: The original prompt file used to generate the existing code. If not specified, the command automatically uses the last committed version of the prompt file from git.
 - `--incremental`: Force incremental patching even if changes are significant. This option is only valid when an output location is specified and the file exists.
+- `--unit-test FILENAME`: Path to a unit test file. If provided, automatic test discovery is disabled and only the content of this file is included in the prompt, instructing the model to generate code that passes the specified tests.
+- `--exclude-tests`: Do not automatically include test files found in the default tests directory.
 
 **Parameter Variables (-e/--env)**:
 Pass key=value pairs to parameterize a prompt so one prompt can generate multiple variants (e.g., multiple files) by invoking `generate` repeatedly with different values.
@@ -1438,6 +1496,62 @@ pdd [GLOBAL OPTIONS] fix --output-code src/factorial_calculator_fixed.py --outpu
 ```
 In this example, `pdd fix` will be run for each test file, and the fixed test files will be saved as `tests/test_factorial_calculator_fixed.py` and `tests/test_factorial_calculator_edge_cases_fixed.py`.
 
+
+#### Agentic Fallback Mode
+
+(This feature is also available for the `crash` and `verify` command.)
+
+For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
+
+**How it Works:**
+If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
+
+**How to Use:**
+
+This feature only takes effect when `--loop` is set.
+
+When the `--loop` flag is set, agentic fallback is enabled by default:
+```bash
+pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+Or you may want to enable it explicitly
+
+```bash
+pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+To disable this feature while using `--loop`, add `--no-agentic-fallback` to turn it off.
+
+```bash
+pdd [GLOBAL OPTIONS] fix --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+```
+
+**Prerequisites:**
+For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed and the corresponding API key configured in your environment. The agents are tried in the following order of preference:
+
+1.  **Anthropic Claude:**
+    *   Requires the `claude` CLI to be installed and in your `PATH`.
+    *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
+2.  **Google Gemini:**
+    *   Requires the `gemini` CLI to be installed and in your `PATH`.
+    *   Requires the `GOOGLE_API_KEY` environment variable to be set.
+3.  **OpenAI Codex/GPT:**
+    *   Requires the `codex` CLI to be installed and in your `PATH`.
+    *   Requires the `OPENAI_API_KEY` environment variable to be set.
+
+You can configure these keys using `pdd setup` or by setting them in your shell's environment.
+
+Example (save to different location):
+```
+pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+```
+
+Example using the `--git` option:
+```
+pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
+# This overwrites factorial_calculator_python.prompt in place using git history
+```
 ### 7. split
 
 Split large complex prompt files into smaller, more manageable prompt files.
@@ -1490,22 +1604,59 @@ pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv s
 
 ### 9. update
 
-Update the original prompt file based on the modified code and optionally the original code.
+Update prompts based on code changes. This command operates in two primary modes:
 
-```
-pdd [GLOBAL OPTIONS] update [OPTIONS] INPUT_PROMPT_FILE MODIFIED_CODE_FILE [INPUT_CODE_FILE]
+1.  **Repository-Wide Mode (Default)**: When run with no file arguments, `pdd update` scans the entire repository. It finds all code/prompt pairs, creates any missing prompt files, and updates all of them based on the latest Git changes. This is the easiest way to keep your entire project in sync.
+
+2.  **Single-File Mode**: When you provide file arguments, the command operates on a specific file. There are three distinct use cases for this mode:
+
+    **A) Prompt Generation / Regeneration**
+    To generate a brand new prompt for a code file from scratch, or to regenerate an existing prompt, simply provide the path to that code file. This will create a new prompt file or overwrite an existing one.
+    ```bash
+    pdd update <path/to/your_code_file.py>
+    ```
+
+    **B) Prompt Update (using Git)**
+    To update an existing prompt by comparing the modified code against the version in your last commit. This requires the prompt file and the modified code file.
+    ```bash
+    pdd update --git <path/to/prompt.prompt> <path/to/modified_code.py>
+    ```
+
+    **C) Prompt Update (Manual)**
+    To update an existing prompt by manually providing the original code, the modified code, and the prompt. This is for scenarios where Git history is not available or desired.
+    ```bash
+    pdd update <path/to/prompt.prompt> <path/to/modified_code.py> <path/to/original_code.py>
+    ```
+
+```bash
+# Repository-Wide Mode (no arguments)
+pdd [GLOBAL OPTIONS] update
+
+# Single-File Mode: Examples
+# Generate/Regenerate a prompt for a code file
+pdd [GLOBAL OPTIONS] update src/my_new_module.py
+
+# Update an existing prompt using Git history
+pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
+
+# Update an existing prompt by manually providing original code
+pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+
+# Repository-wide update filtered by extension
+pdd [GLOBAL OPTIONS] update --extensions py,js
 ```
 
 Arguments:
-- `INPUT_PROMPT_FILE`: The filename of the prompt file that generated the original code.
-- `MODIFIED_CODE_FILE`: The filename of the code that was modified by the user.
-- `INPUT_CODE_FILE`: (Optional) The filename of the original code that was generated from the input prompt file. This argument is not required when using the `--git` option.
+- `MODIFIED_CODE_FILE`: The filename of the code that was modified or for which a prompt should be generated/regenerated.
+- `INPUT_PROMPT_FILE`: (Optional) The filename of the prompt file that generated the original code. Required for true update scenarios (B and C).
+- `INPUT_CODE_FILE`: (Optional) The filename of the original code. Required for manual update (C), not required when using `--git` (B), and not applicable for generation (A).
 
-**Important**: The `update` command has special behavior compared to other PDD commands. By default, it overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth." This ensures prompts remain in their canonical location and continue to serve as the authoritative specification.
+**Important**: By default, this command overwrites the original prompt file to maintain the core PDD principle of "prompts as source of truth."
 
 Options:
 - `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
+- `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
 
 Example (overwrite original prompt - default behavior):
 ```
@@ -1513,16 +1664,8 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 # This overwrites factorial_calculator_python.prompt in place
 ```
 
-Example (save to different location):
-```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-```
 
-Example using the `--git` option:
-```
-pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place using git history
-```
+
 
 ### 10. detect
 
@@ -1586,8 +1729,11 @@ Options:
 - `--loop`: Enable iterative fixing process.
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
   - `--budget FLOAT`: Set the maximum cost allowed for the fixing process (default is $5.0).
+- `--agentic-fallback / --no-agentic-fallback`: Enable or disable the agentic fallback mode (default: enabled).
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
+
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, or Codex) installed and the corresponding API key configured in your environment.
 
 Example:
 ```
@@ -1699,6 +1845,7 @@ Options:
 - `--output-program LOCATION`: Specify where to save the final program file after verification attempts (even if verification doesn't fully succeed). The default file name is `<program_basename>_verified.<language_extension>`. If an environment variable `PDD_VERIFY_PROGRAM_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--max-attempts INT`: Set the maximum number of fix attempts within the verification loop before giving up (default is 3).
 - `--budget FLOAT`: Set the maximum cost allowed for the entire verification and iterative fixing process (default is $5.0).
+- `--agentic-fallback / --no-agentic-fallback`: Enable or disable the agentic fallback mode (default: enabled).
 
 The command operates iteratively if the initial run of `PROGRAM_FILE` produces output judged incorrect by the LLM based on the `PROMPT_FILE`. After each fix attempt on `CODE_FILE`, `PROGRAM_FILE` is re-run, and its output is re-evaluated. This continues until the output is judged correct, `--max-attempts` is reached, or the `--budget` is exhausted. Intermediate code files may be generated during the loop, similar to the `fix` command.
 
@@ -2006,10 +2153,10 @@ Here are some common issues and their solutions:
 
 8. **Sync-Specific Issues**:
    - **"Another sync is running"**: Check for stale locks in `.pdd/locks/` directory and remove if process no longer exists
-   - **Complex conflict resolution problems**: Use `pdd --verbose sync --log basename` to see detailed LLM reasoning and decision analysis
+   - **Complex conflict resolution problems**: Use `pdd --verbose sync --dry-run basename` to see detailed LLM reasoning and decision analysis
    - **State corruption or unexpected behavior**: Delete `.pdd/meta/{basename}_{language}.json` to reset fingerprint state
    - **Animation display issues**: Sync operations work in background; animation is visual feedback only and doesn't affect functionality
-   - **Fingerprint mismatches**: Use `pdd sync --log basename` to see what changes were detected and why operations were recommended
+   - **Fingerprint mismatches**: Use `pdd sync --dry-run basename` to see what changes were detected and why operations were recommended
 
 If you encounter persistent issues, consult the PDD documentation or post an issue on GitHub for assistance.
 

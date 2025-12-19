@@ -1,6 +1,7 @@
 import pytest
 import json
 import os
+from pathlib import Path
 from pdd.pytest_output import (
     run_pytest_and_capture_output,
     save_output_to_json,
@@ -11,8 +12,8 @@ import sys
 from unittest.mock import patch
 
 
-# Create a directory for test outputs
-OUTPUT_DIR = "output"
+# Create a directory for test outputs (use project root output/ directory)
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -35,7 +36,7 @@ def test_run_pytest_and_capture_output_invalid_file_type() -> None:
     create_test_file(test_file, "This is not a Python file.")
     result = run_pytest_and_capture_output(test_file)
     assert result == {}
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 def test_run_pytest_and_capture_output_successful_run() -> None:
@@ -52,7 +53,7 @@ def test_run_pytest_and_capture_output_successful_run() -> None:
     assert result["test_results"][0]["errors"] == 0
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 def test_run_pytest_and_capture_output_failed_test() -> None:
@@ -69,7 +70,7 @@ def test_run_pytest_and_capture_output_failed_test() -> None:
     assert result["test_results"][0]["errors"] == 0
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 def test_run_pytest_and_capture_output_error_test() -> None:
@@ -88,6 +89,7 @@ def test_run_pytest_and_capture_output_error_test() -> None:
     assert result["test_results"][0]["passed"] == 0
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
+    Path(test_file).unlink(missing_ok=True)
 
 
 def test_run_pytest_and_capture_output_with_warnings() -> None:
@@ -105,29 +107,28 @@ def test_run_pytest_and_capture_output_with_warnings() -> None:
         3,
     )  # 3 means warnings were emitted
     assert result["test_results"][0]["warnings"] >= 0  # Check for warnings
-    os.remove(test_file)
+    Path(test_file).unlink(missing_ok=True)
 
 
 # Test cases for save_output_to_json
-def test_save_output_to_json_successful() -> None:
+def test_save_output_to_json_successful(tmp_path) -> None:
     """Test case: successful save to JSON."""
-    output_file = os.path.join(OUTPUT_DIR, "pytest_output.json")
+    output_file = tmp_path / "pytest_output.json"
     test_data = {"test": "data"}
-    save_output_to_json(test_data, output_file)
-    assert os.path.exists(output_file)
+    save_output_to_json(test_data, str(output_file))
+    assert output_file.exists()
     with open(output_file, "r") as f:
         loaded_data = json.load(f)
     assert loaded_data == test_data
-    os.remove(output_file)
 
 
-def test_save_output_to_json_exception(capsys) -> None:
+def test_save_output_to_json_exception(tmp_path, capsys) -> None:
     """Test case: exception during save to JSON."""
     # Mock the json.dump function to raise an exception
     with patch("json.dump", side_effect=Exception("Test Exception")):
-        output_file = os.path.join(OUTPUT_DIR, "pytest_output.json")
+        output_file = tmp_path / "pytest_output.json"
         test_data = {"test": "data"}
-        save_output_to_json(test_data, output_file)
+        save_output_to_json(test_data, str(output_file))
         captured = capsys.readouterr()
         assert "Error saving output to JSON: Test Exception" in captured.out
 
@@ -216,4 +217,110 @@ def test_test_result_collector_pytest_hooks() -> None:
 
     collector.pytest_sessionfinish(MockSession())
     assert collector.warnings == 0  # Should remain 0 as terminalreporter is None
+
+
+class BrokenStdin:
+    def fileno(self):
+        raise ValueError("redirected stdin is pseudofile, has no fileno()")
+    
+    def read(self, size=-1):
+        return ""
+
+
+def test_subprocess_safe_stdin_in_run_pytest_and_capture_output(tmp_path) -> None:
+    """
+    Regression test for the 'redirected stdin is pseudofile' crash.
+    Verifies that run_pytest_and_capture_output handles invalid sys.stdin gracefully.
+    """
+    # Create a dummy test file
+    test_file = tmp_path / "test_dummy.py"
+    test_file.write_text("def test_pass(): assert True", encoding="utf-8")
+    
+    # Patch sys.stdin to simulate the broken environment
+    with patch('sys.stdin', BrokenStdin()):
+        try:
+            # This should NOT crash
+            # Since run_pytest_and_capture_output expects a string path, convert tmp_path
+            output = run_pytest_and_capture_output(str(test_file))
+            
+            # Verify it actually ran
+            results = output.get('test_results', [{}])[0]
+            assert results.get('passed') == 1
+            assert results.get('failures') == 0
+            assert results.get('errors') == 0
+        except ValueError as e:
+            pytest.fail(f"Function crashed with ValueError accessing stdin: {e}")
+
+
+# ============================================================================
+# Regression Tests - ANSI / Color Output Parsing
+# ============================================================================
+
+def test_run_pytest_and_capture_output_parses_ansi_failed_output(tmp_path) -> None:
+    """
+    Regression test: when pytest output contains ANSI color codes, we should still
+    count failures correctly.
+    """
+    test_file = tmp_path / "test_failure_color_unit.py"
+    test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+
+    import subprocess
+
+    ansi_stdout = "test_failure_color_unit.py::test_fail \x1b[31mFAILED\x1b[0m [100%]\n"
+    fake_completed = subprocess.CompletedProcess(
+        args=["pytest"], returncode=1, stdout=ansi_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result.get("test_results", [{}])[0]
+    assert results.get("return_code") == 1
+    assert results.get("failures") == 1
+    assert results.get("errors") == 0
+
+
+def test_run_pytest_and_capture_output_counts_failures_with_forced_color(tmp_path, monkeypatch) -> None:
+    """
+    Integration regression: force color output (like the sync TUI) and ensure
+    failures are still detected.
+    """
+    test_file = tmp_path / "test_failure_color_integration.py"
+    test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+
+    existing_addopts = os.environ.get("PYTEST_ADDOPTS", "")
+    addopts = (existing_addopts + " " if existing_addopts else "") + "--color=yes"
+    monkeypatch.setenv("PYTEST_ADDOPTS", addopts)
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    result = run_pytest_and_capture_output(str(test_file))
+    results = result.get("test_results", [{}])[0]
+    stdout = results.get("standard_output", "") or ""
+
+    # Ensure this test exercises the ANSI-colored output path.
+    if "\x1b[" not in stdout:
+        pytest.skip("Pytest did not emit ANSI output even with --color=yes")
+    assert results.get("return_code") == 1
+    assert results.get("failures") == 1
+
+
+def test_run_pytest_and_capture_output_nonzero_returncode_never_looks_passing(tmp_path) -> None:
+    """
+    Safety net: if pytest returns a non-zero exit code but output parsing fails,
+    we should still report a failure/error count > 0.
+    """
+    test_file = tmp_path / "test_nonzero_returncode.py"
+    test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+
+    import subprocess
+
+    fake_completed = subprocess.CompletedProcess(
+        args=["pytest"], returncode=1, stdout="(output omitted)", stderr=""
+    )
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result.get("test_results", [{}])[0]
+    assert results.get("return_code") == 1
+    assert (results.get("failures", 0) + results.get("errors", 0)) > 0
     

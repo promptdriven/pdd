@@ -38,7 +38,7 @@ def mock_files_fixture():
 
 
 # pylint: disable=redefined-outer-name
-@pytest.mark.parametrize("coverage_report, existing_tests, expect_exit", [
+@pytest.mark.parametrize("coverage_report, existing_tests, expect_error", [
     (None, None, False),
     ("fake_coverage_report.xml", None, True),
     ("fake_coverage_report.xml", "fake_existing_tests.py", False),
@@ -48,7 +48,7 @@ def test_cmd_test_main_coverage_handling(
     mock_files_fixture,
     coverage_report,
     existing_tests,
-    expect_exit
+    expect_error
 ):
     """
     Tests behavior when coverage_report is missing or present
@@ -81,16 +81,7 @@ def test_cmd_test_main_coverage_handling(
         mock_generate_test.return_value = ("generated_tests_code", 0.05, "test_model")
         mock_increase_tests.return_value = ("enhanced_tests_code", 0.10, "coverage_model")
 
-        # Run the function
-        exit_called = False
-        def mock_exit(code):
-            nonlocal exit_called
-            exit_called = True
-            assert code == 1, "Expected exit code 1 for this test case"
-
-        mock_ctx_fixture.exit.side_effect = mock_exit
-
-        cmd_test_main(
+        result = cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
@@ -102,11 +93,13 @@ def test_cmd_test_main_coverage_handling(
             merge=False,
         )
 
-        # Check if we expected click.Context.exit to be invoked
-        assert exit_called == expect_exit
-
-        if not expect_exit:
-            # If not exiting, we either tested generate_test or increase_tests
+        # Check if we expected an error result (tuple with Error in model_name)
+        if expect_error:
+            assert result[0] == ""
+            assert result[1] == 0.0
+            assert "Error:" in result[2]
+        else:
+            # If not an error, we either tested generate_test or increase_tests
             if coverage_report is None:
                 # Should have invoked generate_test
                 mock_generate_test.assert_called_once()
@@ -122,20 +115,12 @@ def test_cmd_test_main_coverage_handling(
 def test_cmd_test_main_path_construction_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if construct_paths raises an exception,
-    cmd_test_main handles it and calls ctx.exit(1).
+    cmd_test_main handles it and returns an error result tuple.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths:
         mock_construct_paths.side_effect = Exception("construct_paths error")
 
-        exit_called = False
-        def mock_exit(code):
-            nonlocal exit_called
-            exit_called = True
-            assert code == 1
-
-        mock_ctx_fixture.exit.side_effect = mock_exit
-
-        cmd_test_main(
+        result = cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
@@ -146,14 +131,19 @@ def test_cmd_test_main_path_construction_error(mock_ctx_fixture, mock_files_fixt
             target_coverage=None,
             merge=False,
         )
-        assert exit_called is True
+
+        # Verify error result tuple is returned
+        assert result[0] == ""
+        assert result[1] == 0.0
+        assert "Error:" in result[2]
+        assert "construct_paths error" in result[2]
 
 
 # pylint: disable=unused-argument
 def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if generate_test raises an exception,
-    cmd_test_main handles it and calls ctx.exit(1).
+    cmd_test_main handles it and returns an error result tuple.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
          patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
@@ -166,15 +156,7 @@ def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture)
         )
         mock_generate_test.side_effect = Exception("generate_test error")
 
-        exit_called = False
-        def mock_exit(code):
-            nonlocal exit_called
-            exit_called = True
-            assert code == 1
-
-        mock_ctx_fixture.exit.side_effect = mock_exit
-
-        cmd_test_main(
+        result = cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
@@ -185,14 +167,19 @@ def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture)
             target_coverage=None,
             merge=False,
         )
-        assert exit_called is True
+
+        # Verify error result tuple is returned
+        assert result[0] == ""
+        assert result[1] == 0.0
+        assert "Error:" in result[2]
+        assert "generate_test error" in result[2]
 
 
 # pylint: disable=unused-argument
 def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if increase_tests raises an exception (when coverage_report is provided),
-    cmd_test_main handles it and calls ctx.exit(1).
+    cmd_test_main handles it and returns an error result tuple.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
          patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests:
@@ -210,15 +197,7 @@ def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture
         )
         mock_increase_tests.side_effect = Exception("increase_tests error")
 
-        exit_called = False
-        def mock_exit(code):
-            nonlocal exit_called
-            exit_called = True
-            assert code == 1
-
-        mock_ctx_fixture.exit.side_effect = mock_exit
-
-        cmd_test_main(
+        result = cmd_test_main(
             ctx=mock_ctx_fixture,
             prompt_file=mock_files_fixture["prompt_file"],
             code_file=mock_files_fixture["code_file"],
@@ -229,7 +208,12 @@ def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture
             target_coverage=95.0,
             merge=False,
         )
-        assert exit_called is True
+
+        # Verify error result tuple is returned
+        assert result[0] == ""
+        assert result[1] == 0.0
+        assert "Error:" in result[2]
+        assert "increase_tests error" in result[2]
 
 
 # pylint: disable=redefined-outer-name
@@ -386,3 +370,126 @@ def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture
         m_open.assert_called_once_with(str(resolved_file), "w", encoding="utf-8")
         handle = m_open()
         handle.write.assert_called_once_with("unit_test_code")
+
+
+def test_cmd_test_main_uses_safe_ctx_obj_access():
+    """
+    Regression: cmd_test_main should not raise KeyError if ctx.obj
+    is missing 'strength' or 'temperature' keys.
+
+    Bug: Direct dict access ctx.obj["strength"] raises KeyError,
+    but ctx.obj.get("strength", DEFAULT) is safe.
+    """
+    import inspect
+
+    source = inspect.getsource(cmd_test_main)
+
+    # Should NOT use direct dict access for strength/temperature
+    assert 'ctx.obj["strength"]' not in source, \
+        "cmd_test_main should use ctx.obj.get('strength', ...) not ctx.obj['strength']"
+    assert 'ctx.obj["temperature"]' not in source, \
+        "cmd_test_main should use ctx.obj.get('temperature', ...) not ctx.obj['temperature']"
+
+
+def test_cmd_test_main_uses_pddrc_strength_from_resolved_config():
+    """
+    REGRESSION TEST: cmd_test_main must use strength from resolved_config (pddrc),
+    not just ctx.obj or defaults.
+
+    Bug: strength was resolved BEFORE calling construct_paths, so pddrc values
+    from resolved_config were ignored. generate_test received DEFAULT_STRENGTH
+    instead of pddrc value.
+
+    BEFORE FIX: generate_test called with strength=0.75 (default)
+    AFTER FIX: generate_test called with strength=0.9 (from pddrc via resolved_config)
+    """
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.obj = {
+        "verbose": False,
+        "force": False,
+        "quiet": False,
+        "time": 0.25,
+        # strength/temperature NOT in ctx.obj (simulates CLI not passing --strength)
+    }
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+
+        # resolved_config contains pddrc strength value
+        mock_construct_paths.return_value = (
+            {"strength": 0.9, "temperature": 0.5},  # pddrc values in resolved_config
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": "test_output.py"},
+            "python"
+        )
+        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
+
+        cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="test.prompt",
+            code_file="test.py",
+            output="test_output.py",
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify generate_test was called with pddrc strength (0.9), not default (0.75)
+        mock_generate_test.assert_called_once()
+        call_kwargs = mock_generate_test.call_args.kwargs
+        assert call_kwargs["strength"] == 0.9, \
+            f"Expected pddrc strength 0.9, got {call_kwargs['strength']}"
+        assert call_kwargs["temperature"] == 0.5, \
+            f"Expected pddrc temperature 0.5, got {call_kwargs['temperature']}"
+
+
+def test_cmd_test_main_cli_strength_overrides_pddrc():
+    """
+    Verify that explicit CLI --strength overrides pddrc value.
+
+    When user passes --strength 0.3, that should be used even if pddrc has 0.9.
+    """
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.obj = {
+        "verbose": False,
+        "force": False,
+        "quiet": False,
+        "time": 0.25,
+        "strength": 0.3,  # CLI passed --strength 0.3
+        "temperature": 0.1,
+    }
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+
+        # resolved_config would normally have pddrc value, but CLI should win
+        # However, construct_paths merges CLI > pddrc, so resolved_config
+        # should already have the CLI value
+        mock_construct_paths.return_value = (
+            {"strength": 0.3, "temperature": 0.1},  # CLI values propagated
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": "test_output.py"},
+            "python"
+        )
+        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
+
+        cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="test.prompt",
+            code_file="test.py",
+            output="test_output.py",
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify CLI strength (0.3) was used
+        call_kwargs = mock_generate_test.call_args.kwargs
+        assert call_kwargs["strength"] == 0.3, \
+            f"Expected CLI strength 0.3, got {call_kwargs['strength']}"

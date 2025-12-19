@@ -20,3 +20,7 @@
     - 'focus': String containing the focus of the generation.
     - 'explanation': String explanation of why this block_type was the focus of the generation and explain any errors detected in the code, if a code type of block.
     - 'extracted_code': String containing the entire generated and corrected block_type of focus.
+
+% CRITICAL: The 'extracted_code' field MUST preserve all newlines and indentation from the original code. In JSON, newlines must be represented as the escape sequence \n (backslash-n). Each line break in the code must appear as \n in the JSON string value. Do NOT concatenate lines together or remove line breaks. The extracted code must be properly formatted and runnable.
+
+% IMPORTANT: Output ONLY the JSON object. Do not add any trailing whitespace or newlines after the closing brace.
