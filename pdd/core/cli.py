@@ -199,16 +199,16 @@ class PDDCLI(click.Group):
 @click.option(
     "--strength",
     type=click.FloatRange(0.0, 1.0),
-    default=DEFAULT_STRENGTH,
-    show_default=True,
-    help="Set the strength of the AI model (0.0 to 1.0).",
+    default=None,
+    show_default=False,
+    help="Set the strength of the AI model (0.0 to 1.0). Default: 0.75 or .pddrc value.",
 )
 @click.option(
     "--temperature",
     type=click.FloatRange(0.0, 2.0), # Allow higher temperatures if needed
-    default=0.0,
-    show_default=True,
-    help="Set the temperature of the AI model.",
+    default=None,
+    show_default=False,
+    help="Set the temperature of the AI model. Default: 0.0 or .pddrc value.",
 )
 @click.option(
     "--time",
@@ -296,8 +296,12 @@ def cli(
 
     ctx.ensure_object(dict)
     ctx.obj["force"] = force
-    ctx.obj["strength"] = strength
-    ctx.obj["temperature"] = temperature
+    # Only set strength/temperature if explicitly provided (not None)
+    # This allows .get("key", default) to return the default when CLI didn't pass a value
+    if strength is not None:
+        ctx.obj["strength"] = strength
+    if temperature is not None:
+        ctx.obj["temperature"] = temperature
     ctx.obj["verbose"] = verbose
     ctx.obj["quiet"] = quiet
     ctx.obj["output_cost"] = output_cost
