@@ -84,7 +84,7 @@ def sync_main(
     skip_verify: bool,
     skip_tests: bool,
     target_coverage: float,
-    log: bool,
+    dry_run: bool,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -98,7 +98,7 @@ def sync_main(
         skip_verify: Skip the functional verification step.
         skip_tests: Skip unit test generation and fixing.
         target_coverage: Desired code coverage percentage.
-        log: If True, display sync logs instead of running the sync.
+        dry_run: If True, analyze sync state without executing operations.
 
     Returns:
         A tuple containing the results dictionary, total cost, and primary model name.
@@ -151,10 +151,10 @@ def sync_main(
             f"Expected files with format: '{basename}_<language>.prompt'"
         )
 
-    # 5. Handle --log mode separately
-    if log:
+    # 5. Handle --dry-run mode separately
+    if dry_run:
         if not quiet:
-            rprint(Panel(f"Displaying sync logs for [bold cyan]{basename}[/bold cyan]", title="PDD Sync Log", expand=False))
+            rprint(Panel(f"Displaying sync analysis for [bold cyan]{basename}[/bold cyan]", title="PDD Sync Dry Run", expand=False))
 
         for lang in languages:
             if not quiet:
@@ -189,7 +189,7 @@ def sync_main(
                 code_dir=str(code_dir),
                 examples_dir=str(examples_dir),
                 tests_dir=str(tests_dir),
-                log=True,
+                dry_run=True,
                 verbose=verbose,
                 quiet=quiet,
                 context_override=context_override,
@@ -235,14 +235,20 @@ def sync_main(
                 "max_attempts": max_attempts,
                 "budget": budget,
                 "target_coverage": target_coverage,
-                "strength": strength,
-                "temperature": temperature,
                 "time": time_param,
             }
+            # Only pass strength/temperature if explicitly set by user (not CLI defaults)
+            # This allows .pddrc values to take precedence when user doesn't pass CLI flags
+            if strength != DEFAULT_STRENGTH:
+                command_options["strength"] = strength
+            if temperature != 0.0:  # 0.0 is the CLI default for temperature
+                command_options["temperature"] = temperature
 
+            # Use force=True for path discovery - actual file writes happen in sync_orchestration
+            # which will handle confirmations via the TUI's confirm_callback
             resolved_config, _, _, resolved_language = construct_paths(
                 input_file_paths={"prompt_file": str(prompt_file_path)},
-                force=force,
+                force=True,  # Always force during path discovery
                 quiet=True,
                 command="sync",
                 command_options=command_options,
@@ -254,7 +260,11 @@ def sync_main(
             final_temp = resolved_config.get("temperature", temperature)
             final_max_attempts = resolved_config.get("max_attempts", max_attempts)
             final_target_coverage = resolved_config.get("target_coverage", target_coverage)
-            
+
+            # Update ctx.obj with resolved values so sub-commands inherit them
+            ctx.obj["strength"] = final_strength
+            ctx.obj["temperature"] = final_temp
+
             code_dir = resolved_config.get("code_dir", "src")
             tests_dir = resolved_config.get("tests_dir", "tests")
             examples_dir = resolved_config.get("examples_dir", "examples")

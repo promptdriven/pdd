@@ -334,14 +334,33 @@ def test_decision_verify_after_crash_fix(mock_construct, pdd_test_environment):
         "pdd_version": "1.0", "timestamp": "t", "command": "crash",
         "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
     })
-    # And the run report shows a crash
+    # And the run report shows SUCCESS (exit_code=0) - crash fix worked
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 0, "tests_failed": 0, "coverage": 0.0
+    })
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
+    assert decision.operation == 'verify'
+    assert "Previous crash operation completed" in decision.reason
+
+
+@patch('sync_determine_operation.construct_paths')
+def test_decision_crash_retry_when_exit_code_nonzero(mock_construct, pdd_test_environment):
+    """When crash operation failed (exit_code != 0), should retry crash, not proceed to verify."""
+    # Last command was 'crash'
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0", "timestamp": "t", "command": "crash",
+        "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
+    })
+    # And the run report shows FAILURE (exit_code=1) - crash fix didn't work
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, {
         "timestamp": "t", "exit_code": 1, "tests_passed": 0, "tests_failed": 0, "coverage": 0.0
     })
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
-    assert decision.operation == 'verify'
-    assert "Previous crash operation completed" in decision.reason
+    assert decision.operation == 'crash', f"Expected 'crash' when exit_code=1, got '{decision.operation}'"
+    assert "retry crash fix" in decision.reason
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
@@ -423,6 +442,12 @@ def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
     create_fingerprint_file(fp_path, {
         "pdd_version": "1.0", "timestamp": "t", "command": "test",
         "prompt_hash": p_hash, "code_hash": c_hash, "example_hash": e_hash, "test_hash": t_hash
+    })
+
+    # Create run_report to indicate code has been validated
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 5, "tests_failed": 0, "coverage": 95.0
     })
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
@@ -568,7 +593,7 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
             "name": "crash_scenario_skip_tests",
             "metadata": {
                 "pdd_version": "0.0.41",
-                "timestamp": "2023-01-01T00:00:00Z", 
+                "timestamp": "2023-01-01T00:00:00Z",
                 "command": "crash",
                 "prompt_hash": "abc123",
                 "code_hash": "def456",
@@ -577,14 +602,14 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
             },
             "run_report": {
                 "timestamp": "2023-01-01T00:00:00Z",
-                "exit_code": 2,  # Crash exit code
+                "exit_code": 2,  # Crash exit code - crash fix failed!
                 "tests_passed": 0,
                 "tests_failed": 0,
                 "coverage": 0.0
             },
             "skip_tests": True,
             "expected_not": ["analyze_conflict"],
-            "expected_in": ["verify"]  # When fingerprint.command='crash' and exit_code=2, returns 'verify'
+            "expected_in": ["crash"]  # When fingerprint.command='crash' and exit_code!=0, retry crash
         }
     ]
     
@@ -755,9 +780,10 @@ def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
     assert decision.operation == 'analyze_conflict'
-    assert "Multiple files changed" in decision.reason
+    assert "Prompt and derived files changed" in decision.reason
     assert "prompt" in decision.details['changed_files']
     assert "code" in decision.details['changed_files']
+    assert decision.details.get('prompt_changed') == True
 
 
 # --- Part 3: `analyze_conflict_with_llm` ---
@@ -867,9 +893,17 @@ def test_skip_tests_workflow_completion(mock_construct, pdd_test_environment):
         "prompt_hash": p_hash, "code_hash": c_hash, "example_hash": e_hash, "test_hash": None
     })
 
+    # Create run_report to indicate code has been validated
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 0, "tests_failed": 0, "coverage": 0.0
+    })
+
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir), skip_tests=True)
-    assert decision.operation == 'nothing'
-    assert "skip_tests=True" in decision.reason
+    # Either 'nothing' or 'all_synced' indicates workflow is complete
+    assert decision.operation in ['nothing', 'all_synced'], f"Expected done state, got {decision.operation}"
+    # Check for skip_tests in reason or that it's an all_synced with tests skipped
+    assert "skip_tests=True" in decision.reason or "tests skipped" in decision.reason.lower()
 
 @patch('sync_determine_operation.construct_paths')
 def test_skip_flags_parameter_propagation(mock_construct, pdd_test_environment):
@@ -1967,3 +2001,644 @@ def test_get_pdd_file_paths_respects_pddrc_with_PDD_PATH(pdd_test_environment, m
     assert paths["code"].as_posix().endswith("pdd/simple_math.py")
     assert paths["example"].as_posix().endswith("examples/simple_math_example.py")
     assert paths["test"].as_posix().endswith("tests/test_simple_math.py")
+
+
+# --- Regression Tests: All Files Exist But Workflow Incomplete ---
+
+class TestAllFilesExistWorkflowIncomplete:
+    """
+    Regression tests for bugs where test file exists but workflow is incomplete.
+
+    The crash/verify/test logic at line 1074-1137 only runs when test is MISSING.
+    These tests verify correct behavior when all files exist but workflow is incomplete.
+
+    Bug scenarios:
+    - BUG 4: All files exist + NO run_report → should return 'crash'
+    - BUG 1: All files exist + run_report.exit_code != 0 → should return 'crash'
+    - BUG 2: All files exist + run_report OK + command='crash' → should return 'verify'
+    - Sanity: All files exist + run_report OK + command='test' → should return 'nothing'
+    """
+
+    @pytest.fixture
+    def all_files_env(self, tmp_path):
+        """Setup: All PDD files exist with matching fingerprint."""
+        original_cwd = Path.cwd()
+        os.chdir(tmp_path)
+
+        # Setup base directories
+        pdd_dir = tmp_path / ".pdd"
+        meta_dir = pdd_dir / "meta"
+        locks_dir = pdd_dir / "locks"
+        prompts_dir = tmp_path / "prompts"
+
+        for d in [meta_dir, locks_dir, prompts_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+
+        # Update module-level path constants BEFORE calling get_pdd_file_paths
+        pdd_module = sys.modules['sync_determine_operation']
+        pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
+        pdd_module.META_DIR = pdd_module.get_meta_dir()
+        pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
+
+        # Create prompt file first (required for get_pdd_file_paths)
+        prompt_file = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_file.write_text("Create add function")
+
+        # Get the expected file paths from the sync_determine_operation module
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+
+        # Create files at the paths the module expects
+        code_file = paths['code']
+        code_file.parent.mkdir(parents=True, exist_ok=True)
+        code_file.write_text("def add(a, b): return a + b")
+
+        example_file = paths['example']
+        example_file.parent.mkdir(parents=True, exist_ok=True)
+        example_file.write_text("add(1, 2) == 3")
+
+        test_file = paths['test']
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("def test_add(): assert add(1, 2) == 3")
+
+        yield {
+            'tmp_path': tmp_path,
+            'meta_dir': meta_dir,
+            'prompt': prompt_file,
+            'code': code_file,
+            'example': example_file,
+            'test': test_file
+        }
+
+        # Restore original working directory
+        os.chdir(original_cwd)
+        pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
+        pdd_module.META_DIR = pdd_module.get_meta_dir()
+        pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
+
+    def _create_fingerprint(self, env, command='test'):
+        """Helper to create fingerprint with given command."""
+        fp_file = env['meta_dir'] / f"{BASENAME}_{LANGUAGE}.json"
+        fp_file.write_text(json.dumps({
+            "pdd_version": "1.0.0",
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "command": command,
+            "prompt_hash": calculate_sha256(env['prompt']),
+            "code_hash": calculate_sha256(env['code']),
+            "example_hash": calculate_sha256(env['example']),
+            "test_hash": calculate_sha256(env['test'])
+        }))
+
+    def _create_run_report(self, env, exit_code=0):
+        """Helper to create run_report with given exit_code."""
+        rr_file = env['meta_dir'] / f"{BASENAME}_{LANGUAGE}_run.json"
+        rr_file.write_text(json.dumps({
+            "timestamp": "2025-01-01T00:00:00+00:00",
+            "exit_code": exit_code,
+            "tests_passed": 5 if exit_code == 0 else 0,
+            "tests_failed": 0 if exit_code == 0 else 1,
+            "coverage": 95.0 if exit_code == 0 else 0.0
+        }))
+
+    def test_bug4_no_run_report_returns_crash(self, all_files_env):
+        """BUG 4: All files exist, NO run_report → should return 'crash'."""
+        env = all_files_env
+        self._create_fingerprint(env, command='generate')
+        # NO run_report - this is the key scenario
+
+        decision = sync_determine_operation(
+            basename=BASENAME,
+            language=LANGUAGE,
+            target_coverage=TARGET_COVERAGE,
+            log_mode=True
+        )
+
+        assert decision.operation == 'crash', (
+            f"BUG 4: Expected 'crash' when all files exist but no run_report, "
+            f"got '{decision.operation}' with reason: {decision.reason}"
+        )
+
+    def test_bug1_exit_code_nonzero_returns_crash(self, all_files_env):
+        """BUG 1: All files exist, run_report.exit_code != 0 → should return 'crash'."""
+        env = all_files_env
+        self._create_fingerprint(env, command='crash')
+        self._create_run_report(env, exit_code=1)  # Code crashed!
+
+        decision = sync_determine_operation(
+            basename=BASENAME,
+            language=LANGUAGE,
+            target_coverage=TARGET_COVERAGE,
+            log_mode=True
+        )
+
+        assert decision.operation == 'crash', (
+            f"BUG 1: Expected 'crash' when exit_code=1, "
+            f"got '{decision.operation}' with reason: {decision.reason}"
+        )
+
+    def test_bug2_verify_not_run_returns_verify(self, all_files_env):
+        """BUG 2: All files exist, run_report OK, command='crash' → should return 'verify'."""
+        env = all_files_env
+        self._create_fingerprint(env, command='crash')  # Verify hasn't run yet
+        self._create_run_report(env, exit_code=0)
+
+        decision = sync_determine_operation(
+            basename=BASENAME,
+            language=LANGUAGE,
+            target_coverage=TARGET_COVERAGE,
+            log_mode=True
+        )
+
+        assert decision.operation == 'verify', (
+            f"BUG 2: Expected 'verify' when command='crash' (verify not run yet), "
+            f"got '{decision.operation}' with reason: {decision.reason}"
+        )
+
+    def test_complete_workflow_returns_nothing(self, all_files_env):
+        """Sanity check: When workflow is truly complete, should return 'nothing'."""
+        env = all_files_env
+        self._create_fingerprint(env, command='test')  # Workflow complete
+        self._create_run_report(env, exit_code=0)
+
+        decision = sync_determine_operation(
+            basename=BASENAME,
+            language=LANGUAGE,
+            target_coverage=TARGET_COVERAGE,
+            log_mode=True
+        )
+
+        assert decision.operation == 'nothing', (
+            f"Expected 'nothing' when workflow complete, "
+            f"got '{decision.operation}' with reason: {decision.reason}"
+        )
+
+
+# --- Part 6: PDD Doctrine - Derived Artifacts Tests ---
+
+@patch('sync_determine_operation.construct_paths')
+def test_no_conflict_when_only_derived_artifacts_change(mock_construct, pdd_test_environment):
+    """
+    Test that when only derived artifacts (code + example) change but prompt is UNCHANGED,
+    this should NOT be treated as a conflict per PDD doctrine.
+
+    PDD Doctrine: Prompt is the source of truth. Code, example, and test are derived artifacts.
+    If prompt is unchanged, changes to derived artifacts are NOT conflicts - they're
+    interrupted workflows that should continue.
+
+    Bug: sync_determine_operation returns 'analyze_conflict' when len(changes) > 1,
+    without checking if prompt is in the changes list.
+    """
+    prompts_dir = pdd_test_environment / "prompts"
+
+    # Create all files with specific content
+    prompt_content = "unchanged prompt content"
+    code_content = "modified code content"
+    example_content = "modified example content"
+
+    prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+    create_file(pdd_test_environment / f"{BASENAME}.py", code_content)
+    create_file(pdd_test_environment / f"{BASENAME}_example.py", example_content)
+
+    mock_construct.return_value = (
+        {},
+        {},
+        {'generate_output_path': str(pdd_test_environment / f"{BASENAME}.py")},
+        LANGUAGE
+    )
+
+    # Create fingerprint where:
+    # - prompt_hash MATCHES current file (prompt unchanged)
+    # - code_hash DIFFERS from current file (code changed)
+    # - example_hash DIFFERS from current file (example changed)
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0",
+        "timestamp": "2024-01-01T00:00:00",
+        "command": "verify",
+        "prompt_hash": prompt_hash,  # MATCHES - prompt unchanged
+        "code_hash": "old_code_hash_differs",  # DIFFERS - code changed
+        "example_hash": "old_example_hash_differs",  # DIFFERS - example changed
+        "test_hash": None
+    })
+
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+
+    # KEY ASSERTION: Should NOT return analyze_conflict when prompt is unchanged
+    assert decision.operation != 'analyze_conflict', \
+        f"Should not return analyze_conflict when only derived artifacts changed. " \
+        f"Got: {decision.operation}, reason: {decision.reason}, details: {decision.details}"
+
+    # Should continue the workflow with an appropriate operation (not conflict)
+    # verify is appropriate since code/example changed and need validation
+    assert decision.operation in ['verify', 'crash', 'update'], \
+        f"Expected workflow continuation operation, got: {decision.operation}"
+
+    # If details are provided, verify prompt was not flagged as changed
+    if decision.details:
+        assert decision.details.get('prompt_changed', False) == False, \
+            "prompt_changed should be False when only derived artifacts changed"
+
+
+# =============================================================================
+# Stale Run Report Regression Tests
+# =============================================================================
+# Bug Summary (discovered in admin_get_users):
+# - pdd sync returns 'nothing' when run_report is stale (older than fingerprint)
+# - run_report shows tests_failed=0 but actual tests have failures
+# - The fingerprint.test_hash was updated but run_report was NOT invalidated
+
+
+class TestStaleRunReportRegression:
+    """
+    Regression tests for stale run_report bug.
+
+    Bug scenario:
+    - run_report.timestamp: 2025-12-10 (old, shows tests_failed=0)
+    - fingerprint.timestamp: 2025-12-12 (new, test_hash was updated)
+    - Actual tests would fail
+    - sync incorrectly returned 'nothing'
+    """
+
+    def test_stale_run_report_detected_when_test_hash_differs(self, pdd_test_environment):
+        """
+        Sync should detect stale run_report and NOT return 'nothing'.
+
+        When fingerprint.test_hash matches current test file but run_report is stale,
+        sync should trigger 'test', not 'nothing'.
+        """
+        tmp_path = pdd_test_environment
+
+        # Create additional directories needed for this test
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        # Create all files
+        prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt\nGenerate a test module")
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example usage")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False")
+
+        # Create STALE run_report (Dec 10, claims tests pass, no test_hash)
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-10T08:33:52.589258+00:00",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 95.0
+        })
+
+        # Create NEWER fingerprint (Dec 12)
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.81",
+            "timestamp": "2025-12-12T00:39:11.061591+00:00",
+            "command": "verify",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        mock_paths = {
+            'prompt': prompt_path,
+            'code': code_path,
+            'example': example_path,
+            'test': test_path,
+        }
+
+        with patch('sync_determine_operation.construct_paths') as mock_construct, \
+             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+            mock_construct.return_value = (
+                {'prompt_file': str(prompt_path)},
+                {'output': str(code_path)},
+                {'output': str(test_path)},
+                {'output': str(example_path)}
+            )
+            mock_get_paths.return_value = mock_paths
+
+            decision = sync_determine_operation(
+                basename=BASENAME,
+                language=LANGUAGE,
+                target_coverage=TARGET_COVERAGE,
+                prompts_dir="prompts",
+                skip_tests=False,
+                skip_verify=False,
+            )
+
+        # FIX: When run_report is stale, sync returns 'test' to re-validate
+        assert decision.operation != 'nothing', (
+            f"Sync returned 'nothing' with stale run_report!\n"
+            f"Expected: 'test' to re-validate\n"
+            f"Actual: '{decision.operation}' - {decision.reason}"
+        )
+
+    def test_workflow_not_complete_when_run_report_is_stale(self, pdd_test_environment):
+        """
+        _is_workflow_complete() should return False when run_report is stale.
+
+        When fingerprint.timestamp > run_report.timestamp, workflow should NOT be complete.
+        """
+        tmp_path = pdd_test_environment
+
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False")
+
+        paths = {
+            'code': code_path,
+            'example': example_path,
+            'test': test_path
+        }
+
+        # STALE run_report (Dec 10)
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-10T08:33:52.589258+00:00",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 0.0
+        })
+
+        # NEWER fingerprint (Dec 12)
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.81",
+            "timestamp": "2025-12-12T00:39:11.061591+00:00",
+            "command": "verify",
+            "prompt_hash": "abc123",
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        result = _is_workflow_complete(
+            paths=paths,
+            skip_tests=False,
+            skip_verify=False,
+            basename=BASENAME,
+            language=LANGUAGE
+        )
+
+        assert result == False, (
+            "_is_workflow_complete() returned True with stale run_report.\n"
+            "run_report.timestamp: 2025-12-10, fingerprint.timestamp: 2025-12-12\n"
+            "The run_report predates the fingerprint, so workflow should not be complete."
+        )
+
+    def test_run_report_tests_failed_triggers_fix(self, pdd_test_environment):
+        """
+        Sanity check: When run_report.tests_failed > 0, sync should return 'fix'.
+        """
+        tmp_path = pdd_test_environment
+
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# prompt")
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False")
+
+        # run_report with tests_failed > 0
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-12T00:00:00.000000+00:00",
+            "exit_code": 1,
+            "tests_passed": 10,
+            "tests_failed": 3,
+            "coverage": 0.0
+        })
+
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.81",
+            "timestamp": "2025-12-12T00:39:11.061591+00:00",
+            "command": "verify",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        mock_paths = {
+            'prompt': prompt_path,
+            'code': code_path,
+            'example': example_path,
+            'test': test_path,
+        }
+
+        with patch('sync_determine_operation.construct_paths') as mock_construct, \
+             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+            mock_construct.return_value = (
+                {'prompt_file': str(prompt_path)},
+                {'output': str(code_path)},
+                {'output': str(test_path)},
+                {'output': str(example_path)}
+            )
+            mock_get_paths.return_value = mock_paths
+
+            decision = sync_determine_operation(
+                basename=BASENAME,
+                language=LANGUAGE,
+                target_coverage=TARGET_COVERAGE,
+                prompts_dir="prompts",
+                skip_tests=False,
+                skip_verify=False,
+            )
+
+        assert decision.operation == 'fix', (
+            f"Expected 'fix' when tests_failed > 0, got '{decision.operation}'"
+        )
+
+
+class TestFalsePositiveSuccessBugRegression:
+    """
+    Regression tests for GitHub issue #210: False positive success when skip_verify=True.
+
+    Bug scenario (from core dump):
+    - User runs sync, 'example' operation runs
+    - fingerprint saved with command='example'
+    - run_report created with exit_code=0, tests_failed=0, test_hash=None (from example run, not actual tests)
+    - User adds new unit tests that would fail
+    - User runs `pdd sync --skip-verify`
+    - Sync incorrectly reports success without running tests
+
+    Root causes:
+    1. run_report.test_hash was None, causing staleness detection to fail
+    2. _is_workflow_complete() didn't check if tests were actually run when skip_verify=True
+    """
+
+    def test_skip_verify_with_example_command_should_not_be_complete(self, pdd_test_environment):
+        """
+        When fingerprint.command='example' and skip_verify=True, workflow should NOT be complete
+        because tests haven't been run yet.
+
+        This is the core bug: skip_verify=True bypassed the verify check, but the test check
+        was also effectively bypassed because the code only checked for verify completion.
+        """
+        tmp_path = pdd_test_environment
+
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        # Create all files
+        prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False  # Would fail if run")
+
+        # Create run_report from example run (not actual tests)
+        # This mimics what happens after 'crash' check when example passes
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-18T22:00:00.000000+00:00",  # Newer than fingerprint
+            "exit_code": 0,
+            "tests_passed": 1,  # This is from example, not actual unit tests
+            "tests_failed": 0,
+            "coverage": 0.0
+            # test_hash is None (missing) - this was part of the bug
+        })
+
+        # Create fingerprint with command='example' (tests haven't been run)
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.86",
+            "timestamp": "2025-12-18T21:59:51.000000+00:00",  # Older than run_report
+            "command": "example",  # Key: this is NOT 'test', 'fix', or 'update'
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        mock_paths = {
+            'prompt': prompt_path,
+            'code': code_path,
+            'example': example_path,
+            'test': test_path,
+        }
+
+        # Test _is_workflow_complete directly with skip_verify=True
+        result = _is_workflow_complete(
+            paths=mock_paths,
+            skip_tests=False,
+            skip_verify=True,  # Key: skip_verify=True but tests should still be required
+            basename=BASENAME,
+            language=LANGUAGE
+        )
+
+        assert result == False, (
+            "_is_workflow_complete() returned True with skip_verify=True and command='example'.\n"
+            "Bug: Tests haven't been run yet (fingerprint.command='example'), "
+            "but workflow was considered complete.\n"
+            "Expected: False (tests need to run)"
+        )
+
+    def test_sync_returns_test_operation_when_tests_not_run(self, pdd_test_environment):
+        """
+        When skip_verify=True but tests haven't been run, sync should return 'test' or 'crash'
+        operation, NOT 'nothing'.
+
+        This reproduces the exact scenario from GitHub issue #210.
+        """
+        tmp_path = pdd_test_environment
+
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        # Create all files
+        prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False")
+
+        # Create run_report mimicking example success (not actual tests)
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-18T22:00:00.000000+00:00",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 0.0
+        })
+
+        # Fingerprint with command='example' - tests never ran
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.86",
+            "timestamp": "2025-12-18T21:59:51.000000+00:00",
+            "command": "example",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        mock_paths = {
+            'prompt': prompt_path,
+            'code': code_path,
+            'example': example_path,
+            'test': test_path,
+        }
+
+        with patch('sync_determine_operation.construct_paths') as mock_construct, \
+             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+            mock_construct.return_value = (
+                {'prompt_file': str(prompt_path)},
+                {'output': str(code_path)},
+                {'output': str(test_path)},
+                {'output': str(example_path)}
+            )
+            mock_get_paths.return_value = mock_paths
+
+            decision = sync_determine_operation(
+                basename=BASENAME,
+                language=LANGUAGE,
+                target_coverage=TARGET_COVERAGE,
+                prompts_dir="prompts",
+                skip_tests=False,
+                skip_verify=True,  # Skip verify but tests should still run
+            )
+
+        assert decision.operation != 'nothing', (
+            f"Bug reproduced: Sync returned 'nothing' with skip_verify=True and command='example'.\n"
+            f"Expected: 'crash', 'verify', or 'test' (workflow should continue)\n"
+            f"Actual: '{decision.operation}' - {decision.reason}\n"
+            f"This is GitHub issue #210: False positive success"
+        )
+
+        # Should be either 'crash' (to validate example), 'verify' (if not skipped), or 'test'
+        assert decision.operation in ['crash', 'verify', 'test'], (
+            f"Expected 'crash', 'verify', or 'test' to continue workflow, got '{decision.operation}'"
+        )

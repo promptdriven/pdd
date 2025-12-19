@@ -1,6 +1,6 @@
 """PDD - Prompt Driven Development"""
 
-__version__ = "0.0.66"
+__version__ = "0.0.87"
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction
@@ -14,7 +14,7 @@ DEFAULT_TEMPERATURE = 0.0
 DEFAULT_TIME = 0.25
 
 # Define constants used across the package
-DEFAULT_LLM_MODEL = "gpt-5-mini"
+DEFAULT_LLM_MODEL = "gpt-5.1-codex-mini"
 # When going to production, set the following constants:
 # REACT_APP_FIREBASE_API_KEY
 # GITHUB_CLIENT_ID

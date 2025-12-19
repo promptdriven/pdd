@@ -1,0 +1,10 @@
+You are an expert image analyst. You have been provided with an image.
+
+Your task is to generate a Python script that, when run, prints a detailed description of the image you have seen.
+
+**IMPORTANT:**
+- Do **not** write a script that tries to load or read any files.
+- Your script should **only** contain a `print()` statement with a multi-line string that describes the image.
+- Analyze the shapes, colors, and content of the image you have been given and put that description inside the `print()` statement.
+
+<include>examples/image_prompt_example/image.heic</include>

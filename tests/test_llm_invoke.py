@@ -5,7 +5,7 @@ import os
 import pandas as pd
 import json # Added for Pydantic parsing tests
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 from pydantic import BaseModel, ValidationError
 from collections import namedtuple
 from pdd.llm_invoke import llm_invoke
@@ -251,7 +251,7 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
     def _mock_models_df():
         rows = [{
             "provider": "OpenAI",
-            "model": "gpt-5-mini",
+            "model": "gpt-5.1-codex-mini",
             "input": 0.01,
             "output": 0.02,
             "coding_arena_elo": 1500,
@@ -267,7 +267,7 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
         df["avg_cost"] = (df["input"] + df["output"]) / 2
         return df
 
-    def _mock_litellm_response(content="console.log('ok');", model_name="gpt-5-mini"):
+    def _mock_litellm_response(content="console.log('ok');", model_name="gpt-5.1-codex-mini"):
         mock_response = MagicMock()
         mock_choice = MagicMock()
         mock_message = MagicMock()
@@ -333,7 +333,11 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
                 assert call_kwargs['model'] == 'gpt-5-nano'
-                assert call_kwargs['response_format'] == SampleOutputModel
+                # response_format now uses explicit json_object with response_schema for structured output
+                response_format = call_kwargs['response_format']
+                assert response_format['type'] == 'json_object'
+                assert 'response_schema' in response_format
+                assert response_format['response_schema'] == SampleOutputModel.model_json_schema()
 
 def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_set_llm_cache):
     model_key_name = "GOOGLE_API_KEY"
@@ -357,7 +361,11 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
                 assert call_kwargs['model'] == 'gemini-pro'
-                assert call_kwargs['response_format'] == SampleOutputModel
+                # response_format now uses explicit json_object with response_schema for structured output
+                response_format = call_kwargs.get('response_format')
+                assert response_format['type'] == 'json_object'
+                assert 'response_schema' in response_format
+                assert response_format['response_schema'] == SampleOutputModel.model_json_schema()
 
 def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mock_set_llm_cache):
     model_key_name = "GOOGLE_API_KEY"
@@ -375,7 +383,7 @@ def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mo
                     output_pydantic=SampleOutputModel
                 )
                 assert isinstance(response['result'], str)
-                assert "ERROR: Failed to parse Pydantic" in response['result']
+                assert "ERROR: Failed to parse structured output" in response['result']
                 assert repr(invalid_json_str) in response['result']
                 assert response['model_name'] == 'gemini-pro'
                 assert response['cost'] == mock_cost
@@ -425,7 +433,8 @@ def test_llm_invoke_auth_error_new_key_retry(mock_load_models, mock_set_llm_cach
     mock_successful_response = create_mock_litellm_response("Success after retry", model_name='gpt-5-nano')
     mock_completion.side_effect = [auth_error, mock_successful_response]
 
-    with patch('builtins.input', mock_input), \
+    with patch('builtins.open', mock_open()), \
+         patch('builtins.input', mock_input), \
          patch('os.environ.__setitem__', mock_setenv), \
          patch('os.environ.__delitem__', mock_delenv), \
          patch('pdd.llm_invoke.litellm.completion', mock_completion), \
@@ -538,31 +547,33 @@ def test_llm_invoke_csv_path_hierarchy(mock_set_llm_cache, monkeypatch, tmp_path
     2. Project-specific: PROJECT_ROOT/.pdd/llm_model.csv
     3. Package default: via importlib.resources
     """
+    import importlib
+    import pdd.llm_invoke
+
     # Set up paths
     fake_home = tmp_path / "fake_home"
     fake_home.mkdir()
     user_csv = fake_home / ".pdd" / "llm_model.csv"
     project_csv = tmp_path / ".pdd" / "llm_model.csv"
-    
+
     # Set PDD_PATH to control PROJECT_ROOT determination
     monkeypatch.setenv('PDD_PATH', str(tmp_path))
-    
-    # Mock Path.home() to control user CSV location
-    with patch('pdd.llm_invoke.Path.home', return_value=fake_home):
+
+    try:
+        # Mock Path.home() to control user CSV location
+        with patch('pdd.llm_invoke.Path.home', return_value=fake_home):
             # Test 1: User-specific CSV exists - should use it
             def mock_is_file_user(self):
                 if str(self) == str(user_csv):
                     return True
                 return False
-                
+
             with patch.object(Path, 'is_file', mock_is_file_user):
                 # Re-import to trigger module-level path determination
-                import importlib
-                import pdd.llm_invoke
                 importlib.reload(pdd.llm_invoke)
-                
+
                 assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == user_csv
-                
+
             # Test 2: Only project-specific CSV exists - should use it
             def mock_is_file_project(self):
                 if str(self) == str(user_csv):
@@ -570,11 +581,15 @@ def test_llm_invoke_csv_path_hierarchy(mock_set_llm_cache, monkeypatch, tmp_path
                 elif str(self) == str(project_csv):
                     return True
                 return False
-                
+
             with patch.object(Path, 'is_file', mock_is_file_project):
                 importlib.reload(pdd.llm_invoke)
                 # Should now check PROJECT_ROOT/.pdd/llm_model.csv
                 assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == project_csv
+    finally:
+        # Restore module state to prevent pollution of other tests
+        monkeypatch.delenv('PDD_PATH', raising=False)
+        importlib.reload(pdd.llm_invoke)
 
 
 def test_llm_invoke_packaged_csv_fallback_needed(mock_set_llm_cache, monkeypatch, tmp_path):
@@ -603,14 +618,17 @@ def test_llm_invoke_packaged_csv_fallback_needed(mock_set_llm_cache, monkeypatch
 
 def test_llm_invoke_project_pdd_directory(mock_set_llm_cache, tmp_path, monkeypatch):
     """Test that project-specific CSV is looked for in PROJECT_ROOT/.pdd/ not PROJECT_ROOT/data/"""
+    import importlib
+    import pdd.llm_invoke
+
     # Create fake home directory
     fake_home = tmp_path / "fake_home"
     fake_home.mkdir()
-    
+
     # Create the .pdd directory structure
     pdd_dir = tmp_path / ".pdd"
     pdd_dir.mkdir(exist_ok=True)
-    
+
     # Create a CSV file in .pdd directory
     csv_path = pdd_dir / "llm_model.csv"
     csv_data = pd.DataFrame({
@@ -625,16 +643,454 @@ def test_llm_invoke_project_pdd_directory(mock_set_llm_cache, tmp_path, monkeypa
         'max_reasoning_tokens': [0]
     })
     csv_data.to_csv(csv_path, index=False)
-    
+
     # Set PDD_PATH to control PROJECT_ROOT
     monkeypatch.setenv('PDD_PATH', str(tmp_path))
-    
-    # Mock home directory to ensure user CSV doesn't exist
-    with patch('pdd.llm_invoke.Path.home', return_value=fake_home):
+
+    try:
+        # Mock home directory to ensure user CSV doesn't exist
+        with patch('pdd.llm_invoke.Path.home', return_value=fake_home):
             # Re-import to trigger path determination
-            import importlib
-            import pdd.llm_invoke
             importlib.reload(pdd.llm_invoke)
-            
+
             # Should find tmp_path/.pdd/llm_model.csv
-            assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == csv_path 
+            assert pdd.llm_invoke.LLM_MODEL_CSV_PATH == csv_path
+    finally:
+        # Restore module state to prevent pollution of other tests
+        monkeypatch.delenv('PDD_PATH', raising=False)
+        importlib.reload(pdd.llm_invoke)
+
+
+# --- Python Code Repair and Retry Tests ---
+
+# Pydantic model with code fields for testing repair/retry logic
+class CodeOutputModel(BaseModel):
+    explanation: str
+    code: str
+
+
+def test_unescape_code_newlines_repairs_trailing_quote():
+    """Test that _unescape_code_newlines repairs Python code with trailing quote."""
+    from pdd.llm_invoke import _unescape_code_newlines
+    import ast
+
+    # Create a model with invalid Python code (trailing quote)
+    obj = CodeOutputModel(
+        explanation="Fixed the bug",
+        code='def test():\n    return 1\n\ntest()"'  # Trailing quote
+    )
+
+    # Before repair, code should be invalid
+    with pytest.raises(SyntaxError):
+        ast.parse(obj.code)
+
+    # Apply repair
+    _unescape_code_newlines(obj)
+
+    # After repair, code should be valid
+    ast.parse(obj.code)  # Should not raise
+    assert obj.code == 'def test():\n    return 1\n\ntest()'
+
+
+def test_has_invalid_python_code_detects_syntax_errors():
+    """Test that _has_invalid_python_code correctly detects invalid Python."""
+    from pdd.llm_invoke import _has_invalid_python_code
+
+    # Valid code should return False
+    valid_obj = CodeOutputModel(
+        explanation="All good",
+        code='def test():\n    return 1'
+    )
+    assert not _has_invalid_python_code(valid_obj)
+
+    # Invalid code should return True
+    invalid_obj = CodeOutputModel(
+        explanation="Has bug",
+        code='def test():\n    return 1\n\ntest()"'  # Trailing quote
+    )
+    assert _has_invalid_python_code(invalid_obj)
+
+
+def test_has_invalid_python_code_ignores_non_code_strings():
+    """Test that _has_invalid_python_code ignores strings that don't look like code."""
+    from pdd.llm_invoke import _has_invalid_python_code
+
+    # String that doesn't look like code should not trigger validation
+    obj = CodeOutputModel(
+        explanation="This has a trailing quote\"",  # Not code-like
+        code='def test():\n    return 1'  # Valid code
+    )
+    assert not _has_invalid_python_code(obj)
+
+
+def test_llm_invoke_retries_on_invalid_python_code(mock_load_models, mock_set_llm_cache, caplog):
+    """Test that llm_invoke retries with cache bypass when Python code is invalid after repair."""
+    model_key_name = "OPENAI_API_KEY"
+
+    # First response has invalid code (trailing quote that can't be repaired by simple logic)
+    # Using a more complex case where repair might not work
+    invalid_code = 'def test():\n    x = "hello\n    return x'  # Unclosed string - can't be repaired
+
+    # Second response (retry) has valid code
+    valid_code = 'def test():\n    x = "hello"\n    return x'
+
+    first_response_json = json.dumps({"explanation": "First attempt", "code": invalid_code})
+    second_response_json = json.dumps({"explanation": "Retry attempt", "code": valid_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # First call returns invalid code, second call (retry) returns valid code
+            mock_response_1 = create_mock_litellm_response(first_response_json, model_name='gpt-5-nano')
+            mock_response_2 = create_mock_litellm_response(second_response_json, model_name='gpt-5-nano')
+            mock_completion.side_effect = [mock_response_1, mock_response_2]
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Generate code for {task}",
+                    input_json={"task": "test"},
+                    strength=0.5,
+                    temperature=0.7,
+                    verbose=True,
+                    output_pydantic=CodeOutputModel
+                )
+
+                # Should have retried
+                assert mock_completion.call_count == 2
+
+                # Result should be from the retry (valid code)
+                assert isinstance(response['result'], CodeOutputModel)
+                assert response['result'].code == valid_code
+
+                # Check logs for retry message
+                assert "invalid Python syntax" in caplog.text.lower() or "cache bypass retry" in caplog.text.lower()
+
+
+def test_llm_invoke_uses_repaired_code_without_retry(mock_load_models, mock_set_llm_cache):
+    """Test that llm_invoke uses repaired code without retry when repair succeeds."""
+    model_key_name = "OPENAI_API_KEY"
+
+    # Code with trailing quote that CAN be repaired
+    repairable_code = 'def test():\n    return 1\n\ntest()"'
+    expected_repaired = 'def test():\n    return 1\n\ntest()'
+
+    response_json = json.dumps({"explanation": "Generated", "code": repairable_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response(response_json, model_name='gpt-5-nano')
+            mock_completion.return_value = mock_response
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Generate code for {task}",
+                    input_json={"task": "test"},
+                    strength=0.5,
+                    temperature=0.7,
+                    verbose=False,
+                    output_pydantic=CodeOutputModel
+                )
+
+                # Should NOT have retried (repair succeeded)
+                assert mock_completion.call_count == 1
+
+                # Result should have repaired code
+                assert isinstance(response['result'], CodeOutputModel)
+                assert response['result'].code == expected_repaired
+
+
+def test_llm_invoke_no_retry_in_batch_mode(mock_load_models, mock_set_llm_cache, caplog):
+    """Test that retry is skipped in batch mode even with invalid Python code."""
+    model_key_name = "OPENAI_API_KEY"
+
+    # Invalid code that can't be repaired
+    invalid_code = 'def test():\n    x = "hello\n    return x'
+    response_json = json.dumps({"explanation": "Batch result", "code": invalid_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response([response_json], model_name='gpt-5-nano')
+            mock_completion.return_value = mock_response
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Generate code for {task}",
+                    input_json=[{"task": "test"}],  # List triggers batch mode
+                    strength=0.5,
+                    temperature=0.7,
+                    verbose=True,
+                    output_pydantic=CodeOutputModel,
+                    use_batch_mode=True
+                )
+
+                # Should NOT have retried (batch mode)
+                assert mock_completion.call_count == 1
+
+                # Should log that retry was skipped
+                assert "batch mode" in caplog.text.lower() or "cannot retry" in caplog.text.lower()
+
+
+def test_smart_unescape_code_preserves_newlines_in_strings():
+    """Test that _smart_unescape_code preserves \\n inside string literals."""
+    from pdd.llm_invoke import _smart_unescape_code
+    import ast
+
+    # Simulate double-escaped JSON: all newlines are literal \n (2 chars)
+    # The code has structural newlines AND \n inside an f-string
+    literal_backslash_n = chr(92) + 'n'  # Literal \n (2 chars)
+
+    # Build test code with literal backslash-n everywhere
+    test_code = (
+        'def main():' + literal_backslash_n +
+        '    print(f"' + literal_backslash_n + 'Adding integers")' + literal_backslash_n +
+        '    return 0'
+    )
+
+    # Verify input has no actual newlines
+    assert '\n' not in test_code, "Test input should have no actual newlines"
+    assert literal_backslash_n in test_code, "Test input should have literal backslash-n"
+
+    result = _smart_unescape_code(test_code)
+
+    # Verify structural newlines are unescaped
+    assert '\n' in result, "Result should have actual newlines for structure"
+
+    # Verify newline inside string is preserved as escape sequence
+    assert '\\n' in result, "Result should preserve \\n inside string literal"
+
+    # Most importantly: verify the result is valid Python
+    try:
+        ast.parse(result)
+    except SyntaxError as e:
+        pytest.fail(f"Result should be valid Python, got SyntaxError: {e}")
+
+
+def test_smart_unescape_code_mixed_state():
+    """Test that _smart_unescape_code handles mixed state (some real, some escaped newlines)."""
+    from pdd.llm_invoke import _smart_unescape_code
+
+    # Mixed state: some actual newlines, some literal \n
+    # This happens when JSON parsing already converted some but not all
+    mixed_code = 'def main():\n    print("\\nHello")\n    return 0'
+
+    result = _smart_unescape_code(mixed_code)
+
+    # In mixed state, should leave the string unchanged
+    assert result == mixed_code, "Mixed state should be unchanged"
+
+
+def test_smart_unescape_code_only_structural():
+    """Test that _smart_unescape_code works with only structural newlines."""
+    from pdd.llm_invoke import _smart_unescape_code
+    import ast
+
+    literal_backslash_n = chr(92) + 'n'  # Literal \n (2 chars)
+
+    # Code with only structural newlines (no escape sequences in strings)
+    test_code = (
+        'def add(a, b):' + literal_backslash_n +
+        '    return a + b'
+    )
+
+    result = _smart_unescape_code(test_code)
+
+    # Should convert to actual newlines
+    assert '\n' in result
+    assert '\\n' not in result  # No escape sequences to preserve
+
+    # Should be valid Python
+    try:
+        ast.parse(result)
+    except SyntaxError as e:
+        pytest.fail(f"Result should be valid Python, got SyntaxError: {e}")
+
+
+# --- Tests for OpenAI Responses API Malformed JSON Handling ---
+# These tests verify the bug where malformed JSON from the Responses API
+# causes a raw string to be returned instead of a Pydantic model.
+
+
+def create_mock_openai_responses_api_response(output_text, input_tokens=10, output_tokens=10):
+    """Helper to create a mock OpenAI Responses API response object.
+
+    This mimics the structure returned by litellm.responses(), which has:
+    - output: list of items, where message items have content with text
+    - usage: token usage info
+    """
+    mock_resp = MagicMock()
+
+    # Create the nested structure: output[].content[].text
+    mock_content_item = MagicMock()
+    mock_content_item.text = output_text
+
+    mock_message_item = MagicMock()
+    mock_message_item.type = 'message'
+    mock_message_item.content = [mock_content_item]
+
+    mock_resp.output = [mock_message_item]
+
+    mock_usage = MagicMock()
+    mock_usage.input_tokens = input_tokens
+    mock_usage.output_tokens = output_tokens
+    mock_resp.usage = mock_usage
+
+    return mock_resp
+
+
+def test_llm_invoke_responses_api_malformed_json_should_not_return_string(mock_load_models, mock_set_llm_cache):
+    """Test that when OpenAI Responses API returns malformed JSON,
+    it should NOT return a raw string - it should either:
+    1. Repair the JSON and return a valid Pydantic object, OR
+    2. Raise a clear exception
+
+    This test will FAIL until the fix is implemented (TDD red phase).
+    """
+    model_key_name = "OPENAI_API_KEY"
+
+    # Malformed JSON - missing comma between fields (same error as in regression log)
+    malformed_json = '{"reasoning":"The snippet is incomplete" "is_finished": false}'
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        # Mock litellm.responses to return malformed JSON
+        mock_responses_return = create_mock_openai_responses_api_response(malformed_json)
+
+        with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return) as mock_responses:
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_cost = 0.0001
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Test prompt {text}",
+                        input_json={"text": "test"},
+                        strength=0.5,  # Low strength selects gpt-5-nano
+                        temperature=0.0,
+                        verbose=False,
+                        output_pydantic=SampleOutputModel
+                    )
+
+                    # EXPECTED BEHAVIOR AFTER FIX:
+                    # The result should NEVER be a raw string when output_pydantic is specified.
+                    # It should either be:
+                    # 1. A valid Pydantic object (if JSON was repaired), or
+                    # 2. An error string starting with "ERROR:" (existing error convention)
+
+                    result = response['result']
+
+                    # This assertion will FAIL until we fix the bug
+                    # Currently it returns the raw malformed JSON string
+                    assert not isinstance(result, str) or result.startswith("ERROR:"), \
+                        f"Bug detected: Responses API returned raw malformed JSON string instead of " \
+                        f"Pydantic object or error. Got: {type(result).__name__} = {repr(result)[:100]}"
+
+
+def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, mock_set_llm_cache):
+    """Test that valid JSON from OpenAI Responses API is parsed correctly."""
+    model_key_name = "OPENAI_API_KEY"
+
+    # Valid JSON that matches SampleOutputModel
+    valid_json = '{"field1": "test_value", "field2": 42}'
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        # Mock litellm.responses to return valid JSON
+        mock_responses_return = create_mock_openai_responses_api_response(valid_json)
+
+        with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return) as mock_responses:
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_cost = 0.0001
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Test prompt {text}",
+                        input_json={"text": "test"},
+                        strength=0.5,
+                        temperature=0.0,
+                        verbose=False,
+                        output_pydantic=SampleOutputModel
+                    )
+
+                    # Valid JSON should parse correctly
+                    assert isinstance(response['result'], SampleOutputModel)
+                    assert response['result'].field1 == "test_value"
+                    assert response['result'].field2 == 42
+
+
+# --- Tests for Per-Model Vertex AI Location Override ---
+
+def test_vertex_location_override_from_csv(mock_set_llm_cache):
+    """Test that per-model location in CSV overrides VERTEX_LOCATION env var."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        # Create mock model with location='us-central1'
+        mock_data = [{
+            'provider': 'Google',
+            'model': 'vertex_ai/deepseek-ai/deepseek-r1-0528-maas',
+            'input': 0.55, 'output': 2.19,
+            'coding_arena_elo': 1391,
+            'structured_output': False,
+            'base_url': '',
+            'api_key': 'VERTEX_CREDENTIALS',
+            'reasoning_type': 'none',
+            'max_reasoning_tokens': 0,
+            'location': 'us-central1'  # Per-model location override
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        # Set env vars - VERTEX_LOCATION is 'global' but should be overridden
+        env_vars = {
+            'VERTEX_CREDENTIALS': '/fake/path.json',
+            'VERTEX_PROJECT': 'test-project',
+            'VERTEX_LOCATION': 'global'  # This should be overridden by CSV
+        }
+
+        with patch.dict(os.environ, env_vars):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                # Use mock_open for proper file context manager behavior
+                m = mock_open(read_data='{}')
+                with patch('builtins.open', m):
+                    with patch('pdd.llm_invoke.json.load', return_value={}):
+                        llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                # Assert vertex_location was set to 'us-central1', not 'global'
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('vertex_location') == 'us-central1'
+
+
+def test_vertex_location_fallback_when_empty(mock_set_llm_cache):
+    """Test that empty location in CSV falls back to VERTEX_LOCATION env var."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        # Create mock model with NO location (empty string)
+        mock_data = [{
+            'provider': 'Google',
+            'model': 'vertex_ai/gemini-3-flash-preview',
+            'input': 0.15, 'output': 0.6,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'VERTEX_CREDENTIALS',
+            'reasoning_type': 'effort',
+            'max_reasoning_tokens': 0,
+            'location': ''  # Empty - should fall back to env var
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        env_vars = {
+            'VERTEX_CREDENTIALS': '/fake/path.json',
+            'VERTEX_PROJECT': 'test-project',
+            'VERTEX_LOCATION': 'global'  # Should use this when CSV location is empty
+        }
+
+        with patch.dict(os.environ, env_vars):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                m = mock_open(read_data='{}')
+                with patch('builtins.open', m):
+                    with patch('pdd.llm_invoke.json.load', return_value={}):
+                        llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                # Assert vertex_location falls back to env var 'global'
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('vertex_location') == 'global'

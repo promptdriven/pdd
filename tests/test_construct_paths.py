@@ -1,6 +1,7 @@
 # test_construct_paths.py
 
 import pytest
+import click
 from pathlib import Path
 from unittest import mock
 from unittest.mock import patch, MagicMock, ANY
@@ -11,7 +12,7 @@ import os
 # Or mock within each test as currently done.
 
 # Import after potentially modifying sys.path
-from pdd.construct_paths import construct_paths, list_available_contexts
+from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy
 
 # Helper to create absolute path for comparison
 def resolve_path(relative_path_str, base_dir):
@@ -315,7 +316,10 @@ def test_construct_paths_basename_extraction(tmpdir):
                     basename=expected_basename,
                     language=determined_lang, # Use the language determined for mocking
                     file_extension=mock_ext, # Use the extension determined for mocking
-                    context_config={}
+                    context_config={},
+                    input_file_dir=ANY,
+                    input_file_dirs={},
+                    config_base_dir=None,
                 )
         # Clean up dummy code file
         if dummy_code and dummy_code.exists():
@@ -449,12 +453,11 @@ def test_construct_paths_output_file_exists(tmpdir):
          patch('click.secho') as mock_secho, \
          patch('pdd.construct_paths.console.print') as mock_print: # Patch console print too
 
-        with pytest.raises(SystemExit) as excinfo:
+        with pytest.raises(click.Abort):
             construct_paths(
                 input_file_paths, force, quiet, command, command_options
             )
 
-        assert excinfo.value.code == 1
         mock_confirm.assert_called_once()
         # Check confirmation message style (optional, can be brittle)
         # assert mock_confirm.call_args[0][0].startswith(click.style("Overwrite existing files?", fg="yellow"))
@@ -751,7 +754,10 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
             basename=expected_basename, # Verify basename was extracted correctly
             language='python',
             file_extension='.py',
-            context_config={}
+            context_config={},
+            input_file_dir=ANY,
+            input_file_dirs={},
+            config_base_dir=None,
         )
 
 
@@ -832,6 +838,37 @@ def test_construct_paths_sync_discovery_requires_basename(tmpdir):
         )
 
     assert 'Basename must be provided' in str(excinfo.value)
+
+
+def test_construct_paths_sync_discovery_examples_dir_from_directory_path(tmpdir):
+    """
+    Test that examples_dir is correctly resolved when example_output_path
+    is a directory path (e.g., 'context/') rather than a file path.
+
+    This is a regression test for the bug where Path('context/').parent
+    incorrectly evaluates to '.' instead of 'context'.
+    """
+    input_file_paths = {}  # No inputs for sync discovery mode
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {'basename': 'my_module', 'language': 'python'}
+
+    # Mock output paths where example_output_path is a DIRECTORY, not a file
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "backend" / "functions" / "my_module.py"),
+        "test_output_path": str(tmpdir / "backend" / "tests" / "test_my_module.py"),
+        "example_output_path": "context/",  # Directory path, not file path!
+    }
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # The bug: Path('context/').parent == '.' but we want 'context'
+    assert resolved_config["examples_dir"] == "context", \
+        f"Expected 'context' but got '{resolved_config['examples_dir']}'"
 
 
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
@@ -1196,7 +1233,10 @@ def test_construct_paths_conflicting_language_specification(tmpdir):
             basename='my_project', # Basename from filename
             language='javascript', # Correct language passed
             file_extension='.js',   # Correct extension passed
-            context_config={}
+            context_config={},
+            input_file_dir=ANY,
+            input_file_dirs={},
+            config_base_dir=None,
         )
         assert output_file_paths['output'] == str(mock_output_path)
 
@@ -1371,7 +1411,10 @@ def test_construct_paths_symbolic_links(tmpdir):
             basename=expected_basename, # Basename from the real file
             language='python',
             file_extension='.py',
-            context_config={}
+            context_config={},
+            input_file_dir=ANY,
+            input_file_dirs={},
+            config_base_dir=None,
         )
 
 # --- Fixture and tests below seem to use tmp_path_factory correctly ---
@@ -1467,7 +1510,10 @@ def test_construct_paths_generate_command(setup_test_files):
         basename='main_gen',
         language='prompt',
         file_extension='.prompt',
-        context_config={}
+        context_config={},
+        input_file_dir=ANY,
+        input_file_dirs={},
+        config_base_dir=None,
     )
 
 
@@ -1928,8 +1974,41 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
             basename='MyProject',
             language='makefile',
             file_extension='',  # Makefiles have no extension
-            context_config={}
+            context_config={},
+            input_file_dir=ANY,
+            input_file_dirs=ANY,
+            config_base_dir=None,
         )
+
+
+def test_construct_paths_passes_config_base_dir_when_pddrc_present(tmpdir):
+    """Test that construct_paths passes config_base_dir when a .pddrc is found."""
+    tmp_path = Path(str(tmpdir))
+    prompt_file = tmp_path / "my_project_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    from pdd.construct_paths import _find_pddrc_file
+
+    pddrc_path = _find_pddrc_file()
+    assert pddrc_path is not None
+
+    mock_output_paths_dict_str = {"output": str(tmp_path / "output.py")}
+
+    with patch(
+        "pdd.construct_paths.generate_output_paths",
+        return_value=mock_output_paths_dict_str,
+    ) as mock_gen_paths:
+        construct_paths(
+            input_file_paths={"prompt_file": str(prompt_file)},
+            force=True,
+            quiet=True,
+            command="generate",
+            command_options={},
+        )
+
+    assert mock_gen_paths.call_args.kwargs.get("config_base_dir") == str(
+        Path(pddrc_path).parent
+    )
 
 
 # Test context detection functions that were in test_context_detection.py
@@ -2018,3 +2097,182 @@ def test_language_detection_without_pdd_path_fallback(tmpdir):
         # Restore original PDD_PATH
         if original_pdd_path:
             os.environ['PDD_PATH'] = original_pdd_path
+
+
+def test_construct_paths_sync_discovery_custom_prompts_dir(tmpdir):
+    """
+    Regression test: sync discovery mode should respect prompts_dir from .pddrc context config.
+
+    Bug: When prompts_dir is set in .pddrc (e.g., prompts_dir: "prompts/backend"),
+    sync discovery mode was ignoring it and hardcoding "prompts" instead.
+    """
+    input_file_paths = {}
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {"basename": "admin_get_users"}
+
+    mock_output_paths = {
+        "generate_output_path": "/project/backend/functions/admin_get_users.py",
+        "test_output_path": "/project/backend/tests/test_admin_get_users.py",
+        "example_output_path": "/project/context/admin_get_users_example.py",
+    }
+
+    # Mock context config with CUSTOM prompts_dir (the bug scenario)
+    mock_context_config = {
+        "generate_output_path": "backend/functions/",
+        "prompts_dir": "prompts/backend",  # Custom subdirectory
+    }
+
+    mock_cwd = Path("/project")
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'backend': {'defaults': mock_context_config}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='backend'), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config), \
+         patch('pdd.construct_paths.Path.cwd', return_value=mock_cwd):
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # prompts_dir MUST respect the context config, not hardcode "prompts"
+    assert resolved_config["prompts_dir"] == "prompts/backend", \
+        f"Expected prompts_dir='prompts/backend' from context config, got '{resolved_config['prompts_dir']}'"
+
+
+def test_construct_paths_fix_resolves_pddrc_paths_relative_to_pddrc(tmp_path, monkeypatch):
+    """
+    Regression test: `fix` output paths should resolve relative `.pddrc` directories
+    relative to the `.pddrc` location (project root), not relative to the input
+    code file directory.
+
+    Bug: Relative `generate_output_path` / `test_output_path` values like
+    "backend/functions/" and "backend/tests/" were incorrectly joined under the
+    code file directory (e.g. backend/functions/backend/tests/...).
+    """
+    from pdd.construct_paths import construct_paths
+
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / ".pddrc").write_text(
+        '\n'.join(
+            [
+                'version: "1.0"',
+                "contexts:",
+                "  backend:",
+                "    paths:",
+                '      - "backend/**"',
+                "    defaults:",
+                '      generate_output_path: "backend/functions/"',
+                '      test_output_path: "backend/tests/"',
+                '      example_output_path: "context/"',
+                '      prompts_dir: "prompts/backend"',
+                '      default_language: "python"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (tmp_path / "backend" / "functions").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "backend" / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "prompts" / "backend").mkdir(parents=True, exist_ok=True)
+
+    prompt_file = tmp_path / "prompts" / "backend" / "admin_get_users_python.prompt"
+    prompt_file.write_text("prompt", encoding="utf-8")
+    code_file = tmp_path / "backend" / "functions" / "admin_get_users.py"
+    code_file.write_text("def admin_get_users():\n    return []\n", encoding="utf-8")
+    test_file = tmp_path / "backend" / "tests" / "test_admin_get_users.py"
+    test_file.write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+
+    _, _, output_file_paths, language = construct_paths(
+        input_file_paths={
+            "prompt_file": str(prompt_file),
+            "code_file": str(code_file),
+            "unit_test_file": str(test_file),
+        },
+        force=True,
+        quiet=True,
+        command="fix",
+        command_options={"output_test": None, "output_code": None, "output_results": None},
+        create_error_file=True,
+        context_override="backend",
+    )
+
+    assert language == "python"
+    assert output_file_paths["output_code"] == str(tmp_path / "backend" / "functions" / "admin_get_users_fixed.py")
+    assert output_file_paths["output_test"] == str(tmp_path / "backend" / "tests" / "test_admin_get_users_fixed.py")
+    assert output_file_paths["output_results"] == str(
+        tmp_path / "backend" / "functions" / "admin_get_users_fix_results.log"
+    )
+
+
+# =============================================================================
+# Tests for _resolve_config_hierarchy - .pddrc strength/temperature propagation
+# =============================================================================
+
+def test_pddrc_strength_used_when_cli_not_passed():
+    """Bug fix: .pddrc strength (0.8) should be used when CLI doesn't pass strength.
+
+    The fix is in sync_main.py - it no longer passes CLI defaults to command_options.
+    When strength is not in cli_options, .pddrc value should be used.
+    """
+    # Simulate: sync_main now doesn't pass strength when it's the CLI default
+    # So cli_options won't have strength, allowing .pddrc to take precedence
+    cli_options = {
+        # strength NOT included - simulates fixed sync_main.py behavior
+        # temperature NOT included - simulates fixed sync_main.py behavior
+    }
+    context_config = {
+        "strength": 0.8,  # .pddrc value - should be used
+        "temperature": 0.5,
+    }
+    env_vars = {}
+
+    resolved = _resolve_config_hierarchy(cli_options, context_config, env_vars)
+
+    # Now that CLI doesn't pass defaults, .pddrc values should be used
+    assert resolved.get("strength") == 0.8, \
+        f"Expected .pddrc strength 0.8, got {resolved.get('strength')}"
+    assert resolved.get("temperature") == 0.5, \
+        f"Expected .pddrc temperature 0.5, got {resolved.get('temperature')}"
+
+
+def test_cli_strength_overrides_pddrc_when_explicitly_set():
+    """CLI --strength 0.5 should override .pddrc strength: 0.8.
+
+    This test verifies that explicit CLI values still take precedence.
+    """
+    # Simulate: user runs `pdd sync --strength 0.5`
+    # CLI passes explicit value 0.5, .pddrc has 0.8
+    cli_options = {
+        "strength": 0.5,  # Explicit CLI value - should override .pddrc
+    }
+    context_config = {
+        "strength": 0.8,  # .pddrc value
+    }
+    env_vars = {}
+
+    resolved = _resolve_config_hierarchy(cli_options, context_config, env_vars)
+
+    # Explicit CLI value should win
+    assert resolved.get("strength") == 0.5, \
+        f"Expected CLI strength 0.5, got {resolved.get('strength')}"
+
+
+def test_pddrc_strength_used_when_cli_not_in_options():
+    """When CLI doesn't pass strength at all, .pddrc should be used."""
+    cli_options = {
+        "basename": "test",
+        # strength not included
+    }
+    context_config = {
+        "strength": 0.8,
+    }
+    env_vars = {}
+
+    resolved = _resolve_config_hierarchy(cli_options, context_config, env_vars)
+
+    assert resolved.get("strength") == 0.8, \
+        f"Expected .pddrc strength 0.8, got {resolved.get('strength')}"

@@ -1,26 +1,633 @@
-## v0.0.66 (2025-11-07)
+## v0.0.87 (2025-12-18)
+
+## v0.0.86 (2025-12-17)
 
 ### Feat
 
-- implement consistent formatting for architecture JSON and enhance code generation logic
-- enhance architecture visualization with Mermaid diagram support and update model documentation
-- enhance LLM toggle functionality and post-processing pipeline
-- add LLM toggle functionality and force flag improvements
+- **`--dry-run` Flag for Sync Command:** Renamed the `--log` flag to `--dry-run` for clearer semantics. The `--dry-run` flag analyzes sync state without executing operations, showing what sync would do. The old `--log` flag is deprecated with a warning directing users to use `--dry-run` instead.
+
+- **Mock vs Production Code Guidance in LLM Prompts:** Added comprehensive guidance to `fix_verification_errors_LLM.prompt` and `find_verification_errors_LLM.prompt` for distinguishing mock configuration errors from production code errors. Prompts now instruct the LLM to:
+  - Identify test files using mocks (MagicMock, unittest.mock, patch)
+  - Check mock setup FIRST when errors occur (wrong `return_value` structure, missing `__getitem__` configuration)
+  - Preserve production code API usage patterns unless documentation proves otherwise
+  - Follow a diagnosis priority: mock configuration → mock chaining → production code
+
+- **Unit Test Auto-Discovery Regression Test:** Added regression test #20 to `tests/regression.sh` that validates the `generate` command's unit test auto-discovery feature. Tests both `--exclude-tests` mode (no context, expects failure) and default auto-discovery mode (expects success).
+
+- **Encode Message Prompt:** Added `prompts/encode_message_python.prompt` as a simple prompt for testing unit test auto-discovery and regression test scenarios.
 
 ### Fix
 
-- resolve output path handling to ensure absolute paths are used in code generation
-- resolve test generation issues (#88) and test warnings
-- update code_generator_main_python.prompt to use python_env_detector example file
-- remove references to non-existent example files in code_generator_main_python.prompt
-- update template usage examples to use --template flag
-- update architecture template usage examples to use --template flag
+- **Verification Success Tracking Bug:** Fixed a critical bug in `fix_verification_errors_loop` where the function incorrectly reported "No improvement found" when secondary verification passed but the issue count didn't decrease. Added `any_verification_passed` flag that tracks when code was actually changed AND secondary verification passed. The function now correctly returns `success=True` when verification passes, even if the LLM's issue count assessment is unchanged. This ensures code that compiles and runs correctly is recognized as successful. Key changes:
+  - Track `any_verification_passed` separately from best iteration tracking
+  - Only set flag when `code_updated=True` AND verification passes
+  - Return `success=True` with `final_issues=0` when verification passed
 
 ### Refactor
 
-- restructure hello example script and move hello function to src directory
-- reorganize PDD CLI context and update output paths for consistency
-- update prompt files for clarity and consistency in code module references
+- **Remove Unused Warnings Import:** Cleaned up unused `warnings` import from `pdd/commands/maintenance.py`.
+
+- **Error Fixing Loop Prompt Simplification:** Streamlined `prompts/fix_verification_errors_loop_python.prompt` from 123 lines to 63 lines by:
+  - Condensing implementation details into "behavior defined by test suite" directive
+  - Listing key behaviors to implement without step-by-step instructions
+  - Focusing on inputs/outputs and test compliance
+
+### Docs
+
+- **Prompting Guide Major Update:** Significantly expanded `docs/prompting_guide.md` with ~200 lines of new content:
+  - **Automated Grounding (PDD Cloud):** Explains how vector embedding and similarity search automatically provides few-shot examples during generation
+  - **Grounding Overrides:** Documents `<pin>module_name</pin>` and `<exclude>module_name</exclude>` tags for controlling automatic example retrieval
+  - **Three Pillars of PDD Generation:** New section explaining how Prompt (WHAT), Grounding (HOW), and Tests (CORRECTNESS) work together
+  - **Prompt Abstraction Guidance:** Added 10-30% prompt-to-code ratio target with clear guidelines on what NOT to include in prompts
+  - **Non-Deterministic Tag Warnings:** Added explicit warnings about `<shell>` and `<web>` tags introducing environment-dependent behavior
+  - **Requirements Writing Guide:** Expanded with before/after examples and testability criteria
+
+### Tests
+
+- Added 320+ lines of verification loop tests in `tests/test_fix_verification_errors_loop.py` covering:
+  - Verification passes but issue count unchanged (regression test for the bug)
+  - Best iteration restored with verification passed
+  - Proper `any_verification_passed` flag behavior
+  - Success determination based on verification outcome vs issue count
+
+- Added 130+ lines of maintenance command tests in `tests/test_commands_maintenance.py` covering:
+  - `@track_cost` decorator verification for sync and auto-deps commands
+  - Deprecated `--log` flag warning emission and `dry_run=True` propagation
+  - `click.Abort` re-raising (not caught by generic error handlers)
+  - Error handling with correct arguments to `handle_error`
+  - `ctx.obj=None` graceful handling in setup command
+
+- Added 68 lines of static prompt tests in `tests/test_mock_vs_production_fix.py` verifying:
+  - `fix_verification_errors_LLM.prompt` contains mock guidance section, mentions MagicMock, `__getitem__` pattern, and prioritizes mock fixes
+  - `find_verification_errors_LLM.prompt` has mock identification step
+
+- Added 154-line integration test script `tests/test_mock_fix_integration.sh` for validating LLM behavior with mock vs production code scenarios
+
+## v0.0.85 (2025-12-16)
+
+### Feat
+
+- **Unit Test Inclusion in Code Generation:** Added `--unit-test` and `--exclude-tests` options to the `generate` command. When `--unit-test <file>` is specified, the test file content is included in the prompt wrapped in `<unit_test_content>` tags, enabling the LLM to generate code that passes specific tests. When neither option is provided, PDD automatically discovers and includes test files matching `test_{code_stem}*.py` from the configured `tests_dir`. Use `--exclude-tests` to disable automatic test file discovery.
+
+Many thanks to Jiamin Cai for your contributions on the unit test inclusion feature!
+
+- **Example Error Detection:** Implemented `_detect_example_errors()` and `_run_example_with_error_detection()` in `sync_orchestration.py` to detect true crashes/errors in example outputs. Detects Python tracebacks and ERROR-level log messages while intentionally ignoring HTTP status codes (examples may test error responses) and exception type names in logs (prevents false positives). For server-style examples that block, runs until timeout then analyzes output for errors—no errors means success.
+
+- **Bytecode Filtering in Directory Summarization:** Added filtering to `summarize_directory()` to skip `__pycache__` directories and `.pyc`/`.pyo` bytecode files, preventing noise in directory summaries.
+
+### Fix
+
+- **Update Command Mode Detection:** Fixed the `update` command to properly distinguish between single-file mode and repository-wide mode. When a single positional argument is provided, it's now correctly treated as the code file (not the prompt file), enabling `pdd update <CODE_FILE>` to generate a new prompt. Added validation to prevent mixing file-specific flags (`--git`, `--input-code`) with repository-wide mode, and `--extensions` with single-file mode.
+
+Many thanks to Jiamin Cai for your contributions to the update fix!
+
+- **Output Formatting and File Handling:** Corrected output formatting in code generation and test files. Replaced `os.remove()` with `Path.unlink()` for more robust file handling with pathlib.
+
+- **Test Path Resolution:** Updated `PDD_PATH` in tests to point to the 'pdd' directory for accurate file resolution. Fixed test output directory path to use project root and ensured test file cleanup after execution.
+
+### Refactor
+
+- **Sync Regression Script:** Updated `sync_regression.sh` to check for generated Python files in the `src/` directory, enhancing file location handling and error logging.
+
+### CI
+
+- **Public Repo Sync Workflow:** Added `.github/workflows/sync-from-public.yml` GitHub Actions workflow to automatically sync changes from public repositories (`promptdriven/pdd` and `promptdriven/pdd_cap`). Creates PRs with changed files from specified patterns (Python modules, tests, configs) and runs tests before PR creation.
+
+### Docs
+
+- **Prompting Guide:** Expanded the prompting guide with improved guidance and examples.
+
+- **README:** Enhanced README with documentation for the new `--unit-test` and `--exclude-tests` options in the `generate` command.
+
+### Tests
+
+- Added 230+ lines of unit test inclusion tests in `tests/test_code_generator_main.py` covering:
+  - Explicit `--unit-test` file inclusion with content wrapped in `<unit_test_content>` tags
+  - Front matter conflict handling (test files that look like they have front matter)
+  - Automatic test file discovery based on code filename pattern
+  - `--exclude-tests` flag preventing automatic inclusion
+  - Explicit unit test file precedence over automatic discovery
+
+- Added 109 lines of example error detection tests in `tests/test_example_error_detection.py` verifying:
+  - Python traceback detection (catches all unhandled exceptions)
+  - ERROR-level log message detection
+  - No false positives for exception names in log messages
+  - No false positives for HTTP status codes
+  - Clean success output handling
+
+- Added 135+ lines of update command tests in `tests/test_commands_modify.py` covering:
+  - Repository-wide mode with no arguments
+  - Single-file mode treating argument as code file
+  - `--extensions` flag validation (repo mode only)
+  - `--git` flag validation (file mode only)
+
+- Enhanced `tests/test_summarize_directory.py` with tests for `__pycache__` and `.pyc` file filtering.
+
+- Enhanced exception handling in `tests/test_insert_includes.py` by mocking file opening.
+
+## v0.0.84 (2025-12-15)
+
+### Feat
+
+- **True Agentic Mode for CLI Agents:** Rewrote `_run_openai_variants()`, `_run_anthropic_variants()`, and `_run_google_variants()` in `pdd/agentic_fix.py` to invoke agents in full agentic mode with file tool access. Previously, agents were invoked in completion/print mode (`-p` flag for Claude and Gemini, `--sandbox read-only` for Codex) which prevented file modifications. Now agents write prompts to temp files and receive instructions to read them, enabling full read/write file access for autonomous fixes.
+
+- **Agentic Fallback Prompt for Test Failures:** Added `prompts/agentic_fix_explore_LLM.prompt` providing structured guidance for agentic fallback when PDD's normal fix loop fails. The prompt explains PDD principles (prompt is source of truth), lists available files, shows previous fix attempts to avoid repetition, and outlines the task workflow for diagnosing and fixing test failures.
+
+- **Strength/Temperature Propagation to Sub-Commands:** Updated `fix_main()`, `crash_main()`, `fix_verification_main()`, `cmd_test_main()`, and `update_main()` to accept optional `strength` and `temperature` parameters. These parameters are resolved with precedence: function parameter → `ctx.obj` → default constant. This enables `sync_orchestration` to pass explicit values that override CLI context defaults.
+
+- **Click Context Parameters Documentation:** Added `context/ctx_obj_params.prompt` documenting the standard `ctx.obj` dictionary keys available in PDD CLI commands (`verbose`, `strength`, `temperature`, `time`, `force`, `quiet`, `context`, `confirm_callback`) and the resolution pattern for optional parameters.
+
+### Fix
+
+- **Auto-Deps Directory Path Bug:** Fixed `sync_orchestration.py` to pass the examples directory path (`examples_dir`) to `auto_deps_main()` instead of a glob pattern (`f"{examples_dir}/*"`). The glob pattern caused `os.path.isdir()` to return `False`, preventing recursive file discovery in subdirectories. Added regression test `test_auto_deps_passes_directory_not_glob_pattern`.
+
+- **Sync Orchestration Parameter Propagation:** Updated all operation calls in `sync_orchestration()` (`crash_main`, `fix_verification_main`, `cmd_test_main`, `fix_main`, `update_main`) to pass `strength=strength` and `temperature=temperature` parameters, ensuring `.pddrc` configuration values propagate correctly through the sync workflow.
+
+### Docs
+
+- **Onboarding Documentation Enhancements:** Updated `docs/ONBOARDING.md` with:
+  - Clarification that developers/contributors must use a Conda environment (not UV) for development
+  - Instructions for creating and activating the `pdd` conda environment
+  - Recommended test execution order: unit tests → regression tests → sync regression tests
+  - Note on API key requirements explaining that some tests require multiple providers (OpenAI + at least one other)
+
+- **Prompt Template Cleanup:** Updated 15+ prompt files to include `ctx_obj_params.prompt` reference for Click context details and removed outdated Click examples to streamline documentation.
+
+### Tests
+
+- Added 156 lines of agentic mode invocation tests in `tests/test_agentic_fix.py` verifying:
+  - Claude is NOT invoked with `-p` flag (which prevents file tool access)
+  - Codex is NOT invoked with `--sandbox read-only` (which prevents file writes)
+  - Gemini is NOT invoked with `-p` flag (which prevents tool access)
+
+- Added 175 lines of strength/temperature propagation tests in `tests/test_sync_orchestration.py` using source code inspection to verify all sub-command calls include `strength=strength` parameter.
+
+- Added 72 lines of `.pddrc` configuration hierarchy tests in `tests/test_construct_paths.py` verifying that `.pddrc` values are used when CLI doesn't pass explicit values, and explicit CLI values override `.pddrc`.
+
+## v0.0.83 (2025-12-14)
+
+### Feat
+
+- **Multi-Language Test Execution:** Added `pdd/get_test_command.py` module that resolves appropriate test commands based on file language using a three-tier resolution order: (1) CSV `run_test_command` column, (2) smart detection via `default_verify_cmd_for()`, (3) None (triggers agentic fallback). This enables the sync workflow to run tests for TypeScript, Go, Rust, and other languages instead of only Python.
+
+- **Language Format CSV Enhancement:** Added `run_test_command` column to `data/language_format.csv` with language-specific test runners: `python -m pytest {file} -v` for Python, `go test -v {file}` for Go, `cargo test` for Rust, `swift test` for Swift, and `dotnet test` for C#. Supports `{file}` placeholder substitution.
+
+- **Multi-Language Test Output Parsing:** Added `_parse_test_output()` function to `sync_orchestration.py` that extracts passed/failed/coverage metrics from test runner output for Python (pytest), JavaScript/TypeScript (Jest/Vitest/Mocha), Go, and Rust (cargo test), with fallback patterns for other languages.
+
+- **Agentic Fallback CLI Options:** Added `--agentic-fallback/--no-agentic-fallback` flags to the `verify` and `fix` commands, allowing users to control whether the agentic fallback mechanism is invoked when standard fixes fail.
+
+- **Example Usage for get_test_command:** Added `context/get_test_command_example.py` demonstrating test command resolution for various file types including Python, Go, TypeScript, and Rust, with coverage of language override and agentic fallback scenarios.
+
+### Fix
+
+- **Race Condition in Parallel Regression Tests:** Fixed a race condition in `tests/sync_regression_parallel.sh` where `wait -n` could misattribute exit statuses when multiple jobs finished close together. Replaced with explicit `wait "$pid"` for each job to ensure accurate pass/fail reporting.
+
+- **Parameter Name Mismatch in sync_orchestration:** Fixed `sync_orchestration.py` to use `use_git` instead of `git` when calling `update_main()`, preventing silent failures when the update operation was invoked. Added regression test to prevent future issues.
+
+- **Core Dump Timestamp:** Updated `pdd/core/dump.py` to use local time instead of UTC for timestamp generation, improving readability of core dump filenames.
+
+- **Z3 Import Formatting:** Corrected import statement formatting for Z3 library in `test_get_test_command.py`.
+
+### Refactor
+
+- **User Cancellation Handling:** Replaced `sys.exit(1)` with `click.Abort()` across all command modules (`analysis.py`, `fix.py`, `generate.py`, `maintenance.py`, `misc.py`, `modify.py`, `utility.py`) for consistent user cancellation handling. Added `except click.Abort: raise` guards to prevent these exceptions from being swallowed by generic error handlers.
+
+- **CSV Path and Documentation:** Updated CSV file path handling in `get_test_command.py` to use `Path(__file__).parent.parent / "data"` pattern. Improved function docstrings with clear resolution order documentation.
+
+### Tests
+
+- Added 398 lines of comprehensive tests in `tests/test_get_test_command.py` covering Python/Go/TypeScript/Rust file handling, resolution order verification, CSV priority over smart detection, language override behavior, and formal verification of resolution logic using Z3 solver.
+
+- Added 249 lines of multi-language test execution tests in `tests/test_sync_orchestration.py` including bug detection tests for non-Python infinite fix loops and TypeScript/Go test runner verification.
+
+- Added CLI tests in `tests/test_core_cli.py` for click.Abort propagation through command handlers.
+
+## v0.0.82 (2025-12-12)
+
+### Feat
+
+- **Stale Run Report Detection:** Added `test_hash` field to `RunReport` dataclass to track which version of the test file produced the test results. The `_is_workflow_complete()` function now compares this hash against the current test file, detecting when run reports are stale. For legacy run reports without `test_hash`, a timestamp-based fallback compares fingerprint vs. run report timestamps. This prevents sync from incorrectly returning "nothing" when tests need re-running.
+
+- **Smart Coverage Target Selection:** Added `_python_cov_target_for_code_file()` and `_python_cov_target_for_test_and_code()` functions in `sync_orchestration.py`. These analyze test file imports to determine the correct `--cov` target for pytest coverage. Handles both package-based imports (e.g., `backend.functions.module_name`) and stem-based imports (e.g., `from module_name import ...`) that add directories to `sys.path`.
+
+- **ANSI Escape Sequence Handling:** Added `_strip_ansi()` function to `pytest_output.py` that removes ANSI color codes before parsing test results. Added safety net: if return code is non-zero but parsing found no failures/errors (due to formatting), at least one failure/error is recorded. Fixes incorrect `tests_failed=0` when pytest output contains color codes.
+
+- **`.pddrc` Path Resolution Fix:** Added `config_base_dir` parameter to `generate_output_paths()`. Relative paths in `.pddrc` configurations now resolve relative to the `.pddrc` file location (not the input file directory). This parameter is passed through `construct_paths()` when `.pddrc` is present.
+
+- **Auto-Include XML Tag Naming Rules:** Updated `auto_include_LLM.prompt` with strict rules for Step 4 output. Wrapper tags must be canonical dotted Python module paths (e.g., `<utils.auth_helpers>`, `<models.user>`), never `*_example` tags. Added inference rules for deriving module paths from context example files and a third example demonstrating proper tag naming.
+
+- **Prompting Guide - Automatic Update Propagation:** Added new section explaining how `<include>` directives automatically propagate changes from included files to all prompts that reference them. Documents use cases (authoritative documentation, shared constraints, interface definitions) and the token-cost tradeoff of large includes.
+
+### Refactor
+
+- **Conflict Analysis Logic (PDD Doctrine Fix):** Updated `_perform_sync_analysis()` to differentiate between true conflicts (prompt + derived artifacts changed) and interrupted workflows (only derived artifacts changed). Per PDD doctrine, only changes involving the prompt (source of truth) are conflicts. When only code/example/test changed but prompt is unchanged, sync continues the workflow with `verify` or `test` operations instead of triggering `analyze_conflict`. Added `prompt_changed` field to decision details.
+
+### Tests
+
+- Added 300+ lines of regression tests in `test_sync_determine_operation.py` for stale run report detection, PDD doctrine derived artifacts handling, and conflict analysis edge cases
+- Added coverage target selection tests in `test_sync_orchestration.py` for package-based and stem-based import patterns
+- Added ANSI escape sequence and non-zero return code tests in `test_pytest_output.py`
+- Added `config_base_dir` propagation tests in `test_construct_paths.py`
+
+## v0.0.81 (2025-12-11)
+
+### Feat
+
+- **LLM Location Override:** Added `location` column to `data/llm_model.csv` enabling per-model Vertex AI region configuration. Models like `deepseek-r1-0528-maas` can now specify a region (e.g., `us-central1`) that overrides the default `VERTEX_LOCATION` environment variable. The `llm_invoke` module detects and uses this per-model location for both credential-based and API-key-based Vertex AI calls.
+- **LM Studio JSON Schema Support:** Added `extra_body` workaround for LM Studio to properly pass `json_schema` response format, bypassing LiteLLM's `drop_params` behavior that was stripping the schema.
+- **Regression Test Fallback:** Regression tests now copy the verified output file for subsequent tests when available, with automatic fallback to the original file when the verify step hasn't run.
+- **Onboarding Guide Publishing:** Added onboarding guide to public and CAP repositories in the publish process.
+- **Model Range Calculation:** Added midpoint calculation for strength sampling to improve model invocation distribution.
+
+### Fix
+
+- **Infinite Fix Loop Prevention:** Fixed critical bug where `sync_orchestration` failed to pass the `context` parameter to nested operations, causing infinite loops when context-specific configuration was needed. Added explicit test re-execution after successful fix operations to update `run_report` state.
+- **Run Report Stale State Bug:** After a successful fix operation, the orchestrator now explicitly re-runs tests via `_execute_tests_and_create_run_report()` to update the state machine. Previously, stale `run_report` data caused the sync to incorrectly repeat fix operations.
+- **Pytest Error Parsing:** Fixed `_execute_tests_and_create_run_report()` to count pytest ERRORS (fixture/setup failures) in addition to FAILURES. Previously, output like "1 passed, 10 errors" was incorrectly recorded as `tests_failed=0`.
+- **Boolean False Detection Bug:** Changed `result[0] is not None` to `bool(result[0])` when checking fix operation success. Previously, `fix_main` returning `(False, ...)` was incorrectly treated as success because `False is not None` evaluates to `True`.
+- **Default Strength Constant:** Changed hardcoded `strength=0.5` default to use `DEFAULT_STRENGTH` constant (0.75) for consistency.
+- **Model Name in Error Logs:** Fix attempt logs now include the model name used. Error handling returns distinguishable error indicators (e.g., `"Error: ValidationError - ..."`) instead of empty strings.
+
+## v0.0.80 (2025-12-09)
+
+### Feat
+
+- **`report-core` Command:** New `pdd report-core` command for streamlined bug reporting. Automatically finds the most recent core dump, creates GitHub issues with terminal output and tracked file contents, and supports both browser-based (default) and API-based submission (`--api` flag). API mode creates private GitHub Gists containing all relevant files and links them in the issue body. Authenticates via standard methods: `gh` CLI, `GITHUB_TOKEN`, `GH_TOKEN`, or `PDD_GITHUB_TOKEN` environment variables. 
+
+- **Core Dump Enhancements:** Core dumps now capture terminal output (stdout/stderr) with ANSI code stripping for clean logs. File tracking includes content of all files read/written during execution, plus auto-inclusion of relevant `.pdd/meta/` files and PDD config files. Added `OutputCapture` class that acts as a tee to capture output while still displaying it normally. 
+
+Thanks to Jiamin Cai for your contributions on the report core and core dump enhancements!
+
+- **Dependency Synchronization Tooling:** Added `make check-deps` target with `scripts/check_deps.py` to verify that `pyproject.toml` dependencies match `requirements.txt`. The `make release` target now runs this check automatically before version bumping.
+
+- **Documentation Checklists:** Added comprehensive checklists for performance optimization (`docs/checklists/performance-optimization.md`) targeting cold-start reduction from ~1.5s to ~0.3-0.4s, and prompt caching implementation (`docs/checklists/prompt-caching-implementation.md`) for reducing LLM costs.
+
+### Fix
+
+- **Workflow Completion Validation:** Fixed a critical bug where newly generated code would incorrectly be marked as "workflow complete" without crash/verify validation. `_is_workflow_complete()` now requires that `run_report` exists with `exit_code == 0`, and verifies that the `verify` or `test` command has been executed (unless `skip_verify` is set). This prevents the sync workflow from prematurely declaring success.
+
+- **Stale Run Report Cleanup:** After code generation (`generate` operation), the stale `run_report` file is now deleted. This ensures crash/verify validation is always required for freshly generated code, closing a gap where old validation results could incorrectly pass new code.
+
+- **Crash Retry on Failure:** Fixed bug where failed crash fixes (exit_code != 0) would incorrectly proceed to verify. Now properly retries the crash operation when the fix didn't work.
+
+- **Temperature Range Validation:** Updated validation to allow temperature values between 0 and 2 (was incorrectly limited to 0-1). Error messages updated to reflect correct ranges: "Strength and time must be between 0 and 1. Temperature must be between 0 and 2."
+
+- **LiteLLM Responses API:** Switched GPT-5 calls from direct OpenAI API to LiteLLM's `responses()` function for better abstraction. Fixed structured output handling to use `text.format` with `json_schema` and added `additionalProperties: false` for strict mode compliance. Added JSON repair fallback for Pydantic parsing failures.
+
+### Deps
+
+- Added `python-dotenv==1.1.0`, `PyYAML==6.0.1`, `jsonschema==4.23.0`, and `z3-solver` to main dependencies
+- Moved `httpx==0.28.1` to dev dependencies
+- Reorganized `requirements.txt` with clear production/dev sections
+
+### Tests
+
+- Added comprehensive test coverage for core dump file tracking and terminal output capture
+- Added tests for `report-core` command including gist creation and GitHub issue posting
+- Added regression tests for workflow completion checks ensuring generated code requires validation
+- Expanded sync determine operation tests for crash retry and verify completion scenarios
+
+## v0.0.79 (2025-12-08)
+
+### Deps
+
+- **Textual Dependency in pyproject.toml:** Added `textual` to `pyproject.toml` dependencies. This was previously added to `requirements.txt` in v0.0.77 for the Textual TUI feature but was missing from the package manifest, causing installation issues when installing via `pip install pdd-cli`.
+
+Thanks to James Levine for reporting this issue!
+
+## v0.0.78 (2025-12-08)
+
+### Fix
+
+- **Path Resolution for `examples_dir`:** Fixed a bug where `examples_dir` was incorrectly resolved when `example_output_path` was a directory path (e.g., `context/`) rather than a file path. Previously, `Path('context/').parent` would incorrectly evaluate to `.` instead of `context`. The fix now detects directory paths (ending with `/` or having no file extension) and preserves them correctly.
+
+- **Custom `prompts_dir` from Context Config:** Fixed sync discovery mode to respect `prompts_dir` from `.pddrc` context configuration. Previously, the code hardcoded `"prompts"` even when a custom subdirectory like `prompts/backend` was specified in the context config.
+
+- **Empty Prompt Validation in Update:** Added defense-in-depth validation to prevent writing empty prompts. The `update_prompt` module now validates that the LLM returns a non-empty `modified_prompt` (minimum 10 characters via Pydantic), and `update_main` double-checks before writing to disk.
+
+### Tests
+
+- Added regression test `test_construct_paths_sync_discovery_examples_dir_from_directory_path` to verify correct `examples_dir` resolution when `example_output_path` is a directory.
+- Added regression test `test_construct_paths_sync_discovery_custom_prompts_dir` to ensure `prompts_dir` respects `.pddrc` context configuration.
+
+## v0.0.77 (2025-12-07)
+
+### Feat
+
+- **Textual TUI for Sync:** Introduced a rich Terminal User Interface (TUI) for the `sync` command using `Textual`. This includes real-time log streaming, progress animations, and modal dialogs for user input/confirmation, replacing the previous CLI output.
+- **Enhance LLM Response Handling:** Added smart code unescaping, malformed JSON detection, and automatic syntax repair to improve robustness against noisy LLM outputs.
+- **Sync Orchestration:** Improved project root detection (`_find_project_root`), added operation fingerprinting to skip redundant steps, and integrated language-specific run commands.
+- **Universal Execution:** Updated `agentic_langtest` to support more language execution paths.
+
+### Fix
+
+- **Fix Command:** Added validation for error file existence (`--error-file`) and improved error reporting when files are missing.
+- **Boundary Checks:** Fixed boundary checks in project root finding to prevent traversing above the project ceiling.
+
+### Refactor
+
+- **Verification Logic:** Simplified `fix_verification_errors.py` by removing legacy XML parsing fallbacks in favor of Pydantic-based processing.
+- **Tests:** Extensive refactoring of `tests/test_fix_main.py` and addition of new tests for the TUI and orchestration logic.
+
+### Ops
+
+- **Dependencies:** Added `textual` to `requirements.txt`.
+
+## v0.0.76 (2025-12-05)
+
+### LLM Response Handling & Python Syntax Repair
+
+- **Smart Code Unescaping:** Added `_smart_unescape_code()` function that intelligently unescapes `\n` sequences in code while preserving escape sequences inside Python string literals (e.g., `print("line1\nline2")` remains intact).
+- **Malformed JSON Detection:** Added `_is_malformed_json_response()` to detect truncated JSON responses caused by LLMs (particularly Gemini) generating thousands of `\n` characters, causing response truncation before closing braces.
+- **Python Syntax Repair:** Added `_repair_python_syntax()` to validate and automatically fix common syntax errors in LLM-generated Python code, such as spurious trailing quotes at string boundaries.
+- **Pydantic Model Processing:** Added `_unescape_code_newlines()` to recursively process Pydantic model fields, fixing double-escaped newlines in code strings and repairing Python syntax errors.
+- **Automatic Retry on Invalid Syntax:** Enhanced `llm_invoke` to detect invalid Python syntax after initial repair attempts and retry the LLM call with cache bypass, improving reliability for structured code output.
+
+### Prompt Templates
+
+- **JSON Formatting Rules:** Updated `extract_program_code_fix_LLM.prompt` with explicit documentation on proper JSON escaping for newlines (use `\n` not `\\n` for actual line breaks).
+- **Clean JSON Output:** Added instruction to `extract_code_LLM.prompt` requiring output of only the JSON object without trailing whitespace or newlines.
+- **Architecture Schema Fix:** Fixed architecture JSON schema in `architecture_json.prompt` to include `type: string` alongside `enum` properties, ensuring proper JSON Schema compliance.
+
+### Agentic Fix
+
+- **Unattended Execution:** Added `--dangerously-skip-permissions` flag to the Anthropic Claude variant in `agentic_fix.py`, enabling fully automated fix attempts without interactive permission prompts.
+
+### Fix Verification
+
+- **Improved Code Unescaping:** Refactored `fix_verification_errors.py` to use the new `_smart_unescape_code()` function instead of naive string replacement, properly preserving escape sequences inside string literals.
+
+### Examples
+
+- **Architecture Example:** Added comprehensive `examples/arch/` directory demonstrating architecture generation workflow, including `ORDER_MANAGEMENT_PRD.md` (product requirements), `architecture.json` (generated architecture), `architecture_diagram.html` (Mermaid visualization), and `tech_stack.md`.
+
+### Refactor
+
+- **Regression Test Simplification:** Replaced environment variable manipulation (`unset GITHUB_CLIENT_ID`) with the cleaner `--local` CLI flag approach in both `regression.sh` and `sync_regression.sh`.
+- **Code Generator Check:** Changed empty content check from `is None` to falsy check in `code_generator_main.py` to properly handle empty strings from cloud execution.
+
+### Tests
+
+- **LLM Invoke Coverage:** Added 270+ lines of new tests for Python code repair, syntax validation, retry logic, and structured output handling in `test_llm_invoke.py`.
+
+## v0.0.75 (2025-11-30)
+
+### Architecture & CLI Refactor
+
+- **Modular Command Structure:** Massive refactoring of the monolithic `pdd/cli.py` into a modular architecture. The CLI is now organized into distinct command modules under `pdd/commands/` (`analysis`, `fix`, `generate`, `maintenance`, `misc`, `modify`, `templates`, `utility`) and core logic under `pdd/core/` (`cli`, `dump`, `errors`, `utils`). This significantly improves maintainability and extensibility.
+- **Test Suite Restructuring:** The monolithic `tests/test_cli.py` has been split into granular test files (`tests/test_commands_*.py`, `tests/test_core_*.py`) mirroring the new module structure, with enhanced coverage.
+
+### Feat
+
+- **Universal Execution Engine:** Introduced `pdd/get_run_command.py` and updated `data/language_format.csv` to define execution commands for supported languages (e.g., `python {file}`, `node {file}`, `go run {file}`). This allows the agentic fixer (`pdd/agentic_fix.py`) to verify fixes across multiple languages without hardcoded fallbacks.
+- **JavaScript Automation:** Enhanced `agentic_fix` and `agentic_langtest` to support JavaScript/TypeScript workflows, including Node.js and NPM detection. Added a comprehensive `examples/agentic_fallback_example_javascript` to demonstrate this capability.
+- **Analysis Module:** Consolidated analysis-related commands (`detect`, `conflicts`, `bug`, `crash`, `trace`) into a unified `pdd/commands/analysis.py` module.
+- **Core Dump Module:** Extracted and formalized core dump generation logic into `pdd/core/dump.py`, supporting the `report-core` functionality.
+- **Example Organization:** Reorganized context examples into structured subdirectories (e.g., `context/commands/`, `context/core/`) and added new examples for `dump`, `errors`, and `utils` usage.
+- **Goldilocks Prompt Image:** Added the "Goldilocks Zone" diagram asset to the public repository for documentation consistency.
+
+### Fix
+
+- **Agentic Fix Loops:** Refined `fix_code_loop` and `fix_error_loop` to leverage the new universal execution engine, improving stability and language support.
+- **JWT Token Handling:** Enhanced `get_jwt_token.py` with better environment configuration and error handling.
+- **Agentic Fallback Tests:** Updated `tests/test_agentic_fix.py` and `tests/test_agentic_langtest.py` to validate the new Node.js/NPM detection and universal execution paths.
+
+### Docs
+
+- **Prompting Guide:** Updated `docs/prompting_guide.md` with new insights and structural improvements.
+- **Example Generation:** Updated internal logic and prompts for generating core examples, ensuring they align with the new modular CLI structure.
+
+## v0.0.74 (2025-11-24)
+
+### Feat
+
+- **Orchestration Cycle Detection:** Implemented logic to detect and break infinite loops of alternating `test` and `fix` operations in the sync orchestration process, preventing wasted compute cycles.
+- **Structured Output Schemas:** Added `output_schema` support in code generation and LLM invocation, enabling strict JSON schema validation for structured responses.
+- **Architecture Template Normalization:** Added automatic detection and repair of unsupported interface types in generated architecture JSON templates.
+- **Robust Local Fallback:** Enhanced the local execution fallback strategy to default to the first available input file if no prompt files are found, and improved `OPENAI_API_KEY` handling for regression tests.
+
+### Fix
+
+- **Web Scraping Resilience:** Enhanced error handling in web scraping modules to improve stability during regression tests.
+
+### Refactor
+
+- **Regression Test Simplification:** Simplified command usage patterns in synchronization regression tests for better maintainability.
+
+### Data
+
+- **Model Catalog Update:** Updated the LLM catalog to support the latest Claude 4.5 family. Replaced Claude Opus 4.1 with **Claude Opus 4.5** (via Anthropic and Vertex AI) and introduced **Claude Haiku 4.5**, including updated pricing and context window configurations.
+
+### Docs
+
+- **Prompting Guide Visuals:** Added and updated the "Goldilocks" zone diagram to visually illustrate the optimal level of abstraction for prompts. Thanks Rudi Cilibrasi for your feedback!
+
+### Tests
+
+- **Schema Validation Coverage:** Expanded tests in `test_code_generator_main.py` to validate `output_schema` parameter handling across local and cloud fallback scenarios.
+
+## v0.0.73 (2025-11-21)
+
+### Feat
+
+- **Core Dump & Issue Reporting:** Added global `--core-dump` flag to capture detailed execution state, environment variables, and error traces into JSON files on failure. Introduced `pdd report-core` command to parse these dumps into markdown issue reports or automatically post them to GitHub. Thank you Jiamin Cai for your contributions!
+- **Windows Support:** Added comprehensive `SETUP_WITH_WINDOWS.md` guide covering environment variable configuration for PowerShell, CMD, and Git Bash. Thank you Grant Petersen for your contributions!
+
+### Fix
+
+- **Prompt Loading:** Enhanced `load_prompt_template` to search `pdd/prompts/` subdirectories, ensuring packaged prompt templates are correctly discovered when PDD is installed via tools like `uv` or `pip`. Thank you Danial Toktarbayev for your contributions!
+
+### Docs
+
+- **Prompting Guide:** Added a "Quickstart: PDD in 5 Minutes" recipe and a "Glossary" of key terms. Clarified that `<include>` tags are PDD pre-processing directives rather than standard XML.
+
+## v0.0.72 (2025-11-18)
+
+### Feat
+
+- Enhance agentic fallback and path handling: The `run_agentic_fix` function now returns a list of all files modified by the agent. Agentic fix loops (`fix_code_loop`, `fix_error_loop`, `fix_verification_errors_loop`) now display a summary of files changed by the agent and ensure error logs are properly initialized with parent directories created.
+- Improve CLI help structure: The `pdd` CLI now uses a custom `Click` group to organize "Generate Suite" commands (`generate`, `test`, `example`) in its root help, enhancing readability and discoverability. The `generate` command's help text is also expanded for clarity.
+- Refine output path derivation: The `construct_paths` and `generate_output_paths` functions are enhanced to support more granular control over output file locations, allowing different output keys (e.g., `output_code`, `output_test`) to derive their paths from specific input file directories in commands like `fix`, `crash`, and `verify`.
+
+### Fix
+
+- Improve file writing robustness: Commands like `fix` and `verify` now proactively create parent directories for output files (e.g., fixed code, tests, results) before writing, preventing errors in cases where the target directory structure does not yet exist.
+
+### Docs
+
+- **Prompting Guide Improvements:**
+    - Added new references to "Effective Context Engineering" and "Anthropic Prompt Engineering Overview."
+    - Expanded "Steps" guidance to "Steps & Chain of Thought," emphasizing deterministic planning and explicit step-by-step reasoning for complex tasks.
+    - Introduced an "Advanced Tips" section covering: Shared Preamble for Consistency, Positive over Negative Constraints, Positioning Critical Instructions (Hierarchy of Attention), and Command-Specific Context Files.
+    - Added a "Level of Abstraction (The \"Goldilocks\" Zone\")" section, guiding users to focus on architecture, contract, and intent, with examples of effective prompt abstraction.
+    - Updated "Dependencies & Composability (Token-Efficient Examples)" to clarify examples as "compressed interfaces" and module interfaces, with a tip to use `pdd auto-deps`.
+    - Refined PDD Workflow steps and added a "Workflow Cheatsheet: Features vs. Bugs" table, with a strong emphasis on writing new failing tests for bugs and updating prompts (not patching code) for fixes.
+
+### Tests
+
+- Update agentic fix tests: Test assertions in `tests/test_agentic_fix.py` are updated to account for the new `changed_files` return value.
+- Enhance path construction tests: `tests/test_construct_paths.py` includes new tests for the improved `input_file_dirs` handling.
+- Refactor file writing tests: `tests/test_fix_main.py` and `tests/test_fix_verification_main.py` are adjusted to use `pathlib.Path` objects consistently for file operations and verify the new directory creation logic.
+
+Many thanks to Jiamin Cai for your contributions around your continued improvements to the agentic fallback and path handling and thank you to Kante Tran for your work on the CLI help improvements!
+
+## v0.0.71 (2025-11-18)
+
+### Feat
+
+- `pdd update` repository mode now walks the Git root, creates/updates prompts inside the shared `prompts/` directory, honors `--output` directories during regeneration, and blocks file-only switches (`--input-code`, `--git`, etc.) so repo-wide refreshes can be scripted safely.
+- Default output derivation for file-scoped commands (`fix`, `crash`, `verify`, `split`, `change`, `update`) now anchors to the input file’s directory (including relative `.pddrc` or env overrides), so regenerated prompts/tests land beside their sources instead of the current working directory.
+
+### Docs
+
+- README and PyPI description bumped to 0.0.71, moved the agentic fallback guide next to the `fix` command docs (noting `crash`/`verify` support), and clarified the `update` examples/options.
+
+### Data
+
+- Refreshed the LLM catalog and defaults: replaced Gemini 2.5 entries with Gemini 3 previews, switched the CLI default to `gpt-5.1-codex-mini`, and added the latest GPT‑5.1 SKUs.
+
+### Tests
+
+- Added coverage for repo-wide prompt regeneration, prompt-directory summaries, construct-path defaults that follow input directories, CLI summary rendering with the new default model, and LLM invocation to lock in the catalog updates.
+
+Many thanks to Jiamin Cai for your contributions around fixing the directory issues!
+
+
+## v0.0.70 (2025-11-13)
+
+### Feat
+
+- Image includes in prompts: `<include>` now embeds images as base64 data URLs with sensible defaults. Supports `.png`, `.jpg/.jpeg`, `.gif`, `.webp`, and `.heic`; enforces max dimension ~1024px while preserving aspect ratio; converts GIFs to first‑frame PNG and HEIC to JPEG for compatibility.
+- Multimodal generation: `code_generator` detects `data:image/...;base64,...` in prompts and calls the model with mixed `text` + `image_url` content, enabling image‑conditioned generations alongside normal text prompts.
+- Prompt templates updated: clarify parameter validation/defaults (including `time=None` semantics) and document multimodal message construction and image include behavior.
+- Minor: small enhancements around crash/agentic fallback flows.
+
+### Examples
+
+- Added `examples/image_prompt_example/` showing how to include an image in a prompt and generate a Python script that describes it.
+
+### Docs
+
+- Prompting guide notes that `<include>` handles images in addition to text; README and PyPI long description updated with the new version badge.
+
+### Tests
+
+- Expanded coverage for preprocess include flows (include‑many, recursive deferral for shell/web, curly‑brace handling) and added multimodal path tests for `code_generator`.
+
+### Chore
+
+- Version bump to 0.0.70 and dependency updates: add `Pillow` and `pillow-heif`; update `requirements.txt`, `pyproject.toml`, and internal version strings.
+
+Thank you Jiamin Cai for your amazing contributions!
+
+## v0.0.69 (2025-11-12)
+
+### Feat
+
+- crash command: add `--agentic-fallback/--no-agentic-fallback` (default on), wire into the iterative fixer, and always write `--output` and `--output-program` even when unchanged; improve path resolution, messaging, and summary output
+- agentic fallback: normalize result shapes in fix loops, roll agentic cost/model into totals, and re-read final files on success to return the actual post-fix content
+
+### Docs
+
+- README and language examples updated to document crash flow with agentic fallback; refreshed agentic_fallback example READMEs for Python, Java (Maven/Gradle), JavaScript, and TypeScript
+
+### Tests
+
+- strengthen fix verification tests to ensure outputs are written on failure/no-op, propagate `agentic_fallback=True`, validate verbose/force handling, and refine attempt counting
+
+Many thanks to Jiamin Cai for bringing the entire agentic fallback suite contributions to the project!
+
+## v0.0.68 (2025-11-12)
+
+### Feat
+
+- add agentic fallback fixer with multi‑provider support (Anthropic, Google, OpenAI) and deterministic multi‑file patch application using explicit BEGIN/END file markers
+- add language‑aware verification with sensible defaults (pytest, npm/jest, Maven/Gradle) and optional agent‑supplied TESTCMD execution on failure
+- integrate agentic fallback path into CLI fix flow and harden the error loop with clearer logging, timeouts, and safer env handling
+- add new prompt templates for agentic fix and langtest; refine CLI/fix prompt templates
+
+### Examples
+
+- add agentic_fallback examples for Python, Java (Maven and Gradle), JavaScript, and TypeScript, each with prompts, minimal source, and tests
+
+### Tests
+
+- add tests for agentic fixer and language‑aware verification (tests/test_agentic_fix.py, tests/test_agentic_langtest.py)
+- move pytest configuration into tests/conftest.py and update fix error‑loop coverage
+
+### Docs
+
+- update README and examples documentation to cover agentic fallback workflows; refresh PyPI long description
+
+### Chore
+
+- update .gitignore for Node/Yarn artifacts; adjust Makefile test targets and pyproject settings
+
+Many thanks to Jiamin Cai for your amazing contributions!
+
+## v0.0.67 (2025-11-11)
+
+### Feat
+
+- add pdd-local.sh to the list of public root files for publishing
+- add support for --local option in regression tests to enhance context argument handling
+- improve template listing in CLI by enhancing output formatting for better readability
+- implement error recovery in regression tests by adding a 'crash' command to fix failed example runs
+- extend sync command in regression tests with additional options for budget and max attempts
+- add regression test summary parsing to TestRunner for improved pass/fail reporting
+- enhance TestRunner with detailed parsing for sync regression results and improve error handling
+- enhance TestRunner to extract additional log paths and improve regression output parsing
+- improve test result parsing and logging in TestRunner to handle multiple log files
+- enhance Makefile to copy regression scripts and update TestRunner to parse full log files
+- add sync log and analysis tests to regression suite
+- add parallel execution for sync regression tests and update test command in Makefile
+- add make pr-test command to test public PRs against private codebase
+- include PR link in test results comment
+- extract and display failed test numbers in results
+- add manual workflow trigger support without requiring keys in code
+- automate test execution with GitHub Actions and Infisical
+
+### Fix
+
+- improve error logging in sync regression tests by capturing exit status for failed commands
+- improve patch application process in PR tests workflow with fallback mechanism
+- simplify comment body parsing in PR tests workflow
+- update sync command to include local flag for multi-language tests
+- update Infisical environment variable usage and improve sync regression test logging
+- update repository references from pdd_cloud to gltanaka/pdd
+- update all repository URLs to promptdriven/pdd_cloud
+- update repository references to promptdriven organization
+
+### Refactor
+
+- enhance `update` command functionality in CLI to support repository-wide updates and improved prompt handling (Thank you Jiamin Cai for your contributions!)
+- enhance test logging and output handling in TestRunner
+- enhance Infisical integration in test scripts and update workflow for token usage
+- update GitHub Actions workflow to apply public PR patches on private repo
+- use pr-url instead of pr-num for flexibility
+- change workflow to manual-only execution
+
+### Docs
+
+- add developer setup section with test optimization and dependencies
+
+## v0.0.66 (2025-11-07)
+
+### Architecture & Code Generation
+
+- Architecture JSON emission and Mermaid rendering now produce deterministic formatting, `.pddrc` defaults stay in sync with those paths, and the regression suite (`tests/test_code_generator_main.py`, `tests/test_render_mermaid.py`) locks the behavior down so downstream tools always find the generated assets.
+- The LLM toggle plus force flag flows through `code_generator_main.py`, prompt templates, and the Mermaid renderer, letting templates skip or re-run expensive post-processing per invocation; the CLI now pre-parses front matter, writes JSON outputs before post-process scripts run, and always regenerates architecture diagrams when `architecture.json` changes.
+
+### Templates & Examples
+
+- Prompt assets and their drivers now ship module-aware metadata (source/test paths, module names) so generated examples/tests import the right files; they also showcase the new `context/python_env_detector_example.py`, adopt the `--template` flag in docs, and drop the obsolete `mermaid_diagram.prompt`.
+- `.pddrc` now declares explicit `src/` and `tests/` output paths for example contexts, and `generate_output_paths.py` bootstraps an `examples/` directory automatically so newly generated artifacts never depend on `context/example.prompt` or `context/test.prompt`.
+- The hello sample workspace was rebuilt around `examples/hello/src/hello.py` with refreshed metadata, updated `pdd/generate_test.py`, and rewritten prompts/tests so the example mirrors the current CLI workflow.
+
+### Docs & Quality
+
+- Issue #88’s test-generation failures were fixed by tightening `construct_paths`, cleaning prompt instructions, passing resolved file paths into the LLM, and enforcing absolute output paths during code-generation—covered by new tests in `tests/test_construct_paths.py`, `tests/test_generate_test.py`, and `tests/test_generate_output_paths.py`.
+- Onboarding and troubleshooting docs now cover `~/.pdd/llm_model.csv` quota issues and explain the LLM toggle workflow, with the README/model docs updated to match.
 
 ## v0.0.65 (2025-10-24)
 

@@ -33,7 +33,10 @@ def fix_main(
     verification_program: Optional[str],
     max_attempts: int,
     budget: float,
-    auto_submit: bool
+    auto_submit: bool,
+    agentic_fallback: bool = True,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -52,7 +55,7 @@ def fix_main(
         max_attempts: Maximum number of fix attempts
         budget: Maximum cost allowed for fixing
         auto_submit: Whether to auto-submit example if tests pass
-
+        agentic_fallback: Whether the cli agent fallback is triggered
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -69,13 +72,13 @@ def fix_main(
     # Initialize analysis_results to None to prevent reference errors
     analysis_results = None
 
+    # Input validation - let these propagate to caller for proper exit code
+    if not loop:
+        error_path = Path(error_file)
+        if not error_path.exists():
+            raise FileNotFoundError(f"Error file '{error_file}' does not exist.")
+
     try:
-        # Verify error file exists if not in loop mode
-        if not loop:
-            error_path = Path(error_file)
-            if not error_path.exists():
-                raise FileNotFoundError(f"Error file '{error_file}' does not exist.")
-                
         # Construct file paths
         input_file_paths = {
             "prompt_file": prompt_file,
@@ -98,12 +101,13 @@ def fix_main(
             command="fix",
             command_options=command_options,
             create_error_file=loop,  # Only create error file if in loop mode
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback')
         )
 
-        # Get parameters from context
-        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
-        temperature = ctx.obj.get('temperature', 0)
+        # Get parameters from context (prefer passed parameters over ctx.obj)
+        strength = strength if strength is not None else ctx.obj.get('strength', DEFAULT_STRENGTH)
+        temperature = temperature if temperature is not None else ctx.obj.get('temperature', 0)
         verbose = ctx.obj.get('verbose', False)
         time = ctx.obj.get('time') # Get time from context
 
@@ -112,6 +116,7 @@ def fix_main(
             success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
                 unit_test_file=unit_test_file,
                 code_file=code_file,
+                prompt_file=prompt_file,
                 prompt=input_strings["prompt_file"],
                 verification_program=verification_program,
                 strength=strength,
@@ -120,7 +125,8 @@ def fix_main(
                 max_attempts=max_attempts,
                 budget=budget,
                 error_log_file=output_file_paths.get("output_results"),
-                verbose=verbose
+                verbose=verbose,
+                agentic_fallback=agentic_fallback
             )
         else:
             # Use fix_errors_from_unit_tests for single-pass fixing
@@ -140,11 +146,15 @@ def fix_main(
 
         # Save fixed files
         if fixed_unit_test:
-            with open(output_file_paths["output_test"], 'w') as f:
+            output_test_path = Path(output_file_paths["output_test"])
+            output_test_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_test_path, 'w') as f:
                 f.write(fixed_unit_test)
 
         if fixed_code:
-            with open(output_file_paths["output_code"], 'w') as f:
+            output_code_path = Path(output_file_paths["output_code"])
+            output_code_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_code_path, 'w') as f:
                 f.write(fixed_code)
 
         # Provide user feedback
@@ -287,6 +297,9 @@ def fix_main(
 
         return success, fixed_unit_test, fixed_code, attempts, total_cost, model_name
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         if not ctx.obj.get('quiet', False):
             # Safely handle and print MarkupError
@@ -297,4 +310,5 @@ def fix_main(
                  # Print other errors normally, escaping the error string
                  from rich.markup import escape # Ensure escape is imported
                  rprint(f"[bold red]Error:[/bold red] {escape(str(e))}")
-        sys.exit(1)
+        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+        return False, "", "", 0, 0.0, f"Error: {e}"

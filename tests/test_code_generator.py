@@ -75,7 +75,8 @@ def test_code_generator_valid_input_complete(
         strength=0.8,
         temperature=0.5,
         time=None,
-        verbose=True
+        verbose=True,
+        output_schema=None
     )
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
@@ -127,7 +128,8 @@ def test_code_generator_valid_input_incomplete(
         strength=DEFAULT_STRENGTH,
         temperature=0.7,
         time=None,
-        verbose=False
+        verbose=False,
+        output_schema=None
     )
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
@@ -312,6 +314,42 @@ def test_code_generator_edge_case_exact_600_chars(
     assert runnable_code == "runnable_code_here"
     assert total_cost == 0.05 + 0.01 + 0.02
     assert model_name == "model_v1"
+
+def test_code_generator_with_image(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_postprocess
+):
+    """
+    Test code_generator with a prompt containing an image.
+    """
+    image_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    prompt_with_image = f"Generate code based on this image: {image_data}"
+    mock_preprocess.return_value = prompt_with_image
+
+    code_generator(
+        prompt=prompt_with_image,
+        language="python",
+        strength=0.8,
+        temperature=0.5,
+        verbose=True
+    )
+
+    mock_llm_invoke.assert_called_once()
+    call_args = mock_llm_invoke.call_args[1]
+    messages = call_args['messages']
+    
+    assert len(messages) == 1
+    assert messages[0]['role'] == 'user'
+    
+    content = messages[0]['content']
+    assert isinstance(content, list)
+    assert len(content) == 2
+    assert content[0]['type'] == 'text'
+    assert content[0]['text'] == 'Generate code based on this image: '
+    assert content[1]['type'] == 'image_url'
+    assert content[1]['image_url']['url'] == image_data
 
 def test_generate_loops_when_unfinished_never_true(monkeypatch):
     """

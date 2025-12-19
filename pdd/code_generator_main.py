@@ -114,6 +114,62 @@ def _parse_front_matter(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
         return None, text
 
 
+def _is_architecture_template(meta: Optional[Dict[str, Any]]) -> bool:
+    """Detect the packaged architecture JSON template via its front matter name."""
+    return isinstance(meta, dict) and meta.get("name") == "architecture/architecture_json"
+
+
+def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
+    """
+    Patch common LLM slip-ups for the architecture template where interface.type
+    occasionally returns an unsupported value like "object". Only normalizes the
+    interface.type field and leaves other schema issues untouched so validation
+    still fails for genuinely malformed outputs.
+    """
+    allowed_types = {
+        "component",
+        "page",
+        "module",
+        "api",
+        "graphql",
+        "cli",
+        "job",
+        "message",
+        "config",
+    }
+    changed = False
+    if not isinstance(payload, list):
+        return payload, changed
+
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        interface = entry.get("interface")
+        if not isinstance(interface, dict):
+            continue
+        raw_type = interface.get("type")
+        normalized = raw_type.lower() if isinstance(raw_type, str) else None
+        if normalized in allowed_types:
+            if normalized != raw_type:
+                interface["type"] = normalized
+                changed = True
+            continue
+
+        inferred_type = None
+        for key in ("page", "component", "module", "api", "graphql", "cli", "job", "message", "config"):
+            if isinstance(interface.get(key), dict):
+                inferred_type = key
+                break
+        if inferred_type is None:
+            inferred_type = "module"
+
+        if raw_type != inferred_type:
+            interface["type"] = inferred_type
+            changed = True
+
+    return payload, changed
+
+
 def get_git_content_at_ref(file_path: str, git_ref: str = "HEAD") -> Optional[str]:
     """Gets the content of the file as it was at the specified git_ref."""
     abs_file_path = pathlib.Path(file_path).resolve()
@@ -179,6 +235,28 @@ def git_add_files(file_paths: List[str], verbose: bool = False) -> bool:
         return False
 # --- End Git Helper Functions ---
 
+def _find_default_test_files(tests_dir: Optional[str], code_file_path: Optional[str]) -> List[str]:
+    """Find default test files for a given code file in the tests directory."""
+    if not tests_dir or not code_file_path:
+        return []
+
+    tests_path = pathlib.Path(tests_dir)
+    code_path = pathlib.Path(code_file_path)
+
+    if not tests_path.exists() or not tests_path.is_dir():
+        return []
+
+    code_stem = code_path.stem
+    code_suffix = code_path.suffix
+
+    # Look for files starting with test_{code_stem}
+    # We look for test_{code_stem}*.{code_suffix}
+    # e.g., hello.py -> test_hello.py, test_hello_1.py
+    pattern = f"test_{code_stem}*{code_suffix}"
+    found_files = list(tests_path.glob(pattern))
+
+    return [str(p) for p in sorted(found_files)]
+
 
 def code_generator_main(
     ctx: click.Context,
@@ -187,6 +265,8 @@ def code_generator_main(
     original_prompt_file_path: Optional[str],
     force_incremental_flag: bool,
     env_vars: Optional[Dict[str, str]] = None,
+    unit_test_file: Optional[str] = None,
+    exclude_tests: bool = False,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -253,7 +333,8 @@ def code_generator_main(
             quiet=quiet,
             command="generate",
             command_options=command_options,
-            context_override=ctx.obj.get('context')
+            context_override=ctx.obj.get('context'),
+            confirm_callback=cli_params.get('confirm_callback')
         )
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")
@@ -269,9 +350,40 @@ def code_generator_main(
             else:
                 output_path = output
 
+        # --- Unit Test Inclusion Logic ---
+        test_files_to_include: List[str] = []
+        if unit_test_file:
+            test_files_to_include.append(unit_test_file)
+        elif not exclude_tests:
+            # Try to find default test files
+            tests_dir = resolved_config.get("tests_dir")
+            found_tests = _find_default_test_files(tests_dir, output_path)
+            if found_tests:
+                if verbose:
+                    console.print(f"[info]Found default test files: {', '.join(found_tests)}[/info]")
+                test_files_to_include.extend(found_tests)
+        
+        if test_files_to_include:
+            prompt_content += "\n\n<unit_test_content>\n"
+            prompt_content += "The following is the unit test content that the generated code must pass:\n"
+            for tf in test_files_to_include:
+                try:
+                    with open(tf, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    # If multiple files, label them? Or just concat?
+                    # Using code block with file path comment is safer for context.
+                    prompt_content += f"\nFile: {pathlib.Path(tf).name}\n```python\n{content}\n```\n"
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Could not read unit test file {tf}: {e}[/yellow]")
+            prompt_content += "</unit_test_content>\n"
+        # ---------------------------------
+
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
         return "", False, 0.0, "error"
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
         console.print(f"[red]Error during path construction: {e}[/red]")
         return "", False, 0.0, "error"
@@ -692,7 +804,7 @@ def code_generator_main(
                         total_cost = float(response_data.get("totalCost", 0.0))
                         model_name = response_data.get("modelName", "cloud_model")
 
-                        if generated_code_content is None:
+                        if not generated_code_content:
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
@@ -719,6 +831,10 @@ def code_generator_main(
                 local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 # Language already resolved (front matter overrides detection if present)
                 gen_language = language
+                
+                # Extract output schema from front matter if available
+                output_schema = fm_meta.get("output_schema") if fm_meta else None
+                
                 generated_code_content, total_cost, model_name = local_code_generator_func(
                     prompt=local_prompt,
                     language=gen_language,
@@ -726,7 +842,8 @@ def code_generator_main(
                     temperature=temperature,
                     time=time_budget,
                     verbose=verbose,
-                    preprocess_prompt=False
+                    preprocess_prompt=False,
+                    output_schema=output_schema,
                 )
                 was_incremental_operation = False
                 if verbose:
@@ -884,9 +1001,17 @@ def code_generator_main(
                         elif output_path and str(output_path).lower().endswith(".json"):
                             is_json_output = True
                         if is_json_output:
+                            # Check if the generated content is an error message from llm_invoke
+                            if generated_code_content.strip().startswith("ERROR:"):
+                                raise click.UsageError(f"LLM generation failed: {generated_code_content}")
+                                
                             parsed = json.loads(generated_code_content)
+                            if _is_architecture_template(fm_meta):
+                                parsed, repaired = _repair_architecture_interface_types(parsed)
+                                if repaired:
+                                    generated_code_content = json.dumps(parsed, indent=2)
                             try:
-                                import jsonschema  # type: ignore
+                                import jsonschema
                                 jsonschema.validate(instance=parsed, schema=fm_meta.get("output_schema"))
                             except ModuleNotFoundError:
                                 if verbose and not quiet:
@@ -949,10 +1074,19 @@ def code_generator_main(
                 console.print("[red]Error: Code generation failed. No code was produced.[/red]")
                 return "", was_incremental_operation, total_cost, model_name or "error"
 
+    except click.Abort:
+        # User cancelled - re-raise to stop the sync loop
+        raise
     except Exception as e:
-        console.print(f"[red]An unexpected error occurred: {e}[/red]")
-        import traceback
-        if verbose: console.print(traceback.format_exc())
-        return "", was_incremental_operation, total_cost, "error"
+        if isinstance(e, click.UsageError):
+            raise
+
+        # For any other unexpected error, we should fail hard so the CLI exits non-zero
+        # Log the detailed traceback first if verbose
+        if verbose:
+            import traceback
+            console.print(traceback.format_exc())
+
+        raise click.UsageError(f"An unexpected error occurred: {e}")
         
     return generated_code_content or "", was_incremental_operation, total_cost, model_name

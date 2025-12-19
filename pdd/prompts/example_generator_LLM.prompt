@@ -20,6 +20,7 @@
     - Make the example portable across different development environments
     - Use dynamic path resolution with os.path.dirname(__file__) and relative path construction
     - In comments, describe file structure using relative terms, not absolute paths
+ - CRITICAL: The 'extracted_code' field must preserve all newlines using proper JSON escaping (\\n). The output must be valid JSON where multi-line code is represented with \\n escape sequences for each line break.
 
 % Make sure the following happens:
     - Document in detail what the input and output parameters in the doc strings

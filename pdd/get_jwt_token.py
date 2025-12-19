@@ -248,7 +248,14 @@ class FirebaseAuthenticator:
         except requests.exceptions.ConnectionError as e:
             raise NetworkError(f"Failed to connect to Firebase: {e}")
         except requests.exceptions.RequestException as e:
-            raise TokenError(f"Error exchanging GitHub token for Firebase token: {e}")
+            # Capture more detail to help diagnose provider configuration or audience mismatches
+            extra = ""
+            if getattr(e, "response", None) is not None:
+                try:
+                    extra = f" | response: {e.response.text}"
+                except Exception:
+                    pass
+            raise TokenError(f"Error exchanging GitHub token for Firebase token: {e}{extra}")
 
     def verify_firebase_token(self, id_token: str) -> bool:
         """
