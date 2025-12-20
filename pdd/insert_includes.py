@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Callable, Optional, Tuple
 from pathlib import Path
 from rich import print
 from pydantic import BaseModel, Field
@@ -19,7 +19,8 @@ def insert_includes(
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
-    verbose: bool = False
+    verbose: bool = False,
+    progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Tuple[str, str, float, str]:
     """
     Determine needed dependencies and insert them into a prompt.
@@ -32,6 +33,8 @@ def insert_includes(
         temperature (float): Temperature parameter for the LLM model
         time (float): Time budget for the LLM model
         verbose (bool, optional): Whether to print detailed information. Defaults to False.
+        progress_callback (Optional[Callable[[int, int], None]]): Callback for progress updates.
+            Called with (current, total) for each file processed.
 
     Returns:
         Tuple[str, str, float, str]: Tuple containing:
@@ -78,7 +81,8 @@ def insert_includes(
             strength=strength,
             temperature=temperature,
             time=time,
-            verbose=verbose
+            verbose=verbose,
+            progress_callback=progress_callback
         )
 
         if verbose:

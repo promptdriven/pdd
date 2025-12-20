@@ -7,7 +7,7 @@ import asyncio
 
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
-from textual.widgets import Static, RichLog, Button, Label, Input
+from textual.widgets import Static, RichLog, Button, Label, Input, ProgressBar
 from textual.containers import Vertical, Container, Horizontal
 from textual.binding import Binding
 from textual.worker import Worker
@@ -270,10 +270,6 @@ class TUIStdoutWrapper(io.TextIOBase):
     def captured_logs(self) -> List[str]:
         return self.real_redirector.captured_logs
 
-    def isatty(self) -> bool:
-        """Report as TTY so Rich uses \\r mode for progress bars."""
-        return True
-
 
 class ThreadSafeRedirector(io.TextIOBase):
     """
@@ -346,6 +342,20 @@ class SyncApp(App):
         dock: top;
     }
 
+    #progress-container {
+        height: auto;
+        padding: 0 1;
+        display: none;
+    }
+
+    #progress-container.visible {
+        display: block;
+    }
+
+    #progress-bar {
+        width: 100%;
+    }
+
     #log-container {
         height: 1fr;
         border: solid $primary;
@@ -379,6 +389,7 @@ class SyncApp(App):
         example_color_ref: List[str],
         tests_color_ref: List[str],
         stop_event: threading.Event,
+        progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None,
     ):
         super().__init__()
         self.basename = basename
@@ -396,6 +407,7 @@ class SyncApp(App):
         self.code_color_ref = code_color_ref
         self.example_color_ref = example_color_ref
         self.tests_color_ref = tests_color_ref
+        self.progress_callback_ref = progress_callback_ref
 
         self.stop_event = stop_event
 
@@ -445,12 +457,39 @@ class SyncApp(App):
                 return self.redirector.real_redirector.captured_logs
         return []
 
+    def _update_progress(self, current: int, total: int) -> None:
+        """Update the progress bar from the worker thread.
+
+        Called by summarize_directory during auto-deps to show file processing progress.
+        Uses call_from_thread to safely update the UI from the worker thread.
+        """
+        def _do_update():
+            # Show progress container if hidden
+            if "visible" not in self.progress_container.classes:
+                self.progress_container.add_class("visible")
+
+            # Update progress bar
+            self.progress_bar.update(total=total, progress=current)
+
+            # Hide when complete
+            if current >= total:
+                self.progress_container.remove_class("visible")
+
+        self.call_from_thread(_do_update)
+
     def compose(self) -> ComposeResult:
         yield Container(Static(id="animation-view"), id="animation-container")
+        yield Container(ProgressBar(id="progress-bar", show_eta=False), id="progress-container")
         yield Container(RichLog(highlight=True, markup=True, wrap=True, id="log"), id="log-container")
 
     def on_mount(self) -> None:
         self.log_widget = self.query_one("#log", RichLog)
+        self.progress_bar = self.query_one("#progress-bar", ProgressBar)
+        self.progress_container = self.query_one("#progress-container", Container)
+
+        # Set up progress callback if ref is available
+        if self.progress_callback_ref is not None:
+            self.progress_callback_ref[0] = self._update_progress
         self.animation_view = self.query_one("#animation-view", Static)
 
         # Initialize Logo Particles

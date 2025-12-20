@@ -98,3 +98,21 @@ The following secrets are managed centrally:
 **Conflicts with local `.env`:**
 - Infisical values take precedence over `.env` when there's a name conflict
 - Keep only `VERTEX_CREDENTIALS` and `PDD_PATH` in your local `.env`
+
+## Cost-Efficient CLI Usage
+
+PDD has Google Cloud credits and limited Claude Max seats. Use AI CLI tools in this order to maximize value:
+
+| Tier | Model | CLI Tool | Cost |
+|------|-------|----------|------|
+| 1st | Gemini Flash 3.0 | Gemini CLI | Free (GCP credits) |
+| 2nd | Gemini Pro 3.0 | Gemini CLI | Free (GCP credits) |
+| 3rd | Claude Opus 4.5 | Claude Code CLI | Limited (Max subscription) |
+
+### Try and Escalate
+
+1. **Start with Gemini Flash 3.0** for all tasks
+2. **Escalate to Gemini Pro 3.0** if Flash struggles or produces poor results
+3. **Use Claude Opus 4.5** only for truly complex problems that Gemini can't handle
+
+This approach leverages our GCP credits while conserving limited Claude Max usage for when it's really needed.
