@@ -271,6 +271,24 @@ def _extract_basename(
     """
     Deduce the project basename according to the rules explained in *Step A*.
     """
+    # Handle 'fix' command specifically to create a unique basename per test file
+    if command == "fix":
+        prompt_path = _candidate_prompt_path(input_file_paths)
+        if not prompt_path:
+            raise ValueError("Could not determine prompt file for 'fix' command.")
+        
+        prompt_basename = _strip_language_suffix(prompt_path)
+        
+        unit_test_path = input_file_paths.get("unit_test_file")
+        if not unit_test_path:
+            # Fallback to just the prompt basename if no unit test file is provided
+            # This might happen in some edge cases, but 'fix' command structure requires it
+            return prompt_basename
+
+        # Use the stem of the unit test file to make the basename unique
+        test_basename = Path(unit_test_path).stem
+        return f"{prompt_basename}_{test_basename}"
+        
     # Handle conflicts first due to its unique structure
     if command == "conflicts":
         key1 = "prompt1"
@@ -778,12 +796,25 @@ def construct_paths(
          raise # Re-raise the ValueError
 
     # ------------- Step 4: overwrite confirmation ------------
-    # Check if any output *file* exists (operate on Path objects)
+    # Initialize existing_files before the conditional to avoid UnboundLocalError
     existing_files: Dict[str, Path] = {}
-    for k, p_obj in output_paths_resolved.items():
-        # p_obj = Path(p_val) # Conversion now happens earlier
-        if p_obj.is_file():
-            existing_files[k] = p_obj # Store the Path object
+
+    if command in ["test", "bug"] and not force:
+        # For test/bug commands without --force, create numbered files instead of overwriting
+        for key, path in output_paths_resolved.items():
+            if path.is_file():
+                base, ext = os.path.splitext(path)
+                i = 1
+                new_path = Path(f"{base}_{i}{ext}")
+                while new_path.exists():
+                    i += 1
+                    new_path = Path(f"{base}_{i}{ext}")
+                output_paths_resolved[key] = new_path
+    else:
+        # Check if any output *file* exists (operate on Path objects)
+        for k, p_obj in output_paths_resolved.items():
+            if p_obj.is_file():
+                existing_files[k] = p_obj # Store the Path object
 
     if existing_files and not force:
         paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())

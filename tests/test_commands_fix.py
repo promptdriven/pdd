@@ -300,3 +300,64 @@ def test_fix_command_exits_nonzero_for_nonexistent_error_file(tmp_path):
         f"Expected non-zero exit code for nonexistent error file, "
         f"got {result.exit_code}. Output: {result.output}"
     )
+
+
+def test_cli_fix_multiple_test_files(tmp_path):
+    """Test that the fix command accepts multiple test files."""
+    runner = CliRunner()
+
+    prompt_file = tmp_path / "prompt.prompt"
+    prompt_file.write_text("prompt content")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("code content")
+    test_file_1 = tmp_path / "test_1.py"
+    test_file_1.write_text("test 1 content")
+    test_file_2 = tmp_path / "test_2.py"
+    test_file_2.write_text("test 2 content")
+    error_file = tmp_path / "error.txt"
+    error_file.write_text("error content")
+
+    with patch('pdd.commands.fix.fix_main') as mock_fix_main:
+        mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
+        result = runner.invoke(cli.cli, [
+            'fix',
+            str(prompt_file),
+            str(code_file),
+            str(test_file_1),
+            str(test_file_2),
+            str(error_file),
+        ])
+        assert result.exit_code == 0
+        assert mock_fix_main.call_count == 2
+        mock_fix_main.assert_any_call(
+            ctx=ANY,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            unit_test_file=str(test_file_1),
+            error_file=str(error_file),
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False,
+            agentic_fallback=True,
+        )
+        mock_fix_main.assert_any_call(
+            ctx=ANY,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            unit_test_file=str(test_file_2),
+            error_file=str(error_file),
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False,
+            agentic_fallback=True,
+        )
