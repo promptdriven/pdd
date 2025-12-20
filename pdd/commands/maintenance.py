@@ -37,8 +37,8 @@ from ..core.utils import _run_setup_utility
 )
 @click.option(
     "--target-coverage",
-    default=0.0,
-    help="Desired code coverage percentage.",
+    default=None,
+    help="Desired code coverage percentage. Default: 10.0 or .pddrc value.",
 )
 @click.option(
     "--dry-run",

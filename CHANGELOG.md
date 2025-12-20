@@ -1,22 +1,67 @@
+## v0.0.87 (2025-12-18)
+
 ## v0.0.86 (2025-12-17)
 
 ### Feat
 
-- add metadata files for Python test command execution results and configuration
-- add encode_message prompt for encoding functionality in Python
-- add encode_message prompt for regression tests and enhance test auto-discovery in integration tests
-- enhance LLM prompts with detailed mock vs production code guidance and improve integration test script for clarity
-- add integration and static tests for mock vs production code guidance in LLM prompts
-- enhance unit test inclusion in code generation, implement example error detection, and improve directory summarization; update README and tests accordingly
+- **`--dry-run` Flag for Sync Command:** Renamed the `--log` flag to `--dry-run` for clearer semantics. The `--dry-run` flag analyzes sync state without executing operations, showing what sync would do. The old `--log` flag is deprecated with a warning directing users to use `--dry-run` instead.
+
+- **Mock vs Production Code Guidance in LLM Prompts:** Added comprehensive guidance to `fix_verification_errors_LLM.prompt` and `find_verification_errors_LLM.prompt` for distinguishing mock configuration errors from production code errors. Prompts now instruct the LLM to:
+  - Identify test files using mocks (MagicMock, unittest.mock, patch)
+  - Check mock setup FIRST when errors occur (wrong `return_value` structure, missing `__getitem__` configuration)
+  - Preserve production code API usage patterns unless documentation proves otherwise
+  - Follow a diagnosis priority: mock configuration → mock chaining → production code
+
+- **Unit Test Auto-Discovery Regression Test:** Added regression test #20 to `tests/regression.sh` that validates the `generate` command's unit test auto-discovery feature. Tests both `--exclude-tests` mode (no context, expects failure) and default auto-discovery mode (expects success).
+
+- **Encode Message Prompt:** Added `prompts/encode_message_python.prompt` as a simple prompt for testing unit test auto-discovery and regression test scenarios.
 
 ### Fix
 
-- improve verification success tracking in error fixing loop and update related tests
-- add run_attempt to branch name for re-run support
+- **Verification Success Tracking Bug:** Fixed a critical bug in `fix_verification_errors_loop` where the function incorrectly reported "No improvement found" when secondary verification passed but the issue count didn't decrease. Added `any_verification_passed` flag that tracks when code was actually changed AND secondary verification passed. The function now correctly returns `success=True` when verification passes, even if the LLM's issue count assessment is unchanged. This ensures code that compiles and runs correctly is recognized as successful. Key changes:
+  - Track `any_verification_passed` separately from best iteration tracking
+  - Only set flag when `code_updated=True` AND verification passes
+  - Return `success=True` with `final_issues=0` when verification passed
 
 ### Refactor
 
-- remove unused warnings import from maintenance commands
+- **Remove Unused Warnings Import:** Cleaned up unused `warnings` import from `pdd/commands/maintenance.py`.
+
+- **Error Fixing Loop Prompt Simplification:** Streamlined `prompts/fix_verification_errors_loop_python.prompt` from 123 lines to 63 lines by:
+  - Condensing implementation details into "behavior defined by test suite" directive
+  - Listing key behaviors to implement without step-by-step instructions
+  - Focusing on inputs/outputs and test compliance
+
+### Docs
+
+- **Prompting Guide Major Update:** Significantly expanded `docs/prompting_guide.md` with ~200 lines of new content:
+  - **Automated Grounding (PDD Cloud):** Explains how vector embedding and similarity search automatically provides few-shot examples during generation
+  - **Grounding Overrides:** Documents `<pin>module_name</pin>` and `<exclude>module_name</exclude>` tags for controlling automatic example retrieval
+  - **Three Pillars of PDD Generation:** New section explaining how Prompt (WHAT), Grounding (HOW), and Tests (CORRECTNESS) work together
+  - **Prompt Abstraction Guidance:** Added 10-30% prompt-to-code ratio target with clear guidelines on what NOT to include in prompts
+  - **Non-Deterministic Tag Warnings:** Added explicit warnings about `<shell>` and `<web>` tags introducing environment-dependent behavior
+  - **Requirements Writing Guide:** Expanded with before/after examples and testability criteria
+
+### Tests
+
+- Added 320+ lines of verification loop tests in `tests/test_fix_verification_errors_loop.py` covering:
+  - Verification passes but issue count unchanged (regression test for the bug)
+  - Best iteration restored with verification passed
+  - Proper `any_verification_passed` flag behavior
+  - Success determination based on verification outcome vs issue count
+
+- Added 130+ lines of maintenance command tests in `tests/test_commands_maintenance.py` covering:
+  - `@track_cost` decorator verification for sync and auto-deps commands
+  - Deprecated `--log` flag warning emission and `dry_run=True` propagation
+  - `click.Abort` re-raising (not caught by generic error handlers)
+  - Error handling with correct arguments to `handle_error`
+  - `ctx.obj=None` graceful handling in setup command
+
+- Added 68 lines of static prompt tests in `tests/test_mock_vs_production_fix.py` verifying:
+  - `fix_verification_errors_LLM.prompt` contains mock guidance section, mentions MagicMock, `__getitem__` pattern, and prioritizes mock fixes
+  - `find_verification_errors_LLM.prompt` has mock identification step
+
+- Added 154-line integration test script `tests/test_mock_fix_integration.sh` for validating LLM behavior with mock vs production code scenarios
 
 ## v0.0.85 (2025-12-16)
 

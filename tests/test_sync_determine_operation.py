@@ -2468,3 +2468,177 @@ class TestStaleRunReportRegression:
         assert decision.operation == 'fix', (
             f"Expected 'fix' when tests_failed > 0, got '{decision.operation}'"
         )
+
+
+class TestFalsePositiveSuccessBugRegression:
+    """
+    Regression tests for GitHub issue #210: False positive success when skip_verify=True.
+
+    Bug scenario (from core dump):
+    - User runs sync, 'example' operation runs
+    - fingerprint saved with command='example'
+    - run_report created with exit_code=0, tests_failed=0, test_hash=None (from example run, not actual tests)
+    - User adds new unit tests that would fail
+    - User runs `pdd sync --skip-verify`
+    - Sync incorrectly reports success without running tests
+
+    Root causes:
+    1. run_report.test_hash was None, causing staleness detection to fail
+    2. _is_workflow_complete() didn't check if tests were actually run when skip_verify=True
+    """
+
+    def test_skip_verify_with_example_command_should_not_be_complete(self, pdd_test_environment):
+        """
+        When fingerprint.command='example' and skip_verify=True, workflow should NOT be complete
+        because tests haven't been run yet.
+
+        This is the core bug: skip_verify=True bypassed the verify check, but the test check
+        was also effectively bypassed because the code only checked for verify completion.
+        """
+        tmp_path = pdd_test_environment
+
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        # Create all files
+        prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False  # Would fail if run")
+
+        # Create run_report from example run (not actual tests)
+        # This mimics what happens after 'crash' check when example passes
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-18T22:00:00.000000+00:00",  # Newer than fingerprint
+            "exit_code": 0,
+            "tests_passed": 1,  # This is from example, not actual unit tests
+            "tests_failed": 0,
+            "coverage": 0.0
+            # test_hash is None (missing) - this was part of the bug
+        })
+
+        # Create fingerprint with command='example' (tests haven't been run)
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.86",
+            "timestamp": "2025-12-18T21:59:51.000000+00:00",  # Older than run_report
+            "command": "example",  # Key: this is NOT 'test', 'fix', or 'update'
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        mock_paths = {
+            'prompt': prompt_path,
+            'code': code_path,
+            'example': example_path,
+            'test': test_path,
+        }
+
+        # Test _is_workflow_complete directly with skip_verify=True
+        result = _is_workflow_complete(
+            paths=mock_paths,
+            skip_tests=False,
+            skip_verify=True,  # Key: skip_verify=True but tests should still be required
+            basename=BASENAME,
+            language=LANGUAGE
+        )
+
+        assert result == False, (
+            "_is_workflow_complete() returned True with skip_verify=True and command='example'.\n"
+            "Bug: Tests haven't been run yet (fingerprint.command='example'), "
+            "but workflow was considered complete.\n"
+            "Expected: False (tests need to run)"
+        )
+
+    def test_sync_returns_test_operation_when_tests_not_run(self, pdd_test_environment):
+        """
+        When skip_verify=True but tests haven't been run, sync should return 'test' or 'crash'
+        operation, NOT 'nothing'.
+
+        This reproduces the exact scenario from GitHub issue #210.
+        """
+        tmp_path = pdd_test_environment
+
+        Path("src").mkdir(exist_ok=True)
+        Path("tests").mkdir(exist_ok=True)
+        Path("examples").mkdir(exist_ok=True)
+
+        # Create all files
+        prompt_path = tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        prompt_hash = create_file(prompt_path, "# Test prompt")
+
+        code_path = tmp_path / "src" / f"{BASENAME}.py"
+        code_hash = create_file(code_path, "def foo(): pass")
+
+        example_path = tmp_path / "examples" / f"{BASENAME}_example.py"
+        example_hash = create_file(example_path, "# example")
+
+        test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+        test_hash = create_file(test_path, "def test_fail(): assert False")
+
+        # Create run_report mimicking example success (not actual tests)
+        create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+            "timestamp": "2025-12-18T22:00:00.000000+00:00",
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 0.0
+        })
+
+        # Fingerprint with command='example' - tests never ran
+        create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+            "pdd_version": "0.0.86",
+            "timestamp": "2025-12-18T21:59:51.000000+00:00",
+            "command": "example",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+        })
+
+        mock_paths = {
+            'prompt': prompt_path,
+            'code': code_path,
+            'example': example_path,
+            'test': test_path,
+        }
+
+        with patch('sync_determine_operation.construct_paths') as mock_construct, \
+             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+            mock_construct.return_value = (
+                {'prompt_file': str(prompt_path)},
+                {'output': str(code_path)},
+                {'output': str(test_path)},
+                {'output': str(example_path)}
+            )
+            mock_get_paths.return_value = mock_paths
+
+            decision = sync_determine_operation(
+                basename=BASENAME,
+                language=LANGUAGE,
+                target_coverage=TARGET_COVERAGE,
+                prompts_dir="prompts",
+                skip_tests=False,
+                skip_verify=True,  # Skip verify but tests should still run
+            )
+
+        assert decision.operation != 'nothing', (
+            f"Bug reproduced: Sync returned 'nothing' with skip_verify=True and command='example'.\n"
+            f"Expected: 'crash', 'verify', or 'test' (workflow should continue)\n"
+            f"Actual: '{decision.operation}' - {decision.reason}\n"
+            f"This is GitHub issue #210: False positive success"
+        )
+
+        # Should be either 'crash' (to validate example), 'verify' (if not skipped), or 'test'
+        assert decision.operation in ['crash', 'verify', 'test'], (
+            f"Expected 'crash', 'verify', or 'test' to continue workflow, got '{decision.operation}'"
+        )
