@@ -3,7 +3,7 @@ This module provides the `auto_include` function to automatically find and
 insert dependencies into a prompt.
 """
 from io import StringIO
-from typing import Tuple, Optional
+from typing import Callable, Tuple, Optional
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -61,11 +61,17 @@ def _load_prompts() -> tuple[str, str]:
     return auto_include_prompt, extract_prompt
 
 
-def _summarize(directory_path: str, csv_file: Optional[str], llm_kwargs: dict) -> tuple[str, float, str]:
+def _summarize(
+    directory_path: str,
+    csv_file: Optional[str],
+    llm_kwargs: dict,
+    progress_callback: Optional[Callable[[int, int], None]] = None
+) -> tuple[str, float, str]:
     """Summarize the directory."""
     return summarize_directory(
         directory_path=directory_path,
         csv_file=csv_file,
+        progress_callback=progress_callback,
         **llm_kwargs
     )
 
@@ -115,7 +121,8 @@ def auto_include(
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
-    verbose: bool = False
+    verbose: bool = False,
+    progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Tuple[str, str, float, str]:
     """
     Automatically find and insert proper dependencies into the prompt.
@@ -128,6 +135,8 @@ def auto_include(
         temperature (float): Temperature of LLM model (0-1)
         time (float): Time budget for LLM calls
         verbose (bool): Whether to print detailed information
+        progress_callback (Optional[Callable[[int, int], None]]): Callback for progress updates.
+            Called with (current, total) for each file processed.
 
     Returns:
         Tuple[str, str, float, str]: (dependencies, csv_output, total_cost, model_name)
@@ -152,7 +161,7 @@ def auto_include(
             console.print(Panel("Step 2: Running summarize_directory", style="blue"))
 
         csv_output, summary_cost, summary_model = _summarize(
-            directory_path, csv_file, llm_kwargs
+            directory_path, csv_file, llm_kwargs, progress_callback
         )
 
         available_includes = _get_available_includes_from_csv(csv_output)
