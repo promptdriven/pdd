@@ -1,6 +1,6 @@
 {
-  "pdd_version": "0.0.84",
-  "timestamp": "2025-12-15T23:18:14.786118+00:00",
+  "pdd_version": "0.0.87",
+  "timestamp": "2025-12-20T02:05:18.076987+00:00",
   "command": "test",
   "prompt_hash": "d4357fbb6b142ab7feb3a75a575e46dae19c83cf493765bda3922bd98a3a7ea5",
   "code_hash": null,
