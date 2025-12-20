@@ -1,238 +1,618 @@
+# pdd/agentic_common.py
 from __future__ import annotations
 
+import json
 import os
+import secrets
 import shutil
 import subprocess
-import time
-import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
 from rich.console import Console
 
-from .llm_invoke import _load_model_data, LLM_MODEL_CSV_PATH
+from .llm_invoke import LLM_MODEL_CSV_PATH, _load_model_data
 
 console = Console()
 
-# Providers are tried in this order by run_agentic_task.
 AGENT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
 
-# Mapping from provider name to its CLI binary.
-_PROVIDER_CLI_BINARIES: Dict[str, str] = {
+# CLI command mapping for each provider
+CLI_COMMANDS: Dict[str, str] = {
     "anthropic": "claude",
     "google": "gemini",
     "openai": "codex",
 }
 
-# Environment variables that can satisfy "API key configured" for each provider.
-_PROVIDER_API_ENV_VARS: Dict[str, List[str]] = {
-    "anthropic": ["ANTHROPIC_API_KEY"],
-    "google": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-    "openai": ["OPENAI_API_KEY"],
+# Timeouts
+DEFAULT_TIMEOUT_SECONDS: float = 240.0
+TIMEOUT_ENV_VAR: str = "PDD_AGENTIC_TIMEOUT"
+
+
+@dataclass(frozen=True)
+class TokenPricing:
+    """
+    Simple per-token pricing descriptor.
+
+    Prices are expressed in USD per 1,000,000 tokens.
+    cached_input_multiplier is the fraction of full input price charged
+    for cached tokens (e.g. 0.25 == 75% discount).
+    """
+
+    input_per_million: float
+    output_per_million: float
+    cached_input_multiplier: float = 1.0
+
+
+# Approximate Gemini pricing by model family.
+# These values can be refined if needed; they are only used when the
+# provider returns token counts instead of a direct USD cost.
+GEMINI_PRICING_BY_FAMILY: Dict[str, TokenPricing] = {
+    "flash": TokenPricing(input_per_million=0.35, output_per_million=1.05, cached_input_multiplier=0.5),
+    "pro": TokenPricing(input_per_million=3.50, output_per_million=10.50, cached_input_multiplier=0.5),
+    "default": TokenPricing(input_per_million=0.35, output_per_million=1.05, cached_input_multiplier=0.5),
 }
 
-# Cached result of _load_model_data so we don't repeatedly hit disk.
-_MODEL_DATA: Any | None = None
-_MODEL_DATA_LOAD_ERROR: Exception | None = None
+# Codex/OpenAI pricing (explicitly provided in prompt)
+CODEX_PRICING: TokenPricing = TokenPricing(
+    input_per_million=1.50,
+    output_per_million=6.00,
+    cached_input_multiplier=0.25,  # 75% discount for cached tokens
+)
 
 
 # ---------------------------------------------------------------------------
-# Logging utilities (rich-based, controlled by verbose/quiet flags)
+# Logging utilities (Rich-based, respect verbose/quiet flags)
 # ---------------------------------------------------------------------------
 
 
-def log_info(message: str, *, verbose: bool, quiet: bool) -> None:
+def _format_label(label: str) -> str:
+    return f"[{label}] " if label else ""
+
+
+def log_info(message: str, *, verbose: bool, quiet: bool, label: str = "") -> None:
     """
-    Log a normal informational message.
+    Log an informational message.
 
-    Respects the caller's verbosity settings:
-    - Suppressed when quiet is True.
-    - Shown regardless of verbose when quiet is False.
+    Skips output when quiet=True.
     """
     if quiet:
         return
-    console.print(message)
+    prefix = _format_label(label)
+    console.print(f"{prefix}{message}")
 
 
-def log_debug(message: str, *, verbose: bool, quiet: bool) -> None:
+def log_debug(message: str, *, verbose: bool, quiet: bool, label: str = "") -> None:
     """
-    Log a debug/verbose message.
+    Log a debug message.
 
-    Only shown when verbose is True and quiet is False.
+    Only emits output when verbose=True and quiet=False.
     """
     if quiet or not verbose:
         return
-    console.print(message, style="dim")
+    prefix = _format_label(label)
+    console.log(f"{prefix}{message}")
 
 
-def log_error(message: str, *, verbose: bool, quiet: bool) -> None:
+def log_error(message: str, *, verbose: bool, quiet: bool, label: str = "") -> None:
     """
     Log an error message.
 
-    Errors are always shown, even when quiet is True.
+    Errors are always printed, even in quiet mode.
     """
-    console.print(message, style="bold red")
+    prefix = _format_label(label)
+    console.print(f"[red]{prefix}{message}[/red]")
 
 
 # ---------------------------------------------------------------------------
-# Provider / environment helpers
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 
-def _ensure_model_data_loaded(*, verbose: bool, quiet: bool) -> bool:
+def _safe_load_model_data() -> Any | None:
     """
-    Ensure model metadata has been loaded via _load_model_data.
+    Best-effort wrapper around _load_model_data.
 
-    Returns:
-        True if metadata was loaded successfully, False otherwise.
+    This is used as part of provider availability checks so that we
+    respect whatever configuration llm_invoke is using (including
+    any API-key related metadata encoded in the model CSV).
     """
-    global _MODEL_DATA, _MODEL_DATA_LOAD_ERROR
-
-    if _MODEL_DATA is not None:
-        return True
-    if _MODEL_DATA_LOAD_ERROR is not None:
-        return False
-
     try:
-        _MODEL_DATA = _load_model_data(LLM_MODEL_CSV_PATH)
-        return True
-    except Exception as exc:  # pragma: no cover - defensive
-        _MODEL_DATA_LOAD_ERROR = exc
-        log_debug(
-            f"Failed to load LLM model metadata via _load_model_data: {exc}",
-            verbose=verbose,
-            quiet=quiet,
-        )
-        return False
+        return _load_model_data(LLM_MODEL_CSV_PATH)
+    except Exception:
+        return None
 
 
-def _is_cli_available(provider: str) -> bool:
+def _provider_has_api_key(provider: str, model_data: Any | None) -> bool:
     """
-    Check whether the CLI binary for a provider is available on PATH.
+    Determine whether the given provider has an API key configured.
+
+    This function:
+    - Attempts to infer API-key environment variable names from the
+      llm_invoke model data (if it is a DataFrame-like object).
+    - Falls back to well-known default environment variable names.
+
+    The actual presence of API keys is checked via os.environ.
     """
-    binary = _PROVIDER_CLI_BINARIES.get(provider)
-    if not binary:
-        return False
-    return shutil.which(binary) is not None
+    env = os.environ
+
+    # Try to extract env var hints from model_data, if it looks like a DataFrame.
+    inferred_env_vars: List[str] = []
+    if model_data is not None:
+        try:
+            columns = list(getattr(model_data, "columns", []))
+            if "provider" in columns:
+                # DataFrame-like path
+                try:
+                    df = model_data  # type: ignore[assignment]
+                    # Filter rows matching provider name (case-insensitive)
+                    provider_mask = df["provider"].str.lower() == provider.lower()  # type: ignore[index]
+                    provider_rows = df[provider_mask]
+                    # Look for any column that might specify an API-key env var
+                    candidate_cols = [
+                        c
+                        for c in columns
+                        if "api" in c.lower() and "key" in c.lower() or "env" in c.lower()
+                    ]
+                    for _, row in provider_rows.iterrows():  # type: ignore[attr-defined]
+                        for col in candidate_cols:
+                            value = str(row.get(col, "")).strip()
+                            # Heuristic: looks like an env var name (upper & contains underscore)
+                            if value and value.upper() == value and "_" in value:
+                                inferred_env_vars.append(value)
+                except Exception:
+                    # If anything above fails, we silently fall back to defaults.
+                    pass
+        except Exception:
+            pass
+
+    default_env_map: Dict[str, List[str]] = {
+        "anthropic": ["ANTHROPIC_API_KEY"],
+        "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "openai": ["OPENAI_API_KEY"],
+    }
+
+    env_candidates = inferred_env_vars or default_env_map.get(provider, [])
+    return any(env.get(name) for name in env_candidates)
 
 
-def _is_provider_api_configured(provider: str, *, verbose: bool, quiet: bool) -> bool:
+def _get_agent_timeout() -> float:
     """
-    Check whether an API key is configured for the given provider.
-
-    This requires both:
-    - Successful model metadata load via _load_model_data; and
-    - Presence of at least one known API key environment variable.
+    Resolve the agentic subprocess timeout from environment, with a sane default.
     """
-    if not _ensure_model_data_loaded(verbose=verbose, quiet=quiet):
-        return False
-
-    env_vars = _PROVIDER_API_ENV_VARS.get(provider, [])
-    return any(os.getenv(name) for name in env_vars)
-
-
-def _is_provider_available(provider: str, *, verbose: bool, quiet: bool) -> bool:
-    """
-    Determine if a provider is usable (CLI present AND API configured).
-    """
-    if not _is_cli_available(provider):
-        binary = _PROVIDER_CLI_BINARIES.get(provider, "?")
-        log_debug(
-            f"Skipping provider '{provider}': CLI binary '{binary}' not found on PATH.",
-            verbose=verbose,
-            quiet=quiet,
-        )
-        return False
-
-    if not _is_provider_api_configured(provider, verbose=verbose, quiet=quiet):
-        log_debug(
-            f"Skipping provider '{provider}': API key environment variable not configured.",
-            verbose=verbose,
-            quiet=quiet,
-        )
-        return False
-
-    return True
+    raw = os.getenv(TIMEOUT_ENV_VAR)
+    if not raw:
+        return DEFAULT_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+        if value <= 0:
+            raise ValueError
+        return value
+    except ValueError:
+        return DEFAULT_TIMEOUT_SECONDS
 
 
-def _build_agentic_instruction(prompt_file: Path) -> str:
-    """
-    Build the agentic instruction string pointing at the prompt file.
-    """
-    return (
-        f"Read the file {prompt_file} for instructions. "
-        "You have full file access to explore and modify files as needed."
-    )
-
-
-def _build_command_for_provider(provider: str, instruction: str) -> List[str]:
-    """
-    Build the CLI command for the given provider in agentic mode.
-
-    The commands intentionally avoid:
-    - Anthropic/Google: any `-p` (print mode) flag.
-    - OpenAI: `--sandbox read-only` (we want full file access).
-    """
-    if provider == "anthropic":
-        return ["claude", "--dangerously-skip-permissions", instruction]
-    if provider == "google":
-        return ["gemini", instruction]
-    if provider == "openai":
-        return ["codex", "exec", instruction]
-    raise ValueError(f"Unsupported provider: {provider}")
-
-
-def _build_sanitized_env() -> Dict[str, str]:
+def _build_subprocess_env(base: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
     """
     Build a sanitized environment for non-interactive subprocess execution.
+
+    Ensures:
+      - TERM=dumb
+      - NO_COLOR=1
+      - CI=1
+    while preserving existing variables (including API keys).
     """
-    env: Dict[str, str] = dict(os.environ)
-    env["TERM"] = "dumb"
-    env["NO_COLOR"] = "1"
-    env["CI"] = "1"
+    env: Dict[str, str] = dict(base or os.environ)
+    env.setdefault("TERM", "dumb")
+    env.setdefault("NO_COLOR", "1")
+    env.setdefault("CI", "1")
     return env
 
 
-def _get_cost_per_call() -> float:
+def _build_provider_command(provider: str, instruction: str) -> List[str]:
     """
-    Read the per-call cost estimate from the environment.
+    Build the CLI command line for the given provider in headless JSON mode.
 
-    Environment:
-        PDD_AGENTIC_COST_PER_CALL: cost per call (default: 0.02)
+    Provider commands (headless + JSON + file-write permissions):
+
+    - Anthropic (Claude Code):
+      ["claude", "-p", <instruction>, "--dangerously-skip-permissions", "--output-format", "json"]
+
+    - Google (Gemini CLI):
+      ["gemini", "-p", <instruction>, "--yolo", "--output-format", "json"]
+
+    - OpenAI (Codex CLI):
+      ["codex", "exec", "--full-auto", "--json", <instruction>]
     """
-    raw = os.getenv("PDD_AGENTIC_COST_PER_CALL", "0.02")
+    if provider == "anthropic":
+        return [
+            "claude",
+            "-p",
+            instruction,
+            "--dangerously-skip-permissions",
+            "--output-format",
+            "json",
+        ]
+    if provider == "google":
+        return [
+            "gemini",
+            "-p",
+            instruction,
+            "--yolo",
+            "--output-format",
+            "json",
+        ]
+    if provider == "openai":
+        return [
+            "codex",
+            "exec",
+            "--full-auto",
+            "--json",
+            instruction,
+        ]
+    raise ValueError(f"Unknown provider: {provider}")
+
+
+def _classify_gemini_model(model_name: str) -> str:
+    """
+    Classify a Gemini model name into a pricing family: 'flash', 'pro', or 'default'.
+    """
+    lower = model_name.lower()
+    if "flash" in lower:
+        return "flash"
+    if "pro" in lower:
+        return "pro"
+    return "default"
+
+
+def _safe_int(value: Any) -> int:
     try:
-        return float(raw)
-    except ValueError:  # pragma: no cover - defensive
-        return 0.02
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
-def _get_timeout_seconds() -> float:
+def _calculate_gemini_cost(stats: Mapping[str, Any]) -> float:
     """
-    Read the CLI timeout in seconds from the environment.
+    Compute total Gemini cost from stats.models[model]["tokens"] entries.
 
-    Environment:
-        PDD_AGENTIC_TIMEOUT: timeout in seconds (default: 240)
-    """
-    raw = os.getenv("PDD_AGENTIC_TIMEOUT", "240")
-    try:
-        return float(raw)
-    except ValueError:  # pragma: no cover - defensive
-        return 240.0
+    Each model entry should have:
+      tokens = { "prompt": int, "candidates": int, "cached": int, ... }
 
+    Pricing is determined by the model family (flash/pro/default).
+    Cached tokens are charged at a discounted rate.
+    """
+    models = stats.get("models") or {}
+    if not isinstance(models, Mapping):
+        return 0.0
 
-def _safe_unlink(path: Path, *, verbose: bool, quiet: bool) -> None:
-    """
-    Best-effort removal of a file, logging only in verbose mode on failure.
-    """
-    try:
-        path.unlink(missing_ok=True)
-    except Exception as exc:  # pragma: no cover - defensive
-        log_debug(
-            f"Failed to remove temporary prompt file '{path}': {exc}",
-            verbose=verbose,
-            quiet=quiet,
+    total_cost = 0.0
+    for model_name, model_data in models.items():
+        if not isinstance(model_data, Mapping):
+            continue
+        tokens = model_data.get("tokens") or {}
+        if not isinstance(tokens, Mapping):
+            continue
+
+        prompt_tokens = _safe_int(tokens.get("prompt"))
+        output_tokens = _safe_int(tokens.get("candidates"))
+        cached_tokens = _safe_int(tokens.get("cached"))
+
+        family = _classify_gemini_model(str(model_name))
+        pricing = GEMINI_PRICING_BY_FAMILY.get(family, GEMINI_PRICING_BY_FAMILY["default"])
+
+        # Assume prompt_tokens includes cached_tokens; charge non-cached at full price,
+        # cached at a discounted rate.
+        new_prompt_tokens = max(prompt_tokens - cached_tokens, 0)
+        effective_cached_tokens = min(cached_tokens, prompt_tokens)
+
+        cost_input_new = new_prompt_tokens * pricing.input_per_million / 1_000_000
+        cost_input_cached = (
+            effective_cached_tokens
+            * pricing.input_per_million
+            * pricing.cached_input_multiplier
+            / 1_000_000
         )
+        cost_output = output_tokens * pricing.output_per_million / 1_000_000
+
+        total_cost += cost_input_new + cost_input_cached + cost_output
+
+    return total_cost
+
+
+def _calculate_codex_cost(usage: Mapping[str, Any]) -> float:
+    """
+    Compute Codex/OpenAI cost from a `usage` dict with:
+
+      - input_tokens
+      - output_tokens
+      - cached_input_tokens
+
+    Cached tokens are charged at a 75% discount (i.e. 25% of full price).
+    """
+    input_tokens = _safe_int(usage.get("input_tokens"))
+    output_tokens = _safe_int(usage.get("output_tokens"))
+    cached_input_tokens = _safe_int(usage.get("cached_input_tokens"))
+
+    new_input_tokens = max(input_tokens - cached_input_tokens, 0)
+    effective_cached_tokens = min(cached_input_tokens, input_tokens)
+
+    pricing = CODEX_PRICING
+
+    cost_input_new = new_input_tokens * pricing.input_per_million / 1_000_000
+    cost_input_cached = (
+        effective_cached_tokens
+        * pricing.input_per_million
+        * pricing.cached_input_multiplier
+        / 1_000_000
+    )
+    cost_output = output_tokens * pricing.output_per_million / 1_000_000
+
+    return cost_input_new + cost_input_cached + cost_output
+
+
+def _parse_anthropic_result(data: Mapping[str, Any]) -> Tuple[bool, str, float]:
+    """
+    Parse Claude Code (Anthropic) JSON result.
+
+    Expected:
+      - data["response"]: main content
+      - data["error"]: optional error block
+      - data["total_cost_usd"]: total cost in USD (if available)
+    """
+    error_info = data.get("error")
+    has_error = bool(error_info)
+
+    if isinstance(error_info, Mapping):
+        error_msg = str(error_info.get("message") or error_info)
+    elif error_info is not None:
+        error_msg = str(error_info)
+    else:
+        error_msg = ""
+
+    response_text = str(data.get("response") or "")
+    if not response_text and error_msg:
+        response_text = error_msg
+
+    cost_raw = data.get("total_cost_usd")
+    try:
+        cost = float(cost_raw)
+    except (TypeError, ValueError):
+        cost = 0.0
+
+    return (not has_error, response_text, cost)
+
+
+def _parse_gemini_result(data: Mapping[str, Any]) -> Tuple[bool, str, float]:
+    """
+    Parse Gemini CLI JSON result.
+
+    Expected high-level structure:
+      {
+        "response": "string",
+        "stats": { ... per-model token usage ... },
+        "error": { ... }  # optional
+      }
+    """
+    error_info = data.get("error")
+    has_error = bool(error_info)
+
+    if isinstance(error_info, Mapping):
+        error_msg = str(error_info.get("message") or error_info)
+    elif error_info is not None:
+        error_msg = str(error_info)
+    else:
+        error_msg = ""
+
+    response_text = str(data.get("response") or "")
+    if not response_text and error_msg:
+        response_text = error_msg
+
+    stats = data.get("stats") or {}
+    cost = 0.0
+    if isinstance(stats, Mapping):
+        try:
+            cost = _calculate_gemini_cost(stats)
+        except Exception:
+            cost = 0.0
+
+    return (not has_error, response_text, cost)
+
+
+def _extract_codex_usage(stdout: str) -> Optional[Mapping[str, Any]]:
+    """
+    Extract the latest `usage` object from Codex JSONL output.
+
+    The `codex exec --json` command emits newline-delimited JSON events.
+    We scan all lines and keep the most recent event containing a `usage` key.
+    """
+    last_usage: Optional[Mapping[str, Any]] = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        usage = event.get("usage")
+        if isinstance(usage, Mapping):
+            last_usage = usage
+    return last_usage
+
+
+def _extract_codex_output(stdout: str) -> str:
+    """
+    Extract assistant-visible output text from Codex JSONL output.
+
+    Heuristic:
+      - Collect content from events with type == "message" and role == "assistant"
+      - Fallback to raw stdout if nothing is found
+    """
+    assistant_messages: List[str] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        if event.get("type") == "message" and event.get("role") == "assistant":
+            content = event.get("content")
+            if isinstance(content, str):
+                assistant_messages.append(content)
+            elif isinstance(content, list):
+                # Sometimes content may be a list of segments; concatenate any text fields.
+                parts: List[str] = []
+                for part in content:
+                    if isinstance(part, Mapping) and "text" in part:
+                        parts.append(str(part["text"]))
+                    else:
+                        parts.append(str(part))
+                assistant_messages.append("".join(parts))
+
+    if assistant_messages:
+        return "\n".join(assistant_messages)
+
+    return stdout.strip()
+
+
+def _run_with_provider(
+    provider: str,
+    agentic_instruction: str,
+    cwd: Path,
+    *,
+    verbose: bool,
+    quiet: bool,
+    label: str = "",
+) -> Tuple[bool, str, float]:
+    """
+    Invoke the given provider's CLI in headless JSON mode.
+
+    Returns:
+        (success, message, cost)
+
+        - success: True if the CLI completed successfully without reported errors
+        - message: natural-language output on success, or error description on failure
+        - cost: estimated USD cost for this attempt
+    """
+    cmd = _build_provider_command(provider, agentic_instruction)
+    timeout = _get_agent_timeout()
+    env = _build_subprocess_env()
+
+    log_debug(
+        f"Invoking provider '{provider}' with timeout {timeout:.1f}s",
+        verbose=verbose,
+        quiet=quiet,
+        label=label,
+    )
+    log_debug(
+        f"Command: {' '.join(cmd)}",
+        verbose=verbose,
+        quiet=quiet,
+        label=label,
+    )
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=str(cwd),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        message = f"CLI command for provider '{provider}' was not found."
+        log_error(message, verbose=verbose, quiet=quiet, label=label)
+        return False, message, 0.0
+    except subprocess.TimeoutExpired:
+        message = f"Provider '{provider}' CLI timed out after {timeout:.1f} seconds."
+        log_error(message, verbose=verbose, quiet=quiet, label=label)
+        return False, message, 0.0
+    except Exception as exc:
+        message = f"Error invoking provider '{provider}': {exc}"
+        log_error(message, verbose=verbose, quiet=quiet, label=label)
+        return False, message, 0.0
+
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    if verbose and stdout:
+        log_debug(f"{provider} stdout:\n{stdout}", verbose=verbose, quiet=quiet, label=label)
+    if verbose and stderr:
+        log_debug(f"{provider} stderr:\n{stderr}", verbose=verbose, quiet=quiet, label=label)
+
+    # Default assumptions
+    success = completed.returncode == 0
+    cost = 0.0
+    message: str
+
+    # Provider-specific JSON parsing and cost extraction
+    if provider in ("anthropic", "google"):
+        raw_json = stdout.strip() or stderr.strip()
+        if not raw_json:
+            message = f"Provider '{provider}' produced no JSON output."
+            log_error(message, verbose=verbose, quiet=quiet, label=label)
+            return False, message, 0.0
+
+        try:
+            data = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            # Include raw output in the error message to aid debugging
+            # (e.g. if the provider printed a plain text error instead of JSON)
+            message = f"Failed to parse JSON from provider '{provider}': {exc}\nOutput: {raw_json}"
+            log_error(message, verbose=verbose, quiet=quiet, label=label)
+            return False, message, 0.0
+
+        if not isinstance(data, Mapping):
+            message = f"Unexpected JSON structure from provider '{provider}'."
+            log_error(message, verbose=verbose, quiet=quiet, label=label)
+            return False, message, 0.0
+
+        if provider == "anthropic":
+            parsed_success, response_text, cost = _parse_anthropic_result(data)
+        else:  # google / Gemini
+            parsed_success, response_text, cost = _parse_gemini_result(data)
+
+        # Combine CLI exit code with JSON-level success flag
+        if not success or not parsed_success:
+            success = False
+        message = response_text or stderr.strip() or stdout.strip() or "No response from provider."
+
+        if not success and completed.returncode != 0 and stderr:
+            message = f"{message}\n\nCLI stderr:\n{stderr.strip()}"
+        return success, message, cost
+
+    # OpenAI / Codex: JSONL stream on stdout
+    if provider == "openai":
+        usage = _extract_codex_usage(stdout)
+        if usage is not None:
+            try:
+                cost = _calculate_codex_cost(usage)
+            except Exception:
+                cost = 0.0
+
+        message = _extract_codex_output(stdout)
+        if not success:
+            if stderr.strip():
+                message = (
+                    f"{message}\n\nCLI stderr:\n{stderr.strip()}"
+                    if message
+                    else f"Codex CLI failed with exit code {completed.returncode}.\n\nstderr:\n{stderr.strip()}"
+                )
+            elif not message:
+                message = f"Codex CLI failed with exit code {completed.returncode}."
+
+        return success, message or "No response from provider.", cost
+
+    # Should not reach here because _build_provider_command validates provider
+    message = f"Unsupported provider '{provider}'."
+    log_error(message, verbose=verbose, quiet=quiet, label=label)
+    return False, message, 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -242,17 +622,26 @@ def _safe_unlink(path: Path, *, verbose: bool, quiet: bool) -> None:
 
 def get_available_agents() -> List[str]:
     """
-    Return a list of provider names that are currently available.
+    Return a list of available agent providers, e.g. ["anthropic", "google"].
 
-    A provider is considered available when BOTH:
-      * Its CLI binary is present on PATH, and
-      * Model metadata can be loaded via `_load_model_data`, and
-      * At least one of its associated API key env vars is set.
+    A provider is considered available if:
+      - Its CLI binary exists on PATH (checked via shutil.which)
+      - Its API key appears configured (using llm_invoke's model data plus
+        well-known environment variables)
     """
+    model_data = _safe_load_model_data()
     available: List[str] = []
+
     for provider in AGENT_PROVIDER_PREFERENCE:
-        if _is_provider_available(provider, verbose=False, quiet=True):
-            available.append(provider)
+        cli = CLI_COMMANDS.get(provider)
+        if not cli:
+            continue
+        if shutil.which(cli) is None:
+            continue
+        if not _provider_has_api_key(provider, model_data):
+            continue
+        available.append(provider)
+
     return available
 
 
@@ -265,149 +654,137 @@ def run_agentic_task(
     label: str = "",
 ) -> Tuple[bool, str, float, str]:
     """
-    Run an agentic task using CLI-based agents.
+    Run an agentic task using the first available provider in preference order.
 
-    The function tries providers in AGENT_PROVIDER_PREFERENCE order and returns
-    on the first successful run. Providers are only attempted if their CLI
-    binary is available and an API key is configured.
+    The task is executed in headless mode with JSON output for structured
+    parsing and real cost tracking.
+
+    Process:
+      1. Write `instruction` into a unique temp file named
+         `.agentic_prompt_<random>.txt` under `cwd`.
+      2. Build agentic meta-instruction:
+
+         "Read the file {prompt_file} for instructions. You have full file
+          access to explore and modify files as needed."
+
+      3. Try providers in `AGENT_PROVIDER_PREFERENCE` order, but only those
+         returned by `get_available_agents()`.
+      4. For each provider:
+           - Invoke its CLI in headless JSON mode with file-write permissions.
+           - Parse JSON to extract response text and cost.
+           - On success, stop and return.
+           - On failure, proceed to next provider.
+      5. Clean up the temp prompt file.
 
     Args:
-        instruction: Natural-language instruction for the agent.
-        cwd: Working directory in which the CLI should be executed.
-        verbose: Enable verbose logging if True.
-        quiet: Suppress non-essential logging if True (errors still shown).
-        label: Optional label to prefix log lines (e.g., task id).
+        instruction: Natural-language instruction describing the task.
+        cwd: Project root where the agent should operate.
+        verbose: Enable verbose logging (debug output).
+        quiet: Suppress non-error logging.
+        label: Optional label prefix for log messages (e.g. "agentic-fix").
 
     Returns:
-        Tuple[success, output, cost, provider_used]:
-            success:
-                True if an agent completed successfully (exit code == 0).
-            output:
-                Combined stdout/stderr from the provider CLI, or an error
-                message if no provider completed successfully.
-            cost:
-                Estimated cost, computed as
-                PDD_AGENTIC_COST_PER_CALL * number_of_attempted_invocations.
-            provider_used:
-                Name of the provider that produced `output`, or the last
-                attempted provider when all fail, or "" if none were attempted.
+        Tuple[bool, str, float, str]:
+            - success: Whether the task completed successfully.
+            - output:  On success, the agent's main response text.
+                       On failure, a human-readable error message.
+            - cost:    Total estimated USD cost across all provider attempts.
+            - provider_used: Name of the successful provider
+                             ("anthropic", "google", or "openai"),
+                             or "" if no provider succeeded.
     """
-    prefix = f"[{label}] " if label else ""
-
-    # Basic input validation.
-    if not instruction.strip():
-        message = f"{prefix}No instruction provided for agentic task."
-        log_error(message, verbose=verbose, quiet=quiet)
+    if not instruction or not instruction.strip():
+        message = "Agentic instruction must be a non-empty string."
+        log_error(message, verbose=verbose, quiet=quiet, label=label)
         return False, message, 0.0, ""
 
     if not cwd.exists() or not cwd.is_dir():
-        message = f"{prefix}Working directory does not exist or is not a directory: {cwd}"
-        log_error(message, verbose=verbose, quiet=quiet)
+        message = f"Working directory does not exist or is not a directory: {cwd}"
+        log_error(message, verbose=verbose, quiet=quiet, label=label)
         return False, message, 0.0, ""
 
-    cost_per_call = _get_cost_per_call()
-    timeout = _get_timeout_seconds()
-    env = _build_sanitized_env()
+    available = get_available_agents()
+    if not available:
+        message = "No agent providers are available. Ensure CLI tools and API keys are configured."
+        log_error(message, verbose=verbose, quiet=quiet, label=label)
+        return False, message, 0.0, ""
 
-    attempts = 0
-    last_provider: str = ""
+    log_info(
+        f"Available providers (in preference order): {', '.join(available)}",
+        verbose=verbose,
+        quiet=quiet,
+        label=label,
+    )
 
-    for provider in AGENT_PROVIDER_PREFERENCE:
-        if not _is_provider_available(provider, verbose=verbose, quiet=quiet):
-            continue
+    # 1. Write user instruction into a unique prompt file under cwd
+    prompt_token = secrets.token_hex(8)
+    prompt_file = cwd / f".agentic_prompt_{prompt_token}.txt"
 
-        last_provider = provider
-        attempts += 1
+    try:
+        prompt_file.write_text(instruction, encoding="utf-8")
+    except OSError as exc:
+        message = f"Failed to write prompt file '{prompt_file}': {exc}"
+        log_error(message, verbose=verbose, quiet=quiet, label=label)
+        return False, message, 0.0, ""
 
-        prompt_file = cwd / f".agentic_prompt_{uuid.uuid4().hex}.txt"
-        try:
-            prompt_file.write_text(instruction, encoding="utf-8")
-        except Exception as exc:  # pragma: no cover - defensive
-            message = (
-                f"{prefix}Failed to write agentic prompt file '{prompt_file}': {exc}"
-            )
-            log_error(message, verbose=verbose, quiet=quiet)
-            # Even though the CLI was not invoked, we count this as an attempt
-            # against the chosen provider.
-            return False, message, attempts * cost_per_call, provider
+    agentic_instruction = (
+        f"Read the file {prompt_file} for instructions. "
+        "You have full file access to explore and modify files as needed."
+    )
 
-        agentic_instruction = _build_agentic_instruction(prompt_file)
-        cmd = _build_command_for_provider(provider, agentic_instruction)
+    total_cost = 0.0
+    provider_errors: List[str] = []
 
-        log_info(
-            f"{prefix}Invoking {provider} agent via CLI: {' '.join(cmd)}",
-            verbose=verbose,
-            quiet=quiet,
-        )
+    try:
+        for provider in AGENT_PROVIDER_PREFERENCE:
+            if provider not in available:
+                continue
 
-        start_time = time.monotonic()
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(cwd),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            _safe_unlink(prompt_file, verbose=verbose, quiet=quiet)
-            elapsed = time.monotonic() - start_time
-            message = (
-                f"{prefix}Agent provider '{provider}' timed out after "
-                f"{elapsed:.1f}s (timeout={timeout:.0f}s)."
-            )
-            log_error(message, verbose=verbose, quiet=quiet)
-            # Try the next provider, if any.
-            continue
-        except Exception as exc:  # pragma: no cover - defensive
-            _safe_unlink(prompt_file, verbose=verbose, quiet=quiet)
-            message = f"{prefix}Error while running provider '{provider}': {exc}"
-            log_error(message, verbose=verbose, quiet=quiet)
-            # Try the next provider, if any.
-            continue
-        finally:
-            _safe_unlink(prompt_file, verbose=verbose, quiet=quiet)
-
-        elapsed = time.monotonic() - start_time
-        combined_output = (result.stdout or "") + (
-            ("\n" + result.stderr) if result.stderr else ""
-        )
-
-        if result.returncode == 0:
             log_info(
-                f"{prefix}Agent provider '{provider}' completed successfully "
-                f"in {elapsed:.1f}s.",
+                f"Trying provider '{provider}'...",
                 verbose=verbose,
                 quiet=quiet,
+                label=label,
             )
-            return True, combined_output, attempts * cost_per_call, provider
 
-        # Non-zero exit code: log and fall back to the next provider.
-        message = (
-            f"{prefix}Agent provider '{provider}' exited with code "
-            f"{result.returncode} after {elapsed:.1f}s."
-        )
-        log_error(message, verbose=verbose, quiet=quiet)
-        log_debug(
-            f"{prefix}Output from '{provider}':\n{combined_output}",
-            verbose=verbose,
-            quiet=quiet,
-        )
+            success, message, cost = _run_with_provider(
+                provider,
+                agentic_instruction,
+                cwd,
+                verbose=verbose,
+                quiet=quiet,
+                label=label,
+            )
+            total_cost += cost
 
-    # If we reach here, no provider could complete the task successfully.
-    if attempts == 0:
-        message = (
-            f"{prefix}No available agents. Ensure that at least one of "
-            f"{AGENT_PROVIDER_PREFERENCE} has its CLI installed and API key configured."
-        )
-        provider_used = ""
-    else:
-        message = (
-            f"{prefix}All configured agent providers failed to complete the task."
-        )
-        provider_used = last_provider
+            if success:
+                log_info(
+                    f"Provider '{provider}' completed successfully. "
+                    f"Estimated cost: ${cost:.6f}",
+                    verbose=verbose,
+                    quiet=quiet,
+                    label=label,
+                )
+                return True, message, total_cost, provider
 
-    log_error(message, verbose=verbose, quiet=quiet)
-    return False, message, attempts * cost_per_call, provider_used
+            provider_errors.append(f"{provider}: {message}")
+            log_error(
+                f"Provider '{provider}' failed: {message}",
+                verbose=verbose,
+                quiet=quiet,
+                label=label,
+            )
+
+        # If we reach here, all providers failed
+        combined_error = "All agent providers failed. " + " | ".join(provider_errors)
+        log_error(combined_error, verbose=verbose, quiet=quiet, label=label)
+        return False, combined_error, total_cost, ""
+
+    finally:
+        # 5. Clean up prompt file
+        try:
+            if prompt_file.exists():
+                prompt_file.unlink()
+        except OSError:
+            # Best-effort cleanup; ignore errors.
+            pass

@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 from datetime import datetime
 try:
     from datetime import UTC
@@ -88,7 +88,8 @@ def summarize_directory(
     temperature: float,
     verbose: bool,
     time: float = DEFAULT_TIME,
-    csv_file: Optional[str] = None
+    csv_file: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Tuple[str, float, str]:
     """
     Summarize files in a directory and generate a CSV containing the summaries.
@@ -100,6 +101,8 @@ def summarize_directory(
         verbose (bool): Whether to print out the details of the function.
         time (float): Time budget for LLM calls.
         csv_file (Optional[str]): Current CSV file contents if it already exists.
+        progress_callback (Optional[Callable[[int, int], None]]): Callback for progress updates.
+            Called with (current, total) for each file processed. Used by TUI ProgressBar.
 
     Returns:
         Tuple[str, float, str]: A tuple containing:
@@ -145,27 +148,42 @@ def summarize_directory(
             search_pattern = directory_path
 
         # Get list of files first to ensure consistent order
-        files = sorted(glob.glob(search_pattern, recursive=True))
-        if not files:
+        all_files = sorted(glob.glob(search_pattern, recursive=True))
+        if not all_files:
             if verbose:
                 print("[yellow]No files found.[/yellow]")
+            return csv_output, total_cost, model_name
+
+        # Pre-filter to get only processable files (for accurate progress count)
+        files = [
+            f for f in all_files
+            if not os.path.isdir(f)
+            and '__pycache__' not in f
+            and not f.endswith(('.pyc', '.pyo'))
+        ]
+
+        if not files:
+            if verbose:
+                print("[yellow]No processable files found.[/yellow]")
             return csv_output, total_cost, model_name
 
         # Get all modification times at once to ensure consistent order
         file_mod_times = {f: os.path.getmtime(f) for f in files}
 
-        for file_path in track(files, description="Processing files..."):
-            # Skip directories
-            if os.path.isdir(file_path):
-                if verbose:
-                    print(f"[yellow]Skipping directory: {file_path}[/yellow]")
-                continue
+        # Determine iteration method: use callback if provided, else track()
+        # Disable track() when in TUI context (COLUMNS env var set) or callback provided
+        total_files = len(files)
+        use_track = progress_callback is None and "COLUMNS" not in os.environ
 
-            # Skip __pycache__ directories and bytecode files
-            if '__pycache__' in file_path or file_path.endswith(('.pyc', '.pyo')):
-                if verbose:
-                    print(f"[yellow]Skipping bytecode: {file_path}[/yellow]")
-                continue
+        if use_track:
+            file_iterator = track(files, description="Processing files...")
+        else:
+            file_iterator = files
+
+        for idx, file_path in enumerate(file_iterator):
+            # Report progress if callback provided
+            if progress_callback is not None:
+                progress_callback(idx + 1, total_files)
 
             try:
                 relative_path = os.path.relpath(file_path)

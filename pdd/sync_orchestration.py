@@ -715,6 +715,9 @@ def sync_orchestration(
     # This allows the worker to access app.request_confirmation()
     app_ref: List[Optional['SyncApp']] = [None]
 
+    # Progress callback ref for TUI ProgressBar updates during auto-deps
+    progress_callback_ref: List[Optional[Callable[[int, int], None]]] = [None]
+
     # Track if user has already confirmed overwrite (to avoid asking multiple times)
     user_confirmed_overwrite: List[bool] = [False]
 
@@ -896,7 +899,8 @@ def sync_orchestration(
                                 directory_path=examples_dir,
                                 auto_deps_csv_path="project_dependencies.csv",
                                 output=temp_output,
-                                force_scan=False
+                                force_scan=False,
+                                progress_callback=progress_callback_ref[0]
                             )
                             if Path(temp_output).exists():
                                 import shutil
@@ -1171,7 +1175,8 @@ def sync_orchestration(
         code_color_ref=code_box_color_ref,
         example_color_ref=example_box_color_ref,
         tests_color_ref=tests_box_color_ref,
-        stop_event=stop_event
+        stop_event=stop_event,
+        progress_callback_ref=progress_callback_ref
     )
 
     # Store app reference so worker can access request_confirmation
