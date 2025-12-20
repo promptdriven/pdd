@@ -713,7 +713,7 @@ publish-public:
 	fi
 	@echo "Committing and pushing updates in public repo"
 	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git fetch origin && git rebase origin/main && git push; \
 		else \
 			echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
 		fi
@@ -845,7 +845,7 @@ publish-public-cap:
 	fi
 	@echo "Committing and pushing updates in CAP public repo"
 	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && git commit -m "Bump version" && git fetch origin && git rebase origin/main && git push; \
 		else \
 			echo "Skip commit: $(PUBLIC_PDD_CAP_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE)."; \
 		fi
