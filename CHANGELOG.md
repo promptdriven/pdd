@@ -1,4 +1,56 @@
+## v0.0.88 (2025-12-19)
+
+### Feat
+
+- enhance configuration management and testing
+
+### Fix
+
+- adjust commit order in Makefile for public repo updates
+
 ## v0.0.87 (2025-12-18)
+
+### Feat
+
+- **Centralized Config Resolution:** Added `pdd/config_resolution.py` module providing a single source of truth for resolving `strength`, `temperature`, and `time` values. Ensures consistent priority ordering across all commands: CLI global options (highest) → `.pddrc` context defaults → hardcoded defaults (lowest). Updated `crash_main`, `cmd_test_main`, and `change_main` to use `resolve_effective_config()`.
+
+- **Groq Structured Output Workaround:** Added special handling in `llm_invoke.py` for Groq models, which have issues with tool-based structured output. When using Groq, the system now uses JSON object mode with the schema injected into the system prompt, avoiding tool_use failures.
+
+- **Workflow Completion Test Validation:** Fixed `_is_workflow_complete()` in `sync_determine_operation.py` to verify that tests have actually been run (not just verify). Prevents false positive workflow completion when `skip_verify=True` but tests are still required. Thanks Jiamin Cai for your contributions!
+
+- **Run Report Test Hash Tracking:** Enhanced `sync_orchestration.py` to include `test_hash` in `RunReport` when saving run reports after example execution, enabling proper staleness detection.
+
+### Fix
+
+- **CLI Strength/Temperature Defaults:** Changed CLI `--strength` and `--temperature` options to `default=None` instead of hardcoded values. This allows `.pddrc` defaults to take effect when CLI options aren't explicitly provided.
+
+### Data
+
+- **LLM Model Catalog Update:** Updated `data/llm_model.csv` with latest models and configurations:
+  - Added Gemini 3 Flash Preview and updated Gemini 3 Pro Preview ELO scores
+  - Added GPT-5.2 (replacing GPT-5.1-2025-11-13)
+  - Added GPT-5.1-codex-max
+  - Updated DeepSeek to v3.2-maas with global region
+  - Updated GLM to 4p6 with revised pricing
+  - Updated Claude max_reasoning_tokens to 128000
+  - Revised ELO scores across multiple models
+
+### Docs
+
+- **Gemini Setup Guide:** Expanded `SETUP_WITH_GEMINI.md` with improved configuration guidance and examples.
+
+### Tests
+
+- Added 240+ lines of TRUE end-to-end tests in `tests/test_pddrc_true_e2e.py` verifying:
+  - Real `.pddrc` strength/temperature values reach final functions
+  - CLI options properly override `.pddrc` defaults
+  - Priority ordering works correctly through actual data flow
+
+- Added 170+ lines of workflow completion tests in `tests/test_sync_determine_operation.py` covering:
+  - Test requirement validation in `_is_workflow_complete()`
+  - Fingerprint command checking for test completion
+
+- Added 100+ lines of config resolution tests in `tests/test_cmd_test_main.py` and `tests/test_core_cli.py` verifying proper strength/temperature handling.
 
 ## v0.0.86 (2025-12-17)
 
