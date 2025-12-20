@@ -1,3 +1,13 @@
+## v0.0.88 (2025-12-19)
+
+### Feat
+
+- enhance configuration management and testing
+
+### Fix
+
+- adjust commit order in Makefile for public repo updates
+
 ## v0.0.87 (2025-12-18)
 
 ### Feat
