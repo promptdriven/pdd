@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, ANY
 
 import pytest
-from z3 import Real, Solver, sat, And, If
+from z3 import Real, Solver, sat, unsat, And, If
 
 # Add the parent directory to sys.path to allow importing the package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))

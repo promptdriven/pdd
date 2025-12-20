@@ -2251,6 +2251,73 @@ def test_auto_deps_passes_directory_not_glob_pattern(orchestration_fixture):
 
 
 # =============================================================================
+# Test for merge behavior when test file exists
+# =============================================================================
+
+def test_sync_uses_merge_when_test_file_exists(orchestration_fixture):
+    """
+    BUG FIX TEST: When a test file already exists and sync triggers a 'test' operation
+    (e.g., for coverage improvement), it should use merge=True to append new tests
+    rather than regenerating from scratch. This prevents losing fixes made to the test file.
+
+    Root cause: sync_orchestration.py:1006 hardcodes merge=False and existing_tests=None,
+    which causes test regeneration to overwrite any fixes made to the test file.
+
+    Reproduces the bug where:
+    1. fix operation fixes a test file
+    2. test operation is triggered due to low coverage
+    3. test operation regenerates tests from scratch (merge=False)
+    4. The fix is lost
+    """
+    tmp_path = Path.cwd()
+    mocks = orchestration_fixture
+
+    # Pre-create test file (simulating a file that was previously fixed)
+    existing_test_file = tmp_path / 'tests' / 'test_calculator.py'
+    existing_test_file.parent.mkdir(parents=True, exist_ok=True)
+    existing_test_file.write_text("# Existing test with fixes\ndef test_existing(): pass")
+
+    # Also create code file so sync can proceed
+    code_file = tmp_path / 'src' / 'calculator.py'
+    code_file.parent.mkdir(parents=True, exist_ok=True)
+    code_file.write_text("def add(a, b): return a + b")
+
+    # Configure mock to return 'test' operation (simulating low coverage trigger)
+    mocks['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='test', reason='Coverage below target'),
+        SyncDecision(operation='nothing', reason='Done'),
+    ]
+
+    # Don't let the mock overwrite our existing test file
+    def mock_test_that_preserves_file(*args, **kwargs):
+        return ('test content', 0.06, 'mock-model')
+    mocks['cmd_test_main'].side_effect = mock_test_that_preserves_file
+
+    # Run sync
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # ASSERT: cmd_test_main should be called with merge=True when test file exists
+    mocks['cmd_test_main'].assert_called()
+    call_args = mocks['cmd_test_main'].call_args
+
+    # Check if called with keyword arguments
+    if call_args.kwargs:
+        merge_value = call_args.kwargs.get('merge')
+        existing_tests_value = call_args.kwargs.get('existing_tests')
+    else:
+        # Fallback: check positional args (merge is at position 10 based on function signature)
+        # cmd_test_main(ctx, prompt_file, code_file, output, language, coverage_report, existing_tests, target_coverage, merge, ...)
+        merge_value = None
+        existing_tests_value = None
+
+    # This assertion will FAIL with current code (merge=False)
+    assert merge_value is True, \
+        f"sync should use merge=True when test file already exists, got merge={merge_value}"
+    assert existing_tests_value is not None, \
+        f"sync should pass existing_tests when test file already exists, got existing_tests={existing_tests_value}"
+
+
+# =============================================================================
 # Tests for strength/temperature propagation to sub-commands
 # =============================================================================
 

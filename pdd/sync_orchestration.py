@@ -1003,7 +1003,10 @@ def sync_orchestration(
                             result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
                         elif operation == 'test':
                             pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
-                            result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
+                            # Use merge=True when test file exists to preserve fixes and append new tests
+                            # instead of regenerating from scratch (which would overwrite fixes)
+                            test_file_exists = pdd_files['test'].exists()
+                            result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature)
                             if pdd_files['test'].exists():
                                 _execute_tests_and_create_run_report(
                                     pdd_files['test'],
