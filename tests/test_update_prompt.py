@@ -141,7 +141,7 @@ def test_verbose_output(valid_inputs, mock_llm_invoke, mock_load_prompt_template
 def test_empty_modified_prompt_response(valid_inputs, mock_load_prompt_template, mock_preprocess, monkeypatch):
     """Test that empty modified_prompt from LLM raises an error instead of silently returning empty string.
 
-    This catches the bug where vertex_ai/gemini-2.5-flash returns {"modified_prompt": ""} which
+    This catches the bug where vertex_ai/gemini-3-flash-preview returns {"modified_prompt": ""} which
     previously passed validation and resulted in an empty output file.
     """
 
@@ -149,7 +149,7 @@ def test_empty_modified_prompt_response(valid_inputs, mock_load_prompt_template,
     empty_prompt_response = {
         'result': PromptUpdate.model_construct(modified_prompt=''),  # Empty string!
         'cost': 0.002,
-        'model_name': 'vertex_ai/gemini-2.5-flash'
+        'model_name': 'vertex_ai/gemini-3-flash-preview'
     }
 
     def mock_llm(*args, **kwargs):
@@ -169,7 +169,7 @@ def test_whitespace_only_modified_prompt_response(valid_inputs, mock_load_prompt
     whitespace_prompt_response = {
         'result': PromptUpdate.model_construct(modified_prompt='   \n\t  '),  # Only whitespace
         'cost': 0.002,
-        'model_name': 'vertex_ai/gemini-2.5-flash'
+        'model_name': 'vertex_ai/gemini-3-flash-preview'
     }
 
     def mock_llm(*args, **kwargs):

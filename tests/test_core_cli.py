@@ -10,7 +10,7 @@ import pytest
 from click.testing import CliRunner
 import click
 
-from pdd import cli, __version__, DEFAULT_STRENGTH, DEFAULT_TIME
+from pdd import cli, __version__, DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
 
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
@@ -180,8 +180,8 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     ctx = mock_main.call_args.kwargs.get('ctx')
     assert ctx is not None
     assert ctx.obj['force'] is False
-    assert ctx.obj['strength'] == DEFAULT_STRENGTH
-    assert ctx.obj['temperature'] == 0.0
+    assert 'strength' not in ctx.obj  # Not set allows pddrc fallback via .get() default
+    assert 'temperature' not in ctx.obj  # Not set allows pddrc fallback via .get() default
     assert ctx.obj['verbose'] is False
     assert ctx.obj['quiet'] is False
     assert ctx.obj['output_cost'] is None
@@ -457,3 +457,191 @@ def test_user_cancellation_does_not_show_error_message_issue_186(
 
 
 # --- install_completion Command Test ---
+
+
+# =============================================================================
+# Tests for Bug: CLI defaults shadow .pddrc context values
+# =============================================================================
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_bug_cli_default_strength_shadows_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
+    """
+    BUG DETECTION: When user doesn't pass --strength, ctx.obj['strength'] should be None
+    to allow pddrc fallback.
+
+    BEFORE FIX: ctx.obj['strength'] == 0.75 (CLI default) - TEST FAILS
+    AFTER FIX: ctx.obj['strength'] is None - TEST PASSES
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      strength: 0.8\n'
+    )
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    prompt.write_text("dummy prompt")
+    monkeypatch.chdir(tmp_path)
+
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    # User does NOT pass --strength
+    result = runner.invoke(cli.cli, ["--context", "backend", "generate", str(prompt)])
+
+    assert result.exit_code == 0
+    mock_main.assert_called_once()
+
+    passed_ctx = mock_main.call_args.kwargs.get('ctx')
+    assert passed_ctx is not None
+
+    # BUG: Currently ctx.obj['strength'] == 0.75 (CLI default shadows pddrc)
+    # FIXED: ctx.obj['strength'] should be None (allows pddrc fallback)
+    assert passed_ctx.obj.get('strength') is None, \
+        f"Expected ctx.obj['strength'] to be None for pddrc fallback, got {passed_ctx.obj.get('strength')}"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_bug_cli_default_temperature_shadows_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
+    """
+    BUG DETECTION: When user doesn't pass --temperature, ctx.obj['temperature'] should be None.
+
+    BEFORE FIX: ctx.obj['temperature'] == 0.0 (CLI default) - TEST FAILS
+    AFTER FIX: ctx.obj['temperature'] is None - TEST PASSES
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      temperature: 0.5\n'
+    )
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    prompt.write_text("dummy prompt")
+    monkeypatch.chdir(tmp_path)
+
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(cli.cli, ["--context", "backend", "generate", str(prompt)])
+
+    assert result.exit_code == 0
+    mock_main.assert_called_once()
+
+    passed_ctx = mock_main.call_args.kwargs.get('ctx')
+    assert passed_ctx is not None
+
+    # BUG: Currently ctx.obj['temperature'] == 0.0 (CLI default)
+    # FIXED: ctx.obj['temperature'] should be None
+    assert passed_ctx.obj.get('temperature') is None, \
+        f"Expected ctx.obj['temperature'] to be None, got {passed_ctx.obj.get('temperature')}"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_explicit_strength_overrides_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
+    """
+    EXPECTED BEHAVIOR: Explicit --strength 0.5 should be passed through (not None).
+
+    This test should PASS both before and after the fix.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      strength: 0.8\n'
+    )
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    prompt.write_text("dummy prompt")
+    monkeypatch.chdir(tmp_path)
+
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    # User explicitly passes --strength 0.5
+    result = runner.invoke(cli.cli, ["--context", "backend", "--strength", "0.5", "generate", str(prompt)])
+
+    assert result.exit_code == 0
+    mock_main.assert_called_once()
+
+    passed_ctx = mock_main.call_args.kwargs.get('ctx')
+    assert passed_ctx is not None
+
+    # Explicit CLI value should be passed through
+    assert passed_ctx.obj.get('strength') == 0.5, \
+        f"Expected explicit CLI strength 0.5, got {passed_ctx.obj.get('strength')}"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_ctx_obj_get_returns_default_when_strength_not_passed(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
+    """
+    REGRESSION TEST: Verify .get("strength", DEFAULT) returns the default, not None.
+
+    This catches the bug where ctx.obj["strength"] = None would cause
+    .get("strength", DEFAULT_STRENGTH) to return None instead of DEFAULT_STRENGTH,
+    leading to TypeError: '<=' not supported between 'float' and 'NoneType'.
+    """
+    (tmp_path / "prompts").mkdir()
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    prompt.write_text("dummy prompt")
+    monkeypatch.chdir(tmp_path)
+
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    # User does NOT pass --strength
+    result = runner.invoke(cli.cli, ["generate", str(prompt)])
+
+    assert result.exit_code == 0
+    mock_main.assert_called_once()
+
+    passed_ctx = mock_main.call_args.kwargs.get('ctx')
+    assert passed_ctx is not None
+
+    # Key should not be in ctx.obj at all
+    assert 'strength' not in passed_ctx.obj, \
+        f"strength should not be in ctx.obj, but found: {passed_ctx.obj.get('strength')}"
+
+    # .get() with default should return the default, NOT None
+    resolved_strength = passed_ctx.obj.get("strength", DEFAULT_STRENGTH)
+    assert resolved_strength == DEFAULT_STRENGTH, \
+        f"Expected .get('strength', DEFAULT_STRENGTH) to return {DEFAULT_STRENGTH}, got {resolved_strength}"
+
+    # This is the actual pattern used in cmd_test_main.py and other files
+    # It must not return None, which would cause comparison errors
+    assert resolved_strength is not None, \
+        "resolved_strength must not be None - would cause TypeError in downstream comparisons"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_ctx_obj_get_returns_default_when_temperature_not_passed(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
+    """
+    REGRESSION TEST: Verify .get("temperature", DEFAULT) returns the default, not None.
+    """
+    (tmp_path / "prompts").mkdir()
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    prompt.write_text("dummy prompt")
+    monkeypatch.chdir(tmp_path)
+
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(cli.cli, ["generate", str(prompt)])
+
+    assert result.exit_code == 0
+    passed_ctx = mock_main.call_args.kwargs.get('ctx')
+
+    # Key should not be in ctx.obj
+    assert 'temperature' not in passed_ctx.obj
+
+    # .get() with default should return the default
+    resolved_temp = passed_ctx.obj.get("temperature", DEFAULT_TEMPERATURE)
+    assert resolved_temp == DEFAULT_TEMPERATURE, \
+        f"Expected .get('temperature', DEFAULT_TEMPERATURE) to return {DEFAULT_TEMPERATURE}, got {resolved_temp}"
+    assert resolved_temp is not None
