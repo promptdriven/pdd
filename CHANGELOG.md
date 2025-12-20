@@ -2,11 +2,29 @@
 
 ### Feat
 
-- enhance configuration management and testing
+- **Multi-Test File Support for Fix Command:** The `pdd fix` command now accepts multiple unit test files as arguments. Each test file is processed separately by the LLM, enabling targeted fixes per test file rather than concatenating all tests into a single blob. Results are aggregated with overall success requiring all individual fixes to succeed.
+
+- **Numbered Test Output Files:** The `test` and `bug` commands now automatically create numbered output files (e.g., `test_module_1.py`, `test_module_2.py`) when the output file already exists and `--force` is not specified, preventing accidental overwrites while maintaining workflow continuity.
+
+- **Multi-File Existing Tests for Test Command:** The `--existing-tests` option in `cmd_test_main` now accepts multiple test file paths. All test file contents are concatenated and provided to the LLM for context-aware test generation.
+
+Many thanks to Jiamin Cai for your contributions!
 
 ### Fix
 
-- adjust commit order in Makefile for public repo updates
+- **Setup Tool Shell Escaping:** Fixed a security and correctness issue where API keys containing special shell characters (`$`, `"`, `'`, `\`) would generate malformed shell scripts. Now uses `shlex.quote()` for proper POSIX shell escaping across bash, zsh, fish, and csh variants. Thank you to Dhruv Garg for your contributions!
+
+- **Makefile Commit Order:** Adjusted commit order for public repository updates to ensure proper synchronization.
+
+### Tests
+
+- Added 574 lines of comprehensive tests for `setup_tool.py` in `tests/test_setup_tool.py` covering shell script generation with special characters for bash, zsh, fish, and csh.
+
+- Added regression test #21 for multi-test file fix workflow, verifying end-to-end LLM-based fixes across multiple test files.
+
+- Added tests for numbered test file output in `tests/test_construct_paths.py` verifying automatic file numbering behavior.
+
+- Added tests for multi-file existing tests handling in `tests/test_cmd_test_main.py`.
 
 ## v0.0.87 (2025-12-18)
 
