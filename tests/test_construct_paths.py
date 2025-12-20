@@ -2201,10 +2201,12 @@ def test_construct_paths_fix_resolves_pddrc_paths_relative_to_pddrc(tmp_path, mo
     )
 
     assert language == "python"
-    assert output_file_paths["output_code"] == str(tmp_path / "backend" / "functions" / "admin_get_users_fixed.py")
-    assert output_file_paths["output_test"] == str(tmp_path / "backend" / "tests" / "test_admin_get_users_fixed.py")
+    # Note: basename for fix command includes test file stem to support multiple test files
+    # basename = admin_get_users_test_admin_get_users (prompt_basename + test_basename)
+    assert output_file_paths["output_code"] == str(tmp_path / "backend" / "functions" / "admin_get_users_test_admin_get_users_fixed.py")
+    assert output_file_paths["output_test"] == str(tmp_path / "backend" / "tests" / "test_admin_get_users_test_admin_get_users_fixed.py")
     assert output_file_paths["output_results"] == str(
-        tmp_path / "backend" / "functions" / "admin_get_users_fix_results.log"
+        tmp_path / "backend" / "functions" / "admin_get_users_test_admin_get_users_fix_results.log"
     )
 
 
@@ -2276,3 +2278,48 @@ def test_pddrc_strength_used_when_cli_not_in_options():
 
     assert resolved.get("strength") == 0.8, \
         f"Expected .pddrc strength 0.8, got {resolved.get('strength')}"
+
+
+def test_construct_paths_test_command_numbered_file_creation(tmpdir):
+    """
+    Test that 'test' command without --force creates numbered files instead of overwriting.
+    This test ensures the existing_files variable is properly initialized.
+    Regression test for: UnboundLocalError: cannot access local variable 'existing_files'
+    """
+    tmp_path = Path(str(tmpdir))
+
+    # Create input files
+    prompt_file = tmp_path / 'calculator_python.prompt'
+    prompt_file.write_text('// Language: Python\ndef add(a, b): return a + b')
+    code_file = tmp_path / 'calculator.py'
+    code_file.write_text('def add(a, b): return a + b')
+
+    # Create an output file that already exists
+    output_file = tmp_path / 'test_calculator.py'
+    output_file.write_text('# Existing test file')
+
+    input_file_paths = {
+        'prompt_file': str(prompt_file),
+        'code_file': str(code_file),
+    }
+    force = False  # Not forcing - should trigger numbered file creation
+    quiet = True
+    command = 'test'  # 'test' command triggers the numbered file logic
+    command_options = {}
+
+    # Mock generate_output_paths to return the existing output file path
+    mock_output_paths_dict_str = {'output': str(output_file)}
+
+    with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+         patch('pdd.construct_paths.get_language', return_value='python'), \
+         patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
+
+        # This should NOT raise UnboundLocalError for 'existing_files'
+        _, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # The output path should be numbered (test_calculator_1.py) since original exists
+    expected_numbered_path = str(tmp_path / 'test_calculator_1.py')
+    assert output_file_paths['output'] == expected_numbered_path, \
+        f"Expected numbered path {expected_numbered_path}, got {output_file_paths['output']}"
