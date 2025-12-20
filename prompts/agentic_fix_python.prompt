@@ -25,24 +25,12 @@ Multi-agent, two-pass fallback mechanism for fixing code. Orchestrates local CLI
 
 % Dependencies
 <module_dependencies>
-  <agentic_common_example>
-    <include>context/agentic_common_example.py</include>
-  </agentic_common_example>
-  <agentic_langtest_example>
-    <include>context/agentic_langtest_example.py</include>
-  </agentic_langtest_example>
-  <get_language_example>
-    <include>context/get_language_example.py</include>
-  </get_language_example>
-  <load_prompt_template_example>
-    <include>context/load_prompt_template_example.py</include>
-  </load_prompt_template_example>
-  <get_run_command_example>
-    <include>context/get_run_command_example.py</include>
-  </get_run_command_example>
-  <llm_invoke_example>
-    <include>context/llm_invoke_example.py</include>
-  </llm_invoke_example>
+    <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+    <pdd.agentic_langtest><include>context/agentic_langtest_example.py</include></pdd.agentic_langtest>
+    <pdd.get_language><include>context/get_language_example.py</include></pdd.get_language>
+    <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+    <pdd.get_run_command><include>context/get_run_command_example.py</include></pdd.get_run_command>
+    <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
 </module_dependencies>
 
 % Deliverables

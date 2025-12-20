@@ -620,6 +620,35 @@ def _post_apply_verify_or_testcmd(
             return _run_testcmd(testcmd, cwd)
     return False
 
+def _snapshot_mtimes(root: Path) -> Dict[Path, float]:
+    """Record mtimes of all files in root."""
+    snapshot = {}
+    try:
+        for p in root.rglob("*"):
+            if ".git" in p.parts or "__pycache__" in p.parts:
+                continue
+            if p.is_file():
+                snapshot[p] = p.stat().st_mtime
+    except Exception:
+        pass
+    return snapshot
+
+def _detect_mtime_changes(root: Path, snapshot: Dict[Path, float]) -> List[str]:
+    """Return list of changed/new file paths."""
+    changes = []
+    try:
+        for p in root.rglob("*"):
+            if ".git" in p.parts or "__pycache__" in p.parts:
+                continue
+            if p.is_file():
+                if p not in snapshot:
+                    changes.append(str(p))
+                elif p.stat().st_mtime != snapshot[p]:
+                    changes.append(str(p))
+    except Exception:
+        pass
+    return changes
+
 def _try_harvest_then_verify(
     provider: str,
     code_path: Path,
@@ -661,6 +690,9 @@ def _try_harvest_then_verify(
     _info(f"[cyan]Executing {provider.capitalize()} with harvest-only instructions: {harvest_file.resolve()}[/cyan]")
     _print_head("Harvest-only instruction preview", harvest_instr)
 
+    # Snapshot mtimes before agent run
+    mtime_snapshot = _snapshot_mtimes(cwd)
+
     try:
         # Provider-specific variant runners with shorter time budgets
         if provider == "openai":
@@ -681,6 +713,10 @@ def _try_harvest_then_verify(
 
     _print_head(f"{provider.capitalize()} harvest stdout", res.stdout or "")
     _print_head(f"{provider.capitalize()} harvest stderr", res.stderr or "")
+
+    # Detect direct changes by agent
+    direct_changes = _detect_mtime_changes(cwd, mtime_snapshot)
+    changed_files.extend(direct_changes)
 
     allow_new = True
 
@@ -722,6 +758,21 @@ def _try_harvest_then_verify(
                 except Exception:
                     pass
                 return ok
+        
+        # If no output blocks, but direct changes occurred, we should verify
+        if direct_changes:
+            _info("[cyan]No output markers found, but detected file changes. Verifying...[/cyan]")
+            ok = _post_apply_verify_or_testcmd(
+                provider, unit_test_file, cwd,
+                verify_cmd=verify_cmd, verify_enabled=verify_enabled,
+                stdout=res.stdout or "", stderr=res.stderr or ""
+            )
+            try:
+                harvest_file.unlink()
+            except Exception:
+                pass
+            return ok
+
         _info("[yellow]Harvest-only attempt did not include the required markers.[/yellow]")
         try:
             harvest_file.unlink()
@@ -752,6 +803,10 @@ def run_agentic_fix(
     code_file: str,
     unit_test_file: str,
     error_log_file: str,
+    verify_cmd: Optional[str] = None,
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Main entrypoint for agentic fallback:
@@ -761,6 +816,14 @@ def run_agentic_fix(
     - Applies changes locally and verifies locally
     - Returns (success, message, est_cost, used_model, changed_files)
     """
+    global _IS_VERBOSE, _IS_QUIET
+    if verbose:
+        _IS_VERBOSE = True
+        _IS_QUIET = False
+    elif quiet:
+        _IS_QUIET = True
+        _IS_VERBOSE = False
+
     _always("[bold yellow]Standard fix failed. Initiating agentic fallback (AGENT-ONLY)...[/bold yellow]")
 
     instruction_file: Optional[Path] = None
@@ -864,7 +927,13 @@ def run_agentic_fix(
 
         env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)               # "auto"/"0"/"1"/None
         verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
-        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None) or default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
+        
+        # If verify_cmd arg is provided, it overrides env var and default
+        if verify_cmd is None:
+            verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None)
+        
+        if verify_cmd is None:
+             verify_cmd = default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
 
         # Load primary prompt template
         primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
@@ -950,6 +1019,10 @@ def run_agentic_fix(
 
             # Primary attempt (more permissive)
             est_cost += _AGENT_COST_PER_CALL
+            
+            # Snapshot mtimes before agent run
+            mtime_snapshot = _snapshot_mtimes(cwd)
+            
             try:
                 if provider == "openai":
                     res = _run_openai_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
@@ -965,6 +1038,10 @@ def run_agentic_fix(
 
             _print_head(f"{provider.capitalize()} stdout", res.stdout or "")
             _print_head(f"{provider.capitalize()} stderr", res.stderr or "")
+
+            # Detect direct changes by agent
+            direct_changes = _detect_mtime_changes(cwd, mtime_snapshot)
+            changed_files.extend(direct_changes)
 
             # Parse emitted changes (multi-file preferred)
             multi = _extract_files_from_output(res.stdout or "", res.stderr or "")
@@ -992,7 +1069,7 @@ def run_agentic_fix(
             new_code = code_path.read_text(encoding="utf-8")
             _print_diff(orig_code, new_code, code_path)
 
-            proceed_to_verify = (res.returncode == 0) or (new_code != orig_code) or bool(multi)
+            proceed_to_verify = (res.returncode == 0) or (new_code != orig_code) or bool(multi) or bool(direct_changes)
             if proceed_to_verify:
                 ok = _post_apply_verify_or_testcmd(
                     provider, unit_test_file, cwd,
