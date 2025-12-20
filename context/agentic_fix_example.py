@@ -124,7 +124,7 @@ def main():
             # Set log level to see agent activity (optional)
             os.environ["PDD_AGENTIC_LOGLEVEL"] = "normal"
 
-            success, message, cost, model = run_agentic_fix(
+            success, message, cost, model, changed_files = run_agentic_fix(
                 prompt_file=file_paths["prompt"],
                 code_file=file_paths["code"],
                 unit_test_file=file_paths["test"],
@@ -137,6 +137,8 @@ def main():
                 print(f"✅ Success: {message}")
                 print(f"   - Model Used: {model}")
                 print(f"   - Estimated Cost: ${cost:.4f}")
+                if changed_files:
+                    print(f"   - Changed Files: {', '.join(changed_files)}")
                 
                 # 5. Verify the fix by inspecting the corrected code
                 fixed_code = Path(file_paths["code"]).read_text()
