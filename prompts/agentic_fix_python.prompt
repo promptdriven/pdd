@@ -1,56 +1,33 @@
-% You are an expert Python engineer. Your goal is to write the pdd/agentic_fix.py module.
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the pdd/agentic_fix.py module.
 
 % Role & Scope
-This module provides a multi-agent, two-pass fallback mechanism for fixing code. It orchestrates local CLI-based agents (Claude, Gemini, Codex) to repair code based on a problem description, verification commands, and test results. Agents run in **agentic mode** (not completion/print mode) to ensure full file tool access.
+Multi-agent, two-pass fallback mechanism for fixing code. Orchestrates local CLI-based agents to repair code based on problem description, verification commands, and test results. Uses shared infrastructure from `agentic_common.py`. Agents write fixed files directly in agentic mode.
 
 % Requirements
-- File must start with `from __future__ import annotations`.
-- All functions must be fully type-hinted.
-- Use `rich.console.Console` for all printing.
-- Preserve all public names and function signatures for test compatibility.
+1. Use logging utilities from `agentic_common` (pass `verbose`/`quiet` to all calls)
+2. Two-pass fallback per agent: harvest-only first, then primary if harvest fails
+3. Record file mtimes before agent runs, detect changes after (agent writes files directly)
+4. Run verification command after each fix attempt
+5. Return 5-tuple: `(success, message, cost, model, changed_files)`
 
-% Environment Variables
-- `PDD_AGENTIC_LOGLEVEL`: "quiet" | "normal" | "verbose"
-- `PDD_AGENTIC_COST_PER_CALL`: Cost estimate per call (default: 0.02)
-- `PDD_AGENTIC_TIMEOUT`: Agent CLI timeout in seconds (default: 240)
+% Entry Point
+`run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verify_cmd=None, *, verbose: bool = False, quiet: bool = False)`
+
+% Environment Variables (fix-specific)
 - `PDD_AGENTIC_VERIFY_TIMEOUT`: Verification timeout (default: 120)
 - `PDD_AGENTIC_MAX_LOG_LINES`: Max lines to preview (default: 200)
-- `PDD_AGENTIC_AGENT_TESTCMD`: "0" disables agent TESTCMD blocks
-- `PDD_AGENTIC_VERIFY`: "0" disables, "auto" uses agent TESTCMD only
+- `PDD_AGENTIC_VERIFY`: "0" disables, "auto" uses default verification
 - `PDD_AGENTIC_VERIFY_FORCE`: "1" forces verification
 - `PDD_AGENTIC_VERIFY_CMD`: Custom verify command with `{test}` and `{cwd}` placeholders
 
-% Core Logic
-
-Entry point: `run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verify_cmd=None)`
-
-Returns 5-tuple: `(success: bool, message: str, est_cost: float, used_model: str, changed_files: List[str])`
-
-1. **Agent Discovery:** Check API keys via `_load_model_data`. Respect `AGENT_PROVIDER_PREFERENCE` order. For Google, also check `GEMINI_API_KEY` as alias.
-
-2. **Pre-flight:** Read files. If error log empty, populate via fallback chain: env verify_cmd → `default_verify_cmd_for` → `get_run_command_for_file` → Python interpreter.
-
-3. **Two-Pass Loop:** For each available agent:
-   - Write prompt to unique temp file (`.agentic_prompt_<random>.txt`)
-   - **Pass 1 (Harvest):** Use `agentic_fix_harvest_only_LLM` prompt, extract and apply code, verify.
-   - **Pass 2 (Primary):** If harvest fails, use `agentic_fix_primary_LLM` prompt, extract and apply, verify.
-   - Clean up temp prompt file after execution.
-
-4. **File Extraction:** Parse agent output for `<<<BEGIN_FILE:path>>>...<<<END_FILE:path>>>` markers. Fallbacks for single-file fixes and fenced code blocks.
-
-5. **Verification:** Run verify command. If fails, check for `<<<BEGIN_TESTCMD>>>...<<<END_TESTCMD>>>` and run agent-supplied test.
-
-% Agent CLI Invocation (Agentic Mode)
-
-Critical: Do NOT use completion/print mode flags that prevent file tool access.
-
-- **Anthropic:** `["claude", "--dangerously-skip-permissions", <instruction>]` — NO `-p` flag
-- **Google:** `["gemini", <instruction>]` — NO `-p` flag
-- **OpenAI:** `["codex", "exec", <instruction>]` — NO `--sandbox read-only`
-
 % Dependencies
-<pdd>This module relies on several internal helper modules.</pdd>
 <module_dependencies>
+  <agentic_common_example>
+    <include>context/agentic_common_example.py</include>
+  </agentic_common_example>
   <agentic_langtest_example>
     <include>context/agentic_langtest_example.py</include>
   </agentic_langtest_example>
@@ -70,4 +47,3 @@ Critical: Do NOT use completion/print mode flags that prevent file tool access.
 
 % Deliverables
 - Code: `pdd/agentic_fix.py`
-- At file end, include alias: `try_harvest_then_verify = _try_harvest_then_verify`

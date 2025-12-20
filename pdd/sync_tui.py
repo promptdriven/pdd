@@ -270,6 +270,10 @@ class TUIStdoutWrapper(io.TextIOBase):
     def captured_logs(self) -> List[str]:
         return self.real_redirector.captured_logs
 
+    def isatty(self) -> bool:
+        """Report as TTY so Rich uses \\r mode for progress bars."""
+        return True
+
 
 class ThreadSafeRedirector(io.TextIOBase):
     """
@@ -289,10 +293,20 @@ class ThreadSafeRedirector(io.TextIOBase):
 
         self.buffer += s
 
+        # Handle carriage return for in-place updates (progress bars)
+        # When buffer has \r but no \n, it's an intermediate progress update
+        # Keep only content after the last \r (ready for next update or final \n)
+        if '\r' in self.buffer and '\n' not in self.buffer:
+            self.buffer = self.buffer.rsplit('\r', 1)[-1]
+            return len(s)
+
         # Process complete lines
         while '\n' in self.buffer:
             line, self.buffer = self.buffer.split('\n', 1)
-            self.captured_logs.append(line) # Capture raw line
+            # Handle \r within line: keep only content after last \r
+            if '\r' in line:
+                line = line.rsplit('\r', 1)[-1]
+            self.captured_logs.append(line)  # Capture processed line
 
             # Convert ANSI codes to Rich Text
             text = Text.from_ansi(line)
