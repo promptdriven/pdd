@@ -60,23 +60,18 @@ def captured_lines(mock_log):
 
 
 # =============================================================================
-# Test 1: TUIStdoutWrapper.isatty() returns False (default behavior)
+# Test 1: TUIStdoutWrapper.isatty() should return True
 # =============================================================================
 
 def test_tui_stdout_wrapper_isatty():
-    """TUIStdoutWrapper.isatty() should return False (default from io.TextIOBase).
-
-    We no longer need isatty() to return True because:
-    1. Progress is shown via Textual's native ProgressBar widget
-    2. Rich's track() is disabled in TUI context via COLUMNS env var check
-    """
+    """TUIStdoutWrapper should report as TTY so Rich uses \\r mode."""
     mock_redirector = MagicMock()
     mock_stdin = MagicMock()
 
     wrapper = TUIStdoutWrapper(mock_redirector, mock_stdin)
 
-    # Default behavior from io.TextIOBase is False
-    assert wrapper.isatty() == False
+    # This should return True so Rich uses \r for progress bars
+    assert wrapper.isatty() == True
 
 
 # =============================================================================
