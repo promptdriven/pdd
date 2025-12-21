@@ -521,6 +521,7 @@ def estimate_operation_cost(operation: str, language: str = "python") -> float:
         'crash': 0.40,
         'verify': 0.35,
         'test': 0.60,
+        'test_extend': 0.60,  # Same cost as test - generates additional tests
         'fix': 0.45,
         'update': 0.25,
         'analyze_conflict': 0.20,
@@ -1031,6 +1032,23 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                         'target_coverage': target_coverage,
                         'tests_skipped': True,
                         'skip_tests': True
+                    }
+                )
+            elif run_report.tests_failed == 0 and run_report.tests_passed > 0:
+                # Tests pass but coverage is below target
+                # Return 'test_extend' to signal we need to ADD more tests, not regenerate
+                return SyncDecision(
+                    operation='test_extend',
+                    reason=f'Tests pass ({run_report.tests_passed} passed) but coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}% - extending tests',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'current_coverage': run_report.coverage,
+                        'target_coverage': target_coverage,
+                        'tests_passed': run_report.tests_passed,
+                        'tests_failed': run_report.tests_failed,
+                        'extend_tests': True
                     }
                 )
             else:
