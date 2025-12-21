@@ -4,24 +4,18 @@
 Write the pdd/agentic_fix.py module.
 
 % Role & Scope
-Multi-agent, two-pass fallback mechanism for fixing code. Orchestrates local CLI-based agents to repair code based on problem description, verification commands, and test results. Uses shared infrastructure from `agentic_common.py`. Agents write fixed files directly in agentic mode.
+Fallback mechanism for fixing code. Orchestrates local CLI-based agents to repair code based on problem description, test results, and example program file. Uses shared infrastructure from `agentic_common.py`. Agents write fixed files directly in agentic mode.
 
 % Requirements
 1. Use logging utilities from `agentic_common` (pass `verbose`/`quiet` to all calls)
-2. Two-pass fallback per agent: harvest-only first, then primary if harvest fails
+2. Run using the agentic_fix_explore_LLM prompt with the agentic common infrastructure
 3. Record file mtimes before agent runs, detect changes after (agent writes files directly)
-4. Run verification command after each fix attempt
-5. Return 5-tuple: `(success, message, cost, model, changed_files)`
+4. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
+5. Run example program file to verify the fix didn't break the program
+6. Return 5-tuple: `(success, message, cost, model, changed_files)`
 
 % Entry Point
-`run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verify_cmd=None, *, verbose: bool = False, quiet: bool = False)`
-
-% Environment Variables (fix-specific)
-- `PDD_AGENTIC_VERIFY_TIMEOUT`: Verification timeout (default: 120)
-- `PDD_AGENTIC_MAX_LOG_LINES`: Max lines to preview (default: 200)
-- `PDD_AGENTIC_VERIFY`: "0" disables, "auto" uses default verification
-- `PDD_AGENTIC_VERIFY_FORCE`: "1" forces verification
-- `PDD_AGENTIC_VERIFY_CMD`: Custom verify command with `{test}` and `{cwd}` placeholders
+`run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, example_program_file, *, verbose: bool = False, quiet: bool = False)`
 
 % Dependencies
 <module_dependencies>
@@ -31,6 +25,7 @@ Multi-agent, two-pass fallback mechanism for fixing code. Orchestrates local CLI
     <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
     <pdd.get_run_command><include>context/get_run_command_example.py</include></pdd.get_run_command>
     <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
+    <pdd.prompt.agentic_fix_explore_LLM><include>prompts/agentic_fix_explore_LLM.prompt</include></pdd.prompt.agentic_fix_explore_LLM>
 </module_dependencies>
 
 % Deliverables

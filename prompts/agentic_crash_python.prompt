@@ -1,0 +1,41 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the pdd/agentic_crash.py module.
+
+% Role & Scope
+Agentic fallback for crash command. When LLM-based crash fixes fail,
+delegates to a CLI agent with full codebase exploration capability.
+
+Uses explore mode only because:
+1. Non-agentic loop already exhausted fixing just the code and/or program file. The error(s) is likely outside of these files.
+2. What's needed is exploration, not another fix attempt with the code and/or program file.
+
+IMPORTANT: Crash can fix BOTH the code file AND the program file.
+
+% Entry Point
+`run_agentic_crash(prompt_file, code_file, program_file, crash_log_file, *, verbose: bool = False, quiet: bool = False)`
+
+Note: `program_file` is the calling program that crashed.
+      `crash_log_file` contains crash traceback + previous fix attempts.
+
+% LLM Prompt Template
+Uses `agentic_crash_explore_LLM` (loaded via load_prompt_template).
+
+% Requirements
+1. Single-pass: explore mode only
+2. Record file mtimes before agent runs, detect changes after
+3. Run program file after fix attempt to verify the fix
+4. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
+5. Return 5-tuple: `(success, message, cost, model, changed_files)`
+
+% Dependencies
+<module_dependencies>
+    <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+    <pdd.get_run_command><include>context/get_run_command_example.py</include></pdd.get_run_command>
+    <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+    <pdd.prompt.agentic_crash_explore_LLM><include>prompts/agentic_crash_explore_LLM.prompt</include></pdd.prompt.agentic_crash_explore_LLM>
+</module_dependencies>
+
+% Deliverables
+- Code: `pdd/agentic_crash.py`
