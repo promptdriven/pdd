@@ -55,8 +55,8 @@ def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
     # Pretend CLIs exist so selection proceeds
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
 
-    # Short-circuit harvest path to succeed — NOTE: correct symbol (no leading underscore)
-    monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+    # Short-circuit harvest path to succeed — NOTE: uses leading underscore (private function)
+    monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
 
     ok, msg, cost, model, changed_files = run_agentic_fix(p_prompt, p_code, p_test, p_err)
     assert ok is True
