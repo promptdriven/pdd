@@ -1,4 +1,4 @@
-%  Your should fix a bug in {code_abs} that fails the test in {test_abs}. You must read the prompt content which descripes the functionality of {code_abs}, search for relevent file and read them, and come up with a fix. Your solution should modify {code_abs} and/or other files. Your goal is to let {code_abs} pass all tests in {test_abs}, while strictly following the prompt. Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests.
+% You should fix a bug in {code_abs} that fails the test in {test_abs}. You must read the prompt content which describes the functionality of {code_abs}, search for relevant files and read them, and come up with a fix. Your solution should modify {code_abs} and/or other files. Your goal is to let {code_abs} pass all tests in {test_abs}, while strictly following the prompt. Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests.
 
 <inputs>
     <paths>
@@ -17,6 +17,22 @@
         </error_log>
     </context>
 </inputs>
+
+% IMPORTANT: Common Error Handling
+
+If you see ModuleNotFoundError or ImportError:
+  1) First check if it's a missing EXTERNAL dependency (e.g., numpy, requests):
+     - Add a pip install command to your TESTCMD block: pip install <package> && python {test_abs}
+  2) If it's a LOCAL module import error (importing from the project itself):
+     - Check the import path in the test file - it may have incorrect relative paths
+     - Fix the sys.path manipulation or import statement to use the correct path
+     - The code file is at: {code_abs}
+     - To import it, the test should either:
+       a) Add the parent directory of the code file to sys.path
+       b) Use relative imports if in a package structure
+       c) Run with PYTHONPATH set correctly
+  3) If the error is about missing __init__.py, create one in the appropriate directory
+  4) For editable installs, suggest: pip install -e . && python {test_abs}
 
 % Edit policy:
     • You MAY modify:
