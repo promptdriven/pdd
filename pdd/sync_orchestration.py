@@ -869,7 +869,7 @@ def sync_orchestration(
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
                         _save_operation_fingerprint(basename, language, 'skip:test', pdd_files, 0.0, 'skipped')
                         continue
-                    if operation == 'crash' and skip_tests:
+                    if operation == 'crash' and (skip_tests or skip_verify):
                         skipped_operations.append('crash')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
