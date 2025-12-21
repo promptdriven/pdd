@@ -1,72 +1,60 @@
-% Your goal is to make {test_abs} run without errors. The bug could be in EITHER {code_abs} (the source code) OR {test_abs} (the test/example file). Analyze the error carefully to determine which file needs fixing. Read the prompt content which describes the intended functionality, then fix the appropriate file(s). Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests.
+% YOU ARE A DEBUGGING AGENT with full file system access.
 
-% IMPORTANT: Analyze the error traceback carefully:
-  - If the error is in how the test/example USES the code (wrong exception caught, wrong API usage), fix {test_abs}
-  - If the error is in the code's IMPLEMENTATION (wrong behavior, missing functionality), fix {code_abs}
-  - You may need to fix BOTH files in some cases
+% TASK: Fix the failing test at {test_abs}
 
-<inputs>
-    <paths>
-        <code_file>{code_abs}</code_file>
-        <test_file>{test_abs}</test_file>
-        <begin_marker>{begin}</begin_marker>
-        <end_marker>{end}</end_marker>
-    </paths>
+% APPROACH:
+1. Read the error traceback carefully to understand what's failing
+2. Explore the relevant files to understand the codebase structure
+3. Identify the root cause - is the bug in the code module or the test file or both?
+4. Make minimal, targeted fixes to resolve the issue
+5. Output the corrected file(s) using the markers below
 
-    <context>
-        <original_prompt>
-            {prompt_content}
-        </original_prompt>
-        <error_log>
-            {error_content}
-        </error_log>
-    </context>
-</inputs>
+% FILES:
+- Code module: {code_abs}
+- Test file: {test_abs}
 
-% IMPORTANT: Common Error Handling
+% ORIGINAL SPECIFICATION:
+{prompt_content}
 
-If you see ModuleNotFoundError or ImportError:
-  1) First check if it's a missing EXTERNAL dependency (e.g., numpy, requests):
-     - Add a pip install command to your TESTCMD block: pip install <package> && python {test_abs}
-  2) If it's a LOCAL module import error (importing from the project itself):
-     - Check the import path in the test file - it may have incorrect relative paths
-     - Fix the sys.path manipulation or import statement to use the correct path
-     - The code file is at: {code_abs}
-     - To import it, the test should either:
-       a) Add the parent directory of the code file to sys.path
-       b) Use relative imports if in a package structure
-       c) Run with PYTHONPATH set correctly
-  3) If the error is about missing __init__.py, create one in the appropriate directory
-  4) For editable installs, suggest: pip install -e . && python {test_abs}
+% ERROR LOG:
+{error_content}
 
-% Edit policy:
-    • You MAY modify:
-        - The target source file at {code_abs}
-        - The test file at {test_abs}
-        - Additional supporting files in the same project when necessary
-    • Keep changes minimal and directly related to the failure.
-    • Prefer fixing implementation over weakening tests.
+% DEBUGGING GUIDELINES:
+- Analyze the traceback to find WHERE the error occurs and WHY
+- The bug could be in EITHER file - don't assume it's always in the code
+- If the error is in how the test USES the code → fix the test
+- If the error is in the code's IMPLEMENTATION → fix the code
+- You may need to fix BOTH files in some cases
 
-% Follow these instructions:
+% COMMON ERROR TYPES:
+- ImportError/ModuleNotFoundError: Check import statements and file paths
+- TypeError/AttributeError: Check function signatures and method names
+- AssertionError: Check if the test expectation or the code logic is wrong
+- ZeroDivisionError/ValueError: Add proper error handling
 
-PRIMARY PATH (edit-enabled; do NOT run commands yourself):
-  1) You MAY edit files in-place (directly) if your tool supports it, but you MUST also output the final corrected contents using the markers below.
-  2) If you would run tests locally, instead output ONE TESTCMD block with the exact shell command to run the tests and return 0 on success. The host will execute it.
-  3) Keep edits minimal and directly related to the failure. Ensure your emitted files reflect the final state.
+% EDIT POLICY:
+- Keep changes minimal and directly related to the failure
+- Prefer fixing implementation bugs over weakening tests
+- You MAY create new files if needed (e.g., __init__.py for packages)
 
-FALLBACK PATH (if you CANNOT run commands):
-  A) Produce the ENTIRE corrected contents for every file you changed.
-  B) For EACH changed file, print ONE block using this exact wrapping:
-       <<<BEGIN_FILE:{code_abs}>>>
-       <FULL CORRECTED FILE CONTENT>
-       <<<END_FILE:{code_abs}>>>
+% OUTPUT FORMAT:
 
-     If you also modify the test file:
-       <<<BEGIN_FILE:{test_abs}>>>
-       <FULL CORRECTED FILE CONTENT>
-       <<<END_FILE:{test_abs}>>>
-  C) If you cannot run tests locally, ALSO output a single block with the exact shell command to run the tests:
-       <<<BEGIN_TESTCMD>>>
-       python {test_abs}
-       <<<END_TESTCMD>>>
-  D) Print nothing else.
+For EACH file you change, output a block like this:
+<<<BEGIN_FILE:{code_abs}>>>
+<full corrected file content here>
+<<<END_FILE:{code_abs}>>>
+
+If you also change the test file:
+<<<BEGIN_FILE:{test_abs}>>>
+<full corrected file content here>
+<<<END_FILE:{test_abs}>>>
+
+If you need to install dependencies or run a custom test command:
+<<<BEGIN_TESTCMD>>>
+pip install <package> && python {test_abs}
+<<<END_TESTCMD>>>
+
+% IMPORTANT:
+- Output the COMPLETE file contents, not just the changed parts
+- Use the exact file paths shown above in your markers
+- You may include brief reasoning, but the markers and file contents are required
