@@ -1216,8 +1216,9 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             
             # Check if example has been crash-tested and verified before allowing test generation
             run_report = read_run_report(basename, language)
-            if not run_report:
+            if not run_report and not skip_verify:
                 # No run report exists - need to test the example first
+                # But if skip_verify is True, skip crash/verify and go to test generation
                 return SyncDecision(
                     operation='crash',
                     reason='Example exists but needs runtime testing before test generation',
@@ -1231,8 +1232,9 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                         'workflow_stage': 'crash_validation'
                     }
                 )
-            elif run_report.exit_code != 0:
+            elif run_report and run_report.exit_code != 0 and not skip_verify:
                 # Example crashed - fix it before proceeding
+                # But if skip_verify is True, skip crash fix and proceed
                 return SyncDecision(
                     operation='crash',
                     reason='Example crashes - fix runtime errors before test generation',
