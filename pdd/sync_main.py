@@ -122,8 +122,10 @@ def sync_main(
     _validate_basename(basename)
     if budget <= 0:
         raise click.BadParameter("Budget must be a positive number.", param_hint="--budget")
-    if max_attempts <= 0:
-        raise click.BadParameter("Max attempts must be a positive integer.", param_hint="--max-attempts")
+    # Note: max_attempts can be 0 to skip normal fix and go straight to agentic fix
+    # Validation is deferred until after config resolution to allow .pddrc override
+    if max_attempts < 0:
+        raise click.BadParameter("Max attempts cannot be negative.", param_hint="--max-attempts")
 
     if not quiet and budget < 1.0:
         console.log(f"[yellow]Warning:[/] Budget of ${budget:.2f} is low. Complex operations may exceed this limit.")
