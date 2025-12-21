@@ -234,17 +234,18 @@ def sync_main(
             command_options = {
                 "basename": basename,
                 "language": lang,
-                "max_attempts": max_attempts,
                 "budget": budget,
                 "target_coverage": target_coverage,
                 "time": time_param,
             }
-            # Only pass strength/temperature if explicitly set by user (not CLI defaults)
+            # Only pass strength/temperature/max_attempts if explicitly set by user (not CLI defaults)
             # This allows .pddrc values to take precedence when user doesn't pass CLI flags
             if strength != DEFAULT_STRENGTH:
                 command_options["strength"] = strength
             if temperature != 0.0:  # 0.0 is the CLI default for temperature
                 command_options["temperature"] = temperature
+            if max_attempts != 3:  # 3 is the CLI default for max_attempts
+                command_options["max_attempts"] = max_attempts
 
             # Use force=True for path discovery - actual file writes happen in sync_orchestration
             # which will handle confirmations via the TUI's confirm_callback
