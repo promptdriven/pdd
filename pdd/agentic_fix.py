@@ -1006,33 +1006,8 @@ def run_agentic_fix(
                 _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
                 continue
 
-            # First, the strict/fast "harvest-only" attempt for the three main providers
-            if provider in ("google", "openai", "anthropic"):
-                est_cost += _AGENT_COST_PER_CALL
-                try:
-                    if try_harvest_then_verify(
-                        provider,
-                        code_path,
-                        unit_test_file,
-                        orig_code,
-                        prompt_content,
-                        test_content,
-                        error_content,
-                        working_dir,
-                        verify_cmd=verify_cmd,
-                        verify_enabled=verify_enabled,
-                        changed_files=changed_files,
-                    ):
-                        try:
-                            instruction_file.unlink()
-                        except Exception:
-                            pass
-                        return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
-                except subprocess.TimeoutExpired:
-                    _info(f"[yellow]{provider.capitalize()} harvest attempt timed out, moving on...[/yellow]")
-                _info("[yellow]Harvest-first attempt did not pass; trying primary instruction path...[/yellow]")
-
-            # Primary attempt (more permissive)
+            # PRIMARY-FIRST: Try the full agent approach first (allows exploration, debugging)
+            _info(f"[cyan]Trying primary approach with {provider.capitalize()}...[/cyan]")
             est_cost += _AGENT_COST_PER_CALL
             
             # Snapshot mtimes before agent run
@@ -1098,6 +1073,32 @@ def run_agentic_fix(
                     except Exception:
                         pass
                     return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
+
+            # PRIMARY FAILED - Try harvest as a quick fallback before moving to next provider
+            if provider in ("google", "openai", "anthropic"):
+                _info("[yellow]Primary attempt did not pass; trying harvest fallback...[/yellow]")
+                est_cost += _AGENT_COST_PER_CALL
+                try:
+                    if _try_harvest_then_verify(
+                        provider,
+                        code_path,
+                        unit_test_file,
+                        orig_code,
+                        prompt_content,
+                        test_content,
+                        error_content,
+                        working_dir,
+                        verify_cmd=verify_cmd,
+                        verify_enabled=verify_enabled,
+                        changed_files=changed_files,
+                    ):
+                        try:
+                            instruction_file.unlink()
+                        except Exception:
+                            pass
+                        return True, f"Agentic fix successful with {provider.capitalize()} (harvest fallback).", est_cost, used_model, changed_files
+                except subprocess.TimeoutExpired:
+                    _info(f"[yellow]{provider.capitalize()} harvest fallback timed out.[/yellow]")
 
             # Prepare for next iteration/provider: update baseline code snapshot
             orig_code = new_code
