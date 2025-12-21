@@ -728,18 +728,28 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
 
         # Check verify has been done (unless skip_verify)
         # Without this, workflow would be "complete" after crash even though verify hasn't run
+        # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_verify:
             fingerprint = read_fingerprint(basename, language)
-            if fingerprint and fingerprint.command not in ['verify', 'test', 'fix', 'update']:
-                return False
+            if fingerprint:
+                # If command starts with 'skip:', the operation was skipped, not completed
+                if fingerprint.command.startswith('skip:'):
+                    return False
+                if fingerprint.command not in ['verify', 'test', 'fix', 'update']:
+                    return False
 
         # CRITICAL FIX: Check tests have been run (unless skip_tests)
         # Without this, workflow would be "complete" after verify even though tests haven't run
         # This prevents false positive success when skip_verify=True but tests are still required
+        # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_tests:
             fp = read_fingerprint(basename, language)
-            if fp and fp.command not in ['test', 'fix', 'update']:
-                return False
+            if fp:
+                # If command starts with 'skip:', the operation was skipped, not completed
+                if fp.command.startswith('skip:'):
+                    return False
+                if fp.command not in ['test', 'fix', 'update']:
+                    return False
 
     return True
 
