@@ -16,9 +16,8 @@ import os
 import traceback
 
 from rich.console import Console
-from rich.markdown import Markdown
 
-from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES
+from .agentic_common import get_available_agents, run_agentic_task
 from .load_prompt_template import load_prompt_template
 
 # Optional globals from package root; ignore if not present.
@@ -108,23 +107,17 @@ def _detect_changed_files(
     return sorted({p.resolve() for p in changed})
 
 
-def _discover_test_files(
-    code_path: Path,
-    tests_dir: Optional[Path] = None,
-) -> List[Path]:
+def _discover_test_files(code_path: Path) -> List[Path]:
     """
     Discover test files associated with a given code file.
 
     Uses pattern: ``test_{code_stem}*{code_suffix}`` and searches in:
-      1. Configured tests_dir from .pddrc (if provided)
-      2. ``tests/`` relative to the code file directory
-      3. The same directory as the code file
-      4. Sibling ``tests/`` directory (../tests/)
-      5. Project root ``tests/``
+      1. ``tests/`` relative to the code file directory
+      2. The same directory as the code file
+      3. Project root ``tests/``
 
     Args:
         code_path: Path to the main code file.
-        tests_dir: Optional path to tests directory from .pddrc config.
 
     Returns:
         Ordered list of discovered test file paths (deduplicated).
@@ -134,15 +127,11 @@ def _discover_test_files(
     suffix = code_path.suffix
     pattern = f"test_{stem}*{suffix}"
 
-    search_dirs: List[Path] = []
-    if tests_dir is not None:
-        search_dirs.append(Path(tests_dir).resolve())
-    search_dirs.extend([
+    search_dirs: List[Path] = [
         code_path.parent / "tests",
         code_path.parent,
-        code_path.parent.parent / "tests",  # Sibling tests dir (../tests/)
         PROJECT_ROOT / "tests",
-    ])
+    ]
 
     seen: set[Path] = set()
     discovered: List[Path] = []
@@ -194,7 +183,6 @@ def run_agentic_update(
     code_file: str,
     test_files: Optional[List[Path]] = None,
     *,
-    tests_dir: Optional[Path] = None,
     verbose: bool = False,
     quiet: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
@@ -217,8 +205,6 @@ def run_agentic_update(
             test files are auto-discovered using the pattern
             ``test_{code_stem}*{code_suffix}`` in the configured search
             locations.
-        tests_dir: Optional path to tests directory from .pddrc config.
-            Used for auto-discovery when test_files is None.
         verbose: If True, enable verbose logging for the underlying agent task.
         quiet: If True, suppress informational logging from this function.
             (Passed through to the agent as well; ``quiet`` takes precedence
@@ -282,7 +268,7 @@ def run_agentic_update(
             return False, error, 0.0, "", []
         selected_tests = normalized_tests or []
     else:
-        selected_tests = _discover_test_files(code_path, tests_dir=tests_dir)
+        selected_tests = _discover_test_files(code_path)
 
     # Paths to track *before* running the agent (for mtime comparison)
     before_paths: set[Path] = {prompt_path.resolve(), code_path.resolve()}
@@ -337,7 +323,6 @@ def run_agentic_update(
             verbose=bool(verbose and not quiet),
             quiet=quiet,
             label=f"agentic_update:{code_path.stem}",
-            max_retries=DEFAULT_MAX_RETRIES,
         )
     except Exception as exc:
         message = f"Agentic task failed with an exception: {exc}"
@@ -376,10 +361,7 @@ def run_agentic_update(
 
     if not quiet:
         if success:
-            console.print("[green]Prompt file updated successfully.[/green]")
-            if output_message:
-                console.print("\n[bold]Agent output:[/bold]")
-                console.print(Markdown(output_message))
+            console.print(f"[green]{base_msg}[/green]")
         else:
             console.print(f"[yellow]{base_msg}[/yellow]")
 
