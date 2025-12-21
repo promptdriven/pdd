@@ -789,27 +789,29 @@ def sync_orchestration(
                             operation = 'generate'
                             decision.operation = 'generate' # Update decision too
 
+                    # Bug #4 fix: Detect crash-verify cycle pattern
+                    # The pattern [crash, verify, crash, verify] or [verify, crash, verify, crash]
+                    # represents 2 iterations of the alternating cycle, so break immediately
                     if len(operation_history) >= 4:
                         recent_ops = operation_history[-4:]
                         if (recent_ops == ['crash', 'verify', 'crash', 'verify'] or
                             recent_ops == ['verify', 'crash', 'verify', 'crash']):
-                            cycle_count = 0
-                            # Simplified counting
-                            if operation_history[-2] == operation and operation_history[-4] == operation:
-                                 cycle_count = 2 # Just detected it
-                            
-                            if cycle_count >= MAX_CYCLE_REPEATS:
-                                errors.append(f"Detected crash-verify cycle repeated {cycle_count} times. Breaking cycle.")
-                                break
+                            # Pattern detected - this represents MAX_CYCLE_REPEATS iterations
+                            errors.append(f"Detected crash-verify cycle repeated {MAX_CYCLE_REPEATS} times. Breaking cycle.")
+                            log_sync_event(basename, language, "cycle_detected", {"cycle_type": "crash-verify", "count": MAX_CYCLE_REPEATS})
+                            break
 
+                    # Bug #4 fix: Detect test-fix cycle pattern
+                    # The pattern [test, fix, test, fix] or [fix, test, fix, test]
+                    # represents 2 iterations of the alternating cycle, so break immediately
                     if len(operation_history) >= 4:
                         recent_ops = operation_history[-4:]
                         if (recent_ops == ['test', 'fix', 'test', 'fix'] or
                             recent_ops == ['fix', 'test', 'fix', 'test']):
-                            cycle_count = 2
-                            if cycle_count >= MAX_CYCLE_REPEATS:
-                                errors.append(f"Detected test-fix cycle repeated {cycle_count} times. Breaking cycle.")
-                                break
+                            # Pattern detected - this represents MAX_CYCLE_REPEATS iterations
+                            errors.append(f"Detected test-fix cycle repeated {MAX_CYCLE_REPEATS} times. Breaking cycle.")
+                            log_sync_event(basename, language, "cycle_detected", {"cycle_type": "test-fix", "count": MAX_CYCLE_REPEATS})
+                            break
                                 
                     if operation == 'fix':
                         consecutive_fixes = 0
@@ -851,27 +853,28 @@ def sync_orchestration(
                         append_sync_log(basename, language, log_entry)
                         break
                     
-                    # Handle skips - per spec, save fingerprint to advance state machine
+                    # Handle skips - save fingerprint with 'skip:' prefix to distinguish from actual execution
+                    # Bug #11 fix: Use 'skip:' prefix so _is_workflow_complete() knows the op was skipped
                     if operation == 'verify' and (skip_verify or skip_tests):
                         skipped_operations.append('verify')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
-                        # Save fingerprint to advance state machine (as per spec)
-                        _save_operation_fingerprint(basename, language, 'verify', pdd_files, 0.0, 'skip_verify')
+                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
+                        _save_operation_fingerprint(basename, language, 'skip:verify', pdd_files, 0.0, 'skipped')
                         continue
                     if operation == 'test' and skip_tests:
                         skipped_operations.append('test')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
-                        # Save fingerprint to advance state machine (as per spec)
-                        _save_operation_fingerprint(basename, language, 'test', pdd_files, 0.0, 'skipped')
+                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
+                        _save_operation_fingerprint(basename, language, 'skip:test', pdd_files, 0.0, 'skipped')
                         continue
                     if operation == 'crash' and skip_tests:
                         skipped_operations.append('crash')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
-                        # Save fingerprint to advance state machine (as per spec)
-                        _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped')
+                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
+                        _save_operation_fingerprint(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
                         continue
 
                     current_function_name_ref[0] = operation
@@ -1098,7 +1101,7 @@ def sync_orchestration(
 
                     # Post-operation checks (simplified)
                     if success and operation == 'crash':
-                        # Re-run example
+                        # Re-run example to verify crash fix worked
                         try:
                              # Use clean env without TUI-specific vars
                              clean_env = os.environ.copy()
@@ -1122,8 +1125,11 @@ def sync_orchestration(
                              test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                              report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
                              save_run_report(asdict(report), basename, language)
-                        except:
-                             pass
+                        except Exception as e:
+                             # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
+                             error_msg = f"Post-crash verification failed: {e}"
+                             errors.append(error_msg)
+                             log_sync_event(basename, language, "post_crash_verification_failed", {"error": str(e)})
                     
                     if success and operation == 'fix':
                         # Re-run tests to update run_report after successful fix
