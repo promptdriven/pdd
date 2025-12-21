@@ -21,6 +21,7 @@ import logging
 
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
+MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
 
 # --- Real PDD Component Imports ---
 from .sync_tui import SyncApp
@@ -923,6 +924,19 @@ def sync_orchestration(
                             errors.append(f"Detected {consecutive_tests} consecutive test operations. Breaking infinite test loop.")
                             break
 
+                    if operation == 'test_extend':
+                        # Count test_extend attempts to prevent infinite loop
+                        extend_attempts = sum(1 for op in operation_history if op == 'test_extend')
+                        if extend_attempts >= MAX_TEST_EXTEND_ATTEMPTS:
+                            # Accept current coverage after max attempts
+                            log_sync_event(basename, language, "test_extend_limit", {
+                                "attempts": extend_attempts,
+                                "max_attempts": MAX_TEST_EXTEND_ATTEMPTS,
+                                "reason": "Accepting current coverage after max extend attempts"
+                            })
+                            success = True
+                            break
+
                     if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
                         current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                         success = operation in ['all_synced', 'nothing']
@@ -1145,6 +1159,43 @@ def sync_orchestration(
                                     target_coverage,
                                     code_file=pdd_files.get("code"),
                                 )
+                        elif operation == 'test_extend':
+                            # Extend existing tests to improve coverage
+                            # Uses existing_tests and merge=True to add more test cases
+                            pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
+                            if pdd_files['test'].exists():
+                                existing_test_path = str(pdd_files['test'])
+                                result = cmd_test_main(
+                                    ctx,
+                                    prompt_file=str(pdd_files['prompt']),
+                                    code_file=str(pdd_files['code']),
+                                    output=str(pdd_files['test']),
+                                    language=language,
+                                    coverage_report=None,
+                                    existing_tests=[existing_test_path],
+                                    target_coverage=target_coverage,
+                                    merge=True,
+                                    strength=strength,
+                                    temperature=temperature
+                                )
+                                _execute_tests_and_create_run_report(
+                                    pdd_files['test'],
+                                    basename,
+                                    language,
+                                    target_coverage,
+                                    code_file=pdd_files.get("code"),
+                                )
+                            else:
+                                # No existing test file, fall back to regular test generation
+                                result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
+                                if pdd_files['test'].exists():
+                                    _execute_tests_and_create_run_report(
+                                        pdd_files['test'],
+                                        basename,
+                                        language,
+                                        target_coverage,
+                                        code_file=pdd_files.get("code"),
+                                    )
                         elif operation == 'fix':
                             error_file_path = Path("fix_errors.log")
                             # Capture errors using language-appropriate test command
