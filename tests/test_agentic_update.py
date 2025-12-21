@@ -263,7 +263,9 @@ def test_detect_changed_files_logic(mock_dependencies, project_root_mock):
     create_dummy_file(prompt_file)
     create_dummy_file(code_file)
     
-    new_file = project_root_mock / "new_file.py"
+    # Use a filename that matches the test discovery pattern so it gets detected.
+    # The code only scans for changes in prompt, code, and discoverable tests.
+    new_file = project_root_mock / "test_main_new.py"
     
     def agent_action(*args, **kwargs):
         # Modify prompt
