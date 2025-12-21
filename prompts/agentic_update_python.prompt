@@ -18,10 +18,8 @@ Agentic prompt update using Claude Code, Gemini, or Codex CLI. Invokes AI agents
 9. Return success if prompt file was modified
 
 % Dependencies
-<module_dependencies>
-  <agentic_common_example><include>context/agentic_common_example.py</include></agentic_common_example>
-  <load_prompt_template_example><include>context/load_prompt_template_example.py</include></load_prompt_template_example>
-</module_dependencies>
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 
 % Deliverables
 - Code: `pdd/agentic_update.py`
