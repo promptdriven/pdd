@@ -395,8 +395,9 @@ def test_decision_test_on_low_coverage(mock_construct, pdd_test_environment):
         "timestamp": "t", "exit_code": 0, "tests_passed": 10, "tests_failed": 0, "coverage": 75.0
     })
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
-    assert decision.operation == 'test'
-    assert f"Coverage 75.0% below target {TARGET_COVERAGE:.1f}%" in decision.reason
+    # When tests pass but coverage is low, we return test_extend to add more tests
+    assert decision.operation == 'test_extend'
+    assert f"coverage 75.0% below target {TARGET_COVERAGE:.1f}%" in decision.reason.lower()
 
 # --- No Fingerprint Tests ---
 @patch('sync_determine_operation.construct_paths')
@@ -2637,9 +2638,9 @@ class TestFalsePositiveSuccessBugRegression:
             f"This is GitHub issue #210: False positive success"
         )
 
-        # Should be either 'crash' (to validate example), 'verify' (if not skipped), or 'test'
-        assert decision.operation in ['crash', 'verify', 'test'], (
-            f"Expected 'crash', 'verify', or 'test' to continue workflow, got '{decision.operation}'"
+        # Should be either 'crash' (to validate example), 'verify' (if not skipped), 'test', or 'test_extend'
+        assert decision.operation in ['crash', 'verify', 'test', 'test_extend'], (
+            f"Expected 'crash', 'verify', 'test', or 'test_extend' to continue workflow, got '{decision.operation}'"
         )
 
 
