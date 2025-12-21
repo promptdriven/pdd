@@ -8,7 +8,7 @@ from typing import Any, Iterable, Mapping
 
 from rich.console import Console
 
-from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES
+from .agentic_common import get_available_agents, run_agentic_task
 from .get_run_command import get_run_command_for_file
 from .load_prompt_template import load_prompt_template
 
@@ -287,14 +287,7 @@ def _run_program_file(
             cwd=project_root,
             capture_output=True,
             text=True,
-            stdin=subprocess.DEVNULL,  # Prevent blocking on input()
-            timeout=120,  # 2 minute timeout to prevent infinite hangs
         )
-    except subprocess.TimeoutExpired:
-        msg = f"Program '{program_path}' timed out after 120 seconds (may be waiting for input or stuck in infinite loop)"
-        if not quiet:
-            console.print(f"[red]{msg}[/red]")
-        return False, msg
     except OSError as exc:
         msg = f"Failed to execute program '{program_path}': {exc}"
         if not quiet:
@@ -404,9 +397,7 @@ def run_agentic_crash(
                 f"'{crash_log_path}': {exc}"
             )
 
-    # Use cwd as project root (consistent with agentic_test_generate.py and agentic_verify.py)
-    # Bug fix: Previously used prompt_path.parent which was wrong when prompt is in prompts/ subdir
-    project_root = Path.cwd()
+    project_root = prompt_path.parent
 
     if verbose and not quiet:
         console.print("[cyan]Starting agentic crash fallback (explore mode)...[/cyan]")
@@ -467,7 +458,6 @@ def run_agentic_crash(
             verbose=verbose,
             quiet=quiet,
             label="agentic_crash_explore",
-            max_retries=DEFAULT_MAX_RETRIES,
         )
     except Exception as exc:  # noqa: BLE001
         msg = f"Agentic CLI invocation failed: {exc}"
@@ -498,24 +488,16 @@ def run_agentic_crash(
     all_changed_files_set.update(changed_files_from_fs)
     all_changed_files = sorted(all_changed_files_set)
 
-    # 5) Verify the fix
-    is_python = program_path.suffix.lower() == ".py"
+    # 5) Run the program file after the agent's fix attempt to verify the fix
+    program_success, program_message = _run_program_file(
+        program_path=program_path,
+        project_root=project_root,
+        verbose=verbose,
+        quiet=quiet,
+    )
 
-    if is_python:
-        # Python: run the program file to verify no crash
-        program_success, program_message = _run_program_file(
-            program_path=program_path,
-            project_root=project_root,
-            verbose=verbose,
-            quiet=quiet,
-        )
-        overall_success = bool(agent_success) and bool(program_success)
-    else:
-        # Non-Python: trust the agent's own verification.
-        # The agent already ran the program using language-appropriate tools.
-        program_success = agent_success
-        program_message = agent_message or ""
-        overall_success = bool(agent_success)
+    # Combine agent's view of success with verification result
+    overall_success = bool(agent_success) and bool(program_success)
 
     if program_success:
         # Verification succeeded
