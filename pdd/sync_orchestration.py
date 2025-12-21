@@ -353,6 +353,94 @@ def _detect_example_errors(output: str) -> tuple[bool, str]:
     return False, ''
 
 
+def _try_auto_fix_import_error(
+    error_output: str,
+    code_file: Path,
+    example_file: Path,
+) -> tuple[bool, str]:
+    """
+    Try to automatically fix common import errors before calling expensive agentic fix.
+
+    Returns:
+        (fixed, message): Whether a fix was attempted and what was done.
+    """
+    import re
+
+    # Check for ModuleNotFoundError or ImportError
+    module_not_found = re.search(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]", error_output)
+    import_error = re.search(r"ImportError: cannot import name ['\"]([^'\"]+)['\"]", error_output)
+
+    if not module_not_found and not import_error:
+        return False, "No import error detected"
+
+    if module_not_found:
+        missing_module = module_not_found.group(1)
+        # Split by . to get the top-level package
+        top_level_package = missing_module.split('.')[0]
+
+        # Check if this is the module we're trying to import (local module)
+        code_module_name = code_file.stem  # e.g., "data_validator" from "data_validator.py"
+
+        if top_level_package == code_module_name:
+            # It's trying to import our own generated code - fix the example's sys.path
+            # Read the example and fix the path manipulation
+            try:
+                example_content = example_file.read_text(encoding='utf-8')
+                code_dir = str(code_file.parent.resolve())
+
+                # Look for existing sys.path manipulation
+                if 'sys.path' in example_content:
+                    # Try to fix the existing path manipulation
+                    # Common pattern: module_path = os.path.abspath(os.path.join(...))
+                    # Replace with correct path
+                    fixed_content = re.sub(
+                        r"module_path\s*=\s*os\.path\.abspath\([^)]+\)",
+                        f"module_path = '{code_dir}'",
+                        example_content
+                    )
+                    if fixed_content != example_content:
+                        example_file.write_text(fixed_content, encoding='utf-8')
+                        return True, f"Fixed sys.path to point to {code_dir}"
+
+                # If no existing sys.path, add one at the start after imports
+                lines = example_content.split('\n')
+                insert_pos = 0
+                for i, line in enumerate(lines):
+                    if line.startswith('import ') or line.startswith('from '):
+                        if 'sys' in line or 'os' in line:
+                            insert_pos = i + 1
+                            continue
+                    if line.strip() and not line.startswith('#') and not line.startswith('import') and not line.startswith('from'):
+                        insert_pos = i
+                        break
+
+                path_fix = f"\n# Auto-added by pdd to fix import\nimport sys\nsys.path.insert(0, '{code_dir}')\n"
+                lines.insert(insert_pos, path_fix)
+                example_file.write_text('\n'.join(lines), encoding='utf-8')
+                return True, f"Added sys.path.insert(0, '{code_dir}') to example"
+
+            except Exception as e:
+                return False, f"Failed to fix import path: {e}"
+
+        else:
+            # It's an external package - try pip install
+            try:
+                result = subprocess.run(
+                    [sys.executable, '-m', 'pip', 'install', top_level_package],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                if result.returncode == 0:
+                    return True, f"Installed missing package: {top_level_package}"
+                else:
+                    return False, f"Failed to install {top_level_package}: {result.stderr}"
+            except Exception as e:
+                return False, f"Failed to run pip install: {e}"
+
+    return False, "Import error detected but no auto-fix available"
+
+
 def _run_example_with_error_detection(
     cmd_parts: list[str],
     env: dict,
@@ -991,6 +1079,45 @@ def sync_orchestration(
                                     continue
                                     
                             if has_crash:
+                                # Try auto-fix for common import errors before expensive agentic call
+                                auto_fixed, auto_fix_msg = _try_auto_fix_import_error(
+                                    crash_log_content,
+                                    pdd_files['code'],
+                                    pdd_files['example']
+                                )
+                                if auto_fixed:
+                                    log_sync_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg})
+                                    # Retry running the example after auto-fix
+                                    retry_returncode, retry_stdout, retry_stderr = _run_example_with_error_detection(
+                                        cmd_parts,
+                                        env=env,
+                                        cwd=str(pdd_files['example'].parent),
+                                        timeout=60
+                                    )
+                                    if retry_returncode == 0:
+                                        # Auto-fix worked! Save run report and continue
+                                        log_sync_event(basename, language, "auto_fix_success", {"message": auto_fix_msg})
+                                        test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                        report = RunReport(
+                                            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                            exit_code=0,
+                                            tests_passed=1,
+                                            tests_failed=0,
+                                            coverage=0.0,
+                                            test_hash=test_hash
+                                        )
+                                        save_run_report(asdict(report), basename, language)
+                                        result = (True, 0.0, 'auto-fix')
+                                        success = True
+                                        actual_cost = 0.0
+                                        model_name = 'auto-fix'
+                                        # Update crash_log_content for logging
+                                        crash_log_content = f"Auto-fixed: {auto_fix_msg}"
+                                        continue  # Skip crash_main, move to next operation
+                                    else:
+                                        # Auto-fix didn't fully work, update error log and proceed
+                                        crash_log_content = f"Auto-fix attempted ({auto_fix_msg}) but still failing:\nRETRY STDOUT:\n{retry_stdout}\nRETRY STDERR:\n{retry_stderr}\n"
+
                                 Path("crash.log").write_text(crash_log_content)
                                 try:
                                     result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log", output=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
