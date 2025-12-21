@@ -6,10 +6,10 @@
 1. Read the error traceback carefully to understand what's failing
 2. Explore the relevant files to understand the codebase structure
 3. Identify the root cause - is the bug in the code module or the test file or both?
-4. Make minimal, targeted fixes to resolve the issue
-5. Output the corrected file(s) using the markers below
+4. Use your file editing tools to make minimal, targeted fixes
+5. After fixing, output the test command to verify your changes
 
-% FILES:
+% FILES YOU CAN READ AND EDIT:
 - Code module: {code_abs}
 - Test file: {test_abs}
 
@@ -26,35 +26,26 @@
 - If the error is in the code's IMPLEMENTATION → fix the code
 - You may need to fix BOTH files in some cases
 
-% COMMON ERROR TYPES:
-- ImportError/ModuleNotFoundError: Check import statements and file paths
+% COMMON ERROR TYPES AND FIXES:
+- ImportError/ModuleNotFoundError: The import statement in the test file may be wrong.
+  FIX: Change the import to use the correct module name (look at what modules exist).
+  DO NOT create new modules to match a wrong import - fix the import instead!
 - TypeError/AttributeError: Check function signatures and method names
 - AssertionError: Check if the test expectation or the code logic is wrong
 - ZeroDivisionError/ValueError: Add proper error handling
 
 % EDIT POLICY:
 - Keep changes minimal and directly related to the failure
+- Prefer fixing import statements over creating new files
 - Prefer fixing implementation bugs over weakening tests
-- You MAY create new files if needed (e.g., __init__.py for packages)
+- You MAY create new files if truly needed (e.g., __init__.py for packages)
 
-% OUTPUT FORMAT:
-
-For EACH file you change, output a block like this:
-<<<BEGIN_FILE:{code_abs}>>>
-<full corrected file content here>
-<<<END_FILE:{code_abs}>>>
-
-If you also change the test file:
-<<<BEGIN_FILE:{test_abs}>>>
-<full corrected file content here>
-<<<END_FILE:{test_abs}>>>
-
-If you need to install dependencies or run a custom test command:
+% AFTER FIXING, OUTPUT VERIFICATION COMMAND:
 <<<BEGIN_TESTCMD>>>
-pip install <package> && python {test_abs}
+python -m pytest "{test_abs}" -q
 <<<END_TESTCMD>>>
 
 % IMPORTANT:
-- Output the COMPLETE file contents, not just the changed parts
-- Use the exact file paths shown above in your markers
-- You may include brief reasoning, but the markers and file contents are required
+- Use your file tools to directly read and modify the files
+- Do NOT output the full file contents - just make targeted edits
+- The test command will be run automatically to verify your fix worked

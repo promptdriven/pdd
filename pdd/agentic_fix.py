@@ -876,12 +876,13 @@ def run_agentic_fix(
 
         test_path_input = Path(unit_test_file)
         if not test_path_input.is_absolute():
-            test_path_resolved = (working_dir / test_path_input).resolve()
+            test_path = (working_dir / test_path_input).resolve()
         else:
-            test_path_resolved = test_path_input.resolve()
+            test_path = test_path_input.resolve()
 
         orig_code = code_path.read_text(encoding="utf-8")
-        test_content = test_path_resolved.read_text(encoding="utf-8")
+        orig_test = test_path.read_text(encoding="utf-8")
+        test_content = orig_test  # Alias for prompt template compatibility
 
         # Read error log if it exists, otherwise we'll populate it via preflight
         error_log_path = Path(error_log_file)
@@ -889,7 +890,23 @@ def run_agentic_fix(
 
         # --- Preflight: populate error_content if empty so the agent sees fresh failures ---
         # This makes run_agentic_fix self-sufficient even if the caller forgot to write the error log.
-        if not (error_content or "").strip():
+        # Also detect useless content patterns like empty XML tags (e.g., "<history></history>")
+        def _is_useless_error_content(content: str) -> bool:
+            """Check if error content is empty or useless (e.g., empty XML tags)."""
+            stripped = (content or "").strip()
+            if not stripped:
+                return True
+            # Detect empty XML-like tags with no actual error content
+            import re
+            # Remove all XML-like empty tags and whitespace
+            cleaned = re.sub(r"<[^>]+>\s*</[^>]+>", "", stripped).strip()
+            if not cleaned:
+                return True
+            # Check if content lacks any traceback or error keywords
+            error_indicators = ["Error", "Exception", "Traceback", "failed", "FAILED", "error:"]
+            return not any(ind in content for ind in error_indicators)
+
+        if _is_useless_error_content(error_content):
             try:
                 lang = get_language(os.path.splitext(code_path)[1])
                 pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
@@ -1057,9 +1074,17 @@ def run_agentic_fix(
 
             # Show diff (verbose) and decide whether to verify
             new_code = code_path.read_text(encoding="utf-8")
+            new_test = test_path.read_text(encoding="utf-8")
             _print_diff(orig_code, new_code, code_path)
+            if new_test != orig_test:
+                _print_diff(orig_test, new_test, test_path)
+                if str(test_path) not in changed_files:
+                    changed_files.append(str(test_path))
 
-            proceed_to_verify = (res.returncode == 0) or (new_code != orig_code) or bool(multi) or bool(direct_changes)
+            # Proceed to verify if: agent returned 0, OR either file changed, OR markers found, OR direct changes
+            code_changed = new_code != orig_code
+            test_changed = new_test != orig_test
+            proceed_to_verify = (res.returncode == 0) or code_changed or test_changed or bool(multi) or bool(direct_changes)
             if proceed_to_verify:
                 ok = _post_apply_verify_or_testcmd(
                     provider, unit_test_file, working_dir,
