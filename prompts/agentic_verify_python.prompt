@@ -1,0 +1,37 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the pdd/agentic_verify.py module.
+
+% Role & Scope
+Agentic fallback for verify command. When LLM-based verification fixes fail,
+delegates to a CLI agent with full codebase exploration capability.
+
+Uses explore mode only because:
+1. Non-agentic loop already exhausted fixing just the code and/or program file. The error(s) is likely outside of these files.
+2. What's needed is exploration, not another fix attempt with the code and/or program file.
+
+% Entry Point
+`run_agentic_verify(prompt_file, code_file, program_file, verification_log_file, *, verbose: bool = False, quiet: bool = False)`
+
+Note: `program_file` is an example/demo program (NOT unit tests).
+      `verification_log_file` contains LLM judgment + previous fix attempts.
+
+% LLM Prompt Template
+Uses `agentic_verify_explore_LLM` (loaded via load_prompt_template).
+
+% Requirements
+1. Single-pass: explore mode only
+2. Record file mtimes before agent runs, detect changes after
+3. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
+4. Return 5-tuple: `(success, message, cost, model, changed_files)`
+
+% Dependencies
+<module_dependencies>
+    <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+    <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+    <pdd.prompt.agentic_verify_explore_LLM><include>prompts/agentic_verify_explore_LLM.prompt</include></pdd.prompt.agentic_verify_explore_LLM>
+</module_dependencies>
+
+% Deliverables
+- Code: `pdd/agentic_verify.py`

@@ -1,0 +1,49 @@
+You are fixing a crash in a PDD (Prompt-Driven Development) project.
+You are running as FALLBACK after PDD's normal crash loop failed multiple times. This loop was only allowed to change the code and/or program file.
+The error(s) is likely outside of these files.
+
+## PDD Principle
+The PROMPT FILE is the source of truth. Code is a generated artifact.
+The PROGRAM FILE calls the code and crashed. Both files may need fixes.
+
+## Files (you have full read/write access)
+- Prompt file (THE SPEC): {prompt_path}
+- Code file: {code_path}
+- Program file: {program_path}
+- Project root: {project_root}
+
+## Previous Fix Attempts
+The following shows what PDD's normal crash loop already tried.
+DO NOT repeat these approaches - try something different.
+
+<previous_attempts>
+{previous_attempts}
+</previous_attempts>
+
+## Your Task
+1. Read the prompt file to understand the intended behavior
+2. Read the code and program files
+3. Analyze the crash traceback to identify the root cause
+4. Explore related files (imports, dependencies, conftest.py) if needed
+5. Determine what needs fixing:
+   - Code has a bug -> fix the code
+   - Program calls code incorrectly -> fix the program
+   - Both have issues -> fix both
+   - Issue requires changes to other files -> make those changes
+6. Make ALL necessary changes to stop the crash including other files if needed
+7. Run the program file to verify the fix
+8. Repeat steps 4-7 until the program output aligns with the prompt's intent
+9. Output a JSON string with the following fields:
+   - success: bool
+   - message: str
+   - cost: float
+   - model: str
+   - changed_files: list[str]
+
+## Critical Rules
+- The prompt file defines what's correct - code should conform to it
+- DO NOT repeat approaches from the fix history above
+- You MAY modify BOTH the code file AND the program file
+- IMPORTANT: Read actual source files before assuming what functions/classes exist
+  - Do NOT guess at imports or API names
+  - Explore the codebase to understand actual exports
