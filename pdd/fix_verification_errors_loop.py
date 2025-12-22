@@ -251,9 +251,9 @@ def fix_verification_errors_loop(
     if not 0.0 <= temperature <= 1.0:
          console.print(f"[bold red]Error: Temperature must be between 0.0 and 1.0.[/bold red]")
          return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
-    # max_attempts can be 0 to skip normal fix and go straight to agentic fallback
-    if max_attempts < 0:
-        console.print(f"[bold red]Error: Max attempts cannot be negative.[/bold red]")
+    # Prompt requires positive max_attempts
+    if max_attempts <= 0:
+        console.print(f"[bold red]Error: Max attempts must be positive.[/bold red]")
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
     if budget < 0:
         console.print(f"[bold red]Error: Budget cannot be negative.[/bold red]")
