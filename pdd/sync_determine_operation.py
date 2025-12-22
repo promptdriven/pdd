@@ -885,6 +885,27 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     run_report = read_run_report(basename, language)
     if run_report:
+        # Check for prompt changes FIRST - prompt changes take priority over runtime signals
+        # If the user modified the prompt, we need to regenerate regardless of runtime state
+        if fingerprint:
+            paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
+            current_prompt_hash = calculate_sha256(paths['prompt'])
+            if current_prompt_hash and current_prompt_hash != fingerprint.prompt_hash:
+                prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore') if paths['prompt'].exists() else ""
+                has_deps = check_for_dependencies(prompt_content)
+                return SyncDecision(
+                    operation='auto-deps' if has_deps else 'generate',
+                    reason='Prompt changed - regenerating (takes priority over runtime signals)',
+                    confidence=0.95,
+                    estimated_cost=estimate_operation_cost('generate'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'prompt_changed': True,
+                        'previous_command': fingerprint.command,
+                        'runtime_state_ignored': True
+                    }
+                )
+
         # Check if we just completed a crash operation and need verification FIRST
         # This takes priority over test failures because we need to verify the crash fix worked
         # BUT only proceed to verify if exit_code == 0 (crash fix succeeded)
