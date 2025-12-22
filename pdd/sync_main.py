@@ -122,10 +122,8 @@ def sync_main(
     _validate_basename(basename)
     if budget <= 0:
         raise click.BadParameter("Budget must be a positive number.", param_hint="--budget")
-    # Note: max_attempts can be 0 to skip normal fix and go straight to agentic fix
-    # Validation is deferred until after config resolution to allow .pddrc override
-    if max_attempts < 0:
-        raise click.BadParameter("Max attempts cannot be negative.", param_hint="--max-attempts")
+    if max_attempts <= 0:
+        raise click.BadParameter("Max attempts must be a positive integer.", param_hint="--max-attempts")
 
     if not quiet and budget < 1.0:
         console.log(f"[yellow]Warning:[/] Budget of ${budget:.2f} is low. Complex operations may exceed this limit.")
@@ -234,18 +232,17 @@ def sync_main(
             command_options = {
                 "basename": basename,
                 "language": lang,
+                "max_attempts": max_attempts,
                 "budget": budget,
                 "target_coverage": target_coverage,
                 "time": time_param,
             }
-            # Only pass strength/temperature/max_attempts if explicitly set by user (not CLI defaults)
+            # Only pass strength/temperature if explicitly set by user (not CLI defaults)
             # This allows .pddrc values to take precedence when user doesn't pass CLI flags
             if strength != DEFAULT_STRENGTH:
                 command_options["strength"] = strength
             if temperature != 0.0:  # 0.0 is the CLI default for temperature
                 command_options["temperature"] = temperature
-            if max_attempts != 3:  # 3 is the CLI default for max_attempts
-                command_options["max_attempts"] = max_attempts
 
             # Use force=True for path discovery - actual file writes happen in sync_orchestration
             # which will handle confirmations via the TUI's confirm_callback
