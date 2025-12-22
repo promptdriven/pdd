@@ -10,14 +10,25 @@
 5. After fixing, output the test command to verify your changes
 
 % FILES YOU CAN READ AND EDIT:
-- Code module: {code_abs}
-- Test file: {test_abs}
+<code_module>
+    {code_abs}
+  </code_module>
+<test_file>
+    {test_abs}
+</test_file>
+
 
 % ORIGINAL SPECIFICATION:
-{prompt_content}
+<proompt_content> 
+    {prompt_content}
+</proompt_content>
+
 
 % ERROR LOG:
-{error_content}
+<error_content>
+  {error_content}
+</error_content>
+
 
 % DEBUGGING GUIDELINES:
 - Analyze the traceback to find WHERE the error occurs and WHY
