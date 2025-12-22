@@ -7,17 +7,18 @@ Write `pdd/git_update.py` with a `git_update` function.
 Retrieves original code from Git HEAD, routes to agentic or legacy prompt update, preserves user's modified code on disk.
 
 % Requirements
-1. Function signature (preserve existing params, add `simple` at end):
+1. Function signature (preserve existing params, add `simple`, `quiet`, `prompt_file` at end):
    ```
-   git_update(input_prompt: str, modified_code_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, simple: bool = False, quiet: bool = False) -> Tuple[Optional[str], float, str]
+   git_update(input_prompt: str, modified_code_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, simple: bool = False, quiet: bool = False, prompt_file: Optional[str] = None) -> Tuple[Optional[str], float, str]
    ```
    Note: `input_prompt` is the prompt TEXT content, not a file path.
+   Note: `prompt_file` is the path to the prompt file (required for agentic path).
 2. Read modified code from disk before any git operations
 3. Restore original code from Git HEAD (local only, no fetch) using `git.Repo` with `search_parent_directories=True`
 4. Routing logic:
-   - If `simple=False` and `get_available_agents()` returns non-empty: use `run_agentic_update()`
+   - If `simple=False` AND `prompt_file` is provided AND `get_available_agents()` returns non-empty: use `run_agentic_update()`
    - On agentic success: READ the prompt file to get updated content, then return that content
-   - Otherwise (simple=True, no agents, or agentic failed): fall back to `update_prompt()`
+   - Otherwise (simple=True, no prompt_file, no agents, or agentic failed): fall back to `update_prompt()`
 5. Always restore user's modified code to disk before returning
 6. Never stage or commit changes to Git
 7. Return (updated_prompt_content, cost, model) on success, (None, cost, model) on failure
@@ -34,8 +35,9 @@ When using agentic update:
 
 % Dependencies
 <module_dependencies>
-  <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
-  <agentic_common_example><include>context/agentic_common_example.py</include></agentic_common_example>
+<pdd.update_prompt><include>context/update_prompt_example.py</include></pdd.update_prompt>
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_update><include>context/agentic_update_example.py</include></pdd.agentic_update>
 </module_dependencies>
 
 % Deliverables
