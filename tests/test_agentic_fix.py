@@ -395,3 +395,162 @@ class TestPromptFileHandling:
         remaining = list(tmp_path.glob("*prompt*"))
         assert len(remaining) == 0, \
             f"Temp prompt files should be cleaned up, found: {remaining}"
+
+
+class TestCwdHandling:
+    """
+    Tests for working directory handling in run_agentic_fix.
+
+    Bug: run_agentic_fix uses Path.cwd() for path resolution, which fails
+    when called from a different directory than where the module files live.
+
+    Example: Running `pdd sync hello` from repo root for examples/hello/ module
+    causes paths like "src/hello.py" to resolve to /repo/src/hello.py instead
+    of /repo/examples/hello/src/hello.py.
+    """
+
+    def test_run_agentic_fix_respects_cwd_parameter(self, tmp_path, monkeypatch):
+        """
+        Regression test: run_agentic_fix should use passed cwd for path resolution,
+        not Path.cwd().
+
+        This test simulates the scenario where:
+        - Process cwd is repo root (wrong directory)
+        - Module files are in a subdirectory (correct directory)
+        - Relative paths should resolve against the module directory
+        """
+        # Setup two directories - wrong_dir simulates repo root, correct_dir is module
+        wrong_dir = tmp_path / "repo_root"
+        wrong_dir.mkdir()
+
+        correct_dir = tmp_path / "repo_root" / "examples" / "hello"
+        correct_dir.mkdir(parents=True)
+
+        # Create files in correct directory
+        src_dir = correct_dir / "src"
+        src_dir.mkdir()
+        (src_dir / "hello.py").write_text("def hello(): print('hello')")
+
+        tests_dir = correct_dir / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_hello.py").write_text("from hello import hello")
+
+        prompt_file = correct_dir / "hello.prompt"
+        prompt_file.write_text("print hello")
+
+        # Create error log in correct dir
+        error_log = correct_dir / "error.log"
+        error_log.write_text("test error")
+
+        # Set process cwd to WRONG directory (simulates running pdd from repo root)
+        monkeypatch.chdir(wrong_dir)
+
+        # Mock dependencies to prevent actual agent calls
+        monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
+        monkeypatch.setattr(
+            "pdd.agentic_fix.load_prompt_template",
+            lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}{verify_cmd}",
+        )
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
+
+        # Track instruction file creation
+        instruction_file_paths = []
+        original_write_text = Path.write_text
+
+        def track_write(self, content, *args, **kwargs):
+            if "agentic_fix_instructions" in str(self):
+                instruction_file_paths.append(str(self))
+            return original_write_text(self, content, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", track_write)
+
+        # Mock try_harvest_then_verify to return True (success)
+        monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+
+        # Call with relative paths AND explicit cwd parameter
+        ok, msg, cost, model, changed_files = run_agentic_fix(
+            prompt_file=str(prompt_file),
+            code_file="src/hello.py",
+            unit_test_file="tests/test_hello.py",
+            error_log_file="error.log",
+            cwd=correct_dir,  # NEW: explicit cwd - should resolve paths against this
+        )
+
+        # Instruction file should be in correct_dir, not wrong_dir
+        assert any(str(correct_dir) in p for p in instruction_file_paths), \
+            f"Instruction file should be created in {correct_dir}, but found: {instruction_file_paths}"
+
+        assert not any(str(wrong_dir) + "/agentic" in p for p in instruction_file_paths), \
+            f"Instruction file should NOT be in {wrong_dir}"
+
+    def test_run_agentic_fix_resolves_paths_against_cwd(self, tmp_path, monkeypatch):
+        """
+        Verify that relative code/test paths are resolved against the cwd parameter,
+        not against Path.cwd().
+        """
+        # Setup
+        module_dir = tmp_path / "examples" / "hello"
+        module_dir.mkdir(parents=True)
+
+        src_dir = module_dir / "src"
+        src_dir.mkdir()
+        code_file = src_dir / "hello.py"
+        code_file.write_text("def hello(): print('hello')")
+
+        tests_dir = module_dir / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_hello.py"
+        test_file.write_text("from hello import hello")
+
+        prompt_file = module_dir / "hello.prompt"
+        prompt_file.write_text("print hello")
+
+        error_log = module_dir / "error.log"
+        error_log.write_text("test error")
+
+        # Set cwd to somewhere else entirely
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+        monkeypatch.chdir(other_dir)
+
+        # Mock dependencies
+        monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
+
+        # Capture the resolved paths used in the instruction template
+        captured_template_args = {}
+        original_format = str.format
+
+        def capture_format(fmt_string, **kwargs):
+            if "code_abs" in kwargs:
+                captured_template_args.update(kwargs)
+            return original_format(fmt_string, **kwargs)
+
+        monkeypatch.setattr(
+            "pdd.agentic_fix.load_prompt_template",
+            lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}{verify_cmd}",
+        )
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
+        monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+
+        # Call with relative paths and explicit cwd
+        run_agentic_fix(
+            prompt_file=str(prompt_file),
+            code_file="src/hello.py",
+            unit_test_file="tests/test_hello.py",
+            error_log_file="error.log",
+            cwd=module_dir,
+        )
+
+        # Check that the instruction file was created in the correct location
+        instruction_file = module_dir / "agentic_fix_instructions.txt"
+        if instruction_file.exists():
+            content = instruction_file.read_text()
+            # Paths in content should reference module_dir, not other_dir
+            assert str(module_dir / "src" / "hello.py") in content, \
+                f"Code path should reference {module_dir}, got: {content[:200]}"
+            assert str(other_dir / "src" / "hello.py") not in content, \
+                "Code path should NOT reference the process cwd (other_dir)"
