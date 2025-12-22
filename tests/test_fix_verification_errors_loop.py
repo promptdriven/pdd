@@ -1115,9 +1115,9 @@ def test_non_python_target_bypasses_loop(setup_test_environment, mocker):
         )
     )
 
-    # Mock _safe_run_agentic_fix (called for non-Python targets)
+    # Mock _safe_run_agentic_verify (called for non-Python targets)
     mock_agentic = mocker.patch(
-        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
         return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(go_code_file)])
     )
 
@@ -1132,8 +1132,9 @@ def test_non_python_target_bypasses_loop(setup_test_environment, mocker):
     mock_agentic.assert_called_once_with(
         prompt_file=str(prompt_file),
         code_file=str(go_code_file),
-        unit_test_file=env["default_args"]["verification_program"],
-        error_log_file=env["default_args"]["verification_log_file"],
+        program_file=env["default_args"]["verification_program"],
+        verification_log_file=env["default_args"]["verification_log_file"],
+        verbose=False,
         cwd=env["tmp_path"],
     )
 
@@ -1186,9 +1187,9 @@ def test_agentic_fallback_invoked_on_python_loop_failure(setup_test_environment,
         }
     ]
 
-    # Mock _safe_run_agentic_fix (called at end of failed loop)
+    # Mock _safe_run_agentic_verify (called at end of failed loop)
     mock_agentic = mocker.patch(
-        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
         return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(env["code_file"])])
     )
 
@@ -1205,8 +1206,9 @@ def test_agentic_fallback_invoked_on_python_loop_failure(setup_test_environment,
     mock_agentic.assert_called_once_with(
         prompt_file=str(prompt_file),
         code_file=str(env["code_file"]),
-        unit_test_file=env["default_args"]["verification_program"],
-        error_log_file=env["default_args"]["verification_log_file"],
+        program_file=env["default_args"]["verification_program"],
+        verification_log_file=env["default_args"]["verification_log_file"],
+        verbose=False,
         cwd=env["tmp_path"],
     )
 
@@ -1254,9 +1256,9 @@ def test_agentic_fallback_not_invoked_when_disabled(setup_test_environment, mock
         }
     ]
 
-    # Mock _safe_run_agentic_fix to verify it's NOT called
+    # Mock _safe_run_agentic_verify to verify it's NOT called
     mock_agentic = mocker.patch(
-        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
         return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(env["code_file"])])
     )
 
