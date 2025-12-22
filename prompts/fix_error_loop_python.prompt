@@ -16,6 +16,59 @@ This module acts as the core execution engine for an automated code-repair syste
     *   *Note:* If tests pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and an empty string for `model_name`.
 10. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
 
+### Control Flow:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Init: validate files exist
+
+    Init --> InitialTest: run pytest or verify cmd
+
+    InitialTest --> NonPythonFallback: non-Python && fails
+    InitialTest --> NonPythonPass: non-Python && passes
+    InitialTest --> FixLoop: Python (always enters loop)
+
+    state FixLoop {
+        [*] --> CheckSuccess
+        CheckSuccess --> ReadFiles_InLoop: success=true
+        ReadFiles_InLoop --> [*]: break (files read HERE for initially_passing!)
+
+        CheckSuccess --> CreateBackups: success=false
+        CreateBackups --> UpdateBestIteration
+        UpdateBestIteration --> CallLLMFix: fix_errors_from_unit_tests
+        CallLLMFix --> IncrementAttempts: fix_attempts++
+        IncrementAttempts --> WriteFiles
+        WriteFiles --> RunVerification
+        RunVerification --> RestoreBackup: verification fails
+        RestoreBackup --> RerunPytest
+        RunVerification --> RerunPytest: verification passes
+        RerunPytest --> CheckSuccess: update success
+    }
+
+    FixLoop --> PostLoop: loop exits
+
+    PostLoop --> RestoreBest: !success && best_attempt!=None
+    PostLoop --> SetFinal: success OR best_attempt==None
+    RestoreBest --> ReadFiles_PostLoop
+    SetFinal --> ReadFiles_PostLoop: stats["best_iteration"]="final"
+    ReadFiles_PostLoop --> PrintSummary: skip read if initially_passing
+
+    PrintSummary --> AgenticFallback: !success && budget remains
+    PrintSummary --> Return: success
+
+    AgenticFallback --> Return
+    NonPythonFallback --> Return
+    NonPythonPass --> Return
+
+    Return --> [*]
+```
+
+Notes:
+- ALL Python files enter FixLoop (even initially-passing)
+- Initially-passing: CheckSuccess → ReadFiles_InLoop → break → PostLoop → SetFinal (stats="final")
+- `fix_attempts` counts LLM calls, not loop iterations
+- PostLoop skips file read for initially_passing (already read in loop)
+
 ### Dependencies:
 <python_preamble>
     <include>context/python_preamble.prompt</include>
