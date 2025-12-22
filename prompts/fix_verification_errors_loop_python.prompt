@@ -42,7 +42,7 @@ def fix_verification_errors_loop(
    - Track best iteration (lowest issues where verification passed)
    - Break on success (0 issues + verified) or no effective changes
 5. Final: return success if any verification passed; else restore best/original state
-6. Agentic fallback: if failed and agentic_fallback=True, invoke run_agentic_verify
+6. Agentic fallback: if failed and agentic_fallback=True, invoke run_agentic_verify with `cwd=Path(prompt_file).parent` to ensure paths resolve correctly
 
 % XML Logging (xml.sax.saxutils.escape):
 <InitialState>, <Iteration attempt="N"> (with <SecondaryVerification passed="true/false">), <FinalActions>
