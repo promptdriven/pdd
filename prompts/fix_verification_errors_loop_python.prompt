@@ -1,63 +1,50 @@
-% You are an expert Python Software Engineer. Write a function "fix_verification_errors_loop" that iteratively fixes code errors by comparing program execution output against the original prompt's intent through multiple iterations.
+% Write function "fix_verification_errors_loop" that iteratively fixes code errors by comparing program execution output against the original prompt's intent.
 
 <include>context/python_preamble.prompt</include>
 
-% Inputs and Outputs:
-    Inputs:
-        'program_file' - A string containing the path to the Python program file that exercises the code_file according to the prompt's intent.
-        'code_file' - A string containing the path to the code file being tested/verified.
-        'prompt' - A string containing the prompt that generated the code under test, defining the intended behavior.
-        'verification_program' - A string containing the path to a secondary Python program that verifies if the code_file still runs correctly after modifications. This file must exist; if not found, the function returns failure immediately.
-        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use for fixing.
-        'temperature' - A float between 0 and 1 that represents the temperature parameter for the LLM model.
-        'llm_time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
-        'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
-        'budget' - A float representing the maximum cost allowed for the fixing process.
-        'verification_log_file' - A string containing the path where this loop function will write detailed XML-formatted logs for each attempt (default: "verification.log").
-        'output_code_path' - An optional string for a potential output code file path (currently unused).
-        'output_program_path' - An optional string for a potential output program file path (currently unused).
-        'verbose' - A boolean indicating whether to enable verbose logging (default: False).
-        'program_args' - An optional list of strings containing command-line arguments to pass to the 'program_file' when executed.
-        'prompt_file' - A string path to the original prompt file; required for agentic fallback flows.
-        'agentic_fallback' - Optional boolean (default True). If the main loop does not converge, a final automated repair path may be attempted.
-    Outputs:
-        'success' - A boolean indicating whether the code was successfully fixed.
-        'final_program' - A string containing the contents of the final program file.
-        'final_code' - A string containing the contents of the final code file.
-        'total_attempts' - An integer representing the number of fix attempts made (iterations started).
-        'total_cost' - A float representing the total cost of all fix attempts.
-        'model_name' - A string representing the name of the LLM model used.
-        'statistics' - A dictionary containing detailed process statistics:
-            - 'initial_issues': int - Issue count from initial assessment (-1 if error/unknown)
-            - 'final_issues': int - Final issue count (0 if successful, -1 if unknown)
-            - 'best_iteration_num': int - Iteration number with lowest issues (-1 if none)
-            - 'best_iteration_issues': float - Issue count of best iteration (inf if none)
-            - 'improvement_issues': int or 'N/A' - Reduction in issues from initial to final
-            - 'improvement_percent': float or 'N/A' - Percentage improvement toward 0 issues
-            - 'status_message': str - Human-readable status of the process outcome
+% Signature:
+def fix_verification_errors_loop(
+    program_file: str,           # Python program exercising code_file
+    code_file: str,              # Code being verified/fixed
+    prompt: str,                 # Prompt defining intended behavior
+    prompt_file: str,            # Path to prompt file (for agentic fallback)
+    verification_program: str,   # Secondary verification program (must exist)
+    strength: float,             # [0,1] LLM model strength
+    temperature: float,          # [0,1] LLM temperature
+    max_attempts: int,           # Max fix attempts
+    budget: float,               # Max cost allowed
+    verification_log_file: str = "verification.log",
+    output_code_path: Optional[str] = None,
+    output_program_path: Optional[str] = None,
+    verbose: bool = False,
+    program_args: Optional[list[str]] = None,
+    llm_time: float = DEFAULT_TIME,
+    agentic_fallback: bool = True,
+) -> Dict[str, Any]:  # Returns: success, final_program, final_code, total_attempts, total_cost, model_name, statistics
 
 % Dependencies:
-<internal_example_modules>
-    <fix_verification_errors_example>
-        <include>context/fix_verification_errors_example.py</include>
-    </fix_verification_errors_example>
-</internal_example_modules>
+<fix_verification_errors_example>
+    <include>context/fix_verification_errors_example.py</include>
+</fix_verification_errors_example>
 
-% Behavior:
-All behavior is defined by the test suite. Implement the function to pass all tests in tests/test_fix_verification_errors_loop.py.
+Also use: run_agentic_fix, get_language, default_verify_cmd_for
 
-Key behaviors to implement:
-- Input validation (files exist, parameters in range). Return failure with empty statistics if invalid.
-- Initial assessment with early success return when verification_issues_count is 0
-- Main loop with budget and max_attempts limits
-- Secondary verification before applying code changes; discard changes if verification fails
-- Best iteration tracking (only update when secondary verification passes)
-- Error sentinel detection (when fixer returns explanation=None AND model_name=None, abort gracefully)
-- any_verification_passed flag: set True only when code was changed AND secondary verification passed
-- Final success determination: if any_verification_passed is True, return success even without issue improvement
-- XML logging with proper escaping for special characters
-- Non-Python target handling: bypass main loop, use get_language() and default_verify_cmd_for(), invoke agentic fallback
-- Agentic fallback for Python targets on loop failure (when agentic_fallback=True)
+% Algorithm:
+1. Non-Python targets (.py check): bypass loop, use get_language()/default_verify_cmd_for(), invoke run_agentic_fix
+2. Validate inputs (files exist, params in range); return failure with empty statistics if invalid
+3. Initial assessment: run program_file, call fix_verification_errors
+   - Abort on error sentinel (explanation=None AND model_name=None)
+   - Return success if verification_issues_count == 0; return failure if budget exceeded
+4. Main loop (attempts < max_attempts, budget not exceeded):
+   - Run program, backup files, call fix_verification_errors
+   - If code changed: run verification_program; apply if passes, discard if fails
+   - Track best iteration (lowest issues where verification passed)
+   - Break on success (0 issues + verified) or no effective changes
+5. Final: return success if any verification passed; else restore best/original state
+6. Agentic fallback: if failed and agentic_fallback=True, invoke run_agentic_fix
+
+% XML Logging (xml.sax.saxutils.escape):
+<InitialState>, <Iteration attempt="N"> (with <SecondaryVerification passed="true/false">), <FinalActions>
 
 % Deliverables:
-Produce a single Python function `fix_verification_errors_loop` matching the signature above. Ensure all existing tests pass.
+Implement to pass all tests in tests/test_fix_verification_errors_loop.py. Include helpers for subprocess execution and log writing.
