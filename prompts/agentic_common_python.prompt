@@ -73,7 +73,6 @@ Notes:
 % Dependencies
 <module_dependencies>
   <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
-  <pdd.agentic_fix><include>context/agentic_fix_example.py</include></pdd.agentic_fix>
 </module_dependencies>
 
 % Deliverables
