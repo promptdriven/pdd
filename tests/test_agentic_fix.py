@@ -466,8 +466,14 @@ class TestCwdHandling:
 
         monkeypatch.setattr(Path, "write_text", track_write)
 
-        # Mock try_harvest_then_verify to return True (success)
-        monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+        # Mock agent runners to return success without making real calls
+        # With PRIMARY-FIRST logic, we need to mock the primary path functions
+        mock_result = MagicMock(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_google_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_openai_variants", lambda *a, **k: mock_result)
+        # Also mock harvest fallback
+        monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
 
         # Call with relative paths AND explicit cwd parameter
         ok, msg, cost, model, changed_files = run_agentic_fix(
@@ -534,7 +540,14 @@ class TestCwdHandling:
             lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}{verify_cmd}",
         )
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
-        monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+
+        # Mock agent runners to return success without making real calls
+        # With PRIMARY-FIRST logic, we need to mock the primary path functions
+        mock_result = MagicMock(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_google_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_openai_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
 
         # Call with relative paths and explicit cwd
         run_agentic_fix(

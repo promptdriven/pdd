@@ -1134,6 +1134,7 @@ def test_non_python_target_bypasses_loop(setup_test_environment, mocker):
         code_file=str(go_code_file),
         unit_test_file=env["default_args"]["verification_program"],
         error_log_file=env["default_args"]["verification_log_file"],
+        cwd=env["tmp_path"],
     )
 
     # Verify fix_verification_errors (main loop fixer) was NOT called
@@ -1206,6 +1207,7 @@ def test_agentic_fallback_invoked_on_python_loop_failure(setup_test_environment,
         code_file=str(env["code_file"]),
         unit_test_file=env["default_args"]["verification_program"],
         error_log_file=env["default_args"]["verification_log_file"],
+        cwd=env["tmp_path"],
     )
 
     # Verify result shows success from agentic fallback
