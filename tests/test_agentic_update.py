@@ -137,7 +137,9 @@ def mock_deps() -> Generator[Tuple[MagicMock, MagicMock, MagicMock, MagicMock], 
         
         # Default happy path setup
         mock_agents.return_value = ["claude"]
-        mock_load.return_value = "Template with {prompt_path}, {code_path}, {test_paths}"
+        mock_template = MagicMock()
+        mock_template.format.return_value = "Rendered template with placeholders"
+        mock_load.return_value = mock_template
         mock_run.return_value = (True, "Task complete", 0.01, "claude-3-opus")
         
         yield mock_agents, mock_load, mock_run, mock_console
