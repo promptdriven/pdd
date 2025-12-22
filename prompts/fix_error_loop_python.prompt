@@ -30,6 +30,9 @@
 % Here are examples of how to use internal modules:
 <internal_example_modules>
     % Here is an example of the fix_errors_from_unit_tests function that will be used: <fix_errors_from_unit_tests_example><include>context/fix_errors_from_unit_tests_example.py</include></fix_errors_from_unit_tests_example>
+    <agentic_fix_example><include>context/agentic_fix_example.py</include></agentic_fix_example>
+    <agentic_langtest_example><include>context/agentic_langtest_example.py</include></agentic_langtest_example>
+    <get_language_example><include>context/get_language_example.py</include></get_language_example>
 </internal_example_modules>
 
 % Here is an example of the TestResultCollector plugin used to capture pytest results:
@@ -75,7 +78,7 @@
     Step 5. If the last run isn't the best iteration, copy back the files from the best iteration and print out which iteration was restored. Update the statistics tracker with the best iteration information.
     Step 6. Calculate and print summary statistics, including the initial state, final state, best iteration identifier, reductions in failures/errors/warnings, and the overall improvement percentage across all three metrics.
     Step 7. Return the success status, final unit test contents, final code contents, total number of attempts, total cost, and model name.
-    Step 8 (optional, when agentic_fallback is True and the loop did not succeed within budget): attempt a final agentic recovery step by calling an agentic fixer with (prompt_file, code_file, unit_test_file, error_log_file). Normalize its return shape to (success, message, cost, model). Add any cost to the total_cost and, on success, refresh final file contents and set model_name accordingly.
+    Step 8 (optional, when agentic_fallback is True and the loop did not succeed within budget): attempt a final agentic recovery step by calling `run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verification_program)`. Normalize its return shape to (success, message, cost, model, changed_files). Add any cost to the total_cost and, on success, refresh final file contents and set model_name accordingly.
 
 % Optional language extension for non-Python targets:
     - When the code under test is not a Python file, compute the language from the file extension and run a language-appropriate verification command (e.g., via a helper like default_verify_cmd_for). If the initial verification passes, return success without fixes. If it fails, write the verification output to error_log_file and (when agentic_fallback is enabled) invoke the same agentic recovery flow described in Step 8.
