@@ -1,25 +1,25 @@
-% Test Plan for pdd.agentic_update.run_agentic_update
-%
-% 1. Z3 Formal Verification:
-%    - Model the control flow and success conditions using Z3.
-%    - Verify that success=True implies the prompt file was modified.
-%    - Verify that missing preconditions (files, agents, template) lead to success=False.
-%
-% 2. Unit Tests:
-%    - test_missing_files: Verify handling of missing prompt or code files.
-%    - test_no_agents: Verify handling when no agents are available.
-%    - test_template_errors: Verify handling of template loading or formatting errors.
-%    - test_explicit_tests_missing: Verify handling of invalid explicit test paths.
-%    - test_successful_update: Verify success=True when prompt file is modified by the agent task.
-%    - test_no_modification: Verify success=False when prompt file is NOT modified.
-%    - test_test_discovery: Verify that test files are correctly discovered from various locations and passed to the template.
-%    - test_explicit_empty_tests: Verify passing an empty list prevents discovery.
+# Test Plan for pdd.agentic_update.run_agentic_update
+#
+# 1. Z3 Formal Verification:
+#    - Model the control flow and success conditions using Z3.
+#    - Verify that success=True implies the prompt file was modified.
+#    - Verify that missing preconditions (files, agents, template) lead to success=False.
+#
+# 2. Unit Tests:
+#    - test_missing_files: Verify handling of missing prompt or code files.
+#    - test_no_agents: Verify handling when no agents are available.
+#    - test_template_errors: Verify handling of template loading or formatting errors.
+#    - test_explicit_tests_missing: Verify handling of invalid explicit test paths.
+#    - test_successful_update: Verify success=True when prompt file is modified by the agent task.
+#    - test_no_modification: Verify success=False when prompt file is NOT modified.
+#    - test_test_discovery: Verify that test files are correctly discovered from various locations and passed to the template.
+#    - test_explicit_empty_tests: Verify passing an empty list prevents discovery.
 
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest

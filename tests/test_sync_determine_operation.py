@@ -253,23 +253,23 @@ def test_log_mode_skips_lock(mock_construct, pdd_test_environment):
 # --- Runtime Signal Tests ---
 def test_context_aware_fix_over_crash_logic(pdd_test_environment):
     """Test the new context-aware decision logic that prefers 'fix' over 'crash'."""
-    
-    # Create prompt file
+
+    # Create prompt file and get its real hash
     prompts_dir = pdd_test_environment / "prompts"
     prompts_dir.mkdir(exist_ok=True)
-    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Test prompt")
-    
+    prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Test prompt")
+
     # Test Case 1: No successful history - should use 'crash'
     create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
         "pdd_version": "1.0.0",
         "timestamp": "2025-07-15T12:00:00Z",
         "command": "generate",  # No successful example history
-        "prompt_hash": "test_hash",
+        "prompt_hash": prompt_hash,  # Use real hash so prompt change detection doesn't trigger
         "code_hash": "test_hash",
         "example_hash": None,
         "test_hash": None
     })
-    
+
     create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
         "timestamp": "2025-07-15T12:00:00Z",
         "exit_code": 1,
@@ -277,39 +277,39 @@ def test_context_aware_fix_over_crash_logic(pdd_test_environment):
         "tests_failed": 0,
         "coverage": 0.0
     })
-    
+
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
     assert decision.operation == 'crash'
     assert "no successful example history" in decision.reason.lower()
     assert decision.details['example_success_history'] == False
-    
+
     # Test Case 2: Successful history via 'verify' command - should use 'fix'
     create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
         "pdd_version": "1.0.0",
         "timestamp": "2025-07-15T12:00:00Z",
         "command": "verify",  # Indicates successful example history
-        "prompt_hash": "test_hash",
+        "prompt_hash": prompt_hash,  # Use real hash
         "code_hash": "test_hash",
         "example_hash": "test_hash",
         "test_hash": None
     })
-    
+
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
     assert decision.operation == 'fix'
     assert "prefer fix over crash" in decision.reason.lower()
     assert decision.details['example_success_history'] == True
-    
+
     # Test Case 3: Successful history via 'test' command - should use 'fix'
     create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
         "pdd_version": "1.0.0",
         "timestamp": "2025-07-15T12:00:00Z",
         "command": "test",  # Indicates successful example history
-        "prompt_hash": "test_hash",
+        "prompt_hash": prompt_hash,  # Use real hash
         "code_hash": "test_hash",
         "example_hash": "test_hash",
         "test_hash": "test_hash"
     })
-    
+
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
     assert decision.operation == 'fix'
     assert "prefer fix over crash" in decision.reason.lower()
@@ -456,25 +456,25 @@ def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
 
 def test_fix_over_crash_with_successful_example_history(pdd_test_environment):
     """Test sync --skip-tests when a crash operation would be triggered."""
-    
-    # Create prompt file
+
+    # Create prompt file and get its real hash
     prompts_dir = pdd_test_environment / "prompts"
     prompts_dir.mkdir(exist_ok=True)
-    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Create a simple add function")
-    
-    # Create metadata with real hashes
+    prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Create a simple add function")
+
+    # Create metadata with real prompt hash
     fingerprint_data = {
         "pdd_version": "0.0.41",
-        "timestamp": "2025-07-03T02:34:36.929768+00:00", 
+        "timestamp": "2025-07-03T02:34:36.929768+00:00",
         "command": "test",
-        "prompt_hash": "79a219808ec6de6d5b885c28ee811a033ae4a92eba993f7853b5a9d6a3befa84",
+        "prompt_hash": prompt_hash,  # Use real hash so prompt change detection doesn't trigger
         "code_hash": "6d0669923dc331420baaaefea733849562656e00f90c6519bbed46c1e9096595",
         "example_hash": "861d5b27f80c1e3b5b21b23fb58bfebb583bd4224cde95b2517a426ea4661fae",
         "test_hash": "37f6503380c4dd80a5c33be2fe08429dbc9239dd602a8147ed150863db17651f"
     }
     fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, fingerprint_data)
-    
+
     # Create run report with exit_code=2 (crash scenario)
     run_report = {
         "timestamp": "2025-07-03T02:34:36.182803+00:00",
@@ -485,11 +485,11 @@ def test_fix_over_crash_with_successful_example_history(pdd_test_environment):
     }
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, run_report)
-    
+
     # Test with skip_tests=True - sync_determine_operation should prefer fix over crash
     # when there's successful example history (fingerprint command is "test")
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True, prompts_dir=str(prompts_dir))
-    
+
     # With context-aware decision logic, should prefer 'fix' over 'crash' when example has run successfully before
     # The fingerprint command is "test" which indicates successful example history
     assert decision.operation == 'fix'
@@ -502,39 +502,38 @@ def test_regression_root_cause_missing_files_with_metadata(pdd_test_environment)
     Test that demonstrates the root cause fix: sync_determine_operation should return 'generate'
     (not 'analyze_conflict') when files are missing but metadata exists.
     """
-    
-    # Create prompt file
-    prompts_dir = pdd_test_environment / "prompts"  
+
+    # Create prompt file and get its real hash
+    prompts_dir = pdd_test_environment / "prompts"
     prompts_dir.mkdir(exist_ok=True)
     prompt_content = """Create a Python module with a simple math function.
 
 Requirements:
 - Function name: add
-- Parameters: a, b (both numbers)  
+- Parameters: a, b (both numbers)
 - Return: sum of a and b
 - Include type hints
 - Add docstring explaining the function
 
 Example usage:
 result = add(5, 3)  # Should return 8"""
-    
-    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-    
-    # Create metadata with real hashes from actual regression test  
-    # These are the exact hash values from the failing debug_real_hashes.py scenario
+
+    prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+
+    # Create metadata with real prompt hash (so prompt change detection doesn't trigger)
     from datetime import datetime, timezone
     fingerprint_data = {
         "pdd_version": "0.0.41",
-        "timestamp": "2025-07-03T02:34:36.929768+00:00",  # Exact timestamp from debug scenario
+        "timestamp": "2025-07-03T02:34:36.929768+00:00",
         "command": "test",
-        "prompt_hash": "79a219808ec6de6d5b885c28ee811a033ae4a92eba993f7853b5a9d6a3befa84",
-        "code_hash": "6d0669923dc331420baaaefea733849562656e00f90c6519bbed46c1e9096595", 
+        "prompt_hash": prompt_hash,  # Use real hash so we test missing files, not prompt change
+        "code_hash": "6d0669923dc331420baaaefea733849562656e00f90c6519bbed46c1e9096595",
         "example_hash": "861d5b27f80c1e3b5b21b23fb58bfebb583bd4224cde95b2517a426ea4661fae",
         "test_hash": "37f6503380c4dd80a5c33be2fe08429dbc9239dd602a8147ed150863db17651f"
     }
     fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, fingerprint_data)
-    
+
     # Create run report indicating previous successful test execution
     run_report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -545,13 +544,13 @@ result = add(5, 3)  # Should return 8"""
     }
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, run_report)
-    
+
     # Key test: Files are missing but metadata exists
     # This was causing 'analyze_conflict' but should return 'generate'
-    
+
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-    
-    # The fix: should detect missing files and return 'generate', not 'analyze_conflict' 
+
+    # The fix: should detect missing files and return 'generate', not 'analyze_conflict'
     assert decision.operation == 'generate'
     assert decision.operation != 'analyze_conflict'
     assert "file missing" in decision.reason.lower() or "new" in decision.reason.lower()
@@ -560,20 +559,20 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
     """
     Validate that skip_tests scenarios work correctly after the regression fix.
     """
-    
-    # Create prompt file
+
+    # Create prompt file and get its real hash
     prompts_dir = pdd_test_environment / "prompts"
-    prompts_dir.mkdir(exist_ok=True) 
-    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Create a simple add function")
-    
+    prompts_dir.mkdir(exist_ok=True)
+    prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Create a simple add function")
+
     test_scenarios = [
         {
             "name": "missing_files_with_metadata_skip_tests",
             "metadata": {
-                "pdd_version": "0.0.41", 
+                "pdd_version": "0.0.41",
                 "timestamp": "2023-01-01T00:00:00Z",
                 "command": "test",
-                "prompt_hash": "abc123",
+                "prompt_hash": prompt_hash,  # Use real hash so prompt change detection doesn't trigger
                 "code_hash": "def456",
                 "example_hash": "ghi789",
                 "test_hash": "jkl012"
@@ -595,7 +594,7 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
                 "pdd_version": "0.0.41",
                 "timestamp": "2023-01-01T00:00:00Z",
                 "command": "crash",
-                "prompt_hash": "abc123",
+                "prompt_hash": prompt_hash,  # Use real hash so prompt change detection doesn't trigger
                 "code_hash": "def456",
                 "example_hash": "ghi789",
                 "test_hash": "jkl012"
@@ -612,28 +611,28 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
             "expected_in": ["crash"]  # When fingerprint.command='crash' and exit_code!=0, retry crash
         }
     ]
-    
+
     for scenario in test_scenarios:
         # Clean up previous state
         for meta_file in get_meta_dir().glob("*.json"):
             meta_file.unlink()
-        
+
         # Setup scenario
         if scenario["metadata"]:
             fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
             create_fingerprint_file(fp_path, scenario["metadata"])
-        
+
         if scenario["run_report"]:
             rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
             create_run_report_file(rr_path, scenario["run_report"])
-        
+
         # Test decision
         decision = sync_determine_operation(
-            BASENAME, LANGUAGE, TARGET_COVERAGE, 
+            BASENAME, LANGUAGE, TARGET_COVERAGE,
             skip_tests=scenario["skip_tests"],
             prompts_dir=str(prompts_dir)
         )
-        
+
         # Validate results
         for forbidden_op in scenario["expected_not"]:
             assert decision.operation != forbidden_op, f"Scenario {scenario['name']}: got forbidden operation {forbidden_op}"
@@ -645,37 +644,37 @@ def test_real_hashes_with_context_aware_fix_over_crash(pdd_test_environment):
     Test the exact scenario from debug_real_hashes.py:
     Missing files with metadata containing real hashes AND exit_code=2 with skip_tests=True.
     """
-    
-    # Create prompt file
+
+    # Create prompt file and get its real hash
     prompts_dir = pdd_test_environment / "prompts"
     prompts_dir.mkdir(exist_ok=True)
     prompt_content = """Create a Python module with a simple math function.
 
 Requirements:
 - Function name: add
-- Parameters: a, b (both numbers)  
+- Parameters: a, b (both numbers)
 - Return: sum of a and b
 - Include type hints
 - Add docstring explaining the function
 
 Example usage:
 result = add(5, 3)  # Should return 8"""
-    
-    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-    
-    # Create metadata with REAL hashes (exact values from debug_real_hashes.py)
+
+    prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
+
+    # Create metadata with real prompt hash (so prompt change detection doesn't trigger)
     fingerprint_data = {
         "pdd_version": "0.0.41",
-        "timestamp": "2025-07-03T02:34:36.929768+00:00", 
+        "timestamp": "2025-07-03T02:34:36.929768+00:00",
         "command": "test",
-        "prompt_hash": "79a219808ec6de6d5b885c28ee811a033ae4a92eba993f7853b5a9d6a3befa84",
+        "prompt_hash": prompt_hash,  # Use real hash so we test fix-over-crash, not prompt change
         "code_hash": "6d0669923dc331420baaaefea733849562656e00f90c6519bbed46c1e9096595",
         "example_hash": "861d5b27f80c1e3b5b21b23fb58bfebb583bd4224cde95b2517a426ea4661fae",
         "test_hash": "37f6503380c4dd80a5c33be2fe08429dbc9239dd602a8147ed150863db17651f"
     }
     fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
     create_fingerprint_file(fp_path, fingerprint_data)
-    
+
     # Create run report with crash exit code (exact from debug scenario)
     run_report = {
         "timestamp": "2025-07-03T02:34:36.182803+00:00",
@@ -686,17 +685,17 @@ result = add(5, 3)  # Should return 8"""
     }
     rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
     create_run_report_file(rr_path, run_report)
-    
+
     # Test with skip_tests=True - the exact scenario that was causing issues
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, skip_tests=True, prompts_dir=str(prompts_dir))
-    
+
     # Key assertions from debug_real_hashes.py:
     # 1. Should not return 'analyze_conflict' (was causing infinite loops)
     assert decision.operation != 'analyze_conflict', "Should not return analyze_conflict with missing files and real hashes"
-    
+
     # 2. Should not return 'test' operation when skip_tests=True
     assert decision.operation != 'test', "Should not return test operation when skip_tests=True"
-    
+
     # 3. With context-aware decision logic, should prefer 'fix' over 'crash' when example has run successfully before
     # The fingerprint command is "test" which indicates successful example history
     assert decision.operation == 'fix', f"Expected fix operation (context-aware), got {decision.operation}"
@@ -2642,3 +2641,59 @@ class TestFalsePositiveSuccessBugRegression:
         assert decision.operation in ['crash', 'verify', 'test'], (
             f"Expected 'crash', 'verify', or 'test' to continue workflow, got '{decision.operation}'"
         )
+
+
+# --- Bug Fix Tests: Prompt Changes Should Take Priority Over Runtime Signals ---
+
+def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
+    """
+    BUG: When fingerprint.command == 'crash' and run_report.exit_code == 0,
+    the sync should still detect prompt changes and trigger regeneration,
+    not blindly continue to 'verify'.
+
+    This tests the fix for: prompt changes being ignored when runtime signals
+    cause early returns in sync_determine_operation.
+    """
+    prompts_dir = pdd_test_environment / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+
+    # Create prompt with NEW content (different from fingerprint hash)
+    prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+    new_prompt_hash = create_file(prompt_path, "NEW PROMPT CONTENT - changed!")
+
+    # Create fingerprint with OLD prompt hash and command='crash'
+    old_prompt_hash = "old_hash_that_differs_from_current"
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0.0",
+        "timestamp": "2025-01-01T00:00:00Z",
+        "command": "crash",  # Previous command was crash
+        "prompt_hash": old_prompt_hash,  # Different from current!
+        "code_hash": "c_hash",
+        "example_hash": "e_hash",
+        "test_hash": "t_hash"
+    })
+
+    # Create run report showing crash fix succeeded
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_run_report_file(rr_path, {
+        "timestamp": "2025-01-01T00:00:00Z",
+        "exit_code": 0,  # Success - crash was fixed
+        "tests_passed": 1,
+        "tests_failed": 0,
+        "coverage": 95.0
+    })
+
+    # Create code/example/test files so they exist
+    paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+    create_file(paths['code'], "def add(a, b): return a + b")
+    create_file(paths['example'], "print(add(1, 2))")
+    create_file(paths['test'], "def test_add(): assert add(1, 2) == 3")
+
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
+
+    # Should detect prompt change and regenerate, NOT continue to verify
+    assert decision.operation in ('generate', 'auto-deps'), \
+        f"Expected 'generate' or 'auto-deps' due to prompt change, got '{decision.operation}'"
+    assert 'prompt' in decision.reason.lower(), \
+        f"Reason should mention prompt change: {decision.reason}"
