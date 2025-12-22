@@ -8,14 +8,16 @@ Fallback mechanism for fixing code. Orchestrates local CLI-based agents to repai
 
 % Requirements
 1. Use logging utilities from `agentic_common` (pass `verbose`/`quiet` to all calls)
-2. Run using the agentic_fix_explore_LLM prompt with the agentic common infrastructure
-3. Record file mtimes before agent runs, detect changes after (agent writes files directly)
-4. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
-5. Run example program file to verify the fix didn't break the program
-6. Return 5-tuple: `(success, message, cost, model, changed_files)`
+2. PRIMARY-FIRST approach: Try full agent (agentic_fix_primary_LLM) first to allow exploration/debugging, then fall back to harvest-only (agentic_fix_harvest_only_LLM) if primary fails
+3. Path resolution: Use `working_dir = cwd or Path.cwd()`. Resolve relative code_file/unit_test_file paths against working_dir, not Path.cwd()
+4. Track both code AND test file changes: Read orig_code and orig_test at start, detect if either changed after agent run
+5. Detect direct file changes via mtime snapshot: `_snapshot_mtimes()` before agent run, `_detect_mtime_changes()` after to find files agent wrote directly without markers
+6. Detect useless error content: If error_content is empty or contains only empty XML tags like `<history></history>`, run preflight verification to populate real error output
+7. Extended proceed_to_verify logic: Verify if returncode==0 OR code_changed OR test_changed OR multi-file markers OR direct_changes detected
+8. Return 5-tuple: `(success, message, cost, model, changed_files)` where changed_files includes both parsed markers and mtime-detected changes
 
 % Entry Point
-`run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, example_program_file, *, verbose: bool = False, quiet: bool = False)`
+`run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verify_cmd: Optional[str] = None, cwd: Optional[Path] = None, *, verbose: bool = False, quiet: bool = False)`
 
 % Dependencies
 <module_dependencies>

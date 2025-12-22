@@ -77,6 +77,9 @@ def test_run_agentic_fix_handles_no_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
+    # Also hide Claude CLI so subscription auth isn't detected
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
+
     ok, msg, cost, model, changed_files = run_agentic_fix(
         prompt_file=str(p_prompt),
         code_file=str(p_code),
@@ -128,6 +131,11 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     for k in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
         if k != env_key:
             monkeypatch.delenv(k, raising=False)
+
+    # For non-anthropic providers, hide Claude CLI so subscription auth isn't used
+    if provider != "anthropic":
+        original_which = shutil.which
+        monkeypatch.setattr("shutil.which", lambda cmd: None if cmd == "claude" else original_which(cmd))
 
     # Re-apply the cached key to the env var our CSV expects
     if provider == "google":

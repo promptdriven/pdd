@@ -242,6 +242,17 @@ def _sanitized_env_common() -> dict:
     env["LINES"] = env.get("LINES", "40")
     return env
 
+def _sanitized_env_for_anthropic(use_cli_auth: bool = False) -> dict:
+    """
+    Like _sanitized_env_common, plus:
+    - optionally remove ANTHROPIC_API_KEY to force subscription auth via Claude CLI
+    """
+    env = _sanitized_env_common()
+    if use_cli_auth:
+        # Remove API key so Claude CLI uses subscription auth instead
+        env.pop("ANTHROPIC_API_KEY", None)
+    return env
+
 def _sanitized_env_for_openai() -> dict:
     """
     Like _sanitized_env_common, plus:
@@ -333,7 +344,7 @@ def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         prompt_file.unlink(missing_ok=True)
 
 def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    """Subprocess runner for Anthropic commands with common sanitized env."""
+    """Subprocess runner for Anthropic commands with subscription auth (removes API key)."""
     return subprocess.run(
         args,
         capture_output=True,
@@ -341,7 +352,7 @@ def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subproc
         check=False,
         timeout=timeout,
         cwd=str(cwd),
-        env=_sanitized_env_common(),
+        env=_sanitized_env_for_anthropic(use_cli_auth=True),
     )
 
 def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
@@ -852,8 +863,14 @@ def run_agentic_fix(
             api_key_name = provider_df.iloc[0]["api_key"]
             if not api_key_name:
                 continue
-            if os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY")):
-                present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
+            # Check CLI availability first (subscription auth), then API key
+            has_cli_auth = provider == "anthropic" and shutil.which("claude")
+            has_api_key = os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY"))
+            if has_cli_auth or has_api_key:
+                if has_cli_auth:
+                    present_keys.append("claude-cli-auth")
+                else:
+                    present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
                 if provider not in seen:
                     available_agents.append(provider)
                     seen.add(provider)
