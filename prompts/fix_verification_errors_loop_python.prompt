@@ -26,11 +26,12 @@ def fix_verification_errors_loop(
 <fix_verification_errors_example>
     <include>context/fix_verification_errors_example.py</include>
 </fix_verification_errors_example>
-
-Also use: run_agentic_fix, get_language, default_verify_cmd_for
+<agentic_verify_example><include>context/agentic_verify_example.py</include></agentic_verify_example>
+<agentic_langtest_example><include>context/agentic_langtest_example.py</include></agentic_langtest_example>
+<get_language_example><include>context/get_language_example.py</include></get_language_example>
 
 % Algorithm:
-1. Non-Python targets (.py check): bypass loop, use get_language()/default_verify_cmd_for(), invoke run_agentic_fix
+1. Non-Python targets (.py check): bypass loop, use get_language()/default_verify_cmd_for(), invoke run_agentic_verify
 2. Validate inputs (files exist, params in range); return failure with empty statistics if invalid
 3. Initial assessment: run program_file, call fix_verification_errors
    - Abort on error sentinel (explanation=None AND model_name=None)
@@ -41,7 +42,7 @@ Also use: run_agentic_fix, get_language, default_verify_cmd_for
    - Track best iteration (lowest issues where verification passed)
    - Break on success (0 issues + verified) or no effective changes
 5. Final: return success if any verification passed; else restore best/original state
-6. Agentic fallback: if failed and agentic_fallback=True, invoke run_agentic_fix
+6. Agentic fallback: if failed and agentic_fallback=True, invoke run_agentic_verify
 
 % XML Logging (xml.sax.saxutils.escape):
 <InitialState>, <Iteration attempt="N"> (with <SecondaryVerification passed="true/false">), <FinalActions>
