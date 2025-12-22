@@ -1,185 +1,242 @@
-# output/tests/test_agentic_common.py
-from __future__ import annotations
-
+# output/pdd/tests/test_agentic_common.py
+import pytest
 import json
 import os
 import sys
-import shutil
-import subprocess
+from unittest.mock import patch, MagicMock, ANY
 from pathlib import Path
-from unittest.mock import MagicMock, patch, ANY
 
-import pytest
-from z3 import Real, Solver, sat, unsat, And, If
+# Add the parent directory to sys.path to allow imports if running from tests directory
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-# Add the parent directory to sys.path to allow importing the package
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
-# Import the module under test
-# Note: We assume the file is at pdd/agentic_common.py relative to the package root
-from pdd.agentic_common import (
-    get_available_agents,
-    run_agentic_task,
-    AGENT_PROVIDER_PREFERENCE,
-)
+from pdd.agentic_common import get_available_agents, run_agentic_task
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Z3 Formal Verification
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def mock_shutil_which():
-    with patch("shutil.which") as mock:
-        yield mock
+def test_z3_pricing_properties():
+    """
+    Formally verify the pricing logic properties using Z3.
+    Ensures cost is non-negative and caching logic is sound.
+    """
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("z3-solver not installed")
 
-@pytest.fixture
-def mock_subprocess_run():
-    with patch("subprocess.run") as mock:
-        yield mock
+    solver = z3.Solver()
+
+    # --- Codex Pricing Verification ---
+    # Pricing: Input $1.50/M, Output $6.00/M, Cached Input 75% discount (multiplier 0.25)
+    
+    # Variables (Tokens are non-negative integers)
+    input_t = z3.Int('input_t')
+    output_t = z3.Int('output_t')
+    cached_t = z3.Int('cached_t')
+
+    # Constraints: Tokens >= 0, Cached <= Input
+    solver.add(input_t >= 0)
+    solver.add(output_t >= 0)
+    solver.add(cached_t >= 0)
+    solver.add(cached_t <= input_t)
+
+    # Pricing Constants (per million)
+    p_in = 1.50
+    p_out = 6.00
+    p_cached_mult = 0.25
+
+    # Python logic implementation in Z3 Real arithmetic
+    # new_input = max(input - cached, 0) -> since cached <= input, this is just input - cached
+    # effective_cached = min(cached, input) -> since cached <= input, this is cached
+    
+    # Cost calculation
+    # We use Reals for currency
+    cost_codex = (
+        (z3.ToReal(input_t - cached_t) * p_in / 1_000_000) +
+        (z3.ToReal(cached_t) * p_in * p_cached_mult / 1_000_000) +
+        (z3.ToReal(output_t) * p_out / 1_000_000)
+    )
+
+    # Property 1: Cost must be non-negative
+    solver.push()
+    solver.add(cost_codex < 0)
+    assert solver.check() == z3.unsat, "Codex cost can be negative!"
+    solver.pop()
+
+    # Property 2: Caching must reduce or equal cost compared to no caching
+    cost_no_cache = (
+        (z3.ToReal(input_t) * p_in / 1_000_000) +
+        (z3.ToReal(output_t) * p_out / 1_000_000)
+    )
+    
+    solver.push()
+    solver.add(cost_codex > cost_no_cache)
+    assert solver.check() == z3.unsat, "Cached cost is higher than non-cached cost!"
+    solver.pop()
+
+    # --- Gemini Flash Pricing Verification ---
+    # Pricing: Input $0.35/M, Output $1.05/M, Cached Input 50% discount (multiplier 0.5)
+    
+    g_in = 0.35
+    g_out = 1.05
+    g_cached_mult = 0.5
+
+    cost_gemini = (
+        (z3.ToReal(input_t - cached_t) * g_in / 1_000_000) +
+        (z3.ToReal(cached_t) * g_in * g_cached_mult / 1_000_000) +
+        (z3.ToReal(output_t) * g_out / 1_000_000)
+    )
+
+    # Property 1: Cost must be non-negative
+    solver.push()
+    solver.add(cost_gemini < 0)
+    assert solver.check() == z3.unsat, "Gemini cost can be negative!"
+    solver.pop()
+
+    # Property 2: Caching benefit
+    cost_gemini_no_cache = (
+        (z3.ToReal(input_t) * g_in / 1_000_000) +
+        (z3.ToReal(output_t) * g_out / 1_000_000)
+    )
+    
+    solver.push()
+    solver.add(cost_gemini > cost_gemini_no_cache)
+    assert solver.check() == z3.unsat, "Gemini cached cost is higher than non-cached!"
+    solver.pop()
+
+
+# ---------------------------------------------------------------------------
+# Unit Tests
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def mock_env():
-    with patch.dict(os.environ, {}, clear=True) as mock:
+    with patch.dict(os.environ, {}, clear=True):
         yield os.environ
 
 @pytest.fixture
+def mock_cwd(tmp_path):
+    return tmp_path
+
+@pytest.fixture
 def mock_load_model_data():
-    with patch("pdd.agentic_common._safe_load_model_data", return_value=None) as mock:
+    # Mocking _load_model_data to return None by default to force env var checks
+    with patch('pdd.agentic_common._load_model_data', return_value=None) as mock:
         yield mock
 
 @pytest.fixture
-def temp_cwd(tmp_path):
-    """Returns a temporary directory path to use as CWD."""
-    return tmp_path
+def mock_shutil_which():
+    with patch('shutil.which') as mock:
+        yield mock
 
-# ---------------------------------------------------------------------------
-# Tests for get_available_agents
-# ---------------------------------------------------------------------------
+@pytest.fixture
+def mock_subprocess():
+    with patch('subprocess.run') as mock:
+        yield mock
 
-def test_get_available_agents_none(mock_shutil_which, mock_env, mock_load_model_data):
-    """Test that no agents are returned if no CLIs are found."""
-    mock_shutil_which.return_value = None  # No binaries found
-    # Even if keys exist
-    mock_env["ANTHROPIC_API_KEY"] = "sk-ant-123"
-    
-    available = get_available_agents()
-    assert available == []
+def test_get_available_agents_none(mock_env, mock_load_model_data, mock_shutil_which):
+    """Test when no agents are available (no CLI, no keys)."""
+    mock_shutil_which.return_value = None # No CLIs found
+    agents = get_available_agents()
+    assert agents == []
 
-def test_get_available_agents_no_keys(mock_shutil_which, mock_env, mock_load_model_data):
-    """Test that no agents are returned if CLIs exist but no keys are set."""
-    mock_shutil_which.return_value = "/usr/bin/fake-cli"
+def test_get_available_agents_cli_only_no_key(mock_env, mock_load_model_data, mock_shutil_which):
+    """Test when CLIs exist but API keys are missing."""
+    mock_shutil_which.return_value = "/usr/bin/fake"
     # No env vars set
-    
-    available = get_available_agents()
-    assert available == []
+    agents = get_available_agents()
+    assert agents == []
 
-def test_get_available_agents_all(mock_shutil_which, mock_env, mock_load_model_data):
-    """Test that all agents are returned if CLIs and keys exist."""
-    mock_shutil_which.return_value = "/usr/bin/fake-cli"
-    mock_env["ANTHROPIC_API_KEY"] = "sk-ant-123"
-    mock_env["GEMINI_API_KEY"] = "AIzaSy..."
-    mock_env["OPENAI_API_KEY"] = "sk-proj-..."
+def test_get_available_agents_all_available(mock_env, mock_load_model_data, mock_shutil_which):
+    """Test when all agents are available."""
+    mock_shutil_which.return_value = "/usr/bin/fake"
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+    os.environ["GEMINI_API_KEY"] = "AIza..."
+    os.environ["OPENAI_API_KEY"] = "sk-..."
     
-    available = get_available_agents()
-    # Should contain all preferred providers that are configured
-    for provider in ["anthropic", "google", "openai"]:
-        assert provider in available
+    agents = get_available_agents()
+    assert "anthropic" in agents
+    assert "google" in agents
+    assert "openai" in agents
+    assert len(agents) == 3
 
-def test_get_available_agents_partial(mock_shutil_which, mock_env, mock_load_model_data):
-    """Test partial availability."""
-    # Mock shutil.which to only find 'claude'
-    def which_side_effect(cmd):
-        return "/bin/claude" if cmd == "claude" else None
-    mock_shutil_which.side_effect = which_side_effect
+def test_get_available_agents_mixed(mock_env, mock_load_model_data, mock_shutil_which):
+    """Test mixed availability."""
+    # Only claude binary exists
+    mock_shutil_which.side_effect = lambda cmd: "/bin/claude" if cmd == "claude" else None
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["OPENAI_API_KEY"] = "key" # Key exists but binary doesn't
     
-    mock_env["ANTHROPIC_API_KEY"] = "sk-ant-123"
-    mock_env["OPENAI_API_KEY"] = "sk-proj-..." # Key exists but binary doesn't
-    
-    available = get_available_agents()
-    assert "anthropic" in available
-    assert "openai" not in available
-    assert "google" not in available
+    agents = get_available_agents()
+    assert agents == ["anthropic"]
 
-# ---------------------------------------------------------------------------
-# Tests for run_agentic_task validation
-# ---------------------------------------------------------------------------
-
-def test_run_agentic_task_empty_instruction(temp_cwd):
-    success, msg, cost, provider = run_agentic_task("", temp_cwd)
+def test_run_agentic_task_validation(mock_cwd):
+    """Test input validation."""
+    success, msg, cost, provider = run_agentic_task("", mock_cwd)
     assert not success
     assert "must be a non-empty string" in msg
-    assert cost == 0.0
-    assert provider == ""
 
-def test_run_agentic_task_invalid_cwd():
-    bad_path = Path("/path/does/not/exist/at/all")
-    success, msg, cost, provider = run_agentic_task("do something", bad_path)
+    success, msg, cost, provider = run_agentic_task("do stuff", Path("/non/existent/path"))
     assert not success
-    assert "Working directory does not exist" in msg
+    assert "does not exist" in msg
 
-def test_run_agentic_task_no_agents_available(mock_shutil_which, temp_cwd, mock_load_model_data):
-    mock_shutil_which.return_value = None # No agents
-    success, msg, cost, provider = run_agentic_task("do something", temp_cwd)
+def test_run_agentic_task_no_agents(mock_cwd, mock_load_model_data, mock_shutil_which):
+    """Test behavior when no agents are available."""
+    mock_shutil_which.return_value = None
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
     assert not success
     assert "No agent providers are available" in msg
+    assert cost == 0.0
 
-# ---------------------------------------------------------------------------
-# Tests for run_agentic_task execution (Mocked Providers)
-# ---------------------------------------------------------------------------
-
-def test_run_agentic_task_anthropic_success(mock_shutil_which, mock_env, mock_subprocess_run, temp_cwd, mock_load_model_data):
+def test_run_agentic_task_anthropic_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test successful execution with Anthropic (Claude)."""
     # Setup availability
     mock_shutil_which.return_value = "/bin/claude"
-    mock_env["ANTHROPIC_API_KEY"] = "sk-ant-123"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
     
-    # Setup subprocess response
-    response_json = json.dumps({
-        "response": "Task completed successfully.",
-        "total_cost_usd": 0.015,
+    # Mock subprocess output
+    mock_output = {
+        "response": "Task completed.",
+        "total_cost_usd": 0.05,
         "error": None
-    })
-    mock_subprocess_run.return_value = subprocess.CompletedProcess(
-        args=[], returncode=0, stdout=response_json, stderr=""
-    )
-    
-    success, output, cost, provider = run_agentic_task("Fix the bug", temp_cwd, verbose=True)
-    
-    assert success is True
-    assert output == "Task completed successfully."
-    assert cost == 0.015
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd, verbose=True)
+
+    assert success
+    assert msg == "Task completed."
+    assert cost == 0.05
     assert provider == "anthropic"
     
-    # Verify command arguments
-    args, kwargs = mock_subprocess_run.call_args
-    cmd_list = args[0]
-    assert cmd_list[0] == "claude"
-    assert "--dangerously-skip-permissions" in cmd_list
-    assert "--output-format" in cmd_list
-    assert "json" in cmd_list
+    # Verify command structure
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    assert cmd[0] == "claude"
+    assert "--dangerously-skip-permissions" in cmd
+    assert "--output-format" in cmd
+    assert "json" in cmd
     
     # Verify temp file creation and cleanup
-    # The instruction passed to CLI should reference a temp file
-    cli_instruction = cmd_list[2]
-    assert "Read the file" in cli_instruction
-    assert ".agentic_prompt_" in cli_instruction
-    
-    # Check that no temp files remain in cwd matching the pattern
-    assert len(list(temp_cwd.glob(".agentic_prompt_*.txt"))) == 0
+    temp_files = list(mock_cwd.glob(".agentic_prompt_*.txt"))
+    assert len(temp_files) == 0 # Should be cleaned up
 
-def test_run_agentic_task_gemini_success(mock_shutil_which, mock_env, mock_subprocess_run, temp_cwd, mock_load_model_data):
+def test_run_agentic_task_gemini_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test successful execution with Google (Gemini) and cost calculation."""
-    # Setup availability (Only Google)
+    # Setup availability: Anthropic missing, Google present
     def which_side_effect(cmd):
         return "/bin/gemini" if cmd == "gemini" else None
     mock_shutil_which.side_effect = which_side_effect
-    mock_env["GEMINI_API_KEY"] = "AIza..."
-    
-    # Setup subprocess response
-    # Using Flash pricing: Input $0.35/1M, Output $1.05/1M
+    os.environ["GEMINI_API_KEY"] = "key"
+
+    # Mock subprocess output for Gemini
+    # Using Flash pricing: $0.35/M input, $1.05/M output
     # 1M input tokens = $0.35
     # 1M output tokens = $1.05
-    response_json = json.dumps({
+    mock_output = {
         "response": "Gemini response.",
         "stats": {
             "models": {
@@ -192,225 +249,205 @@ def test_run_agentic_task_gemini_success(mock_shutil_which, mock_env, mock_subpr
                 }
             }
         }
-    })
-    mock_subprocess_run.return_value = subprocess.CompletedProcess(
-        args=[], returncode=0, stdout=response_json, stderr=""
-    )
-    
-    success, output, cost, provider = run_agentic_task("Instruction", temp_cwd)
-    
-    assert success is True
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
+
+    assert success
     assert provider == "google"
-    # Expected cost: 0.35 + 1.05 = 1.40
+    assert msg == "Gemini response."
+    # Cost = 0.35 + 1.05 = 1.40
     assert abs(cost - 1.40) < 0.0001
 
-def test_run_agentic_task_openai_success(mock_shutil_which, mock_env, mock_subprocess_run, temp_cwd, mock_load_model_data):
-    """Test successful execution with OpenAI (Codex) JSONL output."""
-    # Setup availability (Only OpenAI)
+    # Verify command
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert cmd[0] == "gemini"
+    assert "--yolo" in cmd
+
+def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test successful execution with OpenAI (Codex) using JSONL output."""
+    # Setup availability: Only Codex
     def which_side_effect(cmd):
         return "/bin/codex" if cmd == "codex" else None
     mock_shutil_which.side_effect = which_side_effect
-    mock_env["OPENAI_API_KEY"] = "sk-..."
-    
-    # Setup subprocess response (JSONL format)
-    # Codex Pricing: Input $1.50/1M, Output $6.00/1M
+    os.environ["OPENAI_API_KEY"] = "key"
+
+    # Mock subprocess output (JSONL stream)
+    # Pricing: $1.50/M input, $6.00/M output
     # 1M input, 1M output -> 1.5 + 6.0 = 7.5
-    jsonl_output = """
-    {"type": "init", "session_id": "123"}
-    {"type": "message", "role": "assistant", "content": "I have fixed the code."}
-    {"type": "result", "usage": {"input_tokens": 1000000, "output_tokens": 1000000, "cached_input_tokens": 0}}
-    """
-    mock_subprocess_run.return_value = subprocess.CompletedProcess(
-        args=[], returncode=0, stdout=jsonl_output, stderr=""
-    )
-    
-    success, output, cost, provider = run_agentic_task("Instruction", temp_cwd)
-    
-    assert success is True
-    assert provider == "openai"
-    assert output == "I have fixed the code."
-    assert abs(cost - 7.50) < 0.0001
-    
-    # Verify command
-    args, _ = mock_subprocess_run.call_args
-    assert args[0][0] == "codex"
-    assert "--full-auto" in args[0]
-    assert "--json" in args[0]
-
-def test_run_agentic_task_fallback_logic(mock_shutil_which, mock_env, mock_subprocess_run, temp_cwd, mock_load_model_data):
-    """Test that it falls back to the next provider if the first fails."""
-    # Make Anthropic and Google available
-    mock_shutil_which.return_value = "/bin/exe"
-    mock_env["ANTHROPIC_API_KEY"] = "key"
-    mock_env["GEMINI_API_KEY"] = "key"
-    
-    # First call (Anthropic) fails, Second (Google) succeeds
-    failure_response = json.dumps({"error": {"message": "Overloaded"}, "total_cost_usd": 0.01})
-    success_response = json.dumps({
-        "response": "Success", 
-        "stats": {"models": {"gemini-flash": {"tokens": {"prompt": 0, "candidates": 0}}}}
-    })
-    
-    mock_subprocess_run.side_effect = [
-        subprocess.CompletedProcess(args=[], returncode=1, stdout=failure_response, stderr="Error"),
-        subprocess.CompletedProcess(args=[], returncode=0, stdout=success_response, stderr="")
+    jsonl_output = [
+        json.dumps({"type": "init"}),
+        json.dumps({"type": "message", "role": "assistant", "content": "Codex output."}),
+        json.dumps({
+            "type": "result",
+            "usage": {
+                "input_tokens": 1000000,
+                "output_tokens": 1000000,
+                "cached_input_tokens": 0
+            }
+        })
     ]
-    
-    success, output, cost, provider = run_agentic_task("Task", temp_cwd)
-    
-    assert success is True
-    assert provider == "google"
-    assert output == "Success"
-    # Cost should include the failed attempt (0.01) + success attempt (0.0)
-    assert cost == 0.01
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
 
-def test_run_agentic_task_all_fail(mock_shutil_which, mock_env, mock_subprocess_run, temp_cwd, mock_load_model_data):
-    """Test behavior when all providers fail."""
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
+
+    assert success
+    assert provider == "openai"
+    assert "Codex output." in msg
+    assert abs(cost - 7.50) < 0.0001
+
+    # Verify command
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert cmd[0] == "codex"
+    assert "--full-auto" in cmd
+    assert "--json" in cmd
+
+def test_run_agentic_task_fallback(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test fallback mechanism: Anthropic fails, Google succeeds."""
     mock_shutil_which.return_value = "/bin/exe"
-    mock_env["ANTHROPIC_API_KEY"] = "key"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["GEMINI_API_KEY"] = "key"
+
+    # Side effect for subprocess.run
+    # First call (Anthropic): Fails
+    # Second call (Google): Succeeds
+    
+    anthropic_fail = MagicMock()
+    anthropic_fail.returncode = 1
+    anthropic_fail.stdout = json.dumps({"error": {"message": "Overloaded"}})
+    
+    google_success = MagicMock()
+    google_success.returncode = 0
+    google_success.stdout = json.dumps({
+        "response": "Success",
+        "stats": {"models": {"flash": {"tokens": {"prompt": 0, "candidates": 0}}}}
+    })
+
+    # We need to inspect the command to decide which mock to return
+    def run_side_effect(cmd, **kwargs):
+        if "claude" in cmd:
+            return anthropic_fail
+        if "gemini" in cmd:
+            return google_success
+        return MagicMock(returncode=1)
+
+    mock_subprocess.side_effect = run_side_effect
+
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
+
+    assert success
+    assert provider == "google"
+    assert msg == "Success"
+    # Cost should be 0.0 (Anthropic failed/0 + Google 0)
+    assert cost == 0.0
+
+def test_run_agentic_task_all_fail(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test when all providers fail."""
+    mock_shutil_which.return_value = "/bin/exe"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
     
     # Only Anthropic available, and it fails
-    mock_subprocess_run.return_value = subprocess.CompletedProcess(
-        args=[], returncode=1, stdout="", stderr="Critical failure"
-    )
-    
-    success, output, cost, provider = run_agentic_task("Task", temp_cwd)
-    
-    assert success is False
+    mock_subprocess.return_value.returncode = 1
+    mock_subprocess.return_value.stdout = json.dumps({"error": "Fatal error"})
+
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
+
+    assert not success
     assert provider == ""
-    assert "Critical failure" in output
+    assert "Fatal error" in msg
+    assert "All agent providers failed" in msg
 
-# ---------------------------------------------------------------------------
-# Z3 Formal Verification Tests
-# ---------------------------------------------------------------------------
+def test_run_agentic_task_timeout(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test timeout handling."""
+    mock_shutil_which.return_value = "/bin/exe"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    
+    import subprocess
+    mock_subprocess.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=10)
 
-def test_z3_verify_gemini_pricing_logic():
-    """
-    Use Z3 to formally verify the properties of the Gemini pricing formula.
-    Formula: Cost = (Prompt - Cached)*Price_In + Cached*Price_In*Discount + Output*Price_Out
-    
-    We verify:
-    1. Non-negativity: Cost >= 0 for all non-negative inputs.
-    2. Monotonicity: Increasing output tokens always increases cost.
-    """
-    s = Solver()
-    
-    # Define variables (Real numbers for tokens to allow continuous analysis, though tokens are ints)
-    prompt = Real('prompt')
-    candidates = Real('candidates')
-    cached = Real('cached')
-    
-    # Pricing constants for Flash (from code)
-    p_in = 0.35 / 1_000_000
-    p_out = 1.05 / 1_000_000
-    discount = 0.5
-    
-    # Constraints: Tokens are non-negative, cached <= prompt
-    s.add(prompt >= 0)
-    s.add(candidates >= 0)
-    s.add(cached >= 0)
-    s.add(cached <= prompt)
-    
-    # Logic from code:
-    # new_prompt_tokens = max(prompt_tokens - cached_tokens, 0)
-    # effective_cached_tokens = min(cached_tokens, prompt_tokens)
-    # Since we constrained cached <= prompt, max(p-c, 0) is p-c and min(c, p) is c.
-    
-    cost = (prompt - cached) * p_in + (cached * p_in * discount) + (candidates * p_out)
-    
-    # 1. Verify Non-negativity
-    # We ask Z3 to find a counter-example where cost < 0
-    s.push()
-    s.add(cost < 0)
-    result = s.check()
-    assert result == unsat, "Found a case where cost is negative!"
-    s.pop()
-    
-    # 2. Verify Monotonicity with respect to candidates
-    # cost(c1) < cost(c2) if c1 < c2
-    c1 = Real('c1')
-    c2 = Real('c2')
-    cost1 = (prompt - cached) * p_in + (cached * p_in * discount) + (c1 * p_out)
-    cost2 = (prompt - cached) * p_in + (cached * p_in * discount) + (c2 * p_out)
-    
-    s.push()
-    s.add(c1 < c2)
-    s.add(cost1 >= cost2) # Counter-example: c1 < c2 but cost1 >= cost2
-    result = s.check()
-    assert result == unsat, "Cost is not strictly monotonic with respect to output tokens!"
-    s.pop()
+    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
 
-def test_gemini_cost_calculation_verified_by_z3(mock_shutil_which, mock_env, mock_subprocess_run, temp_cwd, mock_load_model_data):
+    assert not success
+    assert "timed out" in msg
+
+def test_environment_sanitization(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Verify environment variables passed to subprocess."""
+    mock_shutil_which.return_value = "/bin/exe"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["EXISTING_VAR"] = "value"
+    
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs['env']
+    
+    assert env_passed["TERM"] == "dumb"
+    assert env_passed["NO_COLOR"] == "1"
+    assert env_passed["CI"] == "1"
+    assert env_passed["EXISTING_VAR"] == "value"
+    assert env_passed["ANTHROPIC_API_KEY"] == "key"
+
+def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """
-    Use Z3 to generate a valid test case for the Python implementation.
-    We solve for a specific cost and verify the Python code produces it.
+    Specific test for Gemini cached token logic.
+    Flash Pricing: Input $0.35, Cached Multiplier 0.5 (so $0.175 effective).
     """
-    s = Solver()
-    prompt = Real('prompt')
-    candidates = Real('candidates')
-    cached = Real('cached')
-    
-    # Pricing for Flash
-    p_in = 0.35 / 1_000_000
-    p_out = 1.05 / 1_000_000
-    discount = 0.5
-    
-    # Constraints
-    s.add(prompt >= 1000)
-    s.add(candidates >= 1000)
-    s.add(cached == 0) # Simplify for this test case
-    
-    # Target cost: exactly $1.00
-    cost = prompt * p_in + candidates * p_out
-    s.add(cost == 1.0)
-    
-    # Check if such a configuration exists
-    if s.check() == sat:
-        m = s.model()
-        # Extract values (convert to int for the mock)
-        # Note: Z3 gives exact fractions, we approximate for the test inputs
-        # but we need to be careful about float precision in the assertion.
-        # Instead, let's reverse: Pick inputs, calculate expected using Z3 logic, assert Python matches.
-        
-        # Let's reverse: Pick inputs, calculate expected using Z3 logic, assert Python matches.
-        val_prompt = 2_000_000
-        val_cands = 1_000_000
-        val_cached = 500_000
-        
-        expected_cost = (
-            (val_prompt - val_cached) * p_in + 
-            (val_cached * p_in * discount) + 
-            (val_cands * p_out)
-        )
-        
-        # Setup Mock
-        def which_side_effect(cmd):
-            return "/bin/gemini" if cmd == "gemini" else None
-        mock_shutil_which.side_effect = which_side_effect
-        mock_env["GEMINI_API_KEY"] = "AIza..."
-        
-        response_json = json.dumps({
-            "response": "Z3 Verified",
+    mock_shutil_which.return_value = "/bin/gemini"
+    os.environ["GEMINI_API_KEY"] = "key"
+    # Force only google to be available
+    with patch('pdd.agentic_common.AGENT_PROVIDER_PREFERENCE', ["google"]):
+        # 1M cached tokens.
+        # Cost should be 1M * 0.35 * 0.5 = $0.175
+        mock_output = {
+            "response": "ok",
             "stats": {
                 "models": {
-                    "gemini-1.5-flash": {
+                    "gemini-flash": {
                         "tokens": {
-                            "prompt": val_prompt,
-                            "candidates": val_cands,
-                            "cached": val_cached
+                            "prompt": 1000000,
+                            "candidates": 0,
+                            "cached": 1000000
                         }
                     }
                 }
             }
-        })
-        mock_subprocess_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=response_json, stderr=""
-        )
-        
-        success, output, cost, provider = run_agentic_task("Instruction", temp_cwd)
-        
-        assert success is True
-        # Verify Python calculation matches our manual calculation (derived from Z3 logic)
-        assert abs(cost - expected_cost) < 1e-9
-    else:
-        pytest.skip("Could not generate Z3 model for test case")
+        }
+        mock_subprocess.return_value.returncode = 0
+        mock_subprocess.return_value.stdout = json.dumps(mock_output)
+
+        success, _, cost, _ = run_agentic_task("instr", mock_cwd)
+        assert abs(cost - 0.175) < 0.0001
+
+def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """
+    Specific test for Codex cached token logic.
+    Pricing: Input $1.50, Cached Multiplier 0.25 (75% discount).
+    """
+    mock_shutil_which.return_value = "/bin/codex"
+    os.environ["OPENAI_API_KEY"] = "key"
+    with patch('pdd.agentic_common.AGENT_PROVIDER_PREFERENCE', ["openai"]):
+        # 1M cached tokens.
+        # Cost should be 1M * 1.50 * 0.25 = $0.375
+        jsonl_output = [
+            json.dumps({
+                "type": "result",
+                "usage": {
+                    "input_tokens": 1000000,
+                    "output_tokens": 0,
+                    "cached_input_tokens": 1000000
+                }
+            })
+        ]
+        mock_subprocess.return_value.returncode = 0
+        mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
+
+        success, _, cost, _ = run_agentic_task("instr", mock_cwd)
+        assert abs(cost - 0.375) < 0.0001
