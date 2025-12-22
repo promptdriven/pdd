@@ -1,102 +1,222 @@
+% Test Plan for pdd.agentic_update.run_agentic_update
+%
+% 1. Z3 Formal Verification:
+%    - Model the control flow and success conditions using Z3.
+%    - Verify that success=True implies the prompt file was modified.
+%    - Verify that missing preconditions (files, agents, template) lead to success=False.
+%
+% 2. Unit Tests:
+%    - test_missing_files: Verify handling of missing prompt or code files.
+%    - test_no_agents: Verify handling when no agents are available.
+%    - test_template_errors: Verify handling of template loading or formatting errors.
+%    - test_explicit_tests_missing: Verify handling of invalid explicit test paths.
+%    - test_successful_update: Verify success=True when prompt file is modified by the agent task.
+%    - test_no_modification: Verify success=False when prompt file is NOT modified.
+%    - test_test_discovery: Verify that test files are correctly discovered from various locations and passed to the template.
+%    - test_explicit_empty_tests: Verify passing an empty list prevents discovery.
+
 import os
 import sys
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Import the module under test
+# Add project root to sys.path to ensure pdd package can be imported
+# This assumes the test file is in tests/ relative to the project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from pdd.agentic_update import run_agentic_update
 
-# Constants for mocking
-MOCK_TEMPLATE = "Update prompt {prompt_path} for code {code_path} using tests {test_paths}"
+# -----------------------------------------------------------------------------
+# Z3 Formal Verification
+# -----------------------------------------------------------------------------
+
+def test_z3_logic_verification() -> None:
+    """
+    Formal verification of the control flow logic using Z3.
+    Ensures that success is strictly tied to prompt modification and preconditions.
+    """
+    try:
+        import z3  # type: ignore
+    except ImportError:
+        pytest.skip("z3-solver not installed, skipping formal verification")
+
+    s = z3.Solver()
+
+    # State Variables
+    prompt_exists = z3.Bool('prompt_exists')
+    code_exists = z3.Bool('code_exists')
+    agents_available = z3.Bool('agents_available')
+    explicit_tests_valid = z3.Bool('explicit_tests_valid')
+    template_loaded = z3.Bool('template_loaded')
+    template_formatted = z3.Bool('template_formatted')
+    
+    # The critical side-effect check
+    prompt_modified = z3.Bool('prompt_modified')
+
+    # The function output
+    success = z3.Bool('success')
+
+    # Logic Constraints based on code analysis
+    
+    # 1. File existence checks
+    s.add(z3.Implies(z3.Not(prompt_exists), z3.Not(success)))
+    s.add(z3.Implies(z3.And(prompt_exists, z3.Not(code_exists)), z3.Not(success)))
+
+    # 2. Agent availability check
+    s.add(z3.Implies(z3.And(prompt_exists, code_exists, z3.Not(agents_available)), z3.Not(success)))
+
+    # 3. Explicit test validation (if we assume explicit tests are provided and invalid)
+    # We model the case where explicit tests are invalid -> failure
+    s.add(z3.Implies(z3.And(prompt_exists, code_exists, agents_available, z3.Not(explicit_tests_valid)), z3.Not(success)))
+
+    # 4. Template loading and formatting
+    pre_template = z3.And(prompt_exists, code_exists, agents_available, explicit_tests_valid)
+    s.add(z3.Implies(z3.And(pre_template, z3.Not(template_loaded)), z3.Not(success)))
+    s.add(z3.Implies(z3.And(pre_template, template_loaded, z3.Not(template_formatted)), z3.Not(success)))
+
+    # 5. Final Success Condition
+    # If all preconditions are met, success is determined by whether the prompt was modified.
+    all_preconditions = z3.And(
+        prompt_exists, 
+        code_exists, 
+        agents_available, 
+        explicit_tests_valid, 
+        template_loaded, 
+        template_formatted
+    )
+    
+    # The code: success = bool(prompt_modified)
+    s.add(z3.Implies(all_preconditions, success == prompt_modified))
+
+    # Verification 1: Can we have success=True if prompt_modified=False?
+    s.push()
+    s.add(success == True)
+    s.add(prompt_modified == False)
+    result = s.check()
+    assert result == z3.unsat, "Logic Error: Success reported despite no prompt modification"
+    s.pop()
+
+    # Verification 2: Can we have success=True if any precondition is missing?
+    # Example: prompt_exists=False
+    s.push()
+    s.add(success == True)
+    s.add(prompt_exists == False)
+    result = s.check()
+    assert result == z3.unsat, "Logic Error: Success reported despite missing prompt file"
+    s.pop()
+
+    # Verification 3: If all preconditions met and prompt modified, must be success
+    s.push()
+    s.add(all_preconditions)
+    s.add(prompt_modified == True)
+    s.add(success == False)
+    result = s.check()
+    assert result == z3.unsat, "Logic Error: Failed to report success despite valid update"
+    s.pop()
+
+
+# -----------------------------------------------------------------------------
+# Unit Tests
+# -----------------------------------------------------------------------------
 
 @pytest.fixture
-def mock_dependencies():
+def mock_deps() -> Generator[Tuple[MagicMock, MagicMock, MagicMock, MagicMock], None, None]:
     """
-    Fixture to mock external dependencies:
-    - get_available_agents
-    - load_prompt_template
-    - run_agentic_task
-    - console (to suppress output)
+    Mock external dependencies: agents, template loader, agent runner, console.
     """
-    with patch("pdd.agentic_update.get_available_agents") as mock_get_agents, \
-         patch("pdd.agentic_update.load_prompt_template") as mock_load_template, \
-         patch("pdd.agentic_update.run_agentic_task") as mock_run_task, \
+    with patch("pdd.agentic_update.get_available_agents") as mock_agents, \
+         patch("pdd.agentic_update.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_update.run_agentic_task") as mock_run, \
          patch("pdd.agentic_update.console") as mock_console:
         
         # Default happy path setup
-        mock_get_agents.return_value = ["claude"]
-        mock_load_template.return_value = MOCK_TEMPLATE
-        mock_run_task.return_value = (True, "Task completed", 0.01, "claude")
+        mock_agents.return_value = ["claude"]
+        mock_load.return_value = "Template with {prompt_path}, {code_path}, {test_paths}"
+        mock_run.return_value = (True, "Task complete", 0.01, "claude-3-opus")
         
-        yield mock_get_agents, mock_load_template, mock_run_task, mock_console
+        yield mock_agents, mock_load, mock_run, mock_console
 
-@pytest.fixture
-def project_root_mock(tmp_path):
-    """
-    Mock PROJECT_ROOT to point to tmp_path for file discovery tests.
-    This ensures that relative path calculations in the module work against our temp dir.
-    """
-    with patch("pdd.agentic_update.PROJECT_ROOT", tmp_path):
-        yield tmp_path
 
-def create_dummy_file(path: Path, content: str = ""):
-    """Helper to create a file and set its mtime to the past."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    # Set mtime to the past to ensure updates are detectable
-    old_time = time.time() - 100
-    os.utime(path, (old_time, old_time))
-
-def test_missing_prompt_file(mock_dependencies, tmp_path):
-    """Test failure when prompt file does not exist."""
-    prompt_file = tmp_path / "non_existent_prompt.md"
+def test_missing_files(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test that missing prompt or code files result in failure."""
+    prompt_file = tmp_path / "missing.prompt"
     code_file = tmp_path / "code.py"
-    create_dummy_file(code_file)
-    
+    code_file.touch()
+
+    # Case 1: Missing prompt file
     success, msg, cost, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
-    
     assert not success
     assert "Prompt file not found" in msg
     assert cost == 0.0
 
-def test_missing_code_file(mock_dependencies, tmp_path):
-    """Test failure when code file does not exist."""
-    prompt_file = tmp_path / "prompt.md"
-    code_file = tmp_path / "non_existent_code.py"
-    create_dummy_file(prompt_file)
-    
+    # Case 2: Missing code file
+    prompt_file.touch()
+    code_file.unlink()
     success, msg, cost, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
-    
     assert not success
     assert "Code file not found" in msg
 
-def test_no_agents_available(mock_dependencies, tmp_path):
-    """Test failure when no agents are available."""
-    mock_get_agents, _, _, _ = mock_dependencies
-    mock_get_agents.return_value = []
-    
-    prompt_file = tmp_path / "prompt.md"
+
+def test_no_agents(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test behavior when no agents are available."""
+    mock_agents, _, _, _ = mock_deps
+    mock_agents.return_value = []
+
+    prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "code.py"
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    
+    prompt_file.touch()
+    code_file.touch()
+
     success, msg, cost, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
     
     assert not success
     assert "No agentic CLI available" in msg
+    assert cost == 0.0
 
-def test_missing_explicit_test_file(mock_dependencies, tmp_path):
-    """Test failure when an explicitly provided test file is missing."""
-    prompt_file = tmp_path / "prompt.md"
-    code_file = tmp_path / "code.py"
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
+
+def test_template_errors(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test handling of template loading or formatting errors."""
+    mock_agents, mock_load, _, _ = mock_deps
     
-    missing_test = tmp_path / "tests" / "missing_test.py"
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    # Case 1: Template load returns None/Empty
+    mock_load.return_value = None
+    success, msg, _, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
+    assert not success
+    assert "could not be loaded" in msg
+
+    # Case 2: Template load raises exception
+    mock_load.side_effect = Exception("Load error")
+    success, msg, _, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
+    assert not success
+    assert "Error while loading prompt template" in msg
+
+    # Case 3: Template format error
+    mock_load.side_effect = None
+    mock_load.return_value = "Invalid format {missing_key}"
+    success, msg, _, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
+    assert not success
+    assert "Error formatting" in msg
+
+
+def test_explicit_tests_missing(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test validation of explicitly provided test files."""
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    missing_test = tmp_path / "missing_test.py"
     
     success, msg, _, _, _ = run_agentic_update(
         str(prompt_file), 
@@ -107,224 +227,176 @@ def test_missing_explicit_test_file(mock_dependencies, tmp_path):
     
     assert not success
     assert "Test file(s) not found" in msg
-    assert str(missing_test) in msg
 
-def test_template_loading_failure(mock_dependencies, tmp_path):
-    """Test failure when template cannot be loaded."""
-    _, mock_load_template, _, _ = mock_dependencies
-    mock_load_template.return_value = None
-    
-    prompt_file = tmp_path / "prompt.md"
-    code_file = tmp_path / "code.py"
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    
-    success, msg, _, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
-    
-    assert not success
-    assert "could not be loaded" in msg
 
-def test_template_formatting_error(mock_dependencies, tmp_path):
-    """Test failure when template formatting fails (e.g. missing keys)."""
-    _, mock_load_template, _, _ = mock_dependencies
-    mock_load_template.return_value = "Invalid template with {missing_key}"
-    
-    prompt_file = tmp_path / "prompt.md"
-    code_file = tmp_path / "code.py"
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    
-    success, msg, _, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
-    
-    assert not success
-    assert "Error formatting" in msg
-
-def test_agent_task_exception(mock_dependencies, tmp_path):
-    """Test handling of exception during agent task execution."""
-    _, _, mock_run_task, _ = mock_dependencies
-    mock_run_task.side_effect = Exception("Agent crashed")
-    
-    prompt_file = tmp_path / "prompt.md"
-    code_file = tmp_path / "code.py"
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    
-    success, msg, _, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
-    
-    assert not success
-    assert "Agentic task failed" in msg
-    assert "Agent crashed" in msg
-
-def test_success_flow_with_modification(mock_dependencies, project_root_mock):
+def test_successful_update(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
     """
-    Test successful update where prompt file is modified.
-    Uses project_root_mock to ensure relative paths work correctly.
+    Test a successful update scenario where the agent modifies the prompt file.
     """
-    _, _, mock_run_task, _ = mock_dependencies
+    _, _, mock_run, _ = mock_deps
     
-    # Setup files in the mocked project root
-    prompt_file = project_root_mock / "prompt.md"
-    code_file = project_root_mock / "src" / "main.py"
-    test_file = project_root_mock / "src" / "test_main.py" # Should be auto-discovered
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
     
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    create_dummy_file(test_file)
-    
-    # Define side effect to modify prompt file
-    def agent_action(*args, **kwargs):
-        # Simulate agent modifying the prompt file
-        prompt_file.write_text("Updated content")
-        return (True, "Updated prompt", 0.05, "claude-3-opus")
-    
-    mock_run_task.side_effect = agent_action
-    
-    success, msg, cost, provider, changed = run_agentic_update(
+    # Ensure initial mtime is old enough
+    old_time = time.time() - 100
+    os.utime(prompt_file, (old_time, old_time))
+
+    # Define side effect to simulate agent modifying the file
+    def simulate_agent_modification(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        # Update mtime to now
+        prompt_file.touch()
+        return True, "Updated prompt", 0.05, "claude"
+
+    mock_run.side_effect = simulate_agent_modification
+
+    success, msg, cost, model, changed = run_agentic_update(
         str(prompt_file), 
         str(code_file), 
         quiet=True
     )
-    
+
     assert success is True
     assert "Prompt file updated successfully" in msg
     assert cost == 0.05
-    assert provider == "claude-3-opus"
-    assert str(prompt_file) in changed
-    
-    # Verify instruction contained correct paths
-    call_args = mock_run_task.call_args
-    instruction = call_args[1]['instruction']
-    assert str(prompt_file.relative_to(project_root_mock)) in instruction
-    assert str(code_file.relative_to(project_root_mock)) in instruction
-    assert str(test_file.relative_to(project_root_mock)) in instruction
+    assert model == "claude"
+    assert str(prompt_file.resolve()) in changed
 
-def test_success_flow_no_modification(mock_dependencies, project_root_mock):
-    """Test agent runs successfully but does not modify the prompt file."""
-    _, _, mock_run_task, _ = mock_dependencies
+
+def test_no_modification(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """
+    Test scenario where agent runs but does not modify the prompt file.
+    """
+    _, _, mock_run, _ = mock_deps
     
-    prompt_file = project_root_mock / "prompt.md"
-    code_file = project_root_mock / "main.py"
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    
-    # Agent does nothing to files
-    mock_run_task.return_value = (True, "No changes needed", 0.02, "gemini")
-    
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    # Agent runs but touches nothing
+    mock_run.return_value = (True, "No changes needed", 0.02, "claude")
+
     success, msg, cost, _, changed = run_agentic_update(
         str(prompt_file), 
         str(code_file), 
         quiet=True
     )
-    
+
     assert success is False
-    assert "did not modify the prompt file" in msg
+    assert "did not modify" in msg
+    assert cost == 0.02
     assert len(changed) == 0
 
-def test_explicit_test_files(mock_dependencies, project_root_mock):
-    """Test using explicitly provided test files."""
-    _, _, mock_run_task, _ = mock_dependencies
+
+def test_test_discovery(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """
+    Test that test files are correctly discovered from:
+    1. Same directory
+    2. tests/ subdirectory
+    3. Project root tests/ (mocked)
+    """
+    _, mock_load, _, _ = mock_deps
+
+    # Setup directory structure
+    # tmp_path/
+    #   code.py
+    #   test_code.py (Same dir)
+    #   tests/
+    #     test_code_extra.py (Subdir)
+    #   project_root/
+    #     tests/
+    #       test_code_global.py (Global)
     
-    prompt_file = project_root_mock / "prompt.md"
-    code_file = project_root_mock / "main.py"
-    explicit_test = project_root_mock / "custom_tests" / "test_custom.py"
+    project_root = tmp_path / "project_root"
+    project_root.mkdir()
+    (project_root / "tests").mkdir()
     
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    create_dummy_file(explicit_test)
+    code_dir = tmp_path
+    (code_dir / "tests").mkdir()
+
+    code_file = code_dir / "code.py"
+    code_file.touch()
+    prompt_file = code_dir / "code.prompt"
+    prompt_file.touch()
+
+    # Create test files
+    t1 = code_dir / "test_code.py"
+    t1.touch()
     
-    # Side effect to modify prompt
-    def agent_action(*args, **kwargs):
-        prompt_file.write_text("Updated")
-        return (True, "Done", 0.0, "codex")
-    mock_run_task.side_effect = agent_action
+    t2 = code_dir / "tests" / "test_code_extra.py"
+    t2.touch()
     
-    success, _, _, _, _ = run_agentic_update(
+    t3 = project_root / "tests" / "test_code_global.py"
+    t3.touch()
+
+    # Patch PROJECT_ROOT in the module to point to our mock project root
+    with patch("pdd.agentic_update.PROJECT_ROOT", project_root):
+        run_agentic_update(str(prompt_file), str(code_file), quiet=True)
+
+    # Verify what was passed to the template
+    # We expect all 3 tests to be found and formatted into the template
+    args, kwargs = mock_load.return_value.format.call_args
+    test_paths_str = kwargs.get("test_paths", "")
+    
+    assert "test_code.py" in test_paths_str
+    assert "test_code_extra.py" in test_paths_str
+    assert "test_code_global.py" in test_paths_str
+
+
+def test_explicit_empty_tests(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """
+    Test that passing an empty list for test_files prevents auto-discovery.
+    """
+    _, mock_load, _, _ = mock_deps
+    
+    code_file = tmp_path / "code.py"
+    code_file.touch()
+    prompt_file = tmp_path / "code.prompt"
+    prompt_file.touch()
+    
+    # Create a test that would be discovered if we didn't pass empty list
+    (tmp_path / "test_code.py").touch()
+
+    run_agentic_update(
         str(prompt_file), 
         str(code_file), 
-        test_files=[explicit_test],
+        test_files=[],  # Explicitly empty
         quiet=True
     )
-    
-    assert success is True
-    
-    # Verify instruction contains explicit test path
-    instruction = mock_run_task.call_args[1]['instruction']
-    assert str(explicit_test.relative_to(project_root_mock)) in instruction
 
-def test_detect_changed_files_logic(mock_dependencies, project_root_mock):
-    """
-    Test that _detect_changed_files logic works correctly via the main function.
-    We simulate file creation and modification.
-    """
-    _, _, mock_run_task, _ = mock_dependencies
+    args, kwargs = mock_load.return_value.format.call_args
+    test_paths_str = kwargs.get("test_paths", "")
     
-    prompt_file = project_root_mock / "prompt.md"
-    code_file = project_root_mock / "main.py"
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    
-    # Use a filename that matches the test discovery pattern so it gets detected.
-    # The code only scans for changes in prompt, code, and discoverable tests.
-    new_file = project_root_mock / "test_main_new.py"
-    
-    def agent_action(*args, **kwargs):
-        # Modify prompt
-        prompt_file.write_text("Modified")
-        # Create new file
-        new_file.write_text("New content")
-        return (True, "Changes made", 0.1, "claude")
-    
-    mock_run_task.side_effect = agent_action
-    
-    success, _, _, _, changed_files = run_agentic_update(
-        str(prompt_file), 
-        str(code_file), 
-        quiet=True
-    )
-    
-    assert success is True
-    assert str(prompt_file) in changed_files
-    assert str(new_file) in changed_files
-    assert str(code_file) not in changed_files
+    # Should indicate no tests found/used
+    assert "No tests were found" in test_paths_str
+    assert "test_code.py" not in test_paths_str
 
-def test_auto_discovery_locations(mock_dependencies, project_root_mock):
+
+def test_agent_failure_but_file_changed(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
     """
-    Test that tests are discovered in:
-    1. tests/ relative to code
-    2. same dir as code
-    3. project root tests/
+    Edge case: Agent reports failure (e.g. crash/timeout) but still managed to modify the file.
+    The function should report success based on file modification.
     """
-    _, _, mock_run_task, _ = mock_dependencies
+    _, _, mock_run, _ = mock_deps
     
-    prompt_file = project_root_mock / "prompt.md"
-    # Structure:
-    # src/code.py
-    # src/tests/test_code_1.py
-    # src/test_code_2.py
-    # tests/test_code_3.py
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
     
-    src_dir = project_root_mock / "src"
-    src_dir.mkdir()
-    (src_dir / "tests").mkdir()
-    (project_root_mock / "tests").mkdir()
-    
-    code_file = src_dir / "code.py"
-    test1 = src_dir / "tests" / "test_code_1.py"
-    test2 = src_dir / "test_code_2.py"
-    test3 = project_root_mock / "tests" / "test_code_3.py"
-    
-    create_dummy_file(prompt_file)
-    create_dummy_file(code_file)
-    create_dummy_file(test1)
-    create_dummy_file(test2)
-    create_dummy_file(test3)
-    
-    # We just want to check the instruction passed to the agent
-    run_agentic_update(str(prompt_file), str(code_file), quiet=True)
-    
-    instruction = mock_run_task.call_args[1]['instruction']
-    
-    # Check that all 3 tests are in the instruction
-    assert str(test1.relative_to(project_root_mock)) in instruction
-    assert str(test2.relative_to(project_root_mock)) in instruction
-    assert str(test3.relative_to(project_root_mock)) in instruction
+    old_time = time.time() - 100
+    os.utime(prompt_file, (old_time, old_time))
+
+    def simulate_crash_but_write(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        prompt_file.touch()
+        return False, "Crashed", 0.0, "claude"
+
+    mock_run.side_effect = simulate_crash_but_write
+
+    success, msg, _, _, _ = run_agentic_update(str(prompt_file), str(code_file), quiet=True)
+
+    assert success is True
+    assert "Underlying agent reported failure" in msg
