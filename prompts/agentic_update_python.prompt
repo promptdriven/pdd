@@ -20,6 +20,7 @@ Agentic prompt update using Claude Code, Gemini, or Codex CLI. Invokes AI agents
 % Dependencies
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.prompt.agentic_update_LLM><include>prompts/agentic_update_LLM.prompt</include></pdd.prompt.agentic_update_LLM>
 
 % Deliverables
 - Code: `pdd/agentic_update.py`
