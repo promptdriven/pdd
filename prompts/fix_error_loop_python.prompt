@@ -1,99 +1,63 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations. The function should include an optional verbose mode for detailed logging. Additionally, the function should track and report detailed statistics about the fixing process, including initial and final test states, improvements made, and the best iteration.
+% You are an expert Python Software Engineer. Your goal is to write a robust Python module containing the `fix_error_loop` function and its associated helpers. This module implements an iterative, agentic workflow to fix errors in unit tests and their corresponding code files using an LLM.
 
-<include>context/python_preamble.prompt</include>
+### Role and Scope:
+This module acts as the core execution engine for an automated code-repair system. It manages the lifecycle of a "fix attempt," which includes running tests, capturing failures, invoking an LLM to suggest repairs, verifying those repairs, and falling back to a more powerful agentic fix if the iterative loop fails. It is responsible for state management (backups and restoration) and detailed logging.
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-        'unit_test_file' - A string containing the path to the unit test file.
-        'code_file' - A string containing the path to the code file being tested.
-        'prompt_file' - A string containing the path to the prompt template used for agentic fallback and provenance.
-        'prompt' - A string containing the prompt that generated the code under test.
-        'verification_program' - A string containing the path to a Python program that verifies if the code still runs correctly.
-        'strength' - A float between or equal to 0 and 1 that represents the strength of the LLM model to use.
-        'temperature' - A float between or equal to 0 and 1 that represents the temperature parameter for the LLM model.
-        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
-        'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
-        'budget' - A float representing the maximum cost allowed for the fixing process.
-        'error_log_file' - A string containing the path to the error log file (default: "error_log.txt").
-        'verbose' - A boolean indicating whether to enable verbose logging (default: False).
-        'agentic_fallback' - A boolean indicating whether to attempt a final agentic recovery step when the loop does not succeed within budget (default: True).
-    Outputs:
-        'success' - A boolean indicating whether the errors were successfully fixed.
-        'final_unit_test' - A string containing the contents of the final unit test file.
-        'final_code' - A string containing the contents of the final code file.
-        'total_attempts' - An integer representing the number of LLM fix attempts made (re-running tests in the same iteration does not increase this counter).
-        'total_cost' - A float representing the total cost of all fix attempts (and any agentic fallback if executed).
-        'model_name' - A string representing the name of the LLM model used (may reflect the agentic model if fallback succeeds).
-    Note:
-        If the test suite passes without warnings on the initial run, return empty strings for 'final_unit_test' and 'final_code' and set 'total_attempts' to 1 to acknowledge work without making a fix attempt.
+### Requirements:
+1.  **Iterative Fixing Logic:** The `fix_error_loop` must attempt to resolve code/test mismatches over multiple iterations (up to `max_attempts`). It must track failures, errors, and warnings at each step.
+2.  **Statistics & Improvement Tracking:** Maintain a `stats` dictionary to track initial/final states, improvement percentages, and identify the `best_iteration`.
+3.  **Structured XML Logging:** Implement a dictionary-based log structure. This must be formatted into a string using XML tags (`<pytest_output>`, `<fix_attempt>`, `<verification_output>`) for each iteration and written to `error_log_file`.
+4.  **Best State Recovery:** If the final iteration is not the most successful (prioritizing lowest errors, then fails, then warnings), the module must restore the file contents from the best recorded iteration backups.
+5.  **Verification Step:** After every code update, run a verification program using `detect_host_python_executable`. If the verification returns a non-zero exit code, restore the previous code backup immediately and log the restoration.
+6.  **Agentic Fallback:** If the loop finishes without total success and budget remains, invoke `run_agentic_fix`. Ensure the `error_log_file` is populated with the current state before the agent is called.
+7.  **Non-Python Support:** Detect non-Python files by extension. Use `default_verify_cmd_for` to run initial verification. If it fails, skip the standard pytest loop and go directly to the agentic fallback.
+8.  **Cost & Budget Management:** Accumulate `total_cost` from LLM calls and stop the loop immediately if the `budget` is exceeded.
+9.  **Output Contract:** Return a 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
+    *   *Note:* If tests pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and an empty string for `model_name`.
+10. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
 
-% Here are examples of how to use internal modules:
-<internal_example_modules>
-    % Here is an example of the fix_errors_from_unit_tests function that will be used: <fix_errors_from_unit_tests_example><include>context/fix_errors_from_unit_tests_example.py</include></fix_errors_from_unit_tests_example>
-    <agentic_fix_example><include>context/agentic_fix_example.py</include></agentic_fix_example>
-    <agentic_langtest_example><include>context/agentic_langtest_example.py</include></agentic_langtest_example>
-    <get_language_example><include>context/get_language_example.py</include></get_language_example>
-</internal_example_modules>
+### Dependencies:
+<python_preamble>
+    <include>context/python_preamble.prompt</include>
+</python_preamble>
+<internal_modules>
+    <get_language>
+        <include>context/get_language_example.py</include>
+    </get_language>
+    <fix_errors_from_unit_tests>
+        <include>context/fix_errors_from_unit_tests_example.py</include>
+    </fix_errors_from_unit_tests>
+    <agentic_fix>
+        <include>context/agentic_fix_example.py</include>
+    </agentic_fix>
+    <agentic_langtest>
+        <include>context/agentic_langtest_example.py</include>
+    </agentic_langtest>
+    <pytest_output>
+        <include>context/pytest_example.py</include>
+    </pytest_output>
+    <python_env_detector>
+        <include>context/python_env_detector.py</include>
+    </python_env_detector>
+</internal_modules>
 
-% Here is an example of the TestResultCollector plugin used to capture pytest results:
-<pytest_result_collector_example>
-    <include>context/pytest_example.py</include>
-</pytest_result_collector_example>
+### Instructions:
+1.  **Implement `run_pytest_on_file(test_file)`**: Use `run_pytest_and_capture_output`. Extract failures, errors, and warnings from the first result in the JSON. Combine `standard_output` and `standard_error` for the log.
+2.  **Implement `format_log_for_output(log_structure)`**: Convert the iteration list into a string. Ensure the first iteration includes the initial test output. Use XML tags with `iteration=n` attributes.
+3.  **Implement `fix_error_loop`**:
+    *   **Initialization**: Setup stats, best iteration tracker (using `sys.maxsize` for initial comparison), and the structured log.
+    *   **Initial Check**: Run pytest (or verification for non-Python). If initially passing, exit early per the output contract.
+    *   **The Loop**: 
+        *   Create timestamped backups: `filename_iter_err_fail_warn_timestamp.py`.
+        *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context.
+        *   Update files, run verification, and re-run pytest to update the state.
+    *   **Finalization**: Compare final state to the best iteration and restore if necessary. Print a `rich` summary of improvements including percentage reduction.
+4.  **Agentic Fallback Logic**: Implement `_safe_run_agentic_fix` which calls the agent and passes the result through `_normalize_agentic_result`. 
+    * Ensure the `error_log_file` is written to disk before the agent is called. 
+    * If no iterations were run, write the initial state and pytest output to the log file.
+    * Log the list of `agent_changed_files` to the console if the agent modifies files.
+5.  **Console Output**: Use `rich.print` (as `rprint`). Implement an `escape_brackets` helper to prevent Rich from parsing square brackets in logs.
 
-% This function will do the following:
-    Step 1. Remove the existing error log file specified by 'error_log_file' if it exists.
-    Step 2. Initialize variables:
-        - Counter for the number of attempts
-        - Total cost accumulator
-        - Best iteration tracker (This is so that in case not all issues are solved, the iteration with the lowest errors gets restored. In case there are iterations with the same number of errors, then the iteration with the lowest fails, then the lowest warnings will get restored.)
-        - A statistics tracker to record the initial state, final state, and improvements made during the fixing process.
-        - A structured per-iteration log data structure for rich context sharing with LLM fixes. Format the persisted log as tagged sections like:
-          <pytest_output iteration=n>...</pytest_output>, <fix_attempt iteration=n>...</fix_attempt>, and <verification_output iteration=n>...</verification_output>, plus a "Final Pytest Run" section at the end.
-    Step 3. Run an initial test to determine the starting state of the unit tests and store the results in the statistics tracker. Include the initial pytest output in the structured log as iteration 1's <pytest_output> when applicable.
-    Step 4. Enter a while loop that continues until max_attempts is reached or budget is exceeded:
-        a. Print out to console and error log file the attempt iteration. Maintain and persist the structured log after each significant step (pre-test output, fix analysis, verification, and post-test output).
-        b. Run the unit tests using pytest. First try invoking `pdd pytest-output --json-only <test_file>` via subprocess. If the command is missing, fall back to calling `run_pytest_and_capture_output` from the in-tree `pytest_output` module; optionally, when direct CLI JSON is unavailable, an in-process plugin collector (e.g., TestResultCollector) may be used to capture counts and logs; as a final fallback, call `python -m pdd.pytest_output --json-only <test_file>` using the detected host Python. Strip any non-JSON text from stdout by locating the first `{` and balancing braces to extract the payload, then parse the JSON to capture:
-           - Number of failures (tests that failed assertions)
-           - Number of errors (tests that had errors during setup, execution, or teardown) and increment this count when `return_code` is 2
-           - Number of warnings
-           - Complete test output logs (Combine stdout and stderr from the test results within the JSON.)
-           - Handle `json.JSONDecodeError` and other exceptions gracefully by returning placeholder failure counts and raw output in the logs field.
-        c. If the test passes and has no warnings, break the loop and update the statistics tracker with the final state. If this occurs on the initial run (before any fix attempts), return empty strings for 'final_unit_test' and 'final_code' and set 'total_attempts' to 1.
-        d. If the test fails or has warnings:
-           - Print the captured test output to the console and error log file, escaping square brackets for proper Rich console display.
-           - Create backup copies of the unit_test_file and code_file in their respective directories, appending the current iteration number, the number of errors, fails, warnings, and a timestamp to the filenames like "unit_test_filename_3_1_0_2_20240101_120000.py" and "code_filename_3_1_0_2_20240101_120000.py" (iteration 3 with one error, zero fails, two warnings).
-           - Update the best iteration tracker immediately after creating backups using the current failure, error, and warning counts so the loop can restore this snapshot later if needed (preferring lower errors, then fails, then warnings).
-           - Read the contents of the unit_test_file and code_file.
-           - Call fix_errors_from_unit_tests with the file contents, and the full structured log context (and/or contents of error_log_file), the error log file path, and the provided strength, temperature, and time. Pass the verbose flag to enable detailed logging if specified.
-           - Add the returned total_cost to the total cost accumulator.
-           - If the total cost exceeds the budget, break the loop.
-           - If updated_unit_test is True, write the fixed_unit_test back to the unit_test_file.
-           - Increment the attempt counter.
-           - If updated_code is True:
-              * Write the fixed_code back to the code_file.
-              * Run the verification_program with the detected host Python (via a helper like detect_host_python_executable) to check if the code still runs.
-              * If the verification fails, restore the last known working code_file from one of the backups and output the errors and results of the failed verification run into the error log file so that this can be debugged in the next iteration and indicate that a restore has happened. Then continue the loop.
-           - Run the tests again in the same iteration using the pytest subprocess call to check if the fixes worked.
-           - Update the statistics tracker with the results of the current iteration, including whether the fixes improved the test results.
-    Step 5. If the last run isn't the best iteration, copy back the files from the best iteration and print out which iteration was restored. Update the statistics tracker with the best iteration information.
-    Step 6. Calculate and print summary statistics, including the initial state, final state, best iteration identifier, reductions in failures/errors/warnings, and the overall improvement percentage across all three metrics.
-    Step 7. Return the success status, final unit test contents, final code contents, total number of attempts, total cost, and model name.
-    Step 8 (optional, when agentic_fallback is True and the loop did not succeed within budget): attempt a final agentic recovery step by calling `run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verification_program)`. Normalize its return shape to (success, message, cost, model, changed_files). Add any cost to the total_cost and, on success, refresh final file contents and set model_name accordingly.
-
-% Optional language extension for non-Python targets:
-    - When the code under test is not a Python file, compute the language from the file extension and run a language-appropriate verification command (e.g., via a helper like default_verify_cmd_for). If the initial verification passes, return success without fixes. If it fails, write the verification output to error_log_file and (when agentic_fallback is enabled) invoke the same agentic recovery flow described in Step 8.
-
-% In addition, update the docstring and implementation of the `run_pytest_on_file` function. The function should:
-    - Support both the CLI JSON path and an in-process plugin collector. Prefer `pdd pytest-output --json-only <test_file>` when available, but implementations that use the plugin first are acceptable as long as both paths are supported.
-    - When using the CLI, first call `pdd pytest-output --json-only <test_file>`. If the command is missing, fall back to importing and calling `run_pytest_and_capture_output`, and otherwise to `python -m pdd.pytest_output --json-only <test_file>` using the detected host Python executable. When direct JSON output is unavailable, an in-process plugin collector (e.g., TestResultCollector) may be used to capture counts and logs.
-    - Return a tuple: `(failures, errors, warnings, logs)`.
-    - Extract the JSON payload by locating the leading `{` and balancing braces before parsing.
-    - Increment the `errors` total when the parsed `return_code` equals 2, and concatenate `standard_output` and `standard_error` for the logs.
-    - Handle `json.JSONDecodeError` and other exceptions gracefully by returning placeholder failure counts and the raw combined output in the logs.
-
-% Finally, ensure that the function tracks and reports detailed statistics about the fixing process, including:
-    - Initial state of the tests (failures, errors, warnings).
-    - Final state of the tests (failures, errors, warnings).
-    - Improvements made during the process (reductions in failures, errors, warnings).
-    - The identifier of the best iteration that can be restored.
-    - The overall percentage improvement across failures, errors, and warnings combined.
+### Deliverables:
+*   A standalone Python file containing `run_pytest_on_file`, `format_log_for_output`, `fix_error_loop`, and the normalization helpers.
+*   The module must include an `if __name__ == "__main__":` block demonstrating a sample execution with mock parameters.
