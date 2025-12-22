@@ -41,19 +41,22 @@
 - ImportError/ModuleNotFoundError for LOCAL modules: The import statement may be wrong.
   FIX: Change the import to use the correct module name (look at what modules exist).
   DO NOT create new modules to match a wrong import - fix the import instead!
-- ImportError/ModuleNotFoundError for EXTERNAL packages (pip packages like toml, requests, etc.):
-  OPTION A: Use TESTCMD to install the package first:
+- ImportError/ModuleNotFoundError for EXTERNAL packages (pip packages like toml, requests, humanize, etc.):
+  PREFERRED: Install the missing package using TESTCMD:
     <<<BEGIN_TESTCMD>>>
     pip install <package_name> && python -m pytest "{test_abs}" -q
     <<<END_TESTCMD>>>
-  OPTION B: Make the import optional with try/except (better for optional dependencies):
+
+  DO NOT rewrite the code to remove or replace the dependency unless the specification
+  explicitly says the dependency is optional. If the code uses a library, INSTALL IT.
+
+  ONLY use try/except fallback if the specification says the feature is optional:
     ```python
     try:
         import toml
     except ImportError:
-        toml = None  # Handle gracefully when not installed
+        toml = None  # Only if spec says toml is optional
     ```
-  Choose based on whether the dependency is truly required or optional.
 - TypeError/AttributeError: Check function signatures and method names
 - AssertionError: Check if the test expectation or the code logic is wrong
 - ZeroDivisionError/ValueError: Add proper error handling
@@ -61,7 +64,7 @@
   This often means the file has garbage appended at the end (common LLM extraction bug).
   FIX: Read the end of the file and look for JSON-like metadata patterns such as:
     - Lines starting with `"explanation":`, `"focus":`, `"description":`
-    - Lines with only `}` or `]`
+    - Lines with only `}}` or `]`
     - Code lines ending with `",` followed by JSON keys
   SOLUTION: Delete all the garbage lines at the end of the file to restore valid Python.
 
