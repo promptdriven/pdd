@@ -749,7 +749,7 @@ def _try_harvest_then_verify(
                 newest = code_path.read_text(encoding="utf-8")
                 _print_diff(code_snapshot, newest, code_path)
                 ok = _post_apply_verify_or_testcmd(
-                    provider, unit_test_file, cwd,
+                    provider, unit_test_file, working_dir,
                     verify_cmd=verify_cmd, verify_enabled=verify_enabled,
                     stdout=res.stdout or "", stderr=res.stderr or ""
                 )
@@ -804,6 +804,7 @@ def run_agentic_fix(
     unit_test_file: str,
     error_log_file: str,
     verify_cmd: Optional[str] = None,
+    cwd: Optional[Path] = None,
     *,
     verbose: bool = False,
     quiet: bool = False,
@@ -832,8 +833,9 @@ def run_agentic_fix(
     changed_files: List[str] = []  # Track all files changed by agents
 
     try:
-        cwd = Path.cwd()
-        _info(f"[cyan]Project root (cwd): {cwd}[/cyan]")
+        # Use explicit cwd if provided, otherwise fall back to current directory
+        working_dir = Path(cwd) if cwd else Path.cwd()
+        _info(f"[cyan]Project root (cwd): {working_dir}[/cyan]")
 
         # Load provider table and filter to those with API keys present in the environment
         csv_path = find_llm_csv_path()
@@ -864,9 +866,22 @@ def run_agentic_fix(
 
         # Read input artifacts that feed into the prompt
         prompt_content = Path(prompt_file).read_text(encoding="utf-8")
-        code_path = Path(code_file).resolve()
+
+        # Resolve relative paths against working_dir, not Path.cwd()
+        code_path_input = Path(code_file)
+        if not code_path_input.is_absolute():
+            code_path = (working_dir / code_path_input).resolve()
+        else:
+            code_path = code_path_input.resolve()
+
+        test_path_input = Path(unit_test_file)
+        if not test_path_input.is_absolute():
+            test_path_resolved = (working_dir / test_path_input).resolve()
+        else:
+            test_path_resolved = test_path_input.resolve()
+
         orig_code = code_path.read_text(encoding="utf-8")
-        test_content = Path(unit_test_file).read_text(encoding="utf-8")
+        test_content = test_path_resolved.read_text(encoding="utf-8")
 
         # Read error log if it exists, otherwise we'll populate it via preflight
         error_log_path = Path(error_log_file)
@@ -879,14 +894,14 @@ def run_agentic_fix(
                 lang = get_language(os.path.splitext(code_path)[1])
                 pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
                 if pre_cmd:
-                    pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(cwd))
+                    pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(working_dir))
                     pre = subprocess.run(
                         ["bash", "-lc", pre_cmd],
                         capture_output=True,
                         text=True,
                         check=False,
                         timeout=_VERIFY_TIMEOUT,
-                        cwd=str(cwd),
+                        cwd=str(working_dir),
                     )
                 else:
                     # Use language-appropriate run command from language_format.csv
@@ -898,7 +913,7 @@ def run_agentic_fix(
                             text=True,
                             check=False,
                             timeout=_VERIFY_TIMEOUT,
-                            cwd=str(cwd),
+                            cwd=str(working_dir),
                         )
                     else:
                         # Fallback: run directly with Python interpreter
@@ -908,7 +923,7 @@ def run_agentic_fix(
                             text=True,
                             check=False,
                             timeout=_VERIFY_TIMEOUT,
-                            cwd=str(cwd),
+                            cwd=str(working_dir),
                         )
                 error_content = (pre.stdout or "") + "\n" + (pre.stderr or "")
                 try:
@@ -952,7 +967,7 @@ def run_agentic_fix(
             error_content=error_content,
             verify_cmd=verify_cmd or "No verification command provided.",
         )
-        instruction_file = Path("agentic_fix_instructions.txt")
+        instruction_file = working_dir / "agentic_fix_instructions.txt"
         instruction_file.write_text(primary_instr, encoding="utf-8")
         _info(f"[cyan]Instruction file: {instruction_file.resolve()} ({instruction_file.stat().st_size} bytes)[/cyan]")
         _print_head("Instruction preview", primary_instr)
@@ -984,7 +999,7 @@ def run_agentic_fix(
             if _IS_VERBOSE:
                 _verbose(f"[cyan]CLI binary: {binary} -> {cli_path}[/cyan]")
                 if cmd:
-                    _verbose(f"Executing (cwd={cwd}): {' '.join(cmd)}")
+                    _verbose(f"Executing (cwd={working_dir}): {' '.join(cmd)}")
 
             # Skip if the provider CLI is not available on PATH
             if cli_path == "NOT-IN-PATH":
@@ -1003,7 +1018,7 @@ def run_agentic_fix(
                         prompt_content,
                         test_content,
                         error_content,
-                        cwd,
+                        working_dir,
                         verify_cmd=verify_cmd,
                         verify_enabled=verify_enabled,
                         changed_files=changed_files,
@@ -1021,17 +1036,17 @@ def run_agentic_fix(
             est_cost += _AGENT_COST_PER_CALL
             
             # Snapshot mtimes before agent run
-            mtime_snapshot = _snapshot_mtimes(cwd)
+            mtime_snapshot = _snapshot_mtimes(working_dir)
             
             try:
                 if provider == "openai":
-                    res = _run_openai_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_openai_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
                 elif provider == "anthropic":
-                    res = _run_anthropic_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_anthropic_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
                 elif provider == "google":
-                    res = _run_google_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_google_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
                 else:
-                    res = _run_cli(cmd, cwd, _AGENT_CALL_TIMEOUT)
+                    res = _run_cli(cmd, working_dir, _AGENT_CALL_TIMEOUT)
             except subprocess.TimeoutExpired:
                 _info(f"[yellow]{provider.capitalize()} agent timed out after {_AGENT_CALL_TIMEOUT}s. Trying next...[/yellow]")
                 continue
@@ -1040,14 +1055,14 @@ def run_agentic_fix(
             _print_head(f"{provider.capitalize()} stderr", res.stderr or "")
 
             # Detect direct changes by agent
-            direct_changes = _detect_mtime_changes(cwd, mtime_snapshot)
+            direct_changes = _detect_mtime_changes(working_dir, mtime_snapshot)
             changed_files.extend(direct_changes)
 
             # Parse emitted changes (multi-file preferred)
             multi = _extract_files_from_output(res.stdout or "", res.stderr or "")
             if multi:
                 _info("[cyan]Detected multi-file corrected content (primary attempt). Applying...[/cyan]")
-                applied = _apply_file_map(multi, cwd, code_path, allow_new)
+                applied = _apply_file_map(multi, working_dir, code_path, allow_new)
                 changed_files.extend([str(p) for p in applied])
             else:
                 # Single-file fallback or Gemini code fence
@@ -1072,7 +1087,7 @@ def run_agentic_fix(
             proceed_to_verify = (res.returncode == 0) or (new_code != orig_code) or bool(multi) or bool(direct_changes)
             if proceed_to_verify:
                 ok = _post_apply_verify_or_testcmd(
-                    provider, unit_test_file, cwd,
+                    provider, unit_test_file, working_dir,
                     verify_cmd=verify_cmd, verify_enabled=verify_enabled,
                     stdout=res.stdout or "", stderr=res.stderr or ""
                 )

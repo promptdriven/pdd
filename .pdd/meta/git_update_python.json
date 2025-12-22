@@ -1,0 +1,9 @@
+{
+  "pdd_version": "0.0.88",
+  "timestamp": "2025-12-22T06:45:40.273081+00:00",
+  "command": "crash",
+  "prompt_hash": "c385c0d1b8cbbfd4a4e9b3e33c8af3bfc0e7182d1c57bddc322f187075beb465",
+  "code_hash": "a45bb777d08a5500a060cecfc65bc744af2e5cfd8637219a721ad1deff0b7f42",
+  "example_hash": "73d7959e8109bc87eeb0a81b7d3471565dd6306fe3e4870a08a2c52b0097a4d8",
+  "test_hash": "520ac8e4a8cf0527bdfbe402da13bfe7ece74a8f4c9ebb1b8de28899f9a75ced"
+}

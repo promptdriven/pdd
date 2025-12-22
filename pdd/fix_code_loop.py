@@ -52,7 +52,7 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file, cwd=None):
     """
     Call (possibly monkeypatched) run_agentic_fix and normalize its return.
     """
@@ -63,6 +63,7 @@ def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_f
         code_file=code_file,
         unit_test_file=unit_test_file,
         error_log_file=error_log_file,
+        cwd=cwd,
     )
     return _normalize_agentic_result(res)
 
@@ -220,6 +221,7 @@ def fix_code_loop(
                 code_file=code_file,
                 unit_test_file=verification_program,
                 error_log_file=error_log_file,
+                cwd=Path(prompt_file).parent if prompt_file else None,
             )
             final_program = ""
             final_code = ""
@@ -567,6 +569,7 @@ def fix_code_loop(
             code_file=code_file,
             unit_test_file=verification_program,
             error_log_file=error_log_file,
+            cwd=Path(prompt_file).parent if prompt_file else None,
         )
         total_cost += agent_cost
         if agent_changed_files:
