@@ -16,6 +16,61 @@ This module acts as the core execution engine for an automated code-repair syste
     *   *Note:* If tests pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and an empty string for `model_name`.
 10. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
 
+### Public Interface:
+
+```python
+def fix_error_loop(
+    unit_test_file: str,
+    code_file: str,
+    prompt_file: str,
+    prompt: str,
+    verification_program: str,
+    strength: float,
+    temperature: float,
+    max_attempts: int,
+    budget: float,
+    error_log_file: str = "error_log.txt",
+    verbose: bool = False,
+    time: float = DEFAULT_TIME,
+    agentic_fallback: bool = True
+) -> tuple[bool, str, str, int, float, str]:
+    """
+    Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
+    """
+```
+
+### Internal Data Structures:
+
+**`stats` dictionary** - Tracks improvement metrics across iterations:
+```python
+stats = {
+    "initial_fails": int,      # Failures from initial test run
+    "initial_errors": int,     # Errors from initial test run
+    "initial_warnings": int,   # Warnings from initial test run
+    "final_fails": int,        # Final failure count (initialized to 0)
+    "final_errors": int,       # Final error count (initialized to 0)
+    "final_warnings": int,     # Final warning count (initialized to 0)
+    "best_iteration": int | str | None,  # Iteration number, "final", or 0 (initially passing)
+    "iterations_info": list,   # Per-iteration stats
+    "improvement": {           # Added at end
+        "fails_reduced": int,
+        "errors_reduced": int,
+        "warnings_reduced": int,
+        "percent_improvement": float  # 100 if initially zero issues
+    }
+}
+```
+
+**`_normalize_agentic_result` mapping** - Handles variable return shapes from `run_agentic_fix`:
+| Input Shape | Mapping |
+|-------------|---------|
+| 5-tuple | `(success, msg, cost, model, changed_files)` → use directly |
+| 4-tuple | `(success, msg, cost, model)` → `changed_files=[]` |
+| 3-tuple | `(success, msg, cost)` → `model="agentic-cli"`, `changed_files=[]` |
+| 2-tuple | `(success, msg)` → `cost=0.0`, `model="agentic-cli"`, `changed_files=[]` |
+
+Returns normalized 5-tuple: `(bool, str, float, str, List[str])`
+
 ### Control Flow:
 
 ```mermaid

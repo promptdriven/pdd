@@ -1035,7 +1035,8 @@ def sync_orchestration(
                                         test_result = subprocess.run(
                                             [python_executable, '-m', 'pytest', str(pdd_files['test']), '-v', '--tb=short'],
                                             capture_output=True, text=True, timeout=300,
-                                            stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
+                                            stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True,
+                                            cwd=str(pdd_files['test'].parent)
                                         )
                                     else:
                                         # Use shell command for non-Python
