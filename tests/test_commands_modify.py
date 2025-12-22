@@ -309,3 +309,55 @@ def test_cli_update_command_repo_mode_with_extensions(mock_update_main, mock_aut
     assert call_kwargs['input_prompt_file'] is None
     assert call_kwargs['modified_code_file'] is None
     mock_auto_update.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.update_main')
+def test_cli_update_command_simple_flag(mock_update_main, mock_auto_update, runner, create_dummy_files):
+    """
+    Test that --simple flag is passed correctly to update_main.
+    This forces legacy 2-stage LLM update instead of agentic mode.
+    """
+    # Create a dummy code file
+    files = create_dummy_files("test_code.py", content="def test(): pass")
+
+    # Setup mock return value
+    mock_update_main.return_value = ("Generated prompt", 0.02, "test-model")
+
+    # Run update with --simple flag
+    result = runner.invoke(cli.cli, ["update", "--simple", str(files["test_code.py"])])
+
+    # Should succeed
+    assert result.exit_code == 0
+    assert result.exception is None
+
+    # Verify update_main was called with simple=True
+    mock_update_main.assert_called_once()
+    call_kwargs = mock_update_main.call_args.kwargs
+    assert call_kwargs['simple'] is True
+    mock_auto_update.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.update_main')
+def test_cli_update_command_simple_flag_default_false(mock_update_main, mock_auto_update, runner, create_dummy_files):
+    """
+    Test that simple flag defaults to False when not specified.
+    """
+    # Create a dummy code file
+    files = create_dummy_files("test_code.py", content="def test(): pass")
+
+    # Setup mock return value
+    mock_update_main.return_value = ("Generated prompt", 0.02, "test-model")
+
+    # Run update without --simple flag
+    result = runner.invoke(cli.cli, ["update", str(files["test_code.py"])])
+
+    # Should succeed
+    assert result.exit_code == 0
+
+    # Verify update_main was called with simple=False
+    mock_update_main.assert_called_once()
+    call_kwargs = mock_update_main.call_args.kwargs
+    assert call_kwargs['simple'] is False
+    mock_auto_update.assert_called_once()
