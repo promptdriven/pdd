@@ -52,7 +52,7 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False):
+def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None):
     """
     Call (possibly monkeypatched) run_agentic_verify and normalize its return.
     """
@@ -66,7 +66,8 @@ def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verificati
             program_file=Path(program_file),
             verification_log_file=Path(verification_log_file),
             verbose=verbose,
-            quiet=not verbose
+            quiet=not verbose,
+            cwd=cwd
         )
         return _normalize_agentic_result(res)
     except Exception as e:
@@ -100,7 +101,7 @@ def _run_program(
         command.extend(args)
 
     try:
-        # Run from staging root directory instead of examples/ directory
+        # Run from staging root directory instead of examples/
         # This allows imports from both pdd/ and examples/ subdirectories
         staging_root = program_path.parent.parent  # Go up from examples/ to staging root
         
@@ -202,12 +203,14 @@ def fix_verification_errors_loop(
         with open(verification_log_path, "w") as f:
             f.write(pytest_output)
         
+        agent_cwd = Path(prompt_file).parent if prompt_file else None
         success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
             code_file=code_file,
             program_file=verification_program,
             verification_log_file=verification_log_file,
             verbose=verbose,
+            cwd=agent_cwd,
         )
         if agent_changed_files:
             console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
@@ -983,12 +986,14 @@ def fix_verification_errors_loop(
 
     if not overall_success and agentic_fallback:
         console.print("[bold yellow]Initiating agentic fallback...[/bold yellow]")
+        agent_cwd = Path(prompt_file).parent if prompt_file else None
         agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
             code_file=code_file,
             program_file=verification_program,
             verification_log_file=verification_log_file,
             verbose=verbose,
+            cwd=agent_cwd,
         )
         total_cost += agent_cost
         if agent_changed_files:

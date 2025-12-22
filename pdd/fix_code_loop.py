@@ -53,7 +53,7 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file):
+def _safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None):
     """
     Call (possibly monkeypatched) run_agentic_crash and normalize its return.
     Maps arguments to the expected signature of run_agentic_crash.
@@ -63,14 +63,18 @@ def _safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_f
     
     try:
         # Ensure inputs are Path objects as expected by run_agentic_crash
-        res = run_agentic_crash(
-            prompt_file=Path(prompt_file),
-            code_file=Path(code_file),
-            program_file=Path(program_file),
-            crash_log_file=Path(crash_log_file),
-            verbose=True,
-            quiet=False
-        )
+        call_args = {
+            "prompt_file": Path(prompt_file),
+            "code_file": Path(code_file),
+            "program_file": Path(program_file),
+            "crash_log_file": Path(crash_log_file),
+            "verbose": True,
+            "quiet": False,
+        }
+        if cwd is not None:
+            call_args["cwd"] = Path(cwd)
+
+        res = run_agentic_crash(**call_args)
         return _normalize_agentic_result(res)
     except Exception as e:
         return False, f"Agentic crash handler failed: {e}", 0.0, "agentic-cli", []
@@ -229,6 +233,7 @@ def fix_code_loop(
                 code_file=code_file,
                 program_file=verification_program,
                 crash_log_file=error_log_file,
+                cwd=Path(prompt_file).parent if prompt_file else None
             )
             final_program = ""
             final_code = ""
@@ -576,6 +581,7 @@ def fix_code_loop(
             code_file=code_file,
             program_file=verification_program,
             crash_log_file=error_log_file,
+            cwd=Path(prompt_file).parent if prompt_file else None
         )
         total_cost += agent_cost
         if agent_changed_files:
