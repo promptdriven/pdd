@@ -78,6 +78,7 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
             input_prompt=input_strings["prompt_file"],
             directory_path=directory_path,
             csv_filename=csv_path,
+            prompt_filename=prompt_file,
             strength=strength,
             temperature=temperature,
             time=time_budget,

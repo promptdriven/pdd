@@ -16,6 +16,7 @@ def insert_includes(
     input_prompt: str,
     directory_path: str,
     csv_filename: str,
+    prompt_filename: Optional[str] = None,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
@@ -29,6 +30,8 @@ def insert_includes(
         input_prompt (str): The prompt to process
         directory_path (str): Directory path where the prompt file is located
         csv_filename (str): Name of the CSV file containing dependencies
+        prompt_filename (Optional[str]): The prompt filename being processed,
+            used to filter out self-referential example files
         strength (float): Strength parameter for the LLM model
         temperature (float): Temperature parameter for the LLM model
         time (float): Time budget for the LLM model
@@ -78,6 +81,7 @@ def insert_includes(
             input_prompt=input_prompt,
             directory_path=directory_path,
             csv_file=csv_content,
+            prompt_filename=prompt_filename,
             strength=strength,
             temperature=temperature,
             time=time,

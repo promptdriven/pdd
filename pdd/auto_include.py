@@ -2,6 +2,7 @@
 This module provides the `auto_include` function to automatically find and
 insert dependencies into a prompt.
 """
+import re
 from io import StringIO
 from typing import Callable, Tuple, Optional
 
@@ -114,10 +115,52 @@ def _run_llm_and_extract(
     return dependencies, total_cost, model_name
 
 
+def _extract_module_name(prompt_filename: Optional[str]) -> Optional[str]:
+    """Extract module name from prompt filename.
+
+    Handles various language suffixes:
+    - 'prompts/agentic_fix_python.prompt' -> 'agentic_fix'
+    - 'prompts/some_module_LLM.prompt' -> 'some_module'
+    - 'prompts/cli_bash.prompt' -> 'cli'
+
+    Args:
+        prompt_filename: The prompt filename to extract the module name from.
+
+    Returns:
+        The module name, or None if it cannot be extracted.
+    """
+    if not prompt_filename:
+        return None
+    # Pattern: captures module name before the last underscore + language + .prompt
+    # e.g., "agentic_fix_python.prompt" captures "agentic_fix"
+    match = re.search(r'([^/]+)_[^_]+\.prompt$', prompt_filename)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _filter_self_references(dependencies: str, module_name: Optional[str]) -> str:
+    """Remove includes that reference the module's own example file.
+
+    Args:
+        dependencies: The dependencies string containing include tags.
+        module_name: The module name to filter out self-references for.
+
+    Returns:
+        The dependencies string with self-referential includes removed.
+    """
+    if not module_name:
+        return dependencies
+    # Pattern matches: <...><include>context/{module_name}_example.py</include></...>
+    pattern = rf'<[^>]+><include>context/{re.escape(module_name)}_example\.py</include></[^>]+>\s*'
+    return re.sub(pattern, '', dependencies)
+
+
 def auto_include(
     input_prompt: str,
     directory_path: str,
     csv_file: Optional[str] = None,
+    prompt_filename: Optional[str] = None,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
@@ -131,6 +174,8 @@ def auto_include(
         input_prompt (str): The prompt requiring includes
         directory_path (str): Directory path of dependencies
         csv_file (Optional[str]): Contents of existing CSV file
+        prompt_filename (Optional[str]): The prompt filename being processed,
+            used to filter out self-referential example files
         strength (float): Strength of LLM model (0-1)
         temperature (float): Temperature of LLM model (0-1)
         time (float): Time budget for LLM calls
@@ -176,7 +221,11 @@ def auto_include(
             available_includes=available_includes,
             llm_kwargs=llm_kwargs,
         )
-        
+
+        # Filter out self-referential includes (module's own example file)
+        module_name = _extract_module_name(prompt_filename)
+        dependencies = _filter_self_references(dependencies, module_name)
+
         total_cost = summary_cost + llm_cost
         model_name = llm_model_name or summary_model
 

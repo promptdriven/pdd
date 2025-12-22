@@ -185,3 +185,58 @@ def test_auto_include_llm_invoke_error_extract(
     assert total_cost == 0.5
     # The last successful model name is "mock-model-1"
     assert model_name == "mock-model-1"
+
+
+def test_auto_include_filters_self_referential_example(
+    mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
+):
+    """
+    Test that auto_include filters out a module's own example file.
+
+    When processing prompts/agentic_fix_python.prompt, the system should NOT
+    include context/agentic_fix_example.py as a dependency - that file is the
+    example OUTPUT of the module, not a dependency.
+    """
+    # Mock prompt templates
+    mock_load_prompt_template.side_effect = lambda name: f"{name} content"
+
+    # Mock summarize_directory - includes the module's own example
+    mock_summarize_directory.return_value = (
+        "full_path,file_summary,date\n"
+        "context/agentic_fix_example.py,Example usage of agentic fix,2023-02-02\n"
+        "context/llm_invoke_example.py,Example usage of llm_invoke,2023-02-02",
+        0.25,
+        "mock-summary-model",
+    )
+
+    # Mock LLM returns a self-referential include (the bug we're testing)
+    mock_llm_invoke.side_effect = [
+        {
+            "result": "Include agentic_fix_example.py for context",
+            "cost": 0.5,
+            "model_name": "mock-model-1",
+        },
+        {
+            "result": MagicMock(
+                string_of_includes=(
+                    "<pdd.agentic_fix><include>context/agentic_fix_example.py"
+                    "</include></pdd.agentic_fix>"
+                )
+            ),
+            "cost": 0.75,
+            "model_name": "mock-model-2",
+        },
+    ]
+
+    deps, _, _, _ = auto_include(
+        input_prompt="Write the pdd/agentic_fix.py module...",
+        directory_path="context/*.py",
+        csv_file=None,
+        prompt_filename="prompts/agentic_fix_python.prompt",
+        strength=0.7,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    # The self-referential include should be filtered out
+    assert "agentic_fix_example.py" not in deps
