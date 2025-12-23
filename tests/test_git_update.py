@@ -9,6 +9,12 @@ from pdd.git_update import git_update, DEFAULT_TIME
 from rich.panel import Panel
 from pdd import DEFAULT_STRENGTH
 
+# Constants for agentic tests
+PROMPT_FILE = "/path/to/prompt.prompt"
+UPDATED_PROMPT_CONTENT = "Updated prompt content from agentic"
+AGENTIC_COST = 0.05
+AGENTIC_PROVIDER = "anthropic"
+
 # Sample data for tests
 INPUT_PROMPT = "Please add two numbers and return the sum."
 MODIFIED_CODE_FILE = "/path/to/modified_code.py"
@@ -42,6 +48,16 @@ def mock_console_print():
     with patch('pdd.git_update.console.print') as mock_print:
         yield mock_print
 
+@pytest.fixture
+def mock_get_available_agents():
+    with patch('pdd.git_update.get_available_agents') as mock_func:
+        yield mock_func
+
+@pytest.fixture
+def mock_run_agentic_update():
+    with patch('pdd.git_update.run_agentic_update') as mock_func:
+        yield mock_func
+
 # Helper to set up mock_open side effects
 def setup_mock_open_side_effects(mock_open_patcher, read_modified_data, read_original_data, expect_write=True):
     mock_read_modified_handle = MagicMock()
@@ -67,15 +83,17 @@ def setup_mock_open_side_effects(mock_open_patcher, read_modified_data, read_ori
     return mock_write_handle
 
 @patch('pdd.git_update.open')
-def test_git_update_success(mock_open_func, mock_repo, mock_update_prompt, mock_console_print):
+def test_git_update_success(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents):
     """
-    Test the successful execution of git_update with valid inputs.
+    Test the successful execution of git_update with valid inputs (legacy path).
     """
+    # Return no agents so legacy path is used
+    mock_get_available_agents.return_value = []
     mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
-    
+
     with patch('pdd.git_update.os.path.exists', return_value=True):
         mock_update_prompt.return_value = (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
-        
+
         result = git_update(
             input_prompt=INPUT_PROMPT,
             modified_code_file=MODIFIED_CODE_FILE,
@@ -84,11 +102,11 @@ def test_git_update_success(mock_open_func, mock_repo, mock_update_prompt, mock_
             verbose=False,
             time=DEFAULT_TIME
         )
-        
+
         assert result == (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
-        
+
         mock_repo.git.checkout.assert_called_once_with('HEAD', '--', EXPECTED_RELATIVE_PATH)
-        
+
         expected_open_calls = [
             call(MODIFIED_CODE_FILE, 'r'),
             call(MODIFIED_CODE_FILE, 'r'),
@@ -106,7 +124,7 @@ def test_git_update_success(mock_open_func, mock_repo, mock_update_prompt, mock_
             verbose=False,
             time=DEFAULT_TIME
         )
-        
+
         assert mock_write_handle is not None
         mock_write_handle.write.assert_called_once_with(MODIFIED_CODE)
 
@@ -187,12 +205,16 @@ def test_git_update_not_a_git_repo(mock_repo, mock_update_prompt, mock_console_p
             mock_update_prompt.assert_not_called()
 
 @patch('pdd.git_update.open')
-def test_git_update_update_prompt_exception(mock_open_func, mock_repo, mock_update_prompt, mock_console_print):
+def test_git_update_update_prompt_exception(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents):
     """
     Test git_update when update_prompt raises an exception.
+    Modified code should still be restored (bug fix).
     """
-    setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=False)
-    
+    # Return no agents so legacy path is used
+    mock_get_available_agents.return_value = []
+    # expect_write=True because we now always restore modified code (bug fix)
+    mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
+
     with patch('pdd.git_update.os.path.exists', return_value=True):
         mock_update_prompt.side_effect = Exception("Model error")
         result = git_update(
@@ -214,19 +236,26 @@ def test_git_update_update_prompt_exception(mock_open_func, mock_repo, mock_upda
             verbose=False,
             time=DEFAULT_TIME
         )
+        # Verify modified code was restored even on exception
+        assert mock_write_handle is not None
+        mock_write_handle.write.assert_called_once_with(MODIFIED_CODE)
 
 @patch('pdd.git_update.open')
-def test_git_update_file_write_failure(mock_open_func, mock_repo, mock_update_prompt, mock_console_print):
+def test_git_update_file_write_failure(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents):
     """
     Test git_update when writing back the modified code file fails.
+    Note: With try/finally, write failure in finally is caught and ignored (best effort).
+    The function should still return success from update_prompt.
     """
+    # Return no agents so legacy path is used
+    mock_get_available_agents.return_value = []
     mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
-    
+
     with patch('pdd.git_update.os.path.exists', return_value=True):
         assert mock_write_handle is not None
         mock_write_handle.write.side_effect = IOError("Write failed")
         mock_update_prompt.return_value = (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
-        
+
         result = git_update(
             input_prompt=INPUT_PROMPT,
             modified_code_file=MODIFIED_CODE_FILE,
@@ -235,8 +264,9 @@ def test_git_update_file_write_failure(mock_open_func, mock_repo, mock_update_pr
             verbose=False,
             time=DEFAULT_TIME
         )
-        assert result == (None, 0.0, "")
-        mock_console_print.assert_called()
+        # With try/finally, write failure in finally is caught and ignored
+        # The function returns success from the try block
+        assert result == (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
         mock_update_prompt.assert_called_once_with(
             input_prompt=INPUT_PROMPT,
             input_code=ORIGINAL_CODE,
@@ -249,17 +279,19 @@ def test_git_update_file_write_failure(mock_open_func, mock_repo, mock_update_pr
         mock_write_handle.write.assert_called_once_with(MODIFIED_CODE)
 
 @patch('pdd.git_update.open')
-def test_git_update_invalid_strength_temperature(mock_open_func, mock_repo, mock_update_prompt, mock_console_print):
+def test_git_update_invalid_strength_temperature(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents):
     """
     Test git_update with invalid strength and temperature values.
     """
+    # Return no agents so legacy path is used
+    mock_get_available_agents.return_value = []
     # Assuming the function does not explicitly validate strength and temperature,
     # and update_prompt handles them or passes them through.
     mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
 
     with patch('pdd.git_update.os.path.exists', return_value=True):
         mock_update_prompt.return_value = (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
-        
+
         result = git_update(
             input_prompt=INPUT_PROMPT,
             modified_code_file=MODIFIED_CODE_FILE,
@@ -268,9 +300,9 @@ def test_git_update_invalid_strength_temperature(mock_open_func, mock_repo, mock
             verbose=False,
             time=DEFAULT_TIME
         )
-        
+
         assert result == (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME) # Expect success if update_prompt handles it
-        
+
         mock_update_prompt.assert_called_once_with(
             input_prompt=INPUT_PROMPT,
             input_code=ORIGINAL_CODE,
@@ -282,7 +314,7 @@ def test_git_update_invalid_strength_temperature(mock_open_func, mock_repo, mock
         )
         assert mock_write_handle is not None
         mock_write_handle.write.assert_called_once_with(MODIFIED_CODE)
-        
+
         # Check for success panel print
         expected_panel = Panel.fit(
             f"[bold green]Success:[/bold green]\n"
@@ -296,11 +328,13 @@ def test_git_update_invalid_strength_temperature(mock_open_func, mock_repo, mock
         assert MODIFIED_PROMPT in str(printed_panel.renderable)
 
 @patch('pdd.git_update.open')
-def test_git_update_empty_original_code(mock_open_func, mock_repo, mock_update_prompt, mock_console_print):
+def test_git_update_empty_original_code(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents):
     """
     Test git_update when the original code file is empty (after checkout)
     and the modified code is also empty for this test's purpose.
     """
+    # Return no agents so legacy path is used
+    mock_get_available_agents.return_value = []
     # Simulate user modified to empty, and checked-out version is also empty
     empty_code = ""
     mock_write_handle = setup_mock_open_side_effects(mock_open_func, empty_code, empty_code, expect_write=True)
@@ -329,17 +363,20 @@ def test_git_update_empty_original_code(mock_open_func, mock_repo, mock_update_p
         mock_write_handle.write.assert_called_once_with(empty_code)
 
 @patch('pdd.git_update.open')
-def test_git_update_non_tuple_return(mock_open_func, mock_repo, mock_update_prompt, mock_console_print):
+def test_git_update_non_tuple_return(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents):
     """
     Test git_update when update_prompt returns a non-tuple value.
     This should cause a TypeError during unpacking, caught by the general Exception handler.
+    Modified code should still be restored (bug fix).
     """
-    # update_prompt is called, but then unpacking its result fails. No write should occur.
-    setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=False)
-    
+    # Return no agents so legacy path is used
+    mock_get_available_agents.return_value = []
+    # expect_write=True because we now always restore modified code (bug fix)
+    mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
+
     with patch('pdd.git_update.os.path.exists', return_value=True):
         mock_update_prompt.return_value = "incorrect return type" # Non-tuple
-        
+
         result = git_update(
             input_prompt=INPUT_PROMPT,
             modified_code_file=MODIFIED_CODE_FILE,
@@ -348,7 +385,7 @@ def test_git_update_non_tuple_return(mock_open_func, mock_repo, mock_update_prom
             verbose=False,
             time=DEFAULT_TIME
         )
-        
+
         assert result == (None, 0.0, "") # Expect graceful failure
         mock_console_print.assert_called() # Error panel should be printed
         mock_update_prompt.assert_called_once_with(
@@ -360,3 +397,185 @@ def test_git_update_non_tuple_return(mock_open_func, mock_repo, mock_update_prom
             verbose=False,
             time=DEFAULT_TIME
         )
+        # Verify modified code was restored even on exception
+        assert mock_write_handle is not None
+        mock_write_handle.write.assert_called_once_with(MODIFIED_CODE)
+
+
+# ============== AGENTIC PATH TESTS ==============
+
+@patch('pdd.git_update.open')
+def test_git_update_agentic_success(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents, mock_run_agentic_update):
+    """
+    Test git_update using the agentic path successfully.
+    """
+    mock_get_available_agents.return_value = ["anthropic"]
+    mock_run_agentic_update.return_value = (True, "Success", AGENTIC_COST, AGENTIC_PROVIDER, [PROMPT_FILE])
+
+    # Setup: read modified, read original, read updated prompt, write modified back
+    mock_read_modified = MagicMock()
+    mock_read_modified.read.return_value = MODIFIED_CODE
+    mock_read_modified.__enter__ = MagicMock(return_value=mock_read_modified)
+    mock_read_modified.__exit__ = MagicMock(return_value=None)
+
+    mock_read_original = MagicMock()
+    mock_read_original.read.return_value = ORIGINAL_CODE
+    mock_read_original.__enter__ = MagicMock(return_value=mock_read_original)
+    mock_read_original.__exit__ = MagicMock(return_value=None)
+
+    mock_read_prompt = MagicMock()
+    mock_read_prompt.read.return_value = UPDATED_PROMPT_CONTENT
+    mock_read_prompt.__enter__ = MagicMock(return_value=mock_read_prompt)
+    mock_read_prompt.__exit__ = MagicMock(return_value=None)
+
+    mock_write = MagicMock()
+    mock_write.__enter__ = MagicMock(return_value=mock_write)
+    mock_write.__exit__ = MagicMock(return_value=None)
+
+    mock_open_func.side_effect = [mock_read_modified, mock_read_original, mock_read_prompt, mock_write]
+
+    with patch('pdd.git_update.os.path.exists', return_value=True):
+        result = git_update(
+            input_prompt=INPUT_PROMPT,
+            modified_code_file=MODIFIED_CODE_FILE,
+            strength=STRENGTH,
+            temperature=TEMPERATURE,
+            verbose=True,
+            time=DEFAULT_TIME,
+            simple=False,
+            quiet=False,
+            prompt_file=PROMPT_FILE
+        )
+
+        assert result == (UPDATED_PROMPT_CONTENT, AGENTIC_COST, AGENTIC_PROVIDER)
+        mock_run_agentic_update.assert_called_once_with(
+            prompt_file=PROMPT_FILE,
+            code_file=MODIFIED_CODE_FILE,
+            verbose=True,
+            quiet=False
+        )
+        # Legacy update_prompt should NOT be called
+        mock_update_prompt.assert_not_called()
+        # Modified code should be restored
+        mock_write.write.assert_called_once_with(MODIFIED_CODE)
+
+
+@patch('pdd.git_update.open')
+def test_git_update_agentic_fails_fallback_to_legacy(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents, mock_run_agentic_update):
+    """
+    Test git_update when agentic fails and falls back to legacy.
+    """
+    mock_get_available_agents.return_value = ["anthropic"]
+    # Agentic fails
+    mock_run_agentic_update.return_value = (False, "Failed", AGENTIC_COST, "", [])
+
+    mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
+
+    with patch('pdd.git_update.os.path.exists', return_value=True):
+        mock_update_prompt.return_value = (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
+
+        result = git_update(
+            input_prompt=INPUT_PROMPT,
+            modified_code_file=MODIFIED_CODE_FILE,
+            strength=STRENGTH,
+            temperature=TEMPERATURE,
+            verbose=False,
+            time=DEFAULT_TIME,
+            simple=False,
+            quiet=False,
+            prompt_file=PROMPT_FILE
+        )
+
+        # Should return legacy result with accumulated cost
+        expected_total_cost = AGENTIC_COST + TOTAL_COST
+        assert result == (MODIFIED_PROMPT, expected_total_cost, MODEL_NAME)
+        mock_run_agentic_update.assert_called_once()
+        mock_update_prompt.assert_called_once()
+        mock_write_handle.write.assert_called_once_with(MODIFIED_CODE)
+
+
+@patch('pdd.git_update.open')
+def test_git_update_simple_bypasses_agentic(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents, mock_run_agentic_update):
+    """
+    Test that simple=True bypasses agentic even when agents are available.
+    """
+    mock_get_available_agents.return_value = ["anthropic"]
+    mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
+
+    with patch('pdd.git_update.os.path.exists', return_value=True):
+        mock_update_prompt.return_value = (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
+
+        result = git_update(
+            input_prompt=INPUT_PROMPT,
+            modified_code_file=MODIFIED_CODE_FILE,
+            strength=STRENGTH,
+            temperature=TEMPERATURE,
+            verbose=False,
+            time=DEFAULT_TIME,
+            simple=True,  # Force legacy path
+            quiet=False,
+            prompt_file=PROMPT_FILE
+        )
+
+        assert result == (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
+        # Agentic should NOT be called when simple=True
+        mock_run_agentic_update.assert_not_called()
+        mock_update_prompt.assert_called_once()
+
+
+@patch('pdd.git_update.open')
+def test_git_update_no_prompt_file_bypasses_agentic(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents, mock_run_agentic_update):
+    """
+    Test that prompt_file=None bypasses agentic even when agents are available.
+    """
+    mock_get_available_agents.return_value = ["anthropic"]
+    mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
+
+    with patch('pdd.git_update.os.path.exists', return_value=True):
+        mock_update_prompt.return_value = (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
+
+        result = git_update(
+            input_prompt=INPUT_PROMPT,
+            modified_code_file=MODIFIED_CODE_FILE,
+            strength=STRENGTH,
+            temperature=TEMPERATURE,
+            verbose=False,
+            time=DEFAULT_TIME,
+            simple=False,
+            quiet=False,
+            prompt_file=None  # No prompt file, skip agentic
+        )
+
+        assert result == (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
+        # Agentic should NOT be called when prompt_file is None
+        mock_run_agentic_update.assert_not_called()
+        mock_update_prompt.assert_called_once()
+
+
+@patch('pdd.git_update.open')
+def test_git_update_no_agents_bypasses_agentic(mock_open_func, mock_repo, mock_update_prompt, mock_console_print, mock_get_available_agents, mock_run_agentic_update):
+    """
+    Test that empty agent list bypasses agentic path.
+    """
+    mock_get_available_agents.return_value = []  # No agents available
+    mock_write_handle = setup_mock_open_side_effects(mock_open_func, MODIFIED_CODE, ORIGINAL_CODE, expect_write=True)
+
+    with patch('pdd.git_update.os.path.exists', return_value=True):
+        mock_update_prompt.return_value = (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
+
+        result = git_update(
+            input_prompt=INPUT_PROMPT,
+            modified_code_file=MODIFIED_CODE_FILE,
+            strength=STRENGTH,
+            temperature=TEMPERATURE,
+            verbose=False,
+            time=DEFAULT_TIME,
+            simple=False,
+            quiet=False,
+            prompt_file=PROMPT_FILE
+        )
+
+        assert result == (MODIFIED_PROMPT, TOTAL_COST, MODEL_NAME)
+        # Agentic should NOT be called when no agents
+        mock_run_agentic_update.assert_not_called()
+        mock_update_prompt.assert_called_once()

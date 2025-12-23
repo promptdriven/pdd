@@ -152,6 +152,12 @@ def change(
     default=None,
     help="Comma-separated list of file extensions to update in repo mode (e.g., 'py,js,ts').",
 )
+@click.option(
+    "--simple",
+    is_flag=True,
+    default=False,
+    help="Use legacy 2-stage LLM update instead of agentic mode.",
+)
 @click.pass_context
 @track_cost
 def update(
@@ -162,6 +168,7 @@ def update(
     output: Optional[str],
     use_git: bool,
     extensions: Optional[str],
+    simple: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Update prompts based on code changes.
@@ -213,6 +220,7 @@ def update(
             use_git=use_git,
             repo=is_repo_mode,
             extensions=extensions,
+            simple=simple,
         )
         return result, total_cost, model_name
     except click.Abort:
