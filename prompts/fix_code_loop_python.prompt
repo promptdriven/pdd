@@ -22,7 +22,7 @@
 
 % Helpers
   - `_normalize_agentic_result(result)`: Normalize 2/3/4/5-tuple from run_agentic_crash to 5-tuple.
-  - `_safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file)`: Wrapper that returns failure if prompt_file empty. Maps verification_program → program_file, error_log_file → crash_log_file.
+  - `_safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None)`: Wrapper that returns failure if prompt_file empty. Maps verification_program → program_file, error_log_file → crash_log_file. Pass `cwd=Path(prompt_file).parent` when calling.
   - `run_process_with_output(cmd_args, timeout=300)`: Subprocess with threaded byte-by-byte streaming capture. Returns (returncode, stdout, stderr).
   - `ProcessResult`: Simple class holding returncode, stdout, stderr.
 
@@ -46,7 +46,7 @@
 
   5. Success: read final contents. Failure: return empty strings.
 
-  6. If failure + agentic_fallback: ensure error_log_file exists, call _safe_run_agentic_crash, re-read on success.
+  6. If failure + agentic_fallback: ensure error_log_file exists, call _safe_run_agentic_crash with `cwd=Path(prompt_file).parent`, re-read on success.
 
   7. Return (success, final_program, final_code, attempts, total_cost, model_name).
 

@@ -242,6 +242,17 @@ def _sanitized_env_common() -> dict:
     env["LINES"] = env.get("LINES", "40")
     return env
 
+def _sanitized_env_for_anthropic(use_cli_auth: bool = False) -> dict:
+    """
+    Like _sanitized_env_common, plus:
+    - optionally remove ANTHROPIC_API_KEY to force subscription auth via Claude CLI
+    """
+    env = _sanitized_env_common()
+    if use_cli_auth:
+        # Remove API key so Claude CLI uses subscription auth instead
+        env.pop("ANTHROPIC_API_KEY", None)
+    return env
+
 def _sanitized_env_for_openai() -> dict:
     """
     Like _sanitized_env_common, plus:
@@ -333,7 +344,7 @@ def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         prompt_file.unlink(missing_ok=True)
 
 def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    """Subprocess runner for Anthropic commands with common sanitized env."""
+    """Subprocess runner for Anthropic commands with subscription auth (removes API key)."""
     return subprocess.run(
         args,
         capture_output=True,
@@ -341,7 +352,7 @@ def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subproc
         check=False,
         timeout=timeout,
         cwd=str(cwd),
-        env=_sanitized_env_common(),
+        env=_sanitized_env_for_anthropic(use_cli_auth=True),
     )
 
 def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
@@ -852,8 +863,14 @@ def run_agentic_fix(
             api_key_name = provider_df.iloc[0]["api_key"]
             if not api_key_name:
                 continue
-            if os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY")):
-                present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
+            # Check CLI availability first (subscription auth), then API key
+            has_cli_auth = provider == "anthropic" and shutil.which("claude")
+            has_api_key = os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY"))
+            if has_cli_auth or has_api_key:
+                if has_cli_auth:
+                    present_keys.append("claude-cli-auth")
+                else:
+                    present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
                 if provider not in seen:
                     available_agents.append(provider)
                     seen.add(provider)
@@ -876,12 +893,13 @@ def run_agentic_fix(
 
         test_path_input = Path(unit_test_file)
         if not test_path_input.is_absolute():
-            test_path_resolved = (working_dir / test_path_input).resolve()
+            test_path = (working_dir / test_path_input).resolve()
         else:
-            test_path_resolved = test_path_input.resolve()
+            test_path = test_path_input.resolve()
 
         orig_code = code_path.read_text(encoding="utf-8")
-        test_content = test_path_resolved.read_text(encoding="utf-8")
+        orig_test = test_path.read_text(encoding="utf-8")
+        test_content = orig_test  # Alias for prompt template compatibility
 
         # Read error log if it exists, otherwise we'll populate it via preflight
         error_log_path = Path(error_log_file)
@@ -889,7 +907,23 @@ def run_agentic_fix(
 
         # --- Preflight: populate error_content if empty so the agent sees fresh failures ---
         # This makes run_agentic_fix self-sufficient even if the caller forgot to write the error log.
-        if not (error_content or "").strip():
+        # Also detect useless content patterns like empty XML tags (e.g., "<history></history>")
+        def _is_useless_error_content(content: str) -> bool:
+            """Check if error content is empty or useless (e.g., empty XML tags)."""
+            stripped = (content or "").strip()
+            if not stripped:
+                return True
+            # Detect empty XML-like tags with no actual error content
+            import re
+            # Remove all XML-like empty tags and whitespace
+            cleaned = re.sub(r"<[^>]+>\s*</[^>]+>", "", stripped).strip()
+            if not cleaned:
+                return True
+            # Check if content lacks any traceback or error keywords
+            error_indicators = ["Error", "Exception", "Traceback", "failed", "FAILED", "error:"]
+            return not any(ind in content for ind in error_indicators)
+
+        if _is_useless_error_content(error_content):
             try:
                 lang = get_language(os.path.splitext(code_path)[1])
                 pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
@@ -1006,33 +1040,8 @@ def run_agentic_fix(
                 _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
                 continue
 
-            # First, the strict/fast "harvest-only" attempt for the three main providers
-            if provider in ("google", "openai", "anthropic"):
-                est_cost += _AGENT_COST_PER_CALL
-                try:
-                    if try_harvest_then_verify(
-                        provider,
-                        code_path,
-                        unit_test_file,
-                        orig_code,
-                        prompt_content,
-                        test_content,
-                        error_content,
-                        working_dir,
-                        verify_cmd=verify_cmd,
-                        verify_enabled=verify_enabled,
-                        changed_files=changed_files,
-                    ):
-                        try:
-                            instruction_file.unlink()
-                        except Exception:
-                            pass
-                        return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
-                except subprocess.TimeoutExpired:
-                    _info(f"[yellow]{provider.capitalize()} harvest attempt timed out, moving on...[/yellow]")
-                _info("[yellow]Harvest-first attempt did not pass; trying primary instruction path...[/yellow]")
-
-            # Primary attempt (more permissive)
+            # PRIMARY-FIRST: Try the full agent approach first (allows exploration, debugging)
+            _info(f"[cyan]Trying primary approach with {provider.capitalize()}...[/cyan]")
             est_cost += _AGENT_COST_PER_CALL
             
             # Snapshot mtimes before agent run
@@ -1082,9 +1091,17 @@ def run_agentic_fix(
 
             # Show diff (verbose) and decide whether to verify
             new_code = code_path.read_text(encoding="utf-8")
+            new_test = test_path.read_text(encoding="utf-8")
             _print_diff(orig_code, new_code, code_path)
+            if new_test != orig_test:
+                _print_diff(orig_test, new_test, test_path)
+                if str(test_path) not in changed_files:
+                    changed_files.append(str(test_path))
 
-            proceed_to_verify = (res.returncode == 0) or (new_code != orig_code) or bool(multi) or bool(direct_changes)
+            # Proceed to verify if: agent returned 0, OR either file changed, OR markers found, OR direct changes
+            code_changed = new_code != orig_code
+            test_changed = new_test != orig_test
+            proceed_to_verify = (res.returncode == 0) or code_changed or test_changed or bool(multi) or bool(direct_changes)
             if proceed_to_verify:
                 ok = _post_apply_verify_or_testcmd(
                     provider, unit_test_file, working_dir,
@@ -1098,6 +1115,32 @@ def run_agentic_fix(
                     except Exception:
                         pass
                     return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
+
+            # PRIMARY FAILED - Try harvest as a quick fallback before moving to next provider
+            if provider in ("google", "openai", "anthropic"):
+                _info("[yellow]Primary attempt did not pass; trying harvest fallback...[/yellow]")
+                est_cost += _AGENT_COST_PER_CALL
+                try:
+                    if _try_harvest_then_verify(
+                        provider,
+                        code_path,
+                        unit_test_file,
+                        orig_code,
+                        prompt_content,
+                        test_content,
+                        error_content,
+                        working_dir,
+                        verify_cmd=verify_cmd,
+                        verify_enabled=verify_enabled,
+                        changed_files=changed_files,
+                    ):
+                        try:
+                            instruction_file.unlink()
+                        except Exception:
+                            pass
+                        return True, f"Agentic fix successful with {provider.capitalize()} (harvest fallback).", est_cost, used_model, changed_files
+                except subprocess.TimeoutExpired:
+                    _info(f"[yellow]{provider.capitalize()} harvest fallback timed out.[/yellow]")
 
             # Prepare for next iteration/provider: update baseline code snapshot
             orig_code = new_code
