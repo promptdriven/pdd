@@ -49,6 +49,45 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", text)
 
 
+def extract_failing_files_from_output(pytest_output: str) -> list[str]:
+    """
+    Extract unique file paths from pytest FAILED output lines.
+
+    Parses patterns like:
+    - FAILED tests/test_foo.py::test_name - error message
+    - tests/test_foo.py::test_name FAILED
+
+    Args:
+        pytest_output: The combined stdout/stderr from a pytest run
+
+    Returns:
+        List of unique file paths (without ::test_name suffix) that had failures,
+        in the order they were first encountered.
+    """
+    cleaned_output = _strip_ansi(pytest_output)
+
+    failing_files = []
+    seen = set()
+
+    # Pattern 1: FAILED path/file.py::test_name (with optional error)
+    pattern1 = r'FAILED\s+([^\s:]+\.py)::'
+    for match in re.finditer(pattern1, cleaned_output):
+        file_path = match.group(1)
+        if file_path not in seen:
+            failing_files.append(file_path)
+            seen.add(file_path)
+
+    # Pattern 2: path/file.py::test_name FAILED (verbose output)
+    pattern2 = r'([^\s:]+\.py)::\S+\s+FAILED'
+    for match in re.finditer(pattern2, cleaned_output):
+        file_path = match.group(1)
+        if file_path not in seen:
+            failing_files.append(file_path)
+            seen.add(file_path)
+
+    return failing_files
+
+
 class TestResultCollector:
     __test__ = False  # Prevent pytest from collecting this plugin as a test
 
