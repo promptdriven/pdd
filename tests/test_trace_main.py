@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 from typing import Tuple, Optional
 from click import Context
 from pdd.trace_main import trace_main
+from pdd import DEFAULT_STRENGTH
 
 
 @pytest.fixture
@@ -467,8 +468,8 @@ def test_trace_main_missing_strength_temperature(mock_rprint, mock_trace, mock_c
         "Missing params code content.",
         code_line,
         "Missing params prompt content.",
-        0.75,  # Default strength from mock_ctx
-        0.0,   # Default temperature from mock_ctx
+        DEFAULT_STRENGTH,
+        0.0,   # Default temperature
         time=0.25
     )
     mock_rprint.assert_any_call("[bold green]Trace Analysis Complete[/bold green]")
