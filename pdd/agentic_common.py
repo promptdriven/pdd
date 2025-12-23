@@ -126,9 +126,11 @@ def _safe_load_model_data() -> Any | None:
 
 def _provider_has_api_key(provider: str, model_data: Any | None) -> bool:
     """
-    Determine whether the given provider has an API key configured.
+    Determine whether the given provider has an API key or CLI auth configured.
 
     This function:
+    - For Anthropic: Also checks if Claude CLI is available (subscription auth)
+      which doesn't require an API key.
     - Attempts to infer API-key environment variable names from the
       llm_invoke model data (if it is a DataFrame-like object).
     - Falls back to well-known default environment variable names.
@@ -136,6 +138,14 @@ def _provider_has_api_key(provider: str, model_data: Any | None) -> bool:
     The actual presence of API keys is checked via os.environ.
     """
     env = os.environ
+
+    # For Anthropic: Check if Claude CLI is available for subscription auth
+    # This is more robust as it uses the user's Claude subscription instead of API credits
+    if provider == "anthropic":
+        if shutil.which("claude"):
+            # Claude CLI is available - we can use subscription auth
+            # even without an API key
+            return True
 
     # Try to extract env var hints from model_data, if it looks like a DataFrame.
     inferred_env_vars: List[str] = []
@@ -193,7 +203,11 @@ def _get_agent_timeout() -> float:
         return DEFAULT_TIMEOUT_SECONDS
 
 
-def _build_subprocess_env(base: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+def _build_subprocess_env(
+    base: Optional[Mapping[str, str]] = None,
+    *,
+    use_cli_auth: bool = False,
+) -> Dict[str, str]:
     """
     Build a sanitized environment for non-interactive subprocess execution.
 
@@ -202,47 +216,94 @@ def _build_subprocess_env(base: Optional[Mapping[str, str]] = None) -> Dict[str,
       - NO_COLOR=1
       - CI=1
     while preserving existing variables (including API keys).
+
+    Args:
+        base: Optional base environment mapping (defaults to os.environ).
+        use_cli_auth: If True, remove ANTHROPIC_API_KEY to force Claude CLI
+                      subscription auth instead of API key auth. This is more
+                      robust as it uses the user's Claude subscription.
     """
     env: Dict[str, str] = dict(base or os.environ)
     env.setdefault("TERM", "dumb")
     env.setdefault("NO_COLOR", "1")
     env.setdefault("CI", "1")
+
+    if use_cli_auth:
+        # Remove API key to force Claude CLI subscription auth
+        env.pop("ANTHROPIC_API_KEY", None)
+
     return env
 
 
-def _build_provider_command(provider: str, instruction: str) -> List[str]:
+def _build_provider_command(
+    provider: str,
+    instruction: str,
+    *,
+    use_interactive_mode: bool = False,
+) -> List[str]:
     """
-    Build the CLI command line for the given provider in headless JSON mode.
+    Build the CLI command line for the given provider.
 
-    Provider commands (headless + JSON + file-write permissions):
+    Provider commands:
 
     - Anthropic (Claude Code):
-      ["claude", "-p", <instruction>, "--dangerously-skip-permissions", "--output-format", "json"]
+      Normal: ["claude", "-p", <instruction>, "--dangerously-skip-permissions", "--output-format", "json"]
+      Interactive (more robust, uses subscription auth):
+        ["claude", "--dangerously-skip-permissions", "--output-format", "json", <instruction>]
 
     - Google (Gemini CLI):
-      ["gemini", "-p", <instruction>, "--yolo", "--output-format", "json"]
+      Normal: ["gemini", "-p", <instruction>, "--yolo", "--output-format", "json"]
+      Interactive: ["gemini", "--yolo", "--output-format", "json", <instruction>]
 
     - OpenAI (Codex CLI):
       ["codex", "exec", "--full-auto", "--json", <instruction>]
+
+    Args:
+        provider: The provider name ("anthropic", "google", "openai").
+        instruction: The instruction to pass to the CLI.
+        use_interactive_mode: If True, use interactive mode instead of -p flag.
+                              This is more robust for Anthropic as it uses
+                              subscription auth and allows full file access.
     """
     if provider == "anthropic":
-        return [
-            "claude",
-            "-p",
-            instruction,
-            "--dangerously-skip-permissions",
-            "--output-format",
-            "json",
-        ]
+        if use_interactive_mode:
+            # Interactive mode: no -p flag, uses subscription auth
+            # This allows full file access and is more robust
+            return [
+                "claude",
+                "--dangerously-skip-permissions",
+                "--output-format",
+                "json",
+                instruction,
+            ]
+        else:
+            return [
+                "claude",
+                "-p",
+                instruction,
+                "--dangerously-skip-permissions",
+                "--output-format",
+                "json",
+            ]
     if provider == "google":
-        return [
-            "gemini",
-            "-p",
-            instruction,
-            "--yolo",
-            "--output-format",
-            "json",
-        ]
+        if use_interactive_mode:
+            # Interactive mode for Gemini
+            return [
+                "gemini",
+                "--yolo",
+                "--output-format",
+                "json",
+                instruction,
+            ]
+        else:
+            return [
+                "gemini",
+                "-p",
+                instruction,
+                "--yolo",
+                "--output-format",
+                "json",
+            ]
     if provider == "openai":
         return [
             "codex",
@@ -492,6 +553,10 @@ def _run_with_provider(
     """
     Invoke the given provider's CLI in headless JSON mode.
 
+    For Anthropic (Claude), uses subscription auth (removes API key from env)
+    and interactive mode (no -p flag) for more robust authentication that
+    doesn't require API credits.
+
     Returns:
         (success, message, cost)
 
@@ -499,9 +564,17 @@ def _run_with_provider(
         - message: natural-language output on success, or error description on failure
         - cost: estimated USD cost for this attempt
     """
-    cmd = _build_provider_command(provider, agentic_instruction)
+    # Use interactive mode and CLI auth for Anthropic (more robust, uses subscription)
+    use_interactive = provider == "anthropic"
+    use_cli_auth = provider == "anthropic"
+
+    cmd = _build_provider_command(
+        provider,
+        agentic_instruction,
+        use_interactive_mode=use_interactive,
+    )
     timeout = _get_agent_timeout()
-    env = _build_subprocess_env()
+    env = _build_subprocess_env(use_cli_auth=use_cli_auth)
 
     log_debug(
         f"Invoking provider '{provider}' with timeout {timeout:.1f}s",
