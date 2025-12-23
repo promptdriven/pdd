@@ -15,13 +15,15 @@ from ..core.utils import _run_setup_utility
 @click.argument("basename", required=True)
 @click.option(
     "--max-attempts",
-    default=3,
-    help="Maximum number of fix attempts.",
+    type=int,
+    default=None,
+    help="Maximum number of fix attempts. Default: 3 or .pddrc value.",
 )
 @click.option(
     "--budget",
-    default=20.0,
-    help="Maximum total cost for the sync process.",
+    type=float,
+    default=None,
+    help="Maximum total cost for the sync process. Default: 20.0 or .pddrc value.",
 )
 @click.option(
     "--skip-verify",
@@ -58,8 +60,8 @@ from ..core.utils import _run_setup_utility
 def sync(
     ctx: click.Context,
     basename: str,
-    max_attempts: int,
-    budget: float,
+    max_attempts: Optional[int],
+    budget: Optional[float],
     skip_verify: bool,
     skip_tests: bool,
     target_coverage: float,
