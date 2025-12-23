@@ -2442,3 +2442,275 @@ class TestStrengthTemperaturePropagation:
         assert found_call, "update_main call should exist in sync_orchestration"
         assert found_strength, \
             "update_main call should include 'strength=strength' parameter"
+
+
+# --- Bug #156: Fix operation receives wrong test file ---
+
+def test_fix_operation_identifies_actual_failing_test_file(orchestration_fixture, tmp_path):
+    """
+    Bug #156: When pytest reports failures from a file different from pdd_files['test'],
+    fix_main should receive the actual failing file, not just the tracked file.
+
+    Current (buggy) behavior: fix_main always receives pdd_files['test']
+    Desired behavior: fix_main receives the file where failures actually occurred
+
+    This test will FAIL with the current buggy code and PASS after the fix.
+    """
+    import subprocess
+    from unittest.mock import MagicMock
+
+    # Setup test directory with tracked and sibling files
+    test_dir = tmp_path / 'tests'
+    test_dir.mkdir(parents=True, exist_ok=True)
+    tracked_test = test_dir / 'test_calculator.py'
+    sibling_test = test_dir / 'test_calculator_0.py'
+    tracked_test.write_text('def test_pass(): pass')
+    sibling_test.write_text('def test_fail(): assert False')
+
+    # Also create required files for the fixture
+    (tmp_path / 'prompts').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'prompts' / 'calculator_python.prompt').write_text('Create a calculator.')
+    (tmp_path / 'src').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'src' / 'calculator.py').write_text('def add(a, b): return a + b')
+    (tmp_path / 'examples').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'examples' / 'calculator_example.py').write_text('print(add(1, 2))')
+
+    # Update pdd_files to point to our test files
+    orchestration_fixture['get_pdd_file_paths'].return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+        'code': tmp_path / 'src' / 'calculator.py',
+        'example': tmp_path / 'examples' / 'calculator_example.py',
+        'test': tracked_test  # Points to test_calculator.py (the tracked file)
+    }
+
+    # Configure sync to do 'fix' operation
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Mock subprocess.run to return pytest output with failures in SIBLING file
+    mock_result = MagicMock()
+    mock_result.stdout = """
+test_calculator.py::test_pass PASSED
+FAILED test_calculator_0.py::test_fail - AssertionError
+1 passed, 1 failed
+"""
+    mock_result.stderr = ""
+    mock_result.returncode = 1
+
+    with patch('pdd.sync_orchestration.subprocess.run', return_value=mock_result):
+        with patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'):
+            with patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+                result = sync_orchestration(basename="calculator", language="python")
+
+    # ASSERTION: fix_main should receive the ACTUAL failing file
+    fix_main_mock = orchestration_fixture['fix_main']
+    assert fix_main_mock.called, "fix_main should have been called"
+
+    # Get the unit_test_file argument passed to fix_main
+    call_kwargs = fix_main_mock.call_args[1] if fix_main_mock.call_args[1] else {}
+    unit_test_file = call_kwargs.get('unit_test_file', '')
+
+    # The bug: fix_main receives test_calculator.py (tracked) instead of test_calculator_0.py (failing)
+    # This assertion will FAIL with current code, PASS after fix
+    assert 'test_calculator_0.py' in unit_test_file, \
+        f"Bug #156: fix_main should receive the failing file (test_calculator_0.py), " \
+        f"but got: {unit_test_file}"
+
+
+# --- Bug #157: Crash Retry Infinite Loop Tests ---
+
+def test_crash_total_cost_includes_failed_operations(orchestration_fixture, tmp_path):
+    """
+    Verify that total_cost includes cost from failed crash operations.
+    This tests budget tracking (current_cost_ref), not logging (actual_cost).
+    """
+    # Create required files for crash operation
+    code_file = tmp_path / 'src' / 'calculator.py'
+    code_file.parent.mkdir(parents=True, exist_ok=True)
+    code_file.write_text("# Mock code file")
+
+    example_file = tmp_path / 'examples' / 'calculator_example.py'
+    example_file.parent.mkdir(parents=True, exist_ok=True)
+    example_file.write_text("# Mock example file that crashes\nraise Exception('crash')")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Fix crash'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    # Crash fails but costs money - cost should still be tracked
+    orchestration_fixture['crash_main'].return_value = {'success': False, 'cost': 0.25, 'model': 'mock-model'}
+
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # The key assertion: total_cost should include cost from failed crash operation
+    # Budget tracking (current_cost_ref) should add cost regardless of success
+    assert result['total_cost'] == pytest.approx(0.25), \
+        f"Bug #157: Failed crash cost not tracked! Expected 0.25 but got {result['total_cost']}"
+
+
+def test_consecutive_crash_operations_limited(orchestration_fixture):
+    """
+    BUG #157: Should limit consecutive crash operations to prevent infinite loops.
+    Currently there is no limit (unlike fix which has limit of 5, test has limit of 3).
+
+    This test WILL FAIL with current code - that's expected.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    # Always return crash decision - simulates infinite retry scenario
+    mock_determine.return_value = SyncDecision(operation='crash', reason='Crash retry')
+
+    # Crash always fails
+    orchestration_fixture['crash_main'].return_value = {'success': False, 'cost': 0.08, 'model': 'mock-model'}
+
+    result = sync_orchestration(basename="calculator", language="python", budget=10.0)
+
+    mock_crash = orchestration_fixture['crash_main']
+    # BUG: Without crash counter, this could be much higher (or timeout)
+    assert mock_crash.call_count <= 3, \
+        f"Expected max 3 crash calls but got {mock_crash.call_count} - no crash limit!"
+    assert any('consecutive crash' in err.lower() for err in result['errors']), \
+        f"Expected 'consecutive crash' error but got: {result['errors']}"
+
+
+# --- Issue #159: Test State Desynchronization Bug ---
+
+class TestStateUpdateAtomicity:
+    """Tests for atomic state update behavior - Issue #159.
+
+    The bug: RunReport is written at line 640, but Fingerprint is written
+    ~648 lines later at line 1288. This gap allows inconsistent state reads.
+    """
+
+    def test_atomic_state_update_buffers_writes(self, tmp_path):
+        """
+        Verify the FIX: AtomicStateUpdate buffers both writes and commits together.
+
+        Test passes = FIX WORKS (atomic writes verified)
+        Test fails = FIX BROKEN (writes not atomic)
+        """
+        from pdd.sync_orchestration import AtomicStateUpdate, META_DIR
+        import os
+
+        # Setup temp META_DIR
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+
+        run_report_path = meta_dir / "test_python_run.json"
+        fingerprint_path = meta_dir / "test_python.json"
+
+        # Track actual file writes
+        write_timestamps = {}
+
+        # Override META_DIR temporarily for the test
+        original_meta_dir = META_DIR
+
+        with AtomicStateUpdate("test", "python") as state:
+            # Set run_report - file should NOT exist yet
+            state.set_run_report({"exit_code": 0, "tests_passed": 5}, run_report_path)
+            assert not run_report_path.exists(), \
+                "BUG: run_report was written immediately instead of being buffered!"
+
+            # Set fingerprint - file should NOT exist yet
+            state.set_fingerprint({"command": "test", "timestamp": "2024-01-01"}, fingerprint_path)
+            assert not fingerprint_path.exists(), \
+                "BUG: fingerprint was written immediately instead of being buffered!"
+
+        # After exiting context, BOTH files should exist (written atomically)
+        assert run_report_path.exists(), "run_report was not written after commit!"
+        assert fingerprint_path.exists(), "fingerprint was not written after commit!"
+
+        # Verify file contents
+        import json
+        with open(run_report_path) as f:
+            run_report_data = json.load(f)
+        with open(fingerprint_path) as f:
+            fingerprint_data = json.load(f)
+
+        assert run_report_data["exit_code"] == 0
+        assert fingerprint_data["command"] == "test"
+
+    def test_atomic_state_update_rollback_on_exception(self, tmp_path):
+        """
+        Verify that on exception, neither file is written (rollback behavior).
+        """
+        from pdd.sync_orchestration import AtomicStateUpdate
+
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+
+        run_report_path = meta_dir / "test_python_run.json"
+        fingerprint_path = meta_dir / "test_python.json"
+
+        try:
+            with AtomicStateUpdate("test", "python") as state:
+                state.set_run_report({"exit_code": 0}, run_report_path)
+                state.set_fingerprint({"command": "test"}, fingerprint_path)
+                # Simulate an error during operation
+                raise ValueError("Simulated operation failure")
+        except ValueError:
+            pass
+
+        # Neither file should exist due to rollback
+        assert not run_report_path.exists(), \
+            "run_report was written despite exception - rollback failed!"
+        assert not fingerprint_path.exists(), \
+            "fingerprint was written despite exception - rollback failed!"
+
+    def test_run_report_and_fingerprint_write_order_shows_non_atomicity(self, orchestration_fixture):
+        """
+        Verify the BUG: RunReport and Fingerprint are written with a gap.
+
+        This test captures the CALL ORDER of save_run_report vs _save_operation_fingerprint.
+        With the bug: run_report is called FIRST, fingerprint LATER (non-atomic).
+        After fix: They should be called together atomically (this assertion should FAIL).
+
+        Test passes = BUG EXISTS (non-atomic writes detected)
+        Test fails = BUG FIXED (writes are now atomic)
+        """
+        mock_determine = orchestration_fixture['sync_determine_operation']
+        mock_save_report = orchestration_fixture['save_run_report']
+        mock_save_fp = orchestration_fixture['_save_operation_fingerprint']
+
+        # Track call order using a shared list
+        call_order = []
+
+        def track_run_report(*args, **kwargs):
+            call_order.append('run_report')
+            return None
+
+        def track_fingerprint(*args, **kwargs):
+            call_order.append('fingerprint')
+            return None
+
+        mock_save_report.side_effect = track_run_report
+        mock_save_fp.side_effect = track_fingerprint
+
+        # Trigger a 'test' operation which should call both save functions
+        mock_determine.side_effect = [
+            SyncDecision(operation='test', reason='Tests needed'),
+            SyncDecision(operation='all_synced', reason='Done'),
+        ]
+
+        result = sync_orchestration(basename="calculator", language="python")
+
+        # Verify both functions were called
+        assert 'run_report' in call_order, \
+            f"save_run_report was not called. Call order: {call_order}"
+        assert 'fingerprint' in call_order, \
+            f"_save_operation_fingerprint was not called. Call order: {call_order}"
+
+        # Find the indices
+        run_report_idx = call_order.index('run_report')
+        fingerprint_idx = call_order.index('fingerprint')
+
+        # BUG DETECTION: With the bug, run_report is written BEFORE fingerprint
+        # This assertion PASSES when the bug exists (proving non-atomicity)
+        # This assertion FAILS after the fix (writes are atomic/together)
+        assert run_report_idx < fingerprint_idx, (
+            f"BUG #159 FIXED! run_report and fingerprint are now written atomically. "
+            f"Call order: {call_order}"
+        )

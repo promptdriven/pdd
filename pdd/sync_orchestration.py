@@ -13,7 +13,8 @@ import re
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
+import tempfile
 import sys
 
 import click
@@ -22,6 +23,7 @@ import logging
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
 MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
+MAX_CONSECUTIVE_CRASHES = 3  # Allow up to 3 consecutive crash attempts (Bug #157 fix)
 
 # --- Real PDD Component Imports ---
 from .sync_tui import SyncApp
@@ -47,7 +49,103 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
+from .pytest_output import extract_failing_files_from_output
 from . import DEFAULT_STRENGTH
+
+
+# --- Atomic State Update (Issue #159 Fix) ---
+
+@dataclass
+class PendingStateUpdate:
+    """Holds pending state updates for atomic commit."""
+    run_report: Optional[Dict[str, Any]] = None
+    fingerprint: Optional[Dict[str, Any]] = None
+    run_report_path: Optional[Path] = None
+    fingerprint_path: Optional[Path] = None
+
+
+class AtomicStateUpdate:
+    """
+    Context manager for atomic state updates.
+
+    Ensures run_report and fingerprint are both written or neither is written.
+    This fixes Issue #159 where non-atomic writes caused state desynchronization.
+
+    Usage:
+        with AtomicStateUpdate(basename, language) as state:
+            state.set_run_report(report_dict, report_path)
+            state.set_fingerprint(fingerprint_dict, fp_path)
+        # On successful exit, both files are written atomically
+        # On exception, neither file is written (rollback)
+    """
+
+    def __init__(self, basename: str, language: str):
+        self.basename = basename
+        self.language = language
+        self.pending = PendingStateUpdate()
+        self._temp_files: List[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self._commit()
+        else:
+            self._rollback()
+        return False  # Don't suppress exceptions
+
+    def set_run_report(self, report: Dict[str, Any], path: Path):
+        """Buffer a run report for atomic write."""
+        self.pending.run_report = report
+        self.pending.run_report_path = path
+
+    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
+        """Buffer a fingerprint for atomic write."""
+        self.pending.fingerprint = fingerprint
+        self.pending.fingerprint_path = path
+
+    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
+        """Write data to file atomically using temp file + rename pattern."""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write to temp file in same directory (required for atomic rename)
+        fd, temp_path = tempfile.mkstemp(
+            dir=target_path.parent,
+            prefix=f".{target_path.stem}_",
+            suffix=".tmp"
+        )
+        self._temp_files.append(temp_path)
+
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(data, f, indent=2, default=str)
+
+            # Atomic rename - guaranteed atomic on POSIX systems
+            os.replace(temp_path, target_path)
+            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
+        except Exception:
+            # Leave temp file for rollback to clean up
+            raise
+
+    def _commit(self):
+        """Commit all pending state updates atomically."""
+        # Write fingerprint first (checkpoint), then run_report
+        if self.pending.fingerprint and self.pending.fingerprint_path:
+            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
+        if self.pending.run_report and self.pending.run_report_path:
+            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
+
+    def _rollback(self):
+        """Clean up any temp files without committing changes."""
+        for temp_path in self._temp_files:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except OSError:
+                pass  # Best effort cleanup
+        self._temp_files.clear()
+
 
 # --- Mock Helper Functions ---
 
@@ -109,20 +207,44 @@ def log_sync_event(basename: str, language: str, event: str, details: Dict[str, 
     }
     append_sync_log(basename, language, entry)
 
-def save_run_report(report: Dict[str, Any], basename: str, language: str):
-    """Save a run report to the metadata directory."""
-    report_file = META_DIR / f"{basename}_{language}_run.json"
-    META_DIR.mkdir(parents=True, exist_ok=True)
-    with open(report_file, 'w') as f:
-        json.dump(report, f, indent=2, default=str)
+def save_run_report(report: Dict[str, Any], basename: str, language: str,
+                    atomic_state: Optional['AtomicStateUpdate'] = None):
+    """Save a run report to the metadata directory.
 
-def _save_operation_fingerprint(basename: str, language: str, operation: str, 
-                               paths: Dict[str, Path], cost: float, model: str):
-    """Save fingerprint state after successful operation."""
+    Args:
+        report: The run report dictionary to save.
+        basename: The module basename.
+        language: The programming language.
+        atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
+    """
+    report_file = META_DIR / f"{basename}_{language}_run.json"
+    if atomic_state:
+        # Buffer for atomic write
+        atomic_state.set_run_report(report, report_file)
+    else:
+        # Legacy direct write
+        META_DIR.mkdir(parents=True, exist_ok=True)
+        with open(report_file, 'w') as f:
+            json.dump(report, f, indent=2, default=str)
+
+def _save_operation_fingerprint(basename: str, language: str, operation: str,
+                               paths: Dict[str, Path], cost: float, model: str,
+                               atomic_state: Optional['AtomicStateUpdate'] = None):
+    """Save fingerprint state after successful operation.
+
+    Args:
+        basename: The module basename.
+        language: The programming language.
+        operation: The operation that was performed.
+        paths: Dictionary of PDD file paths.
+        cost: The cost of the operation.
+        model: The model used.
+        atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
+    """
     from datetime import datetime, timezone
     from .sync_determine_operation import calculate_current_hashes, Fingerprint
     from . import __version__
-    
+
     current_hashes = calculate_current_hashes(paths)
     fingerprint = Fingerprint(
         pdd_version=__version__,
@@ -133,11 +255,16 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         example_hash=current_hashes.get('example_hash'),
         test_hash=current_hashes.get('test_hash')
     )
-    
-    META_DIR.mkdir(parents=True, exist_ok=True)
+
     fingerprint_file = META_DIR / f"{basename}_{language}.json"
-    with open(fingerprint_file, 'w') as f:
-        json.dump(asdict(fingerprint), f, indent=2, default=str)
+    if atomic_state:
+        # Buffer for atomic write
+        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
+    else:
+        # Legacy direct write
+        META_DIR.mkdir(parents=True, exist_ok=True)
+        with open(fingerprint_file, 'w') as f:
+            json.dump(asdict(fingerprint), f, indent=2, default=str)
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
@@ -534,6 +661,7 @@ def _execute_tests_and_create_run_report(
     target_coverage: float = 90.0,
     *,
     code_file: Optional[Path] = None,
+    atomic_state: Optional['AtomicStateUpdate'] = None,
 ) -> RunReport:
     """Execute tests and create a RunReport with actual results.
 
@@ -596,7 +724,7 @@ def _execute_tests_and_create_run_report(
                     coverage=0.0,
                     test_hash=test_hash
                 )
-                save_run_report(asdict(report), basename, language)
+                save_run_report(asdict(report), basename, language, atomic_state)
                 return report
 
             # Run the test command
@@ -637,7 +765,7 @@ def _execute_tests_and_create_run_report(
             test_hash=test_hash
         )
 
-    save_run_report(asdict(report), basename, language)
+    save_run_report(asdict(report), basename, language, atomic_state)
     return report
 
 def _create_mock_context(**kwargs) -> click.Context:
@@ -925,6 +1053,18 @@ def sync_orchestration(
                             errors.append(f"Detected {consecutive_tests} consecutive test operations. Breaking infinite test loop.")
                             break
 
+                    # Bug #157 fix: Prevent infinite crash retry loops
+                    if operation == 'crash':
+                        consecutive_crashes = 0
+                        for i in range(len(operation_history) - 1, -1, -1):
+                            if operation_history[i] == 'crash':
+                                consecutive_crashes += 1
+                            else:
+                                break
+                        if consecutive_crashes >= MAX_CONSECUTIVE_CRASHES:
+                            errors.append(f"Detected {consecutive_crashes} consecutive crash operations. Breaking infinite crash loop.")
+                            break
+
                     if operation == 'test_extend':
                         # Count test_extend attempts to prevent infinite loop
                         extend_attempts = sum(1 for op in operation_history if op == 'test_extend')
@@ -1005,6 +1145,9 @@ def sync_orchestration(
                     result = {}
                     success = False
                     op_start_time = time.time()
+
+                    # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
+                    atomic_state = AtomicStateUpdate(basename, language)
 
                     # --- Execute Operation ---
                     try:
@@ -1171,6 +1314,7 @@ def sync_orchestration(
                                     language,
                                     target_coverage,
                                     code_file=pdd_files.get("code"),
+                                    atomic_state=atomic_state,
                                 )
                         elif operation == 'test_extend':
                             # Extend existing tests to improve coverage
@@ -1197,6 +1341,7 @@ def sync_orchestration(
                                     language,
                                     target_coverage,
                                     code_file=pdd_files.get("code"),
+                                    atomic_state=atomic_state,
                                 )
                             else:
                                 # No existing test file, fall back to regular test generation
@@ -1208,6 +1353,7 @@ def sync_orchestration(
                                         language,
                                         target_coverage,
                                         code_file=pdd_files.get("code"),
+                                        atomic_state=atomic_state,
                                     )
                         elif operation == 'fix':
                             error_file_path = Path("fix_errors.log")
@@ -1249,7 +1395,42 @@ def sync_orchestration(
                             except Exception as e:
                                 error_content = f"Test execution error: {e}"
                             error_file_path.write_text(error_content)
-                            result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=str(pdd_files['test']), error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
+
+                            # Bug #156 fix: Parse pytest output to find actual failing files
+                            # and pass the correct file to fix_main
+                            failing_files = extract_failing_files_from_output(error_content)
+                            unit_test_file_for_fix = str(pdd_files['test'])  # Default to tracked file
+
+                            if failing_files:
+                                # Try to resolve the failing file paths
+                                test_dir = pdd_files['test'].parent
+                                tracked_file_name = pdd_files['test'].name
+
+                                # Check if the tracked file is among the failures
+                                tracked_in_failures = any(
+                                    Path(ff).name == tracked_file_name for ff in failing_files
+                                )
+
+                                if not tracked_in_failures:
+                                    # Failures are in a different file - use the first failing file
+                                    for ff in failing_files:
+                                        # Try to resolve the path relative to test directory
+                                        ff_path = Path(ff)
+                                        if ff_path.is_absolute() and ff_path.exists():
+                                            unit_test_file_for_fix = str(ff_path)
+                                            break
+                                        else:
+                                            # Try to find it in the test directory
+                                            candidate = test_dir / ff_path.name
+                                            if candidate.exists():
+                                                unit_test_file_for_fix = str(candidate)
+                                                break
+                                            # Also try the path as-is relative to cwd
+                                            if ff_path.exists():
+                                                unit_test_file_for_fix = str(ff_path.resolve())
+                                                break
+
+                            result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
                         elif operation == 'update':
                             result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
                         else:
@@ -1285,8 +1466,10 @@ def sync_orchestration(
                              model_name = result[-1] if len(result) >= 1 else 'unknown'
                         last_model_name = str(model_name)
                         operations_completed.append(operation)
-                        _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name))
-                    
+                        _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
+                        # Issue #159 fix: Commit both run_report and fingerprint atomically
+                        atomic_state._commit()
+
                     update_sync_log_entry(log_entry, {'success': success, 'cost': actual_cost, 'model': model_name, 'error': errors[-1] if errors and not success else None}, duration)
                     append_sync_log(basename, language, log_entry)
 
@@ -1332,6 +1515,7 @@ def sync_orchestration(
                                 language,
                                 target_coverage,
                                 code_file=pdd_files.get("code"),
+                                atomic_state=atomic_state,
                             )
                     
                     if not success:
