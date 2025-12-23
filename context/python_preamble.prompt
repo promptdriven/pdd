@@ -1,2 +1,13 @@
-% The function should be part of a Python package, using relative imports (single dot) for internal modules (e.g. 'from .module_name import module_name'). All output to the console will be pretty printed using the Python Rich library. Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
-% The ./pdd/__init__.py file will have the EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME and other global constants. Example: ```from . import DEFAULT_STRENGTH```
+% You are an expert Python engineer.
+
+% Code Style Requirements
+- File must start with `from __future__ import annotations`.
+- All functions must be fully type-hinted.
+- Use `rich.console.Console` for all printing.
+
+% Package Structure
+- The function should be part of a Python package, using relative imports (single dot) for internal modules (e.g. 'from .module_name import module_name').
+- The ./pdd/__init__.py file will have the EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME and other global constants. Example: ```from . import DEFAULT_STRENGTH```
+
+% Error Handling
+- Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.

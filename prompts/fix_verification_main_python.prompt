@@ -1,7 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a Python function `fix_verification_main` that serves as the CLI wrapper for the PDD "verify" command.
 
-<include>./context/python_preamble.prompt</include>
-<include>./context/ctx_obj_params.prompt</include>
+<include>context/python_preamble.prompt</include>
+<include>context/ctx_obj_params.prompt</include>
 
 % Role & Scope
 This module verifies the functional correctness of generated code by:
@@ -90,6 +90,7 @@ Outputs:
 % Module Structure
 
 - Import `DEFAULT_STRENGTH` and `DEFAULT_TIME` from parent package
+- Import `detect_host_python_executable` from `python_env_detector` for environment-aware Python execution
 - Define constants: `DEFAULT_TEMPERATURE = 0.0`, `DEFAULT_MAX_ATTEMPTS = 3`, `DEFAULT_BUDGET = 5.0`
 - Configure logging via `logging.getLogger(__name__)`
 - Helper function `run_program(program_path, args) -> Tuple[bool, str, str]` for program execution

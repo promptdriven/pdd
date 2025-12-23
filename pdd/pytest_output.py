@@ -5,12 +5,40 @@ import re
 import sys
 import pytest
 import subprocess
+from pathlib import Path
 from rich.console import Console
 from rich.pretty import pprint
 import os
 from .python_env_detector import detect_host_python_executable
 
 console = Console()
+
+
+def _find_project_root(test_file: Path) -> Path | None:
+    """
+    Find the project root directory by looking for .pddrc (definitive PDD marker).
+
+    Only .pddrc is used as the project marker to ensure we don't incorrectly
+    identify project roots for non-PDD projects. This is a conservative approach
+    that maintains backward compatibility.
+
+    Args:
+        test_file: Path to the test file
+
+    Returns:
+        The project root directory if .pddrc is found, None otherwise.
+        When None is returned, the caller should use original behavior.
+    """
+    current = test_file.resolve().parent
+
+    # Walk up the directory tree looking for .pddrc only
+    while current != current.parent:
+        if (current / ".pddrc").exists():
+            return current
+        current = current.parent
+
+    # No .pddrc found - return None to signal original behavior should be used
+    return None
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -94,17 +122,45 @@ def run_pytest_and_capture_output(test_file: str) -> dict:
 
     # Use environment-aware Python executable for pytest execution
     python_executable = detect_host_python_executable()
-    
+
+    # Find the project root directory for proper pytest execution (PDD projects only)
+    test_path = Path(test_file).resolve()
+    project_root = _find_project_root(test_path)
+
+    # Build subprocess kwargs - only modify cwd/env for PDD projects (.pddrc found)
+    subprocess_kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": 300,
+        "stdin": subprocess.DEVNULL,
+    }
+
+    pytest_args = [python_executable, "-B", "-m", "pytest", str(test_path), "-v"]
+
+    if project_root is not None:
+        # PDD project detected - set up proper environment
+        subprocess_kwargs["cwd"] = str(project_root)
+
+        # Build PYTHONPATH with both project root and src/ if it exists
+        paths_to_add = [str(project_root)]
+        src_dir = project_root / "src"
+        if src_dir.is_dir():
+            paths_to_add.insert(0, str(src_dir))  # src/ takes priority
+
+        env = os.environ.copy()
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        if existing_pythonpath:
+            paths_to_add.append(existing_pythonpath)
+        env["PYTHONPATH"] = os.pathsep.join(paths_to_add)
+        subprocess_kwargs["env"] = env
+
+        # Add --rootdir to ensure pytest uses project's config
+        pytest_args.append(f"--rootdir={project_root}")
+
     try:
         # Run pytest using subprocess with the detected Python executable
         # Use -B flag to disable bytecode caching, ensuring fresh imports
-        result = subprocess.run(
-            [python_executable, "-B", "-m", "pytest", test_file, "-v"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            stdin=subprocess.DEVNULL
-        )
+        result = subprocess.run(pytest_args, **subprocess_kwargs)
         
         stdout = result.stdout
         stderr = result.stderr

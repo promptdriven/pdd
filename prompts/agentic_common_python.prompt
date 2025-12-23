@@ -1,0 +1,79 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the pdd/agentic_common.py module.
+
+% Role & Scope
+Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration.
+
+% CLI Documentation (headless mode, JSON output, permissions)
+<claude_code_json_output>
+<web>https://claudelog.com/faqs/what-is-output-format-in-claude-code/</web>
+</claude_code_json_output>
+
+<gemini_cli_headless>
+<web>https://geminicli.com/docs/cli/headless/</web>
+</gemini_cli_headless>
+
+<gemini_cli_sandbox>
+<web>https://geminicli.com/docs/cli/sandbox/</web>
+</gemini_cli_sandbox>
+
+<gemini_cli_pricing>
+<web>https://geminicli.com/docs/quota-and-pricing/</web>
+</gemini_cli_pricing>
+
+<codex_cli_reference>
+<web>https://developers.openai.com/codex/cli/reference</web>
+</codex_cli_reference>
+
+% Requirements
+1. Export `AGENT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"]`
+2. Provide logging utilities that accept `verbose: bool` and `quiet: bool` as function parameters (callers pass these from their context)
+3. Check agent availability by verifying BOTH: CLI command exists (use `shutil.which`) AND API key is configured (via `_load_model_data()` from llm_invoke)
+4. Run agents in **headless mode** with JSON output for structured response parsing and real cost tracking. Each provider requires specific flags for auto-approval of file operations.
+5. Write prompt to unique temp file (`.agentic_prompt_<random>.txt`), invoke CLI with agentic instruction, clean up
+6. Sanitize environment for non-interactive subprocess execution (TERM=dumb, NO_COLOR=1, CI=1)
+7. Parse JSON output to extract actual cost:
+   - Anthropic: `result["total_cost_usd"]` (USD directly)
+   - Google: Calculate from `result["stats"]["models"][model]["tokens"]` fields (prompt, candidates, cached)
+   - OpenAI: Calculate from `result["usage"]` fields (input_tokens, output_tokens, cached_input_tokens)
+
+% Function Signatures
+
+`get_available_agents() -> List[str]`
+- Returns list of available provider names (e.g., `["anthropic", "google"]`)
+- Checks both CLI binary exists AND API key is configured
+
+`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "") -> Tuple[bool, str, float, str]`
+- Tries providers in `AGENT_PROVIDER_PREFERENCE` order
+- Returns (success, output, cost, provider_used)
+
+% Environment Variables
+- `PDD_AGENTIC_TIMEOUT`: Agent CLI timeout in seconds (default: 240)
+
+% Token Pricing (for providers that return tokens, not USD)
+- Gemini: Refer to current pricing from CLI documentation above
+- Codex: $1.50/1M input, $6/1M output (75% discount for cached tokens)
+
+% CLI Invocation Pattern
+Critical: Build agentic instruction pointing to temp file:
+`"Read the file {prompt_file} for instructions. You have full file access to explore and modify files as needed."`
+
+Provider commands (headless + JSON output + file write permissions):
+- Anthropic: `["claude", "-p", <instruction>, "--dangerously-skip-permissions", "--output-format", "json"]`
+- Google: `["gemini", "-p", <instruction>, "--yolo", "--output-format", "json"]`
+- OpenAI: `["codex", "exec", "--full-auto", "--json", <instruction>]`
+
+Notes:
+- `--dangerously-skip-permissions` (Claude): allows file modifications without prompts
+- `--yolo` (Gemini): auto-approves all operations without prompts
+- `--full-auto` (Codex): exits read-only sandbox, allows file edits
+
+% Dependencies
+<module_dependencies>
+  <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
+</module_dependencies>
+
+% Deliverables
+- Code: `pdd/agentic_common.py`

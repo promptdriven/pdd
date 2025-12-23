@@ -1,54 +1,33 @@
-% You are an expert Python engineer. Your goal is to write `pdd/commands/modify.py`.
-
-% Role & Scope
-  This module contains commands that modify prompts: `split`, `change`, and `update`.
-
 <include>context/python_preamble.prompt</include>
 
-% Program Specification (README.md):
-    <README.md>
-    <include>./README.md</include>
-    </README.md>
+% Goal
+Write `pdd/commands/modify.py`.
+
+% Role & Scope
+This module contains Click commands that modify prompts: `split`, `change`, and `update`.
 
 % Requirements
-  1. **split**:
-     - Interface: Match the `split` command specification in `README.md`.
-     - Logic: Call `split_main`.
-     - Return type: `Optional[Tuple[Dict[str, str], float, str]]`
-  2. **change**:
-     - Interface: Match the `change` command specification in `README.md`.
-     - Logic: Validate inputs (csv vs file) before calling `change_main`.
-     - Validation rules:
-       - When `--csv` is used: `INPUT_CODE` must be a directory; `INPUT_PROMPT_FILE` must not be provided.
-       - When `--csv` is not used: `INPUT_PROMPT_FILE` is required; `INPUT_CODE` must be a file.
-     - Return type: `Optional[Tuple[Union[str, Dict], float, str]]`
-  3. **update**:
-     - Interface: Match the `update` command specification in `README.md` (handling single-file and repo-wide modes).
-     - Logic: Call `update_main`.
-     - Return type: `Optional[Tuple[str, float, str]]`
+1. **split**: Call `split_main` per README.md spec
+2. **change**: Validate csv-vs-file mode, then call `change_main`
+3. **update**: Support repo-wide mode (no args) and single-file mode (with args). When one arg provided, treat as code file. Call `update_main` with `repo=is_repo_mode`
+4. **update --simple flag**: Add `--simple` boolean flag (default False) to use legacy 2-stage LLM update instead of agentic mode. Pass `simple=simple` to `update_main()`
 
 % Error Handling
-  - Apply `@track_cost` decorator to each command function.
-  - Re-raise `click.Abort` exceptions (user cancellation) without calling `handle_error`.
-  - For all other exceptions, call `handle_error(e, command_name, quiet)` and return `None`.
-
-% Dependencies
-  <split_main_example>
-  <include>context/split_main_example.py</include>
-  </split_main_example>
-  <change_main_example>
-  <include>context/change_main_example.py</include>
-  </change_main_example>
-  <update_main_example>
-  <include>context/update_main_example.py</include>
-  </update_main_example>
-  <track_cost_example>
-  <include>context/track_cost_example.py</include>
-  </track_cost_example>
+- Apply `@track_cost` decorator to each command function
+- Re-raise `click.Abort` exceptions (user cancellation) without calling `handle_error`
+- For all other exceptions (including `click.UsageError`), call `handle_error(e, command_name, quiet)` and return None
 
 % Instructions
-  - Validation for `change` should occur at the command level before calling `change_main`.
-  - Raise `click.UsageError` for validation failures.
+- Validation for `change` should occur at the command level before calling `change_main`
+- Raise `click.UsageError` for validation failures
+
+% Dependencies
+<module_dependencies>
+  <split_main_example><include>context/split_main_example.py</include></split_main_example>
+  <change_main_example><include>context/change_main_example.py</include></change_main_example>
+  <update_main_example><include>context/update_main_example.py</include></update_main_example>
+  <track_cost_example><include>context/track_cost_example.py</include></track_cost_example>
+</module_dependencies>
 
 % Deliverables
-  - Code: `pdd/commands/modify.py`
+- Code: `pdd/commands/modify.py`

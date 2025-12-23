@@ -1,32 +1,44 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "git_update", that will:
-%   1) Read the current contents of 'modified_code_file' (this is the user's modified code).
-%   2) Restore the prior checked-in version from the local Git repository (HEAD) without fetching from remote, and load it as 'original_input_code'.
-%   3) Call 'update_prompt' with input_prompt, original_input_code, modified_code, strength, temperature, verbose, and time.
-%   4) Overwrite 'modified_code_file' with the previously read modified contents (i.e., keep the user's edits on disk).
-% Finally, return outputs without staging or committing any changes to the Git repository.
-
 <include>context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-        - 'input_prompt' - A string that contains the prompt that generated the original code.
-        - 'modified_code_file' - A string of the filepath that contains the code that was modified by the user.
-        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
-        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
-        - 'time': A float between 0 and 1 that controls the thinking effort for the LLM model, passed to update_prompt. Default is DEFAULT_TIME. 
-        - 'verbose': A boolean value representing whether to print verbose output. The flag is forwarded to update_prompt for its internal logging.
-    Outputs:
-        - 'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
-        - 'total_cost': A float value representing the total cost of running the function.
-        - 'model_name': A string representing the name of the selected LLM model.
+% Goal
+Write `pdd/git_update.py` with a `git_update` function.
 
-% Behavioral details and error handling:
-%   - Always print a concise Rich success panel on success (showing modified_prompt, total_cost, model_name).
-%   - On any error (e.g., invalid inputs, missing file, not a Git repo, update_prompt failure, or write failure), print a Rich error panel and return (None, 0.0, "").
-%   - If the file was temporarily checked out to HEAD, ensure the user's modified contents are restored back to 'modified_code_file' before returning from an error path.
-%   - Validate that 'input_prompt' and 'modified_code_file' are provided and that the file exists. If the path is not inside a Git repository (or checkout fails), treat it as an error.
+% Role & Scope
+Retrieves original code from Git HEAD, routes to agentic or legacy prompt update, preserves user's modified code on disk.
 
-% Here are examples of how to use internal modules:
-<internal_example_modules>
-    % Here is an example how to use the update_prompt function (which now also accepts a 'time' parameter, and its example usage should reflect this): <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
-</internal_example_modules>
+% Requirements
+1. Function signature (preserve existing params, add `simple`, `quiet`, `prompt_file` at end):
+   ```
+   git_update(input_prompt: str, modified_code_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, simple: bool = False, quiet: bool = False, prompt_file: Optional[str] = None) -> Tuple[Optional[str], float, str]
+   ```
+   Note: `input_prompt` is the prompt TEXT content, not a file path.
+   Note: `prompt_file` is the path to the prompt file (required for agentic path).
+2. Read modified code from disk before any git operations
+3. Restore original code from Git HEAD (local only, no fetch) using `git.Repo` with `search_parent_directories=True`
+4. Routing logic:
+   - If `simple=False` AND `prompt_file` is provided AND `get_available_agents()` returns non-empty: use `run_agentic_update()`
+   - On agentic success: READ the prompt file to get updated content, then return that content
+   - Otherwise (simple=True, no prompt_file, no agents, or agentic failed): fall back to `update_prompt()`
+5. Always restore user's modified code to disk before returning
+6. Never stage or commit changes to Git
+7. Return (updated_prompt_content, cost, model) on success, (None, cost, model) on failure
+
+% Agentic Integration
+When using agentic update:
+- Need the prompt FILE PATH (not content) for `run_agentic_update()`
+- After success, read the file to get the updated prompt content for return value
+- Pass `verbose` and `quiet` parameters to agentic functions
+
+% Error Handling
+- Print Rich success/error panels
+- Follow return conventions from tests
+
+% Dependencies
+<module_dependencies>
+<pdd.update_prompt><include>context/update_prompt_example.py</include></pdd.update_prompt>
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_update><include>context/agentic_update_example.py</include></pdd.agentic_update>
+</module_dependencies>
+
+% Deliverables
+- Code: `pdd/git_update.py`

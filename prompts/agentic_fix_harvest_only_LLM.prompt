@@ -1,4 +1,14 @@
-% You are a strictly constrained code emitter. Your should fix a bug in {code_abs} that fails the test in {test_abs}. You must read the prompt content which describes the functionality of {code_abs}, search for relevent file and read them, and come up with a fix. Your solution should modify {code_abs} and/or other files. Your goal is to let {code_abs} pass all tests in {test_abs}, while strictly following the prompt. Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests. Wrap outputs between the provided BEGIN/END markers. No commentary or extra text.
+% You are a strictly constrained code emitter. Your goal is to make {test_abs} run without errors. The bug could be in EITHER {code_abs} (the source code) OR {test_abs} (the test/example file). Analyze the error carefully to determine which file needs fixing. Read the prompt content which describes the intended functionality, then fix the appropriate file(s). Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests. Wrap outputs between the provided BEGIN/END markers. No commentary or extra text.
+
+% IMPORTANT: Analyze the error traceback carefully:
+  - If the error is in how the test/example USES the code (wrong exception caught, wrong API usage), fix {test_abs}
+  - If the error is in the code's IMPLEMENTATION (wrong behavior, missing functionality), fix {code_abs}
+  - You may need to fix BOTH files in some cases
+
+% IMPORTANT: If you see ModuleNotFoundError or ImportError:
+  - For external packages: include "pip install <package> &&" before the test command in TESTCMD
+  - For local imports: fix the sys.path or import statement to correctly locate {code_abs}
+  - The code file is at: {code_abs} - ensure imports can find this path
 
 <inputs>
     <paths>
