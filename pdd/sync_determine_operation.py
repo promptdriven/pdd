@@ -893,9 +893,30 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     # Read fingerprint early since we need it for crash verification
     fingerprint = read_fingerprint(basename, language)
-    
+
+    # Check if auto-deps just completed - ALWAYS regenerate code after auto-deps
+    # This must be checked early, before any run_report processing, because:
+    # 1. Old run_report (if exists) is stale and should be ignored
+    # 2. auto-deps updates dependencies but doesn't regenerate code
+    if fingerprint and fingerprint.command == 'auto-deps':
+        paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
+        return SyncDecision(
+            operation='generate',
+            reason='Auto-deps completed - regenerate code with updated prompt',
+            confidence=0.90,
+            estimated_cost=estimate_operation_cost('generate'),
+            details={
+                'decision_type': 'heuristic',
+                'previous_command': 'auto-deps',
+                'code_exists': paths['code'].exists() if paths.get('code') else False,
+                'regenerate_after_autodeps': True
+            }
+        )
+
     run_report = read_run_report(basename, language)
-    if run_report:
+    # Only process runtime signals (crash/fix/test) if we have a fingerprint
+    # Without a fingerprint, run_report is stale/orphaned and should be ignored
+    if run_report and fingerprint:
         # Check for prompt changes FIRST - prompt changes take priority over runtime signals
         # If the user modified the prompt, we need to regenerate regardless of runtime state
         if fingerprint:
