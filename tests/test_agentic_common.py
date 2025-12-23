@@ -142,11 +142,17 @@ def test_get_available_agents_none(mock_env, mock_load_model_data, mock_shutil_w
     assert agents == []
 
 def test_get_available_agents_cli_only_no_key(mock_env, mock_load_model_data, mock_shutil_which):
-    """Test when CLIs exist but API keys are missing."""
+    """Test when CLIs exist but API keys are missing.
+
+    Note: Anthropic is now detected even without API key because we support
+    Claude CLI subscription auth. Other providers still require API keys.
+    """
     mock_shutil_which.return_value = "/usr/bin/fake"
     # No env vars set
     agents = get_available_agents()
-    assert agents == []
+    # Anthropic is available via subscription auth (Claude CLI exists)
+    # Google and OpenAI are not available (no API keys)
+    assert agents == ["anthropic"]
 
 def test_get_available_agents_all_available(mock_env, mock_load_model_data, mock_shutil_which):
     """Test when all agents are available."""
@@ -376,11 +382,16 @@ def test_run_agentic_task_timeout(mock_cwd, mock_env, mock_load_model_data, mock
     assert "timed out" in msg
 
 def test_environment_sanitization(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """Verify environment variables passed to subprocess."""
+    """Verify environment variables passed to subprocess.
+
+    Note: For Anthropic, we now use subscription auth which removes the
+    ANTHROPIC_API_KEY from the environment to force CLI subscription auth.
+    This is more robust as it uses the user's Claude subscription.
+    """
     mock_shutil_which.return_value = "/bin/exe"
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["EXISTING_VAR"] = "value"
-    
+
     mock_subprocess.return_value.returncode = 0
     mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
 
@@ -388,12 +399,13 @@ def test_environment_sanitization(mock_cwd, mock_env, mock_load_model_data, mock
 
     args, kwargs = mock_subprocess.call_args
     env_passed = kwargs['env']
-    
+
     assert env_passed["TERM"] == "dumb"
     assert env_passed["NO_COLOR"] == "1"
     assert env_passed["CI"] == "1"
     assert env_passed["EXISTING_VAR"] == "value"
-    assert env_passed["ANTHROPIC_API_KEY"] == "key"
+    # ANTHROPIC_API_KEY is intentionally removed for subscription auth
+    assert "ANTHROPIC_API_KEY" not in env_passed
 
 def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """

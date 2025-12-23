@@ -258,8 +258,9 @@ def test_skip_verify_flag(orchestration_fixture):
     assert 'verify' not in result['operations_completed']
     assert 'test' in result['operations_completed']
     orchestration_fixture['fix_verification_main'].assert_not_called()
-    # Verify the state was advanced by saving a fingerprint
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'verify', ANY, 0.0, 'skip_verify')
+    # Verify the state was advanced by saving a fingerprint with 'skip:' prefix
+    # Bug #11 fix: skipped operations now use 'skip:' prefix to distinguish from actual execution
+    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'skip:verify', ANY, 0.0, 'skipped')
 
 def test_skip_tests_flag(orchestration_fixture):
     """
@@ -278,7 +279,8 @@ def test_skip_tests_flag(orchestration_fixture):
     assert 'test' in result['skipped_operations']
     assert 'test' not in result['operations_completed']
     orchestration_fixture['cmd_test_main'].assert_not_called()
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'test', ANY, 0.0, 'skipped')
+    # Bug #11 fix: skipped operations now use 'skip:' prefix to distinguish from actual execution
+    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'skip:test', ANY, 0.0, 'skipped')
 
 def test_manual_merge_request(orchestration_fixture):
     """

@@ -55,8 +55,8 @@ def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
     # Pretend CLIs exist so selection proceeds
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
 
-    # Short-circuit harvest path to succeed — NOTE: correct symbol (no leading underscore)
-    monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+    # Short-circuit harvest path to succeed — NOTE: uses leading underscore (private function)
+    monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
 
     ok, msg, cost, model, changed_files = run_agentic_fix(p_prompt, p_code, p_test, p_err)
     assert ok is True
@@ -76,6 +76,9 @@ def test_run_agentic_fix_handles_no_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # Also hide Claude CLI so subscription auth isn't detected
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
 
     ok, msg, cost, model, changed_files = run_agentic_fix(
         prompt_file=str(p_prompt),
@@ -128,6 +131,11 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     for k in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
         if k != env_key:
             monkeypatch.delenv(k, raising=False)
+
+    # For non-anthropic providers, hide Claude CLI so subscription auth isn't used
+    if provider != "anthropic":
+        original_which = shutil.which
+        monkeypatch.setattr("shutil.which", lambda cmd: None if cmd == "claude" else original_which(cmd))
 
     # Re-apply the cached key to the env var our CSV expects
     if provider == "google":
@@ -466,8 +474,14 @@ class TestCwdHandling:
 
         monkeypatch.setattr(Path, "write_text", track_write)
 
-        # Mock try_harvest_then_verify to return True (success)
-        monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+        # Mock agent runners to return success without making real calls
+        # With PRIMARY-FIRST logic, we need to mock the primary path functions
+        mock_result = MagicMock(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_google_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_openai_variants", lambda *a, **k: mock_result)
+        # Also mock harvest fallback
+        monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
 
         # Call with relative paths AND explicit cwd parameter
         ok, msg, cost, model, changed_files = run_agentic_fix(
@@ -534,7 +548,14 @@ class TestCwdHandling:
             lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}{verify_cmd}",
         )
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
-        monkeypatch.setattr("pdd.agentic_fix.try_harvest_then_verify", lambda *a, **k: True)
+
+        # Mock agent runners to return success without making real calls
+        # With PRIMARY-FIRST logic, we need to mock the primary path functions
+        mock_result = MagicMock(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_google_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_openai_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
 
         # Call with relative paths and explicit cwd
         run_agentic_fix(
