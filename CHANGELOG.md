@@ -1,3 +1,38 @@
+## v0.0.89 (2025-12-22)
+
+### Feat
+
+- enhance working directory handling in agentic functions
+- enhance fix_error_loop documentation with control flow diagram
+- add --simple flag for legacy update mode in CLI
+- add simple option for legacy routing in update_main
+- refine fix_error_loop module with enhanced logging and iterative error handling
+- enhance git_update function with agentic and legacy routing logic
+- enhance auto_include and insert_includes to filter self-referential dependencies
+- enhance test coverage for agentic functionality with formal verification and unit tests
+- prioritize prompt changes in sync decision logic
+- enhance testing framework for agentic updates with formal verification and unit tests
+- implement crash_main and fix_code_loop functions for error handling
+- add formal verification and unit tests for agentic verification
+- add agentic verification functionality and example
+- implement agentic crash handling and testing framework
+- introduce agentic update functionality for prompt files
+
+### Fix
+
+- clarify prompt authority in error handling and test expectations
+- add progress callback parameter to test functions
+- ensure test file preservation during sync operations
+
+### Refactor
+
+- enhance agentic fix functionality and improve output reporting
+- enhance agentic functionality and improve CLI integration
+- enhance agentic functionality and prompt management
+- enhance clarity and structure in modify_python prompt
+- improve prompt clarity and structure in git_update and update_main
+- streamline agentic_fix and update prompts
+
 ## v0.0.88 (2025-12-19)
 
 ### Feat
