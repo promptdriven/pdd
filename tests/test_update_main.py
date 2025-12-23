@@ -85,13 +85,23 @@ def mock_git_update():
         mock_gu.return_value = ("updated prompt from git", 0.654321, "git-model")
         yield mock_gu
 
+@pytest.fixture
+def mock_get_available_agents():
+    """
+    Patches get_available_agents to return an empty list, disabling agentic routing.
+    """
+    with patch("pdd.update_main.get_available_agents") as mock_ga:
+        mock_ga.return_value = []
+        yield mock_ga
+
 def test_update_main_with_input_code_and_no_git(
     mock_ctx,
     minimal_input_files,
     mock_construct_paths,
     mock_update_prompt,
     mock_git_update,
-    mock_open_file
+    mock_open_file,
+    mock_get_available_agents
 ):
     """
     Test that update_main correctly calls update_prompt() if git=False
@@ -139,7 +149,8 @@ def test_update_main_with_git_no_input_code(
     mock_construct_paths,
     mock_update_prompt,
     mock_git_update,
-    mock_open_file
+    mock_open_file,
+    mock_get_available_agents
 ):
     """
     Test that update_main correctly calls git_update() if git=True
@@ -179,7 +190,10 @@ def test_update_main_with_git_no_input_code(
         strength=0.5,
         temperature=0.0,
         verbose=False,
-        time=0.25
+        time=0.25,
+        simple=False,  # Agentic was not tried (no agents available)
+        quiet=False,
+        prompt_file="some_prompt_file.prompt",
     )
     mock_update_prompt.assert_not_called()  # update_prompt should NOT be called
 
@@ -191,7 +205,8 @@ def test_update_main_with_both_git_and_input_code_returns_none(
     minimal_input_files,
     mock_construct_paths,
     mock_update_prompt,
-    mock_git_update
+    mock_git_update,
+    mock_get_available_agents
 ):
     """
     Test that providing both --git and an input_code_file returns None.
@@ -224,6 +239,7 @@ def test_update_main_regeneration_mode(
     mock_git_update,
     mock_construct_paths,
     mock_open_file,
+    mock_get_available_agents,
     monkeypatch
 ):
     """
@@ -271,7 +287,8 @@ def test_update_main_handles_unexpected_exception_gracefully(
     mock_ctx,
     minimal_input_files,
     mock_construct_paths,
-    mock_open_file
+    mock_open_file,
+    mock_get_available_agents
 ):
     """
     Test that an unexpected exception returns None and prints an error message.
@@ -387,7 +404,7 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_rep
     Test the main orchestration logic of update_main in --repo mode.
     """
     # Use a side_effect to return dynamic values based on input
-    def mock_update_logic(prompt_file, code_file, ctx, repo):
+    def mock_update_logic(prompt_file, code_file, ctx, repo, simple=False):
         return {
             "prompt_file": prompt_file,
             "status": "✅ Success",

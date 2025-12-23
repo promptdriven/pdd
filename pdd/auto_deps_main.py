@@ -1,7 +1,7 @@
 """Main function for the auto-deps command."""
 import sys
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Callable, Tuple, Optional
 import click
 from rich import print as rprint
 
@@ -15,7 +15,8 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
     directory_path: str,
     auto_deps_csv_path: Optional[str],
     output: Optional[str],
-    force_scan: Optional[bool]
+    force_scan: Optional[bool],
+    progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Tuple[str, float, str]:
     """
     Main function to analyze and insert dependencies into a prompt file.
@@ -27,6 +28,7 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
         auto_deps_csv_path: Path to CSV file containing auto-dependency information.
         output: Optional path to save the modified prompt file.
         force_scan: Flag to force rescan of directory by deleting CSV file.
+        progress_callback: Callback for progress updates (current, total) for each file.
 
     Returns:
         Tuple containing:
@@ -76,10 +78,12 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
             input_prompt=input_strings["prompt_file"],
             directory_path=directory_path,
             csv_filename=csv_path,
+            prompt_filename=prompt_file,
             strength=strength,
             temperature=temperature,
             time=time_budget,
-            verbose=not ctx.obj.get('quiet', False)
+            verbose=not ctx.obj.get('quiet', False),
+            progress_callback=progress_callback
         )
 
         # Save the modified prompt to the output file

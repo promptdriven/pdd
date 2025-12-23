@@ -1,75 +1,39 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'crash_main', that will be the CLI wrapper for fixing errors in a code module and its calling program that caused a program to crash. This function will read the necessary files, call the fix_code_module_errors function, and handle the output locations.
+% Write function `crash_main`: CLI wrapper for fixing crashed code modules and their calling programs.
 
-<include>./context/python_preamble.prompt</include>
-<include>./context/ctx_obj_params.prompt</include>
+<include>context/python_preamble.prompt</include>
+<include>context/ctx_obj_params.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys). The function defensively ensures `ctx.obj` and `ctx.params` are dictionaries with fallbacks (e.g., `ctx.obj = ctx.obj if isinstance(ctx.obj, dict) else {}`).
-        - 'prompt_file' (str): Filename of the prompt file that generated the code module.
-        - 'code_file' (str): Filename of the code module that caused the crash and will be modified.
-        - 'program_file' (str): Filename of the program that was running the code module.
-        - 'error_file' (str): Filename of the file containing the errors from the program run.
-        - 'output' (Optional[str]): Path where to save the fixed code file. If None, uses default naming convention.
-        - 'output_program' (Optional[str]): Path where to save the fixed program file. If None, uses default naming convention.
-        - 'loop' (bool): Enable iterative fixing process. Default is False.
-        - 'max_attempts' (Optional[int]): Maximum number of fix attempts before giving up. Only used if loop=True. Default is 3 (only substitute this default when the argument is None so callers can pass falsy-but-valid values).
-        - 'budget' (Optional[float]): Maximum cost allowed for the fixing process. Only used if loop=True. Default is $5.0 (apply the default only when the argument is None).
-        - 'agentic_fallback' (bool): Enable agentic fallback if the primary fix mechanism fails. Default is True.
-        - 'strength' (Optional[float]): LLM generation strength. Resolved via priority chain if None.
-        - 'temperature' (Optional[float]): LLM temperature. Resolved via priority chain if None.
+% Signature:
+```python
+def crash_main(
+    ctx: click.Context,  # Defensively ensure ctx.obj and ctx.params are dicts
+    prompt_file: str, code_file: str, program_file: str, error_file: str,
+    output: Optional[str] = None, output_program: Optional[str] = None,
+    loop: bool = False, max_attempts: Optional[int] = None,  # default 3
+    budget: Optional[float] = None,  # default $5.0
+    agentic_fallback: bool = True,
+    strength: Optional[float] = None, temperature: Optional[float] = None,
+) -> Tuple[bool, str, str, int, float, str]:  # success, final_code, final_program, attempts, cost, model
+```
 
-    Outputs:
-        - Returns a tuple containing:
-            - `bool`: Success status
-            - `str`: The final fixed code module
-            - `str`: The final fixed program
-            - `int`: Total number of fix attempts made
-            - `float`: Total cost of all fix attempts
-            - `str`: The name of the model used (or an error message string if an exception occurred)
-
-% Important implementation details:
-    - The function should track whether the code and program files were actually modified during the fixing process.
-    - If output paths are provided, always write the output files. Additionally, compare the final contents with the originals to determine whether each file actually changed and report that status.
-    - Provide user feedback that accurately reflects which files were modified and saved using Rich printing (`from rich import print as rprint`). Always show save locations when output paths are provided—even when no changes were made—and indicate per-file whether it was modified or not.
-    - Compare final contents with original contents to determine if updates occurred.
-    - **Handle cases where the fixing process returns empty strings for the fixed code or program. If an empty string is returned, consider the file not updated, even if the original file was also empty. If output paths are provided, write the original contents to those outputs but still report the file as not updated.**
-    - Use both `quiet` and `verbose` from the Click context (check both `ctx.params` and `ctx.obj` with fallback). If `quiet` is True, suppress output. Otherwise, print a concise summary; if `verbose` is True, include additional detail beyond the default summary (for example, expanded file-change diagnostics or intermediate steps).
-    - Resolve `strength` using the following priority: (1) explicit `strength` parameter if not None, (2) `ctx.obj.get('strength', ...)`, (3) `DEFAULT_STRENGTH` constant imported from the pdd module.
-    - Resolve `temperature` using the following priority: (1) explicit `temperature` parameter if not None, (2) `ctx.obj.get('temperature', ...)`, (3) `0` (deterministic output) as the default fallback for crash fixing operations.
-    - Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)` from the Click context, where `DEFAULT_TIME` is a constant (imported from the pdd module). Pass `time` to `fix_code_module_errors` or `fix_code_loop`.
-    - Retrieve `force = ctx.params.get("force", ctx.obj.get("force", False))` from the Click context to support the --force CLI option.
-    - **On exceptions, return a failure tuple `(False, "", "", 0, 0.0, error_message_string)` rather than calling `sys.exit(1)`. This allows orchestrators (e.g., the sync command) to handle errors gracefully.** Specific exception handling:
-        - `FileNotFoundError`: Return `(False, "", "", 0, 0.0, f"FileNotFoundError: {e}")`
-        - `click.Abort`: Re-raise immediately to allow user cancellation to propagate (e.g., in sync loops)
-        - Other exceptions: Return `(False, "", "", 0, 0.0, f"Error: {e}")`
-    - In non-loop mode, treat the operation as successful if the fixing routine completes without raising; success does not imply that files were modified.
-    - When using `fix_code_loop`, map its return order `(success, final_program, final_code, attempts, total_cost, model)` to this function's return order `(success, final_code, final_program, attempts, total_cost, model)`.
-    - When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored, and pass `confirm_callback=ctx.obj.get('confirm_callback')` to support TUI environments.
-    - Match the function signature exactly to the inputs listed above (including `strength` and `temperature` as Optional[float] parameters with default None); do not introduce additional CLI parameters unless they are added to this specification.
+% Requirements:
+    1. Use `resolve_effective_config` from `.config_resolution` with `param_overrides` for strength/temperature.
+    2. **Loop mode**: Use `fix_code_loop` (pass `prompt_file`, `agentic_fallback`). Map its return order `(success, final_program, final_code, ...)` to ours.
+    3. **Non-loop mode**: Use `fix_code_module_errors` → `(update_program, update_code, fixed_program, fixed_code, _, cost, model)`. Set `success=True`, `attempts=1`.
+    4. Track modifications by comparing final vs original. Empty string = not updated, fall back to original.
+    5. Exceptions: return `(False, "", "", 0, 0.0, error_string)` instead of sys.exit. Re-raise `click.Abort`.
+    6. Pass `context_override` and `confirm_callback` to `construct_paths`.
+    7. Use `from rich import print as rprint` (overrides preamble). Create parent dirs before writing. Print status/cost/save-locations unless `quiet`; add diagnostics if `verbose`.
 
 <examples>
-   % Here are examples of how to use internal modules:
-   <internal_example_modules>
-      - Here is an example of how to use the `construct_paths` function:
-      <construct_paths_example>
-      <include>context/construct_paths_example.py</include>
-      </construct_paths_example>
-
-      - Here is an example of how to use the `fix_code_module_errors` function:
-      <fix_code_module_errors_example>
-      <include>context/fix_code_module_errors_example.py</include>
-      </fix_code_module_errors_example>
-
-      - Here is an example of how to use the `fix_code_loop` function:
-      <fix_code_loop_example>
-      <include>context/fix_code_loop_example.py</include>
-      </fix_code_loop_example>
-   </internal_example_modules>
+   <construct_paths_example>
+   <include>context/construct_paths_example.py</include>
+   </construct_paths_example>
+   <fix_code_module_errors_example>
+   <include>context/fix_code_module_errors_example.py</include>
+   </fix_code_module_errors_example>
+   <fix_code_loop_example>
+   <include>context/fix_code_loop_example.py</include>
+   </fix_code_loop_example>
 </examples>
-
-% Here is the README for the cli command that has details of how the 'crash' command and related sub-command works:
-   <cli_command_readme>
-   <include>./README.md</include>
-   </cli_command_readme>
 

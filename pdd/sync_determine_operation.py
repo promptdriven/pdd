@@ -521,6 +521,7 @@ def estimate_operation_cost(operation: str, language: str = "python") -> float:
         'crash': 0.40,
         'verify': 0.35,
         'test': 0.60,
+        'test_extend': 0.60,  # Same cost as test - generates additional tests
         'fix': 0.45,
         'update': 0.25,
         'analyze_conflict': 0.20,
@@ -728,18 +729,28 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
 
         # Check verify has been done (unless skip_verify)
         # Without this, workflow would be "complete" after crash even though verify hasn't run
+        # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_verify:
             fingerprint = read_fingerprint(basename, language)
-            if fingerprint and fingerprint.command not in ['verify', 'test', 'fix', 'update']:
-                return False
+            if fingerprint:
+                # If command starts with 'skip:', the operation was skipped, not completed
+                if fingerprint.command.startswith('skip:'):
+                    return False
+                if fingerprint.command not in ['verify', 'test', 'fix', 'update']:
+                    return False
 
         # CRITICAL FIX: Check tests have been run (unless skip_tests)
         # Without this, workflow would be "complete" after verify even though tests haven't run
         # This prevents false positive success when skip_verify=True but tests are still required
+        # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_tests:
             fp = read_fingerprint(basename, language)
-            if fp and fp.command not in ['test', 'fix', 'update']:
-                return False
+            if fp:
+                # If command starts with 'skip:', the operation was skipped, not completed
+                if fp.command.startswith('skip:'):
+                    return False
+                if fp.command not in ['test', 'fix', 'update']:
+                    return False
 
     return True
 
@@ -882,9 +893,51 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     # Read fingerprint early since we need it for crash verification
     fingerprint = read_fingerprint(basename, language)
-    
+
+    # Check if auto-deps just completed - ALWAYS regenerate code after auto-deps
+    # This must be checked early, before any run_report processing, because:
+    # 1. Old run_report (if exists) is stale and should be ignored
+    # 2. auto-deps updates dependencies but doesn't regenerate code
+    if fingerprint and fingerprint.command == 'auto-deps':
+        paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
+        return SyncDecision(
+            operation='generate',
+            reason='Auto-deps completed - regenerate code with updated prompt',
+            confidence=0.90,
+            estimated_cost=estimate_operation_cost('generate'),
+            details={
+                'decision_type': 'heuristic',
+                'previous_command': 'auto-deps',
+                'code_exists': paths['code'].exists() if paths.get('code') else False,
+                'regenerate_after_autodeps': True
+            }
+        )
+
     run_report = read_run_report(basename, language)
-    if run_report:
+    # Only process runtime signals (crash/fix/test) if we have a fingerprint
+    # Without a fingerprint, run_report is stale/orphaned and should be ignored
+    if run_report and fingerprint:
+        # Check for prompt changes FIRST - prompt changes take priority over runtime signals
+        # If the user modified the prompt, we need to regenerate regardless of runtime state
+        if fingerprint:
+            paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
+            current_prompt_hash = calculate_sha256(paths['prompt'])
+            if current_prompt_hash and current_prompt_hash != fingerprint.prompt_hash:
+                prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore') if paths['prompt'].exists() else ""
+                has_deps = check_for_dependencies(prompt_content)
+                return SyncDecision(
+                    operation='auto-deps' if has_deps else 'generate',
+                    reason='Prompt changed - regenerating (takes priority over runtime signals)',
+                    confidence=0.95,
+                    estimated_cost=estimate_operation_cost('generate'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'prompt_changed': True,
+                        'previous_command': fingerprint.command,
+                        'runtime_state_ignored': True
+                    }
+                )
+
         # Check if we just completed a crash operation and need verification FIRST
         # This takes priority over test failures because we need to verify the crash fix worked
         # BUT only proceed to verify if exit_code == 0 (crash fix succeeded)
@@ -1000,6 +1053,23 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                         'target_coverage': target_coverage,
                         'tests_skipped': True,
                         'skip_tests': True
+                    }
+                )
+            elif run_report.tests_failed == 0 and run_report.tests_passed > 0:
+                # Tests pass but coverage is below target
+                # Return 'test_extend' to signal we need to ADD more tests, not regenerate
+                return SyncDecision(
+                    operation='test_extend',
+                    reason=f'Tests pass ({run_report.tests_passed} passed) but coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}% - extending tests',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'current_coverage': run_report.coverage,
+                        'target_coverage': target_coverage,
+                        'tests_passed': run_report.tests_passed,
+                        'tests_failed': run_report.tests_failed,
+                        'extend_tests': True
                     }
                 )
             else:
@@ -1185,8 +1255,9 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             
             # Check if example has been crash-tested and verified before allowing test generation
             run_report = read_run_report(basename, language)
-            if not run_report:
+            if not run_report and not skip_verify:
                 # No run report exists - need to test the example first
+                # But if skip_verify is True, skip crash/verify and go to test generation
                 return SyncDecision(
                     operation='crash',
                     reason='Example exists but needs runtime testing before test generation',
@@ -1200,8 +1271,9 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                         'workflow_stage': 'crash_validation'
                     }
                 )
-            elif run_report.exit_code != 0:
+            elif run_report and run_report.exit_code != 0 and not skip_verify:
                 # Example crashed - fix it before proceeding
+                # But if skip_verify is True, skip crash fix and proceed
                 return SyncDecision(
                     operation='crash',
                     reason='Example crashes - fix runtime errors before test generation',

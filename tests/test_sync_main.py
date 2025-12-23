@@ -248,9 +248,12 @@ def test_sync_invalid_basename(invalid_name):
         )
 
 
-@pytest.mark.parametrize("budget, attempts", [(0, 3), (-5.0, 3), (10.0, 0), (10.0, -1)])
+@pytest.mark.parametrize("budget, attempts", [(0, 3), (-5.0, 3), (10.0, -1)])
 def test_sync_invalid_budget_or_attempts(budget, attempts):
-    """Tests that an error is raised for non-positive budget or max_attempts."""
+    """Tests that an error is raised for non-positive budget or negative max_attempts.
+
+    Note: max_attempts=0 is valid - it skips normal LLM calls and goes straight to agentic fix.
+    """
     ctx = create_mock_context({})
     with pytest.raises(click.BadParameter):
         sync_main(

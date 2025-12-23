@@ -88,6 +88,12 @@ from pdd.update_main import update_main
     is_flag=True,
     help="Enable verbose logging."
 )
+@click.option(
+    "--simple",
+    is_flag=True,
+    default=False,
+    help="Skip agentic routing and use legacy update_prompt() directly."
+)
 @click.pass_context
 def update(
     ctx: click.Context,
@@ -100,7 +106,8 @@ def update(
     temperature: float,
     quiet: bool,
     force: bool,
-    verbose: bool
+    verbose: bool,
+    simple: bool
 ):
     """
     CLI command to update a prompt based on modified code.
@@ -116,6 +123,7 @@ def update(
     :param quiet: Whether to suppress console output.
     :param force: Whether to overwrite existing files if any.
     :param verbose: Whether to enable verbose logging.
+    :param simple: Whether to skip agentic routing and use legacy path.
     """
     # Store parameters in context for the update_main function
     ctx.ensure_object(dict)
@@ -134,7 +142,8 @@ def update(
         modified_code_file=modified_code_file,
         input_code_file=input_code_file,
         output=output,
-        git=git
+        use_git=git,
+        simple=simple
     )
 
     # Print results
