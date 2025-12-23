@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.88-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.89-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.88
+Current version: 0.0.89
 
 To check your installed version, run:
 ```
@@ -1606,6 +1606,28 @@ pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv s
 
 Update prompts based on code changes. This command operates in two primary modes:
 
+**Agentic Prompt Optimization (Default)**
+
+The `update` command uses an agentic AI (Claude Code, Gemini, or Codex) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+
+1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
+2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
+3. **Remove Duplication**: Eliminates redundant content that duplicates included files
+4. **Validate**: Ensures the prompt is human-readable and can reliably regenerate the code
+
+This produces prompts that are more concise while remaining clear to developers and reliable for code generation.
+
+**Prerequisites**: Requires one of these CLI tools installed and configured:
+- `claude` (Anthropic Claude Code)
+- `gemini` (Google Gemini CLI)
+- `codex` (OpenAI Codex CLI)
+
+If no agentic CLI is available, the command automatically falls back to the legacy 2-stage LLM update process.
+
+**Test-Aware Updates**: When tests exist for a module (e.g., `test_my_module.py`, `test_my_module_1.py`), the agentic update automatically discovers and considers them. Behaviors verified by tests don't need to be explicitly specified in the prompt, resulting in more compact prompts.
+
+**Modes:**
+
 1.  **Repository-Wide Mode (Default)**: When run with no file arguments, `pdd update` scans the entire repository. It finds all code/prompt pairs, creates any missing prompt files, and updates all of them based on the latest Git changes. This is the easiest way to keep your entire project in sync.
 
 2.  **Single-File Mode**: When you provide file arguments, the command operates on a specific file. There are three distinct use cases for this mode:
@@ -1657,11 +1679,21 @@ Options:
 - `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
+- `--simple`: Use the legacy 2-stage LLM update process instead of the default agentic mode. Useful when agentic CLIs are not available or for faster updates.
 
 Example (overwrite original prompt - default behavior):
 ```
 pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
 # This overwrites factorial_calculator_python.prompt in place
+```
+
+Example (agentic vs simple mode):
+```bash
+# Default: Agentic mode (uses claude/gemini/codex for intelligent optimization)
+pdd update --git my_module_python.prompt src/my_module.py
+
+# Legacy: Simple 2-stage LLM update (faster, no agentic CLI required)
+pdd update --simple --git my_module_python.prompt src/my_module.py
 ```
 
 

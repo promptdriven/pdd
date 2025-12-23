@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import shutil
 import subprocess
@@ -14,10 +15,10 @@ except ImportError:
 
 # Try to import agentic modules, with fallbacks
 try:
-    from .agentic_fix import run_agentic_fix
+    from .agentic_crash import run_agentic_crash
 except ImportError:
-    def run_agentic_fix(**kwargs):
-        return (False, "Agentic fix not available", 0.0, "N/A", [])
+    def run_agentic_crash(**kwargs):
+        return (False, "Agentic crash handler not available", 0.0, "N/A", [])
 
 try:
     from .get_language import get_language
@@ -33,7 +34,7 @@ except ImportError:
 
 def _normalize_agentic_result(result):
     """
-    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Normalize run_agentic_crash result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
     Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
     """
     if isinstance(result, tuple):
@@ -52,19 +53,31 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+def _safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None):
     """
-    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
+    Call (possibly monkeypatched) run_agentic_crash and normalize its return.
+    Maps arguments to the expected signature of run_agentic_crash.
     """
     if not prompt_file:
         return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli", []
-    res = run_agentic_fix(
-        prompt_file=prompt_file,
-        code_file=code_file,
-        unit_test_file=unit_test_file,
-        error_log_file=error_log_file,
-    )
-    return _normalize_agentic_result(res)
+    
+    try:
+        # Ensure inputs are Path objects as expected by run_agentic_crash
+        call_args = {
+            "prompt_file": Path(prompt_file),
+            "code_file": Path(code_file),
+            "program_file": Path(program_file),
+            "crash_log_file": Path(crash_log_file),
+            "verbose": True,
+            "quiet": False,
+        }
+        if cwd is not None:
+            call_args["cwd"] = Path(cwd)
+
+        res = run_agentic_crash(**call_args)
+        return _normalize_agentic_result(res)
+    except Exception as e:
+        return False, f"Agentic crash handler failed: {e}", 0.0, "agentic-cli", []
 
 # Use Rich for pretty printing to the console
 try:
@@ -155,7 +168,7 @@ def fix_code_loop(
     budget: float,
     error_log_file: str,
     verbose: bool = False,
-    time: float = None,
+    time: float = DEFAULT_TIME,
     prompt_file: str = "",
     agentic_fallback: bool = True,
 ) -> Tuple[bool, str, str, int, float, Optional[str]]:
@@ -185,7 +198,7 @@ def fix_code_loop(
         - total_cost (float): Total cost of all fix attempts.
         - model_name (str | None): Name of the LLM model used (or None if no LLM calls were made).
     """
-    # Handle default time
+    # Handle default time if passed as None (though signature defaults to DEFAULT_TIME)
     if time is None:
         time = DEFAULT_TIME
     
@@ -215,11 +228,12 @@ def fix_code_loop(
             with open(error_log_path, "w") as f:
                 f.write(pytest_output)
             
-            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_crash(
                 prompt_file=prompt_file,
                 code_file=code_file,
-                unit_test_file=verification_program,
-                error_log_file=error_log_file,
+                program_file=verification_program,
+                crash_log_file=error_log_file,
+                cwd=Path(prompt_file).parent if prompt_file else None
             )
             final_program = ""
             final_code = ""
@@ -562,11 +576,12 @@ def fix_code_loop(
         except Exception as e:
             rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
 
-        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_crash(
             prompt_file=prompt_file,
             code_file=code_file,
-            unit_test_file=verification_program,
-            error_log_file=error_log_file,
+            program_file=verification_program,
+            crash_log_file=error_log_file,
+            cwd=Path(prompt_file).parent if prompt_file else None
         )
         total_cost += agent_cost
         if agent_changed_files:

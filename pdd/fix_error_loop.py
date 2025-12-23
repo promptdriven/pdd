@@ -47,7 +47,7 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file, cwd=None):
     """
     Call (possibly monkeypatched) run_agentic_fix and normalize its return.
     """
@@ -56,17 +56,18 @@ def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_f
         code_file=code_file,
         unit_test_file=unit_test_file,
         error_log_file=error_log_file,
+        cwd=cwd,
     )
     return _normalize_agentic_result(res)
 # ---------------------------------------------------------------------
 
 
 def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
-    from .pytest_output import run_pytest_and_capture_output
     """
     Run pytest on the specified test file using the subprocess-based runner.
     Returns a tuple: (failures, errors, warnings, logs)
     """
+    from .pytest_output import run_pytest_and_capture_output
     # Use the subprocess-based runner to avoid module caching issues
     output_data = run_pytest_and_capture_output(test_file)
     
@@ -261,6 +262,7 @@ def fix_error_loop(unit_test_file: str,
                 code_file=code_file,
                 unit_test_file=unit_test_file,
                 error_log_file=error_log_file,
+                cwd=Path(prompt_file).parent if prompt_file else None,
             )
             if agent_changed_files:
                 rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
@@ -581,8 +583,8 @@ def fix_error_loop(unit_test_file: str,
     else:
         stats["best_iteration"] = "final"
 
-    # Read final file contents, but only if tests weren't initially passing
-    # For initially passing tests, keep empty strings as required by the test
+    # Read final file contents for non-initially-passing tests
+    # (Initially passing tests have files read at lines 344-348)
     try:
         if not initially_passing:
             with open(unit_test_file, "r") as f:
@@ -593,11 +595,6 @@ def fix_error_loop(unit_test_file: str,
         rprint(f"[red]Error reading final files:[/red] {e}")
         final_unit_test, final_code = "", ""
 
-    # Check if we broke out early because tests already passed
-    if stats["best_iteration"] == 0 and fix_attempts == 0:
-        # Still return at least 1 attempt to acknowledge the work done
-        fix_attempts = 1
-        
     # Print summary statistics
     rprint("\n[bold cyan]Summary Statistics:[/bold cyan]")
     rprint(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings")
@@ -642,6 +639,7 @@ def fix_error_loop(unit_test_file: str,
             code_file=code_file,
             unit_test_file=unit_test_file,
             error_log_file=error_log_file,
+            cwd=Path(prompt_file).parent if prompt_file else None,
         )
         total_cost += agent_cost
         if agent_changed_files:

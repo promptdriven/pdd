@@ -29,11 +29,11 @@ from . import DEFAULT_TIME # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .get_language import get_language
 from .agentic_langtest import default_verify_cmd_for
-from .agentic_fix import run_agentic_fix
+from .agentic_verify import run_agentic_verify
 
 def _normalize_agentic_result(result):
     """
-    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Normalize run_agentic_verify result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
     Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
     """
     if isinstance(result, tuple):
@@ -52,19 +52,26 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None):
     """
-    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
+    Call (possibly monkeypatched) run_agentic_verify and normalize its return.
     """
     if not prompt_file:
-        return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli", []
-    res = run_agentic_fix(
-        prompt_file=prompt_file,
-        code_file=code_file,
-        unit_test_file=unit_test_file,
-        error_log_file=error_log_file,
-    )
-    return _normalize_agentic_result(res)
+        return False, "Agentic verify requires a valid prompt file.", 0.0, "agentic-cli", []
+    
+    try:
+        res = run_agentic_verify(
+            prompt_file=Path(prompt_file),
+            code_file=Path(code_file),
+            program_file=Path(program_file),
+            verification_log_file=Path(verification_log_file),
+            verbose=verbose,
+            quiet=not verbose,
+            cwd=cwd
+        )
+        return _normalize_agentic_result(res)
+    except Exception as e:
+        return False, f"Agentic verify failed: {e}", 0.0, "agentic-cli", []
 
 # Initialize Rich Console for pretty printing
 console = Console()
@@ -94,7 +101,7 @@ def _run_program(
         command.extend(args)
 
     try:
-        # Run from staging root directory instead of examples/ directory
+        # Run from staging root directory instead of examples/
         # This allows imports from both pdd/ and examples/ subdirectories
         staging_root = program_path.parent.parent  # Go up from examples/ to staging root
         
@@ -196,11 +203,14 @@ def fix_verification_errors_loop(
         with open(verification_log_path, "w") as f:
             f.write(pytest_output)
         
-        success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+        agent_cwd = Path(prompt_file).parent if prompt_file else None
+        success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
             code_file=code_file,
-            unit_test_file=verification_program,
-            error_log_file=verification_log_file,
+            program_file=verification_program,
+            verification_log_file=verification_log_file,
+            verbose=verbose,
+            cwd=agent_cwd,
         )
         if agent_changed_files:
             console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
@@ -976,11 +986,14 @@ def fix_verification_errors_loop(
 
     if not overall_success and agentic_fallback:
         console.print("[bold yellow]Initiating agentic fallback...[/bold yellow]")
-        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+        agent_cwd = Path(prompt_file).parent if prompt_file else None
+        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
             code_file=code_file,
-            unit_test_file=verification_program,
-            error_log_file=verification_log_file,
+            program_file=verification_program,
+            verification_log_file=verification_log_file,
+            verbose=verbose,
+            cwd=agent_cwd,
         )
         total_cost += agent_cost
         if agent_changed_files:
@@ -1008,152 +1021,3 @@ def fix_verification_errors_loop(
         "model_name": model_name,
         "statistics": stats,
     }
-
-# Example usage (requires setting up dummy files and potentially mocking fix_verification_errors)
-if __name__ == "__main__":
-    # Create dummy files for demonstration
-    # In a real scenario, these files would exist and contain actual code/programs.
-    console.print("[yellow]Setting up dummy files for demonstration...[/yellow]")
-    temp_dir = Path("./temp_fix_verification_loop")
-    temp_dir.mkdir(exist_ok=True)
-
-    program_file = temp_dir / "my_program.py"
-    code_file = temp_dir / "my_code_module.py"
-    verification_program_file = temp_dir / "verify_syntax.py"
-
-    program_file.write_text("""
-import my_code_module
-import sys
-# Simulate using the module and checking output
-val = int(sys.argv[1]) if len(sys.argv) > 1 else 5
-result = my_code_module.process(val)
-expected = val * 2
-print(f"Input: {val}")
-print(f"Result: {result}")
-print(f"Expected: {expected}")
-if result == expected:
-    print("VERIFICATION_SUCCESS")
-else:
-    print(f"VERIFICATION_FAILURE: Expected {expected}, got {result}")
-""", encoding="utf-8")
-
-    # Initial code with a bug
-    code_file.write_text("""
-# my_code_module.py
-def process(x):
-    # Bug: should be x * 2
-    return x + 2
-""", encoding="utf-8")
-
-    # Simple verification program (e.g., syntax check)
-    verification_program_file.write_text("""
-import sys
-import py_compile
-import os
-# Check syntax of the code file (passed as argument, but we'll hardcode for simplicity here)
-code_to_check = os.environ.get("CODE_FILE_TO_CHECK", "temp_fix_verification_loop/my_code_module.py")
-print(f"Checking syntax of: {code_to_check}")
-try:
-    py_compile.compile(code_to_check, doraise=True)
-    print("Syntax OK.")
-    sys.exit(0) # Success
-except py_compile.PyCompileError as e:
-    print(f"Syntax Error: {e}")
-    sys.exit(1) # Failure
-except Exception as e:
-    print(f"Verification Error: {e}")
-    sys.exit(1) # Failure
-""", encoding="utf-8")
-    # Set environment variable for the verification script
-    os.environ["CODE_FILE_TO_CHECK"] = str(code_file.resolve())
-
-
-    # --- Mock fix_verification_errors ---
-    # This is crucial for testing without actual LLM calls / costs
-    # In a real test suite, use unittest.mock
-    _original_fix_verification_errors = fix_verification_errors
-    _call_count = 0
-
-    def mock_fix_verification_errors(program, prompt, code, output, strength, temperature, verbose):
-        global _call_count
-        _call_count += 1
-        cost = 0.001 * _call_count # Simulate increasing cost
-        model = "mock_model_v1"
-        explanation = ["Detected deviation: Output shows 'Result: 7', 'Expected: 10'.", "Issue seems to be in the `process` function calculation."]
-        issues_count = 1 # Assume 1 issue initially
-
-        fixed_program = program # Assume program doesn't need fixing
-        fixed_code = code
-
-        # Simulate fixing the code on the first *real* attempt (call_count == 2, as first is initial)
-        if "VERIFICATION_FAILURE" in output and _call_count >= 2:
-             explanation = ["Identified incorrect addition `x + 2`.", "Corrected to multiplication `x * 2` based on prompt intent and output mismatch."]
-             fixed_code = """
-# my_code_module.py
-def process(x):
-    # Fixed: should be x * 2
-    return x * 2
-"""
-             issues_count = 0 # Fixed!
-        elif "VERIFICATION_SUCCESS" in output:
-             explanation = ["Output indicates VERIFICATION_SUCCESS."]
-             issues_count = 0 # Already correct
-
-        return {
-            'explanation': explanation,
-            'fixed_program': fixed_program,
-            'fixed_code': fixed_code,
-            'total_cost': cost,
-            'model_name': model,
-            'verification_issues_count': issues_count,
-        }
-
-    # Replace the real function with the mock
-    # In package context, you might need to patch differently
-    # For this script execution:
-    # Note: This direct replacement might not work if the function is imported
-    # using `from .fix_verification_errors import fix_verification_errors`.
-    # A proper mock framework (`unittest.mock.patch`) is better.
-    # Let's assume for this example run, we can modify the global scope *before* the loop calls it.
-    # This is fragile. A better approach involves dependency injection or mocking frameworks.
-    # HACK: Re-assigning the imported name in the global scope of this script
-    globals()['fix_verification_errors'] = mock_fix_verification_errors
-
-
-    console.print("\n[bold blue]--- Running fix_verification_errors_loop (with mock) ---[/bold blue]")
-
-    # Example program_args: Pass input value 10 and another arg 5
-    # Note: The example program only uses the first arg sys.argv[1]
-    example_args = ["10", "another_arg"]
-
-    results = fix_verification_errors_loop(
-        program_file=str(program_file),
-        code_file=str(code_file),
-        prompt="Create a module 'my_code_module.py' with a function 'process(x)' that returns the input multiplied by 2.",
-        verification_program=str(verification_program_file),
-        strength=0.5,
-        temperature=0.1,
-        max_attempts=3,
-        budget=0.10, # Set a budget
-        verification_log_file=str(temp_dir / "test_verification.log"),
-        verbose=True,
-        program_args=example_args
-    )
-
-    console.print("\n[bold blue]--- Loop Finished ---[/bold blue]")
-    console.print(f"Success: {results['success']}")
-    console.print(f"Total Attempts: {results['total_attempts']}")
-    console.print(f"Total Cost: ${results['total_cost']:.6f}")
-    console.print(f"Model Name: {results['model_name']}")
-    # console.print(f"Final Program:\n{results['final_program']}") # Can be long
-    console.print(f"Final Code:\n{results['final_code']}")
-    console.print(f"Statistics:\n{results['statistics']}")
-
-    # Restore original function if needed elsewhere
-    globals()['fix_verification_errors'] = _original_fix_verification_errors
-
-    # Clean up dummy files
-    # console.print("\n[yellow]Cleaning up dummy files...[/yellow]")
-    # shutil.rmtree(temp_dir)
-    console.print(f"\n[yellow]Dummy files and logs are in: {temp_dir}[/yellow]")
-    console.print("[yellow]Please review the log file 'test_verification.log' inside that directory.[/yellow]")

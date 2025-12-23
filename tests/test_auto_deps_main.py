@@ -83,10 +83,12 @@ def test_auto_deps_normal_operation(
         input_prompt="Contents of prompt file",
         directory_path=directory_path,
         csv_filename=mock_construct_paths.return_value[2]["csv"],
+        prompt_filename=prompt_file,
         strength=mock_ctx.obj["strength"],
         temperature=mock_ctx.obj["temperature"],
         time=mock_ctx.obj["time"],
-        verbose=not mock_ctx.params["quiet"]
+        verbose=not mock_ctx.params["quiet"],
+        progress_callback=None  # No progress callback when called directly
     )
     assert modified_prompt == "Modified prompt with includes"
     assert total_cost == 0.123456
@@ -152,10 +154,12 @@ def test_auto_deps_force_scan_operation(
         input_prompt="Contents of prompt file",
         directory_path=directory_path,
         csv_filename="forced_scan_deps.csv",
+        prompt_filename=prompt_file,
         strength=mock_ctx.obj["strength"],
         temperature=mock_ctx.obj["temperature"],
         time=mock_ctx.obj["time"],
-        verbose=not mock_ctx.params["quiet"]
+        verbose=not mock_ctx.params["quiet"],
+        progress_callback=None  # No progress callback when called directly
     )
     assert modified_prompt == "Modified prompt after force scan"
     assert total_cost == 0.111111
