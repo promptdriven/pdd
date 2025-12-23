@@ -35,6 +35,7 @@ from .sync_determine_operation import (
     SyncLock,
     read_run_report,
     calculate_sha256,
+    calculate_current_hashes,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -977,6 +978,18 @@ def sync_orchestration(
                         append_sync_log(basename, language, log_entry)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
                         _save_operation_fingerprint(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
+                        # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
+                        # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
+                        current_hashes = calculate_current_hashes(pdd_files)
+                        synthetic_report = RunReport(
+                            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            exit_code=0,  # Assume success since we're skipping validation
+                            tests_passed=0,
+                            tests_failed=0,
+                            coverage=0.0,
+                            test_hash=current_hashes.get('test_hash')
+                        )
+                        save_run_report(asdict(synthetic_report), basename, language)
                         continue
 
                     current_function_name_ref[0] = operation
