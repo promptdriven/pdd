@@ -359,7 +359,7 @@ def fix_verification_errors_loop(
             final_log_entry += "</FinalActions>"
             _write_log_entry(log_path, final_log_entry)
             # Skip to final stats (the while loop below will also be skipped since 0 < 0 is False)
-            initial_issues_count = -1  # Set for later reference
+            initial_issues_count = -1  # Sentinel: unknown/not applicable when LLM assessment is skipped; kept numeric for downstream comparisons
         else:
             if verbose:
                 console.print("Running initial assessment with fix_verification_errors...")
