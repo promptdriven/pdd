@@ -434,6 +434,7 @@ def construct_paths(
     create_error_file: bool = True,  # Added parameter to control error file creation
     context_override: Optional[str] = None,  # Added parameter for context override
     confirm_callback: Optional[Callable[[str, str], bool]] = None,  # Callback for interactive confirmation
+    path_resolution_mode: Optional[str] = None,  # "cwd" or "config_base" - if None, use command default
 ) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]:
     """
     High‑level orchestrator that loads inputs, determines basename/language,
@@ -745,6 +746,13 @@ def construct_paths(
         # generate_output_paths might return Dict[str, str] or Dict[str, Path]
         # Let's assume it returns Dict[str, str] based on verification error,
         # and convert them to Path objects here.
+        # Determine path resolution mode:
+        # - If explicitly provided, use it
+        # - Otherwise: sync uses "cwd", other commands use "config_base"
+        effective_path_resolution_mode = path_resolution_mode
+        if effective_path_resolution_mode is None:
+            effective_path_resolution_mode = "cwd" if command == "sync" else "config_base"
+
         output_paths_str: Dict[str, str] = generate_output_paths(
             command=command,
             output_locations=output_location_opts,
@@ -755,8 +763,7 @@ def construct_paths(
             input_file_dir=input_file_dir,
             input_file_dirs=input_file_dirs,
             config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
-            # Sync resolves paths relative to CWD, other commands use config_base
-            path_resolution_mode="cwd" if command == "sync" else "config_base",
+            path_resolution_mode=effective_path_resolution_mode,
         )
 
         # Convert to Path objects for internal use

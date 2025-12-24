@@ -2327,3 +2327,183 @@ def test_construct_paths_test_command_numbered_file_creation(tmpdir):
     expected_numbered_path = str(tmp_path / 'test_calculator_1.py')
     assert output_file_paths['output'] == expected_numbered_path, \
         f"Expected numbered path {expected_numbered_path}, got {output_file_paths['output']}"
+
+
+# =========================================================================
+# Issue: Sync test/example paths resolve to project root instead of CWD
+# =========================================================================
+
+class TestConstructPathsResolutionModeParameter:
+    """
+    Tests for path_resolution_mode parameter in construct_paths.
+
+    Bug: When running `pdd sync hello` from examples/hello/, the code path
+    correctly resolves to examples/hello/src/hello.py, but test and example
+    paths incorrectly resolve to project root (tests/test_hello.py instead
+    of examples/hello/tests/test_hello.py).
+
+    Root cause: sync_determine_operation.py makes separate construct_paths
+    calls for example/test with different commands, but doesn't pass
+    path_resolution_mode="cwd".
+
+    Fix: Add path_resolution_mode parameter to construct_paths and pass it
+    through to generate_output_paths.
+    """
+
+    def test_construct_paths_accepts_path_resolution_mode(self, tmpdir):
+        """
+        construct_paths should accept path_resolution_mode parameter and
+        pass it to generate_output_paths.
+        """
+        tmp_path = Path(str(tmpdir))
+
+        # Create input files
+        prompt_file = tmp_path / 'hello_python.prompt'
+        prompt_file.write_text('# Hello prompt')
+        code_file = tmp_path / 'hello.py'
+        code_file.write_text('# hello code')
+
+        input_file_paths = {
+            'prompt_file': str(prompt_file),
+            'code_file': str(code_file),
+        }
+
+        mock_output_paths = {'output': str(tmp_path / 'test_hello.py')}
+
+        with patch('pdd.construct_paths.get_extension', return_value='.py'), \
+             patch('pdd.construct_paths.get_language', return_value='python'), \
+             patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen:
+
+            # This should NOT raise TypeError for unexpected keyword argument
+            construct_paths(
+                input_file_paths,
+                force=True,
+                quiet=True,
+                command='test',
+                command_options={},
+                path_resolution_mode="cwd"  # NEW PARAMETER
+            )
+
+            # Verify generate_output_paths was called with path_resolution_mode
+            mock_gen.assert_called_once()
+            call_kwargs = mock_gen.call_args[1]
+            assert call_kwargs.get('path_resolution_mode') == 'cwd', \
+                f"Expected path_resolution_mode='cwd', got {call_kwargs.get('path_resolution_mode')}"
+
+    def test_construct_paths_cwd_mode_for_test_command(self, tmpdir):
+        """
+        When path_resolution_mode="cwd", test command paths should resolve
+        relative to CWD, not project root.
+        """
+        tmp_path = Path(str(tmpdir))
+
+        # Create subdirectory structure like examples/hello/
+        subdir = tmp_path / "examples" / "hello"
+        subdir.mkdir(parents=True)
+
+        # Create .pddrc in subdirectory
+        pddrc = subdir / ".pddrc"
+        pddrc.write_text("""contexts:
+  default:
+    generate_output_path: "src/"
+    test_output_path: "tests/"
+    example_output_path: "examples/"
+""")
+
+        # Create input files
+        prompts_dir = subdir / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / 'hello_python.prompt'
+        prompt_file.write_text('# Hello prompt')
+
+        src_dir = subdir / "src"
+        src_dir.mkdir()
+        code_file = src_dir / 'hello.py'
+        code_file.write_text('# hello code')
+
+        input_file_paths = {
+            'prompt_file': str(prompt_file),
+            'code_file': str(code_file),
+        }
+
+        # Save current CWD and change to subdir
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(subdir)
+
+            # Call construct_paths with path_resolution_mode="cwd"
+            _, _, output_file_paths, _ = construct_paths(
+                input_file_paths,
+                force=True,
+                quiet=True,
+                command='test',
+                command_options={},
+                path_resolution_mode="cwd"
+            )
+
+            test_path = output_file_paths.get('output', '')
+
+            # Path should resolve relative to CWD (subdir), not project root
+            assert str(subdir) in str(Path(test_path).resolve()), \
+                f"Test path {test_path} should resolve under CWD {subdir}, not project root"
+
+        finally:
+            os.chdir(original_cwd)
+
+    def test_construct_paths_cwd_mode_for_example_command(self, tmpdir):
+        """
+        When path_resolution_mode="cwd", example command paths should resolve
+        relative to CWD, not project root.
+        """
+        tmp_path = Path(str(tmpdir))
+
+        # Create subdirectory structure
+        subdir = tmp_path / "examples" / "hello"
+        subdir.mkdir(parents=True)
+
+        # Create .pddrc
+        pddrc = subdir / ".pddrc"
+        pddrc.write_text("""contexts:
+  default:
+    generate_output_path: "src/"
+    test_output_path: "tests/"
+    example_output_path: "examples/"
+""")
+
+        # Create input files
+        prompts_dir = subdir / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / 'hello_python.prompt'
+        prompt_file.write_text('# Hello prompt')
+
+        src_dir = subdir / "src"
+        src_dir.mkdir()
+        code_file = src_dir / 'hello.py'
+        code_file.write_text('# hello code')
+
+        input_file_paths = {
+            'prompt_file': str(prompt_file),
+            'code_file': str(code_file),
+        }
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(subdir)
+
+            _, _, output_file_paths, _ = construct_paths(
+                input_file_paths,
+                force=True,
+                quiet=True,
+                command='example',
+                command_options={},
+                path_resolution_mode="cwd"
+            )
+
+            example_path = output_file_paths.get('output', '')
+
+            # Path should resolve relative to CWD (subdir)
+            assert str(subdir) in str(Path(example_path).resolve()), \
+                f"Example path {example_path} should resolve under CWD {subdir}"
+
+        finally:
+            os.chdir(original_cwd)
