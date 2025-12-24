@@ -70,6 +70,11 @@ sys.exit(0)
     # Mock dependencies
     mock_fixer = mocker.patch('pdd.fix_verification_errors_loop.fix_verification_errors', autospec=True)
     mock_runner = mocker.patch('pdd.fix_verification_errors_loop._run_program', autospec=True)
+    # Mock agentic fallback to prevent real API calls during tests
+    mock_agentic_verify = mocker.patch(
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
+        return_value=(False, "Mocked agentic verify - not executed in test", 0.0, None, [])
+    )
     # Mock console print for verbose checks if needed
     # Corrected: Pass the actual console object to spy, not a string path.
     mock_console_print = mocker.spy(pdd.fix_verification_errors_loop.console, 'print')
@@ -104,6 +109,7 @@ sys.exit(0)
         "code_content_fixed": code_content_fixed,
         "mock_fixer": mock_fixer,
         "mock_runner": mock_runner,
+        "mock_agentic_verify": mock_agentic_verify,
         "mock_console_print": mock_console_print,
         "default_args": default_args,
     }
