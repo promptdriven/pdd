@@ -1,6 +1,9 @@
 import os
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
+
+# Type alias for path resolution mode
+PathResolutionMode = Literal["config_base", "cwd"]
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -184,6 +187,7 @@ def generate_output_paths(
     input_file_dir: Optional[str] = None,
     input_file_dirs: Optional[Dict[str, str]] = None,
     config_base_dir: Optional[str] = None,
+    path_resolution_mode: PathResolutionMode = "config_base",
 ) -> Dict[str, str]:
     """
     Generates the full, absolute output paths for a given PDD command.
@@ -216,6 +220,12 @@ def generate_output_paths(
                         config paths resolve under this directory (typically the
                         directory containing `.pddrc`) instead of the input file
                         directory.
+        path_resolution_mode: Controls how relative paths from `.pddrc` and
+                             environment variables are resolved. "config_base"
+                             (default) resolves relative to config_base_dir,
+                             "cwd" resolves relative to the current working
+                             directory. Use "cwd" for sync command to ensure
+                             output files are created where the user is.
 
     Returns:
         A dictionary where keys are the standardized output identifiers
@@ -228,6 +238,7 @@ def generate_output_paths(
     logger.debug(f"Context config: {context_config}")
     logger.debug(f"Input file dirs: {input_file_dirs}")
     logger.debug(f"Config base dir: {config_base_dir}")
+    logger.debug(f"Path resolution mode: {path_resolution_mode}")
     logger.debug(f"Basename: {basename}, Language: {language}, Extension: {file_extension}")
 
     context_config = context_config or {}
@@ -300,10 +311,14 @@ def generate_output_paths(
         elif context_path:
             source = "context"
 
-            # Resolve relative `.pddrc` paths under the config base dir when available.
+            # Resolve relative `.pddrc` paths based on path_resolution_mode.
+            # "cwd" mode: resolve relative to current working directory (for sync)
+            # "config_base" mode: resolve relative to config_base_dir (for fix, etc.)
             # Fall back to the input file directory for backwards compatibility.
             if not os.path.isabs(context_path):
-                if config_base_dir_abs:
+                if path_resolution_mode == "cwd":
+                    context_path = os.path.join(os.getcwd(), context_path)
+                elif config_base_dir_abs:
                     context_path = os.path.join(config_base_dir_abs, context_path)
                 elif input_file_dir:
                     context_path = os.path.join(input_file_dir, context_path)
@@ -329,10 +344,12 @@ def generate_output_paths(
         elif env_path:
             source = "environment"
 
-            # Resolve relative env paths under the config base dir when available.
-            # Fall back to the input file directory for backwards compatibility.
+            # Resolve relative env paths based on path_resolution_mode.
+            # Same logic as .pddrc paths for consistency.
             if not os.path.isabs(env_path):
-                if config_base_dir_abs:
+                if path_resolution_mode == "cwd":
+                    env_path = os.path.join(os.getcwd(), env_path)
+                elif config_base_dir_abs:
                     env_path = os.path.join(config_base_dir_abs, env_path)
                 elif input_file_dir:
                     env_path = os.path.join(input_file_dir, env_path)
