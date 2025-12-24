@@ -69,7 +69,8 @@ class Fingerprint:
     prompt_hash: Optional[str]
     code_hash: Optional[str]
     example_hash: Optional[str]
-    test_hash: Optional[str]
+    test_hash: Optional[str]  # Keep for backward compat (primary test file)
+    test_files: Optional[Dict[str, str]] = None  # Bug #156: {"test_foo.py": "hash1", ...}
 
 
 @dataclass
@@ -81,6 +82,7 @@ class RunReport:
     tests_failed: int
     coverage: float
     test_hash: Optional[str] = None  # Hash of test file when tests were run (for staleness detection)
+    test_files: Optional[Dict[str, str]] = None  # Bug #156: {"test_foo.py": "hash1", ...}
 
 
 @dataclass
@@ -244,9 +246,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger.info(f"output_paths: {output_paths}")
                 
                 # Extract directory configuration from resolved_config
-                test_dir = resolved_config.get('test_output_path', 'tests/')
-                example_dir = resolved_config.get('example_output_path', 'examples/')
-                code_dir = resolved_config.get('generate_output_path', './')
+                # Note: construct_paths sets tests_dir, examples_dir, code_dir keys
+                test_dir = resolved_config.get('tests_dir', 'tests/')
+                example_dir = resolved_config.get('examples_dir', 'examples/')
+                code_dir = resolved_config.get('code_dir', './')
                 
                 logger.info(f"Extracted dirs - test: {test_dir}, example: {example_dir}, code: {code_dir}")
                 
@@ -269,12 +272,21 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 test_path = Path(test_path)
                 example_path = Path(example_path)
                 code_path = Path(code_path)
-                
+
+                # Bug #156: Find all matching test files
+                test_dir_path = test_path.parent
+                test_stem = f"test_{basename}"
+                if test_dir_path.exists():
+                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
+                else:
+                    matching_test_files = [test_path] if test_path.exists() else []
+
                 result = {
                     'prompt': Path(prompt_path),
                     'code': code_path,
                     'example': example_path,
-                    'test': test_path
+                    'test': test_path,
+                    'test_files': matching_test_files or [test_path]  # Bug #156
                 }
                 logger.debug(f"get_pdd_file_paths returning (prompt missing): test={test_path}")
                 return result
@@ -284,11 +296,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
+                fallback_test_path = Path(f"test_{basename}.{extension}")
+                # Bug #156: Find matching test files even in fallback
+                if Path('.').exists():
+                    fallback_matching = sorted(Path('.').glob(f"test_{basename}*.{extension}"))
+                else:
+                    fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
                 return {
                     'prompt': Path(prompt_path),
                     'code': Path(f"{basename}.{extension}"),
                     'example': Path(f"{basename}_example.{extension}"),
-                    'test': Path(f"test_{basename}.{extension}")
+                    'test': fallback_test_path,
+                    'test_files': fallback_matching or [fallback_test_path]  # Bug #156
                 }
         
         input_file_paths = {
@@ -333,19 +352,22 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             
             try:
                 # Get example path using example command
+                # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
                     force=True, quiet=True, command="example", command_options={},
-                    context_override=context_override
+                    context_override=context_override,
+                    path_resolution_mode="cwd"
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
-                
+
                 # Get test path using test command - handle case where test file doesn't exist yet
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
                         force=True, quiet=True, command="test", command_options={},
-                        context_override=context_override
+                        context_override=context_override,
+                        path_resolution_mode="cwd"
                     )
                     test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
                 except FileNotFoundError:
@@ -368,18 +390,21 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # Improved fallback: try to use construct_paths with just prompt_file to get proper directory configs
             try:
                 # Get configured directories by using construct_paths with just the prompt file
+                # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path},
                     force=True, quiet=True, command="example", command_options={},
-                    context_override=context_override
+                    context_override=context_override,
+                    path_resolution_mode="cwd"
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
-                
+
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path},
                         force=True, quiet=True, command="test", command_options={},
-                        context_override=context_override
+                        context_override=context_override,
+                        path_resolution_mode="cwd"
                     )
                     test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
                 except Exception:
@@ -401,21 +426,41 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         
         # Keep paths as they are (absolute or relative as returned by construct_paths)
         # This ensures consistency with how construct_paths expects them
+
+        # Bug #156: Find all matching test files
+        test_dir = test_path.parent
+        test_stem = f"test_{basename}"
+        extension = get_extension(language)
+        if test_dir.exists():
+            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
+        else:
+            matching_test_files = [test_path] if test_path.exists() else []
+
         return {
             'prompt': Path(prompt_path),
             'code': code_path,
             'example': example_path,
-            'test': test_path
+            'test': test_path,
+            'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
         
     except Exception as e:
         # Fallback to simple naming if construct_paths fails
         extension = get_extension(language)
+        test_path = Path(f"test_{basename}.{extension}")
+        # Bug #156: Try to find matching test files even in fallback
+        test_dir = Path('.')
+        test_stem = f"test_{basename}"
+        if test_dir.exists():
+            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
+        else:
+            matching_test_files = [test_path] if test_path.exists() else []
         return {
             'prompt': Path(prompts_dir) / f"{basename}_{language}.prompt",
             'code': Path(f"{basename}.{extension}"),
             'example': Path(f"{basename}_example.{extension}"),
-            'test': Path(f"test_{basename}.{extension}")
+            'test': test_path,
+            'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
 
 
@@ -454,7 +499,8 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
             prompt_hash=data.get('prompt_hash'),
             code_hash=data.get('code_hash'),
             example_hash=data.get('example_hash'),
-            test_hash=data.get('test_hash')
+            test_hash=data.get('test_hash'),
+            test_files=data.get('test_files')  # Bug #156
         )
     except (json.JSONDecodeError, KeyError, IOError):
         return None
@@ -479,19 +525,28 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
             tests_passed=data['tests_passed'],
             tests_failed=data['tests_failed'],
             coverage=data['coverage'],
-            test_hash=data.get('test_hash')  # Optional for backward compatibility
+            test_hash=data.get('test_hash'),  # Optional for backward compatibility
+            test_files=data.get('test_files')  # Bug #156
         )
     except (json.JSONDecodeError, KeyError, IOError):
         return None
 
 
-def calculate_current_hashes(paths: Dict[str, Path]) -> Dict[str, Optional[str]]:
+def calculate_current_hashes(paths: Dict[str, Any]) -> Dict[str, Any]:
     """Computes the hashes for all current files on disk."""
     # Return hash keys that match what the fingerprint expects
-    return {
-        f"{file_type}_hash": calculate_sha256(file_path)
-        for file_type, file_path in paths.items()
-    }
+    hashes = {}
+    for file_type, file_path in paths.items():
+        if file_type == 'test_files':
+            # Bug #156: Calculate hashes for all test files
+            hashes['test_files'] = {
+                f.name: calculate_sha256(f)
+                for f in file_path
+                if isinstance(f, Path) and f.exists()
+            }
+        elif isinstance(file_path, Path):
+            hashes[f"{file_type}_hash"] = calculate_sha256(file_path)
+    return hashes
 
 
 def get_git_diff(file_path: Path) -> str:
@@ -706,26 +761,45 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
         if not run_report or run_report.exit_code != 0:
             return False
 
-        # Check that run_report corresponds to current test file (staleness detection)
-        # If test file changed since run_report was created, we can't trust the results
-        if not skip_tests and 'test' in paths and paths['test'].exists():
-            current_test_hash = calculate_sha256(paths['test'])
-            if run_report.test_hash and current_test_hash != run_report.test_hash:
-                # run_report was created for a different version of the test file
-                return False
-            if not run_report.test_hash:
-                # Legacy run_report without test_hash - check fingerprint timestamp as fallback
-                fingerprint = read_fingerprint(basename, language)
-                if fingerprint:
-                    # If fingerprint is newer than run_report, run_report might be stale
-                    from datetime import datetime
-                    try:
-                        fp_time = datetime.fromisoformat(fingerprint.timestamp.replace('Z', '+00:00'))
-                        rr_time = datetime.fromisoformat(run_report.timestamp.replace('Z', '+00:00'))
-                        if fp_time > rr_time:
-                            return False  # run_report predates fingerprint, might be stale
-                    except (ValueError, AttributeError):
-                        pass  # If timestamps can't be parsed, skip this check
+        # Check that run_report corresponds to current test files (staleness detection)
+        # If any test file changed since run_report was created, we can't trust the results
+        if not skip_tests:
+            # Bug #156: Check ALL test files, not just the primary one
+            if 'test_files' in paths and run_report.test_files:
+                # New multi-file comparison
+                current_test_hashes = {
+                    f.name: calculate_sha256(f)
+                    for f in paths['test_files']
+                    if f.exists()
+                }
+                stored_test_hashes = run_report.test_files
+
+                # Check if any test file changed or new ones added/removed
+                if set(current_test_hashes.keys()) != set(stored_test_hashes.keys()):
+                    return False  # Test files added or removed
+
+                for fname, current_hash in current_test_hashes.items():
+                    if stored_test_hashes.get(fname) != current_hash:
+                        return False  # Test file content changed
+            elif 'test' in paths and paths['test'].exists():
+                # Backward compat: single file check
+                current_test_hash = calculate_sha256(paths['test'])
+                if run_report.test_hash and current_test_hash != run_report.test_hash:
+                    # run_report was created for a different version of the test file
+                    return False
+                if not run_report.test_hash:
+                    # Legacy run_report without test_hash - check fingerprint timestamp as fallback
+                    fingerprint = read_fingerprint(basename, language)
+                    if fingerprint:
+                        # If fingerprint is newer than run_report, run_report might be stale
+                        from datetime import datetime
+                        try:
+                            fp_time = datetime.fromisoformat(fingerprint.timestamp.replace('Z', '+00:00'))
+                            rr_time = datetime.fromisoformat(run_report.timestamp.replace('Z', '+00:00'))
+                            if fp_time > rr_time:
+                                return False  # run_report predates fingerprint, might be stale
+                        except (ValueError, AttributeError):
+                            pass  # If timestamps can't be parsed, skip this check
 
         # Check verify has been done (unless skip_verify)
         # Without this, workflow would be "complete" after crash even though verify hasn't run

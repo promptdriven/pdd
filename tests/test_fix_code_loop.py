@@ -2,12 +2,13 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import pytest
 from unittest.mock import patch, MagicMock
 
 # Import the function under test
 # Adjust the import below if your actual package or file structure is different.
-from pdd.fix_code_loop import fix_code_loop
+from pdd.fix_code_loop import fix_code_loop, run_process_with_output
 
 @pytest.fixture
 def temp_workspace():
@@ -275,3 +276,265 @@ def test_fix_code_loop_exceed_max_attempts(temp_workspace):
         assert model_name == "mocked_model", "Should capture the mocked model name."
         assert final_program == "", "Verification program was never updated."
         assert final_code == "", "Code was never updated."
+
+
+class TestRunProcessWithOutputTimeout:
+    """
+    Tests for run_process_with_output to ensure thread joins have proper
+    timeouts and don't hang indefinitely.
+
+    Bug: Lines 152-153 in fix_code_loop.py had t_out.join() and t_err.join()
+    without timeouts, causing indefinite hangs when subprocess doesn't properly
+    close its pipes.
+    """
+
+    def test_thread_join_completes_when_subprocess_times_out(self):
+        """
+        Verify that run_process_with_output completes within reasonable time
+        even when subprocess needs to be killed due to timeout.
+
+        This test would hang indefinitely before the fix if thread joins
+        don't have timeouts.
+        """
+        start_time = time.time()
+
+        # Create a subprocess that runs longer than the timeout
+        # Use unbuffered output (-u) and flush to ensure output is captured
+        returncode, stdout, stderr = run_process_with_output(
+            ["python", "-u", "-c",
+             "import sys; print('start', flush=True); import time; time.sleep(60)"],
+            timeout=2  # Short timeout - subprocess should be killed
+        )
+
+        elapsed = time.time() - start_time
+
+        # Should complete within timeout + reasonable grace period for cleanup
+        # Before fix: would hang forever
+        # After fix: should complete within ~5-10 seconds max
+        assert elapsed < 15, f"Function took {elapsed:.1f}s, expected < 15s (hung indefinitely before fix)"
+
+        # Should have timeout indication or killed process
+        assert returncode != 0 or "[Timeout]" in stderr, "Should indicate timeout or non-zero return"
+
+    def test_normal_subprocess_still_works(self):
+        """
+        Verify that normal subprocesses that complete quickly still work correctly
+        after adding thread join timeouts.
+        """
+        returncode, stdout, stderr = run_process_with_output(
+            ["python", "-c", "print('hello'); import sys; print('error', file=sys.stderr)"],
+            timeout=30
+        )
+
+        assert returncode == 0, f"Expected success, got returncode={returncode}"
+        assert "hello" in stdout, f"Expected 'hello' in stdout, got: {stdout}"
+        assert "error" in stderr, f"Expected 'error' in stderr, got: {stderr}"
+
+    def test_subprocess_with_lots_of_output(self):
+        """
+        Verify thread handling works correctly when subprocess produces
+        significant output that needs to be captured.
+        """
+        # Generate 1000 lines of output
+        code = "for i in range(1000): print(f'line {i}')"
+        returncode, stdout, stderr = run_process_with_output(
+            ["python", "-c", code],
+            timeout=30
+        )
+
+        assert returncode == 0, f"Expected success, got returncode={returncode}"
+        assert "line 0" in stdout, "Should capture first line"
+        assert "line 999" in stdout, "Should capture last line"
+
+    def test_subprocess_that_fails_immediately(self):
+        """
+        Verify proper handling when subprocess fails immediately with error output.
+        """
+        returncode, stdout, stderr = run_process_with_output(
+            ["python", "-c", "raise ValueError('test error')"],
+            timeout=30
+        )
+
+        assert returncode != 0, "Should have non-zero return code for failed subprocess"
+        assert "ValueError" in stderr or "test error" in stderr, \
+            f"Should capture error in stderr, got: {stderr}"
+
+    def test_subprocess_with_child_process_that_hangs(self):
+        """
+        Test that demonstrates the hang bug: when a subprocess spawns a child
+        that inherits pipes but doesn't close them, thread joins hang forever.
+
+        This test replicates the scenario where Claude CLI (or another tool)
+        spawns background processes that keep the pipes open.
+
+        Before fix: This test will hang indefinitely
+        After fix: Should complete within timeout + grace period
+        """
+        start_time = time.time()
+
+        # Create a subprocess that forks a child which inherits the pipes
+        # The child sleeps forever, keeping pipes open even after parent exits
+        code = '''
+import os
+import sys
+import time
+
+pid = os.fork()
+if pid == 0:
+    # Child process: keep pipes inherited and sleep forever
+    time.sleep(3600)  # Sleep for 1 hour
+else:
+    # Parent: exit immediately
+    print("parent done", flush=True)
+    sys.exit(0)
+'''
+        returncode, stdout, stderr = run_process_with_output(
+            ["python", "-c", code],
+            timeout=2
+        )
+
+        elapsed = time.time() - start_time
+
+        # If threads don't have timeouts, this will hang forever waiting
+        # for the orphaned child to close the pipes
+        # With timeout fix, should complete in ~15 seconds max
+        assert elapsed < 20, (
+            f"Function took {elapsed:.1f}s, expected < 20s. "
+            "Thread joins likely hanging on inherited pipes from child process."
+        )
+
+
+class TestAgenticFallbackBugs:
+    """
+    Tests for agentic fallback bugs that were causing silent failures.
+
+    Bug 1: _safe_run_agentic_crash was passing 'cwd' parameter to run_agentic_crash()
+           but run_agentic_crash() doesn't accept that parameter, causing TypeError.
+
+    Bug 2: The error message from failed agentic calls was being discarded (_msg)
+           instead of being logged, making failures silent.
+    """
+
+    def test_safe_run_agentic_crash_does_not_pass_cwd(self):
+        """
+        Verify that _safe_run_agentic_crash doesn't pass 'cwd' to run_agentic_crash.
+
+        Before fix: Would raise TypeError: run_agentic_crash() got an unexpected
+                    keyword argument 'cwd'
+        After fix: Should call run_agentic_crash without cwd parameter
+        """
+        from pdd.fix_code_loop import _safe_run_agentic_crash
+
+        # Mock run_agentic_crash to capture what arguments it receives
+        with patch('pdd.fix_code_loop.run_agentic_crash') as mock_run:
+            mock_run.return_value = (True, "success", 0.0, "test-model", [])
+
+            # Call with cwd parameter
+            result = _safe_run_agentic_crash(
+                prompt_file="/tmp/test.prompt",
+                code_file="/tmp/test.py",
+                program_file="/tmp/program.py",
+                crash_log_file="/tmp/crash.log",
+                cwd="/tmp"  # This should NOT be passed to run_agentic_crash
+            )
+
+            # Verify run_agentic_crash was called
+            assert mock_run.called, "run_agentic_crash should have been called"
+
+            # Verify 'cwd' was NOT in the call arguments
+            call_kwargs = mock_run.call_args.kwargs
+            assert 'cwd' not in call_kwargs, (
+                f"'cwd' should not be passed to run_agentic_crash, but got kwargs: {call_kwargs}"
+            )
+
+    def test_safe_run_agentic_crash_returns_error_on_empty_prompt(self):
+        """
+        Verify that _safe_run_agentic_crash returns a proper error message
+        when prompt_file is empty, not just silently failing.
+        """
+        from pdd.fix_code_loop import _safe_run_agentic_crash
+
+        success, msg, cost, model, changed_files = _safe_run_agentic_crash(
+            prompt_file="",  # Empty prompt file
+            code_file="/tmp/test.py",
+            program_file="/tmp/program.py",
+            crash_log_file="/tmp/crash.log",
+        )
+
+        assert success is False, "Should fail with empty prompt_file"
+        assert "prompt file" in msg.lower(), f"Error message should mention prompt file: {msg}"
+        assert cost == 0.0, "No cost should be incurred"
+
+    def test_safe_run_agentic_crash_captures_exception_message(self):
+        """
+        Verify that when run_agentic_crash raises an exception,
+        the error message is captured and returned (not discarded).
+        """
+        from pdd.fix_code_loop import _safe_run_agentic_crash
+
+        with patch('pdd.fix_code_loop.run_agentic_crash') as mock_run:
+            # Simulate the old bug: TypeError from unexpected cwd argument
+            mock_run.side_effect = TypeError("got an unexpected keyword argument 'cwd'")
+
+            success, msg, cost, model, changed_files = _safe_run_agentic_crash(
+                prompt_file="/tmp/test.prompt",
+                code_file="/tmp/test.py",
+                program_file="/tmp/program.py",
+                crash_log_file="/tmp/crash.log",
+            )
+
+            assert success is False, "Should fail when exception is raised"
+            assert "cwd" in msg or "failed" in msg.lower(), (
+                f"Error message should contain exception info: {msg}"
+            )
+
+
+class TestAgenticVerifyFallbackBugs:
+    """
+    Tests for agentic verify fallback bugs.
+    """
+
+    def test_safe_run_agentic_verify_does_not_pass_cwd(self):
+        """
+        Verify that _safe_run_agentic_verify doesn't pass 'cwd' to run_agentic_verify.
+
+        Before fix: Would raise TypeError: run_agentic_verify() got an unexpected
+                    keyword argument 'cwd'
+        After fix: Should call run_agentic_verify without cwd parameter
+        """
+        from pdd.fix_verification_errors_loop import _safe_run_agentic_verify
+
+        with patch('pdd.fix_verification_errors_loop.run_agentic_verify') as mock_run:
+            mock_run.return_value = (True, "success", 0.0, "test-model", [])
+
+            result = _safe_run_agentic_verify(
+                prompt_file="/tmp/test.prompt",
+                code_file="/tmp/test.py",
+                program_file="/tmp/program.py",
+                verification_log_file="/tmp/verify.log",
+                verbose=False,
+                cwd="/tmp"  # This should NOT be passed to run_agentic_verify
+            )
+
+            assert mock_run.called, "run_agentic_verify should have been called"
+
+            call_kwargs = mock_run.call_args.kwargs
+            assert 'cwd' not in call_kwargs, (
+                f"'cwd' should not be passed to run_agentic_verify, but got kwargs: {call_kwargs}"
+            )
+
+    def test_safe_run_agentic_verify_returns_error_on_empty_prompt(self):
+        """
+        Verify proper error message when prompt_file is empty.
+        """
+        from pdd.fix_verification_errors_loop import _safe_run_agentic_verify
+
+        success, msg, cost, model, changed_files = _safe_run_agentic_verify(
+            prompt_file="",
+            code_file="/tmp/test.py",
+            program_file="/tmp/program.py",
+            verification_log_file="/tmp/verify.log",
+        )
+
+        assert success is False, "Should fail with empty prompt_file"
+        assert "prompt file" in msg.lower(), f"Error message should mention prompt file: {msg}"

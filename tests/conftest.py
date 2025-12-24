@@ -10,6 +10,25 @@ from dotenv import load_dotenv
 # Load environment variables from .env early in collection
 load_dotenv()
 
+# Store the original PDD_PATH at module load time for restoration
+_ORIGINAL_PDD_PATH = os.environ.get('PDD_PATH')
+
+
+@pytest.fixture(autouse=True)
+def preserve_pdd_path():
+    """Ensure PDD_PATH is restored after each test to prevent test pollution.
+
+    Always restores to the original PDD_PATH that was present when conftest loaded,
+    regardless of what other fixtures or tests did during the test.
+    """
+    yield
+    # Always restore original PDD_PATH after each test
+    if _ORIGINAL_PDD_PATH is not None:
+        os.environ['PDD_PATH'] = _ORIGINAL_PDD_PATH
+    elif 'PDD_PATH' in os.environ:
+        # Original was None but test set it - remove it
+        del os.environ['PDD_PATH']
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Expose the legacy ``--run-all`` flag expected by our tooling."""

@@ -1,37 +1,32 @@
+## v0.0.90 (2025-12-23)
+
 ## v0.0.89 (2025-12-22)
 
 ### Feat
 
-- enhance working directory handling in agentic functions
-- enhance fix_error_loop documentation with control flow diagram
-- add --simple flag for legacy update mode in CLI
-- add simple option for legacy routing in update_main
-- refine fix_error_loop module with enhanced logging and iterative error handling
-- enhance git_update function with agentic and legacy routing logic
-- enhance auto_include and insert_includes to filter self-referential dependencies
-- enhance test coverage for agentic functionality with formal verification and unit tests
-- prioritize prompt changes in sync decision logic
-- enhance testing framework for agentic updates with formal verification and unit tests
-- implement crash_main and fix_code_loop functions for error handling
-- add formal verification and unit tests for agentic verification
-- add agentic verification functionality and example
-- implement agentic crash handling and testing framework
-- introduce agentic update functionality for prompt files
+- **Agentic Module Suite:** Added `agentic_common.py` with shared utilities for multi-provider CLI tool invocation (Claude, Gemini, Codex), including token pricing, cost tracking, and logging. New `agentic_crash.py`, `agentic_update.py`, and `agentic_verify.py` modules enable agentic workflows for crash handling, prompt updates, and verification.
+
+- **`--simple` Flag for Update Command:** Added `--simple` flag to bypass agentic routing and use legacy `update_prompt()` path directly.
+
+- **Self-Referential Dependency Filtering:** `auto_include` and `insert_includes` now filter out dependencies that reference the module's own prompt file, preventing circular includes.
+
+- **Sync Auto-Deps Regeneration:** Sync now always regenerates code after `auto-deps` completes, even if code files exist (previously stale code could persist).
+
+- **Prompt Change Priority:** Sync decision logic now prioritizes prompt changes over runtime signals, ensuring modified prompts trigger regeneration.
 
 ### Fix
 
-- clarify prompt authority in error handling and test expectations
-- add progress callback parameter to test functions
-- ensure test file preservation during sync operations
+- **4 Critical P0 Sync Bugs:** Fixed `skip_verify` flag not skipping crash operation; fixed stale run report processing when fingerprint is missing; fixed `skip:` prefix detection in workflow completion checks; fixed orphaned run report handling.
 
-### Refactor
+- **Infinite Loop Prevention:** Fixed sync orchestration infinite loop when auto-deps completed but code existed.
 
-- enhance agentic fix functionality and improve output reporting
-- enhance agentic functionality and improve CLI integration
-- enhance agentic functionality and prompt management
-- enhance clarity and structure in modify_python prompt
-- improve prompt clarity and structure in git_update and update_main
-- streamline agentic_fix and update prompts
+- **Pytest Path Resolution:** Fixed pytest invocation path issues in test execution.
+
+- **Test File Preservation:** Ensured test files are preserved during sync operations.
+
+### Tests
+
+- Added ~3,300 lines of new tests across 18 test files covering agentic modules, sync operations, and edge cases. Key additions: `test_agentic_common.py` (465 lines), `test_agentic_crash.py` (432 lines), `test_agentic_update.py` (404 lines), `test_agentic_verify.py` (294 lines), expanded `test_sync_determine_operation.py` (+495 lines).
 
 ## v0.0.88 (2025-12-19)
 
