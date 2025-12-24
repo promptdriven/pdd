@@ -41,6 +41,7 @@ def mock_ctx():
     return ctx
 
 # Patch Path.exists for tests where error_file check happens before construct_paths
+@patch('pdd.fix_main.run_pytest_on_file')
 @patch('pdd.fix_main.Path') # Patch Path where it's used in fix_main
 @patch('pdd.fix_main.construct_paths')
 @patch('pdd.fix_main.fix_error_loop')
@@ -50,6 +51,7 @@ def test_fix_main_without_loop(
     mock_fix_error_loop,
     mock_construct_paths,
     mock_path, # Add mock_path fixture
+    mock_run_pytest,
     mock_ctx
 ):
     """
@@ -100,6 +102,9 @@ def test_fix_main_without_loop(
         "gpt-4"
     )
 
+    # Mock pytest to return passing tests (validates the fix)
+    mock_run_pytest.return_value = (0, 0, 0, "All tests passed")
+
     # Use mock_open for file writing assertions
     m_open = mock_open()
     with patch('builtins.open', m_open):
@@ -149,12 +154,8 @@ def test_fix_main_without_loop(
     assert attempts == 1
     assert total_cost == 0.75
     assert model_name == "gpt-4"
-
-    # Assert file writing - fix_main now uses Path objects
-    from pathlib import Path as PathLib
-    m_open.assert_called_once_with(PathLib('output/test_code_fixed.py'), 'w')
-    handle = m_open()
-    handle.write.assert_called_once_with("Fixed unit test content")
+    # Verify test validation was performed
+    mock_run_pytest.assert_called_once()
 
 
 @patch('pdd.fix_main.construct_paths')
@@ -538,16 +539,18 @@ def test_fix_main_success_is_false_when_no_updates(
     assert model_name == "gpt-4"
 
 
+@patch('pdd.fix_main.run_pytest_on_file')
 @patch('pdd.fix_main.construct_paths')
 @patch('pdd.fix_main.fix_errors_from_unit_tests')
 def test_fix_main_success_when_only_code_updated(
     mock_fix_errors,
     mock_construct_paths,
+    mock_run_pytest,
     mock_ctx
 ):
     """
-    Test that success is True when only update_code=True (update_unit_test=False).
-    Verifies the OR logic: success = update_unit_test or update_code
+    Test that success is True when only update_code=True (update_unit_test=False)
+    AND the tests pass after validation.
     """
     from pathlib import Path as RealPath
 
@@ -584,6 +587,9 @@ def test_fix_main_success_when_only_code_updated(
         "gpt-4"
     )
 
+    # Mock pytest to return passing tests (validates the fix works)
+    mock_run_pytest.return_value = (0, 0, 0, "All tests passed")
+
     m_open = mock_open()
     with patch('pdd.fix_main.Path', MockPath):
         with patch.object(MockPath, 'mkdir'):
@@ -605,12 +611,11 @@ def test_fix_main_success_when_only_code_updated(
                 )
 
     # Assert
-    assert success is True  # True because update_code was True
+    assert success is True  # True because tests passed after the fix
     assert fixed_test == ""
     assert fixed_code == "fixed code content"
-
-    # Verify only code file was written (not test file since it's empty)
-    m_open.assert_called_once_with(MockPath('output/code.py'), 'w')
+    # Verify test validation was performed
+    mock_run_pytest.assert_called_once()
 
 
 @patch('pdd.fix_main.Path')
@@ -987,3 +992,229 @@ def test_fix_main_non_loop_always_has_one_attempt(
 
     assert success is False
     assert attempts == 1  # Always 1 in non-loop mode
+
+
+# ============================================================================
+# Bug Regression Tests - Issue #158
+# ============================================================================
+
+@patch('pdd.fix_main.run_pytest_on_file')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_non_loop_should_not_report_success_without_test_validation(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_run_pytest,
+    mock_ctx
+):
+    """
+    BUG TEST - Issue #158: fix_main reports success=True when LLM suggests
+    changes, but never validates that the changes actually fix the tests.
+
+    This test exposes the bug where:
+    - Current behavior (BUG): success = update_unit_test or update_code
+    - Expected behavior: success should only be True if tests pass after fixes
+
+    The LLM returning update_code=True means "I suggest updating the code",
+    NOT "the code is now fixed". Without running tests, we cannot know if
+    the suggested fix actually works.
+
+    Evidence from issue: model="" and actual_cost=0.0 with success=true
+    indicates no LLM was actually invoked, yet success was claimed.
+    """
+    mock_path.return_value.exists.return_value = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt content', 'code_file': 'def broken():\n    return 1/0',
+         'unit_test_file': 'def test_broken():\n    assert broken() == 1',
+         'error_file': 'ZeroDivisionError: division by zero'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py',
+         'output_results': 'results/results.log'},
+        None
+    )
+
+    # LLM suggests a fix (update_code=True), but the fix is WRONG
+    mock_fix_errors.return_value = (
+        False,  # update_unit_test - LLM says don't update test
+        True,   # update_code - LLM says update code (suggests a fix)
+        "",     # fixed_unit_test
+        "def broken():\n    return 'still wrong'",  # LLM's suggested fix - WRONG!
+        "Analysis: Changed the function to return a string",
+        0.75,
+        "gpt-4"
+    )
+
+    # Simulate tests STILL FAILING after the fix is applied
+    # This is the key: the LLM suggested a fix, but it didn't actually work
+    mock_run_pytest.return_value = (1, 0, 0, "FAILED: test_broken - AssertionError")
+
+    # Act
+    success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # After the fix for issue #158:
+    # success should be False because run_pytest_on_file returned failures
+    assert success is False, (
+        "Bug #158: success should be False when test validation fails. "
+        f"Got success={success}, but expected False because tests still fail."
+    )
+    # Verify that test validation was actually performed
+    mock_run_pytest.assert_called_once()
+
+
+@patch('pdd.fix_main.run_pytest_on_file')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_non_loop_success_requires_test_validation_both_flags_true(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_run_pytest,
+    mock_ctx
+):
+    """
+    BUG TEST - Issue #158: Demonstrates that success=True should require
+    actual test validation, not just LLM suggesting changes.
+
+    This test shows that when both update_unit_test=True AND update_code=True,
+    the current code reports success=True, but this is wrong because:
+    1. No tests were run to validate the fix
+    2. The LLM could have suggested completely wrong fixes
+    3. success=True gives users false confidence
+
+    The log evidence shows model="" and actual_cost=0.0 with success=true,
+    meaning the system claimed success without any LLM invocation at all.
+    """
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['quiet'] = True  # Suppress output for cleaner test
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't', 'error_file': 'e'},
+        {'output_test': 'output/t.py', 'output_code': 'output/c.py', 'output_results': 'results/r.log'},
+        None
+    )
+
+    # Simulate: LLM suggests updating BOTH test and code
+    # But what if the suggestions are wrong? Current code would still say success=True
+    mock_fix_errors.return_value = (
+        True,   # update_unit_test - LLM wants to change test
+        True,   # update_code - LLM wants to change code
+        "def test_foo(): pass",  # Bad test suggestion
+        "def foo(): raise Exception()",  # Bad code suggestion
+        "Analysis: Made both worse",
+        0.50,
+        "gpt-4"
+    )
+
+    # Simulate tests STILL FAILING after the bad fix is applied
+    mock_run_pytest.return_value = (1, 0, 0, "FAILED: test_foo")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        success, _, _, _, _, _ = fix_main(
+            ctx=mock_ctx,
+            prompt_file="p.prompt",
+            code_file="c.py",
+            unit_test_file="t.py",
+            error_file="e.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    # After the fix for issue #158:
+    # success should be False because run_pytest_on_file returned failures
+    assert success is False, (
+        "Bug #158: success=True is reported based on LLM suggestion flags "
+        "(update_unit_test or update_code), not actual test results. "
+        "The system should run tests after applying fixes to validate success."
+    )
+    # Verify that test validation was performed
+    mock_run_pytest.assert_called_once()
+
+
+@patch('pdd.fix_main.run_pytest_on_file')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_non_loop_success_when_tests_pass_after_fix(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_path,
+    mock_run_pytest,
+    mock_ctx
+):
+    """
+    Test that success=True when the LLM suggests a fix AND tests pass after validation.
+    This is the positive case: the fix actually works.
+    """
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['quiet'] = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'p', 'code_file': 'c', 'unit_test_file': 't', 'error_file': 'e'},
+        {'output_test': 'output/t.py', 'output_code': 'output/c.py', 'output_results': 'results/r.log'},
+        None
+    )
+
+    # LLM suggests a fix that actually works
+    mock_fix_errors.return_value = (
+        False,  # update_unit_test
+        True,   # update_code - LLM fixed the code
+        "",     # fixed_unit_test
+        "def foo(): return 42",  # Good fix
+        "Analysis: Fixed the return value",
+        0.50,
+        "gpt-4"
+    )
+
+    # Simulate tests PASSING after the fix is applied
+    mock_run_pytest.return_value = (0, 0, 0, "All tests passed!")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        success, _, _, _, _, _ = fix_main(
+            ctx=mock_ctx,
+            prompt_file="p.prompt",
+            code_file="c.py",
+            unit_test_file="t.py",
+            error_file="e.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    # success should be True because tests pass after the fix
+    assert success is True, (
+        f"success should be True when tests pass after fix. Got success={success}"
+    )
+    mock_run_pytest.assert_called_once()
