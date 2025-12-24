@@ -368,26 +368,37 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
                 assert response_format['response_schema'] == SampleOutputModel.model_json_schema()
 
 def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mock_set_llm_cache):
-    model_key_name = "GOOGLE_API_KEY"
-    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+    """Test that when ALL models fail Pydantic validation, RuntimeError is raised.
+
+    Updated for Issue #168: Validation failures now trigger model fallback.
+    When all models fail validation, RuntimeError is raised instead of returning
+    an error string.
+    """
+    # All API keys needed so all models can be tried
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+    with patch.dict(os.environ, all_keys):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # ALL models return invalid JSON (field2 should be int, not string)
             invalid_json_str = '{"field1": "value1", "field2": "not_an_int"}'
-            mock_response = create_mock_litellm_response(invalid_json_str, model_name='gemini-pro')
+            mock_response = create_mock_litellm_response(invalid_json_str, model_name='test-model')
             mock_completion.return_value = mock_response
             mock_cost = 0.00009
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 11, "output_tokens": 16}):
-                response = llm_invoke(
-                    prompt="Provide data.", input_json={"query": "Provide data."},
-                    strength=0.3, 
-                    temperature=0.7, verbose=False, 
-                    output_pydantic=SampleOutputModel
-                )
-                assert isinstance(response['result'], str)
-                assert "ERROR: Failed to parse structured output" in response['result']
-                assert repr(invalid_json_str) in response['result']
-                assert response['model_name'] == 'gemini-pro'
-                assert response['cost'] == mock_cost
-                mock_completion.assert_called_once()
+                # All models fail validation, so RuntimeError should be raised
+                with pytest.raises(RuntimeError, match="All candidate models failed"):
+                    llm_invoke(
+                        prompt="Provide data.", input_json={"query": "Provide data."},
+                        strength=0.3,
+                        temperature=0.7, verbose=False,
+                        output_pydantic=SampleOutputModel
+                    )
+                # All models should have been tried
+                num_models = len(mock_load_models.return_value)
+                assert mock_completion.call_count == num_models
 
 
 def test_llm_invoke_llm_error(mock_load_models, mock_set_llm_cache):
@@ -801,17 +812,24 @@ def test_llm_invoke_uses_repaired_code_without_retry(mock_load_models, mock_set_
 
 
 def test_llm_invoke_no_retry_in_batch_mode(mock_load_models, mock_set_llm_cache, caplog):
-    """Test that retry is skipped in batch mode even with invalid Python code."""
+    """Test that retry is skipped in batch mode even with invalid Python code.
+
+    Note: This test uses valid Pydantic schema but invalid Python syntax.
+    The code has invalid Python (unclosed string) but the JSON is valid.
+    In batch mode, the retry-with-cache-bypass logic is skipped.
+    """
     model_key_name = "OPENAI_API_KEY"
 
-    # Invalid code that can't be repaired
+    # Invalid Python code that can't be repaired (unclosed string literal)
+    # But the JSON structure is valid for the Pydantic model
     invalid_code = 'def test():\n    x = "hello\n    return x'
     response_json = json.dumps({"explanation": "Batch result", "code": invalid_code})
 
     with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
-        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-            mock_response = create_mock_litellm_response([response_json], model_name='gpt-5-nano')
-            mock_completion.return_value = mock_response
+        with patch('pdd.llm_invoke.litellm.batch_completion') as mock_batch_completion:
+            # Fix: Return proper batch response format (list of responses)
+            mock_response = create_mock_litellm_response(response_json, model_name='gpt-5-nano')
+            mock_batch_completion.return_value = [mock_response]
 
             mock_cost = 0.0001
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
@@ -825,10 +843,16 @@ def test_llm_invoke_no_retry_in_batch_mode(mock_load_models, mock_set_llm_cache,
                     use_batch_mode=True
                 )
 
-                # Should NOT have retried (batch mode)
-                assert mock_completion.call_count == 1
+                # Should NOT have retried (batch mode - retry logic is skipped)
+                assert mock_batch_completion.call_count == 1
 
-                # Should log that retry was skipped
+                # Result should still be a valid CodeOutputModel (parsed successfully)
+                # even though the Python code inside is invalid
+                assert isinstance(response['result'], list)
+                assert len(response['result']) == 1
+                assert isinstance(response['result'][0], CodeOutputModel)
+
+                # Should log that retry was skipped due to batch mode
                 assert "batch mode" in caplog.text.lower() or "cannot retry" in caplog.text.lower()
 
 
@@ -1197,3 +1221,177 @@ class TestApiKeyInputHang:
 
                         # Verify we got a result
                         assert result['result'] == "Success"
+
+
+# --- Tests for Issue #168: Pydantic Validation Failure Should Trigger Model Fallback ---
+
+def test_llm_invoke_pydantic_validation_failure_triggers_model_fallback(mock_load_models, mock_set_llm_cache):
+    """Test that Pydantic validation failure triggers model fallback.
+
+    BUG (Issue #168): When validation fails, `continue` at line 2242 advances to
+    the next batch item instead of triggering model fallback. This test will FAIL
+    until the bug is fixed.
+    """
+    # All API keys needed so multiple models can be tried
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+
+    with patch.dict(os.environ, all_keys):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # First model returns invalid JSON (field2 should be int, not string)
+            invalid_json = '{"field1": "value", "field2": "not_an_int"}'
+            first_response = create_mock_litellm_response(invalid_json, model_name='gpt-5-nano')
+
+            # Second model returns valid JSON
+            valid_json = '{"field1": "value", "field2": 123}'
+            second_response = create_mock_litellm_response(valid_json, model_name='gemini-pro')
+
+            mock_completion.side_effect = [first_response, second_response]
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Provide data.",
+                    input_json={"query": "test"},
+                    strength=0.5,
+                    temperature=0.7,
+                    output_pydantic=SampleOutputModel,
+                    verbose=True
+                )
+
+                # EXPECTED after fix: Second model was tried (fallback happened)
+                assert mock_completion.call_count >= 2, \
+                    f"Expected model fallback, but only {mock_completion.call_count} call(s) made"
+
+                # EXPECTED after fix: Result is valid Pydantic object from second model
+                assert isinstance(response['result'], SampleOutputModel), \
+                    f"Expected SampleOutputModel, got {type(response['result'])}: {response['result']}"
+
+
+# --- Tests for structured_output CSV flag behavior ---
+
+def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm_cache):
+    """Verify that DeepSeek MaaS model passes response_format when output_pydantic is requested.
+
+    According to Google Cloud documentation, all Vertex AI MaaS models (including DeepSeek)
+    support structured output. This test verifies the CSV has structured_output=True for DeepSeek.
+
+    This test will:
+    - FAIL if structured_output=False in CSV (the bug)
+    - PASS if structured_output=True in CSV (after fix)
+    """
+    # Read the REAL CSV to get DeepSeek's actual structured_output value
+    from pdd.llm_invoke import _load_model_data
+    real_data = _load_model_data(None)  # None uses package default CSV path
+
+    # Filter to only include DeepSeek MaaS model
+    deepseek_data = real_data[real_data['model'] == 'vertex_ai/deepseek-ai/deepseek-v3.2-maas'].copy()
+    assert len(deepseek_data) == 1, "DeepSeek MaaS model not found in CSV"
+
+    with patch('pdd.llm_invoke._load_model_data', return_value=deepseek_data):
+        with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                # Return valid JSON that matches SampleOutputModel
+                json_response = '{"field1": "test_value", "field2": 42}'
+                mock_response = create_mock_litellm_response(
+                    json_response,
+                    model_name='vertex_ai/deepseek-ai/deepseek-v3.2-maas'
+                )
+                mock_completion.return_value = mock_response
+
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                          {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Return a sample output.",
+                        input_json={"query": "test"},
+                        strength=0.5,
+                        temperature=0.7,
+                        output_pydantic=SampleOutputModel,
+                        verbose=True
+                    )
+
+                # Verify DeepSeek was called
+                mock_completion.assert_called_once()
+                call_args, call_kwargs = mock_completion.call_args
+                assert call_kwargs['model'] == 'vertex_ai/deepseek-ai/deepseek-v3.2-maas', \
+                    f"Expected DeepSeek model, got {call_kwargs['model']}"
+
+                # EXPECTED: DeepSeek MaaS should have response_format passed
+                # because it supports structured output (per Google Cloud docs)
+                assert 'response_format' in call_kwargs, \
+                    "DeepSeek MaaS should have response_format passed - check that structured_output=True in CSV"
+
+                response_format = call_kwargs['response_format']
+                assert response_format['type'] == 'json_object', \
+                    f"Expected type 'json_object', got '{response_format.get('type')}'"
+                assert 'response_schema' in response_format, \
+                    "response_format should contain response_schema"
+
+
+def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock_set_llm_cache):
+    """Verify that Vertex AI Claude Opus passes response_format when output_pydantic is requested.
+
+    LiteLLM had a bug (#17755) where Vertex AI rejected the anthropic-beta headers
+    for structured output. This was fixed in LiteLLM versions after v1.80.5.
+
+    This test verifies that after upgrading LiteLLM to >=1.81.0:
+    - structured_output=True in CSV for vertex_ai/claude-opus-4-5
+    - response_format is correctly passed to LiteLLM
+
+    This test will:
+    - FAIL if LiteLLM version is too old or structured_output=False
+    - PASS if LiteLLM is upgraded and structured_output=True
+    """
+    # Read the REAL CSV to get Claude Opus's actual structured_output value
+    from pdd.llm_invoke import _load_model_data
+    real_data = _load_model_data(None)  # None uses package default CSV path
+
+    # Filter to only include Vertex AI Claude Opus model
+    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
+    assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
+
+    # Verify CSV has structured_output=True
+    assert opus_data.iloc[0]['structured_output'] == True, \
+        "vertex_ai/claude-opus-4-5 should have structured_output=True in CSV"
+
+    with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
+        with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                # Return valid JSON that matches SampleOutputModel
+                json_response = '{"field1": "test_value", "field2": 42}'
+                mock_response = create_mock_litellm_response(
+                    json_response,
+                    model_name='vertex_ai/claude-opus-4-5'
+                )
+                mock_completion.return_value = mock_response
+
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                          {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Return a sample output.",
+                        input_json={"query": "test"},
+                        strength=0.5,
+                        temperature=0.7,
+                        output_pydantic=SampleOutputModel,
+                        verbose=True
+                    )
+
+                # Verify Claude Opus was called
+                mock_completion.assert_called_once()
+                call_args, call_kwargs = mock_completion.call_args
+                assert call_kwargs['model'] == 'vertex_ai/claude-opus-4-5', \
+                    f"Expected Claude Opus model, got {call_kwargs['model']}"
+
+                # EXPECTED: Vertex AI Claude Opus should have response_format passed
+                # This requires LiteLLM >=1.81.0 to fix the beta headers issue
+                assert 'response_format' in call_kwargs, \
+                    "Vertex AI Claude Opus should have response_format passed - ensure LiteLLM >=1.81.0"
+
+                response_format = call_kwargs['response_format']
+                assert response_format['type'] == 'json_object', \
+                    f"Expected type 'json_object', got '{response_format.get('type')}'"
+                assert 'response_schema' in response_format, \
+                    "response_format should contain response_schema"
