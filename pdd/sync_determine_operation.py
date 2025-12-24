@@ -246,9 +246,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger.info(f"output_paths: {output_paths}")
                 
                 # Extract directory configuration from resolved_config
-                test_dir = resolved_config.get('test_output_path', 'tests/')
-                example_dir = resolved_config.get('example_output_path', 'examples/')
-                code_dir = resolved_config.get('generate_output_path', './')
+                # Note: construct_paths sets tests_dir, examples_dir, code_dir keys
+                test_dir = resolved_config.get('tests_dir', 'tests/')
+                example_dir = resolved_config.get('examples_dir', 'examples/')
+                code_dir = resolved_config.get('code_dir', './')
                 
                 logger.info(f"Extracted dirs - test: {test_dir}, example: {example_dir}, code: {code_dir}")
                 
@@ -351,19 +352,22 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             
             try:
                 # Get example path using example command
+                # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
                     force=True, quiet=True, command="example", command_options={},
-                    context_override=context_override
+                    context_override=context_override,
+                    path_resolution_mode="cwd"
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
-                
+
                 # Get test path using test command - handle case where test file doesn't exist yet
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
                         force=True, quiet=True, command="test", command_options={},
-                        context_override=context_override
+                        context_override=context_override,
+                        path_resolution_mode="cwd"
                     )
                     test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
                 except FileNotFoundError:
@@ -386,18 +390,21 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # Improved fallback: try to use construct_paths with just prompt_file to get proper directory configs
             try:
                 # Get configured directories by using construct_paths with just the prompt file
+                # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path},
                     force=True, quiet=True, command="example", command_options={},
-                    context_override=context_override
+                    context_override=context_override,
+                    path_resolution_mode="cwd"
                 )
                 example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
-                
+
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path},
                         force=True, quiet=True, command="test", command_options={},
-                        context_override=context_override
+                        context_override=context_override,
+                        path_resolution_mode="cwd"
                     )
                     test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
                 except Exception:
