@@ -27,6 +27,19 @@ class SampleOutputModel(BaseModel):
     field1: str
     field2: int
 
+
+# Issue #168: Model mimicking production CodeFix schema
+class CodeFixLikeModel(BaseModel):
+    """Test model mimicking production CodeFix schema from fix_code_module_errors.py.
+
+    Used to reproduce the Opus bug where it returned only 'fixed_program'
+    without 'fixed_code', causing Pydantic validation to fail.
+    """
+    update_program: bool
+    update_code: bool
+    fixed_program: str
+    fixed_code: str
+
 # Fixture to mock the internal _load_model_data function returning a DataFrame
 @pytest.fixture
 def mock_load_models():
@@ -1269,6 +1282,102 @@ def test_llm_invoke_pydantic_validation_failure_triggers_model_fallback(mock_loa
                 # EXPECTED after fix: Result is valid Pydantic object from second model
                 assert isinstance(response['result'], SampleOutputModel), \
                     f"Expected SampleOutputModel, got {type(response['result'])}: {response['result']}"
+
+
+def test_llm_invoke_missing_required_field_triggers_model_fallback(mock_load_models, mock_set_llm_cache):
+    """Issue #168: Missing required field should trigger model fallback.
+
+    This test reproduces the exact production scenario where Opus returned
+    {"fixed_program": "..."} without the required "fixed_code" field.
+
+    BUG BEHAVIOR (main branch):
+    - Only 1 LLM call made
+    - Returns ERROR string instead of Pydantic object
+    - No fallback to next model
+
+    FIX BEHAVIOR (this branch):
+    - 2+ LLM calls made (fallback occurred)
+    - Returns valid Pydantic object from second model
+    """
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+
+    with patch.dict(os.environ, all_keys):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # First model returns incomplete response - missing 'fixed_code' (exactly like Opus bug)
+            incomplete_json = '{"update_program": true, "update_code": true, "fixed_program": "def foo(): pass"}'
+            first_response = create_mock_litellm_response(incomplete_json, model_name='gpt-5-nano')
+
+            # Second model returns complete valid response
+            complete_json = '{"update_program": true, "update_code": true, "fixed_program": "def foo(): pass", "fixed_code": "def bar(): pass"}'
+            second_response = create_mock_litellm_response(complete_json, model_name='gemini-pro')
+
+            mock_completion.side_effect = [first_response, second_response]
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Fix the code that has errors.",
+                    input_json={"code": "broken_code"},
+                    strength=0.5,
+                    temperature=0.7,
+                    output_pydantic=CodeFixLikeModel,
+                    verbose=True
+                )
+
+            # EXPECTED after fix: Model fallback happened (2+ calls)
+            assert mock_completion.call_count >= 2, \
+                f"Expected model fallback (2+ calls), but only {mock_completion.call_count} call(s) made. " \
+                "BUG: The 'continue' statement is not triggering fallback to next model."
+
+            # EXPECTED after fix: Result is valid Pydantic object from second model
+            assert isinstance(response['result'], CodeFixLikeModel), \
+                f"Expected CodeFixLikeModel, got {type(response['result'])}: {response['result']}"
+
+            # Verify the result came from the second model's complete response
+            assert response['result'].fixed_code == "def bar(): pass", \
+                f"Expected fixed_code from second model, got: {response['result'].fixed_code}"
+
+
+def test_llm_invoke_all_models_fail_validation_raises_runtime_error(mock_load_models, mock_set_llm_cache):
+    """Issue #168: When ALL models fail validation, should raise RuntimeError.
+
+    This test verifies that when every candidate model returns an invalid
+    response, the function properly raises a RuntimeError after exhausting
+    all options.
+    """
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+
+    with patch.dict(os.environ, all_keys):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # All models return incomplete response (missing both 'update_code' and 'fixed_code')
+            incomplete_json = '{"update_program": true, "fixed_program": "code"}'
+            responses = [
+                create_mock_litellm_response(incomplete_json, model_name=f'model-{i}')
+                for i in range(4)  # 4 mock models in fixture
+            ]
+            mock_completion.side_effect = responses
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                with pytest.raises(RuntimeError, match="All candidate models failed"):
+                    llm_invoke(
+                        prompt="Fix the code that has errors.",
+                        input_json={"code": "broken_code"},
+                        strength=0.5,
+                        output_pydantic=CodeFixLikeModel,
+                    )
+
+            # EXPECTED: All models were tried before raising error
+            assert mock_completion.call_count == 4, \
+                f"Expected all 4 models to be tried, but only {mock_completion.call_count} call(s) made"
 
 
 # --- Tests for structured_output CSV flag behavior ---
