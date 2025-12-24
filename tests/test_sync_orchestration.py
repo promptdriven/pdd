@@ -2786,6 +2786,43 @@ class TestStateUpdateAtomicity:
         )
 
 
+def test_atomic_state_exit_is_called_bug_165(orchestration_fixture):
+    """
+    Bug #165: AtomicStateUpdate.__exit__ should be called to commit all writes.
+
+    Currently, AtomicStateUpdate is created WITHOUT 'with', so __exit__ is never
+    called and post-fix run_reports are never committed.
+
+    Test FAILS = Bug exists (__exit__ not called, no context manager)
+    Test PASSES = Bug fixed (__exit__ called via 'with' statement)
+    """
+    from unittest.mock import patch
+    from pdd.sync_orchestration import sync_orchestration, SyncDecision, AtomicStateUpdate
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    # Spy on __exit__ to verify it's called
+    original_exit = AtomicStateUpdate.__exit__
+    exit_called = []
+
+    def tracking_exit(self, *args):
+        exit_called.append(True)
+        return original_exit(self, *args)
+
+    with patch.object(AtomicStateUpdate, '__exit__', tracking_exit):
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Assert __exit__ was called (meaning context manager was used)
+    assert len(exit_called) > 0, (
+        "BUG #165: AtomicStateUpdate.__exit__ was never called! "
+        "The 'with' statement is not being used, so writes after _commit() are lost."
+    )
+
+
 def test_final_state_handles_test_files_list(orchestration_fixture, tmp_path):
     """
     Bug #156: final_state dict comprehension crashes when pdd_files contains test_files list.
