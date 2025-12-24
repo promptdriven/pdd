@@ -126,10 +126,11 @@ def sync_main(
     _validate_basename(basename)
 
     # Validate CLI-specified values if provided (not None)
+    # Note: max_attempts=0 is valid (skips LLM loop, goes straight to agentic mode)
     if budget is not None and budget <= 0:
         raise click.BadParameter("Budget must be a positive number.", param_hint="--budget")
-    if max_attempts is not None and max_attempts <= 0:
-        raise click.BadParameter("Max attempts must be a positive integer.", param_hint="--max-attempts")
+    if max_attempts is not None and max_attempts < 0:
+        raise click.BadParameter("Max attempts must be a non-negative integer.", param_hint="--max-attempts")
 
     # 3. Use construct_paths in 'discovery' mode to find the prompts directory.
     try:
@@ -288,10 +289,11 @@ def sync_main(
                 final_budget = resolved_config.get("budget") or DEFAULT_BUDGET
 
             # Validate the resolved values
+            # Note: max_attempts=0 is valid (skips LLM loop, goes straight to agentic mode)
             if final_budget <= 0:
                 raise click.BadParameter("Budget must be a positive number.", param_hint="--budget")
-            if final_max_attempts <= 0:
-                raise click.BadParameter("Max attempts must be a positive integer.", param_hint="--max-attempts")
+            if final_max_attempts < 0:
+                raise click.BadParameter("Max attempts must be a non-negative integer.", param_hint="--max-attempts")
 
             # Initialize remaining_budget from first resolved config if not set yet
             if remaining_budget is None:

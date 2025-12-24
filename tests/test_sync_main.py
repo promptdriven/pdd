@@ -261,6 +261,72 @@ def test_sync_invalid_budget_or_attempts(budget, attempts):
         )
 
 
+def test_sync_max_attempts_zero_is_valid(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Tests that max_attempts=0 is accepted and skips normal LLM calls, going straight to agentic mode.
+
+    When max_attempts=0:
+    - Validation should NOT reject it (unlike negative values)
+    - Normal LLM fix loop should be skipped
+    - Agentic fallback should be triggered directly
+    """
+    (mock_project_dir / "prompts" / "agentic_test_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.5,
+        "model_name": "agentic-provider",
+        "summary": "Agentic fix succeeded.",
+    }
+
+    ctx = create_mock_context({})
+
+    # This should NOT raise an error - max_attempts=0 is valid
+    results, total_cost, model = sync_main(
+        ctx,
+        "agentic_test",
+        max_attempts=0,  # Should be valid - triggers agentic mode directly
+        budget=10.0,
+        skip_verify=False,
+        skip_tests=False,
+        target_coverage=90.0,
+        dry_run=False,
+    )
+
+    mock_sync_orchestration.assert_called_once()
+    call_args = mock_sync_orchestration.call_args[1]
+
+    # Verify max_attempts=0 was passed through correctly
+    assert call_args["max_attempts"] == 0, (
+        f"Expected max_attempts=0 to be passed to sync_orchestration, but got {call_args['max_attempts']}"
+    )
+
+    assert results["overall_success"] is True
+
+
+def test_sync_negative_max_attempts_still_rejected(mock_project_dir, mock_construct_paths):
+    """Tests that negative max_attempts values are still rejected.
+
+    Only max_attempts=0 should be valid (for agentic-only mode).
+    Negative values like -1 should still raise BadParameter.
+    """
+    (mock_project_dir / "prompts" / "negative_test_python.prompt").touch()
+
+    ctx = create_mock_context({})
+
+    # Negative max_attempts should still be rejected
+    with pytest.raises(click.BadParameter, match="non-negative"):
+        sync_main(
+            ctx,
+            "negative_test",
+            max_attempts=-1,  # Should be rejected
+            budget=10.0,
+            skip_verify=False,
+            skip_tests=False,
+            target_coverage=90.0,
+            dry_run=False,
+        )
+
+
 def test_sync_budget_exhausted(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
     """Tests that sync stops for subsequent languages if budget is used up."""
     (mock_project_dir / "prompts" / "app_python.prompt").touch()
