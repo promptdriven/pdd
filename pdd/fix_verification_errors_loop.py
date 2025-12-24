@@ -259,9 +259,9 @@ def fix_verification_errors_loop(
     if not 0.0 <= temperature <= 1.0:
          console.print(f"[bold red]Error: Temperature must be between 0.0 and 1.0.[/bold red]")
          return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
-    # Prompt requires positive max_attempts
-    if max_attempts <= 0:
-        console.print(f"[bold red]Error: Max attempts must be positive.[/bold red]")
+    # max_attempts must be non-negative (0 is valid - skips LLM loop, goes straight to agentic mode)
+    if max_attempts < 0:
+        console.print(f"[bold red]Error: Max attempts must be non-negative.[/bold red]")
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
     if budget < 0:
         console.print(f"[bold red]Error: Budget cannot be negative.[/bold red]")
@@ -334,128 +334,155 @@ def fix_verification_errors_loop(
     initial_log_entry += '</InitialState>'
     _write_log_entry(log_path, initial_log_entry)
 
+    # 3c: Check if skipping LLM assessment (max_attempts=0 means skip to agentic fallback)
+    skip_llm = (max_attempts == 0)
+
     # 3d: Call fix_verification_errors for initial assessment
     try:
-        if verbose:
-            console.print("Running initial assessment with fix_verification_errors...")
-        # Use actual strength/temp for realistic initial assessment
-        initial_fix_result = fix_verification_errors(
-            program=initial_program_content,
-            prompt=prompt,
-            code=initial_code_content,
-            output=initial_output,
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            time=llm_time # Pass time
-        )
-        # 3e: Add cost
-        initial_cost = initial_fix_result.get('total_cost', 0.0)
-        total_cost += initial_cost
-        model_name = initial_fix_result.get('model_name') # Capture model name early
-        if verbose:
-             console.print(f"Initial assessment cost: ${initial_cost:.6f}, Total cost: ${total_cost:.6f}")
-
-        # 3f: Extract initial issues
-        initial_issues_count = initial_fix_result.get('verification_issues_count', -1)
-        stats['initial_issues'] = initial_issues_count
-        if verbose:
-            console.print(f"Initial verification issues found: {initial_issues_count}")
-            if initial_fix_result.get('explanation'):
-                 console.print("Initial assessment explanation:")
-                 console.print(initial_fix_result['explanation'])
-
-        # FIX: Add check for initial assessment error *before* checking success/budget
-        # Check if the fixer function returned its specific error state (None explanation/model)
-        if initial_fix_result.get('explanation') is None and initial_fix_result.get('model_name') is None:
-             error_msg = "Error: Fixer returned invalid/error state during initial assessment"
-             console.print(f"[bold red]{error_msg}. Aborting.[/bold red]")
-             stats['status_message'] = error_msg
-             stats['final_issues'] = -1 # Indicate unknown/error state
-             # Write final action log for error on initial check
-             final_log_entry = "<FinalActions>\n"
-             final_log_entry += f'  <Error>{escape(error_msg)}</Error>\n'
-             final_log_entry += "</FinalActions>"
-             _write_log_entry(log_path, final_log_entry)
-             # Return failure state
-             return {
-                 "success": False,
-                 "final_program": initial_program_content,
-                 "final_code": initial_code_content,
-                 "total_attempts": 0,
-                 "total_cost": total_cost, # May be non-zero if error occurred after some cost
-                 "model_name": model_name, # May have been set before error
-                 "statistics": stats,
-             }
-
-        # 3g: Initialize best iteration tracker
-        # Store original paths as the 'backup' for iteration 0
-        best_iteration = {
-            'attempt': 0, # Use 0 for initial state
-            'program_backup': str(program_path), # Path to original
-            'code_backup': str(code_path),       # Path to original
-            'issues': initial_issues_count if initial_issues_count != -1 else float('inf')
-        }
-        stats['best_iteration_num'] = 0
-        stats['best_iteration_issues'] = best_iteration['issues']
-
-        # 3h: Check for immediate success or budget exceeded
-        if initial_issues_count == 0:
-            console.print("[bold green]Initial check found 0 verification issues. No fixing loop needed.[/bold green]")
-            overall_success = True
-            stats['final_issues'] = 0
-            stats['status_message'] = 'Success on initial check'
-            stats['improvement_issues'] = 0
-            stats['improvement_percent'] = 100.0 # Reached target of 0 issues
-
-            # Write final action log for successful initial check
+        if skip_llm:
+            # Skip initial LLM assessment when max_attempts=0
+            console.print("[bold cyan]max_attempts=0: Skipping LLM assessment, proceeding to agentic fallback.[/bold cyan]")
+            # Set up state for skipping the LLM loop
+            stats['initial_issues'] = -1  # Unknown since we skipped assessment
+            stats['final_issues'] = -1
+            stats['best_iteration_num'] = -1
+            stats['best_iteration_issues'] = float('inf')
+            stats['status_message'] = 'Skipped LLM (max_attempts=0)'
+            stats['improvement_issues'] = 'N/A'
+            stats['improvement_percent'] = 'N/A'
+            overall_success = False  # Trigger agentic fallback
+            final_program_content = initial_program_content
+            final_code_content = initial_code_content
+            # Write log entry for skipped LLM
             final_log_entry = "<FinalActions>\n"
-            final_log_entry += f'  <Action>Process finished successfully on initial check.</Action>\n'
+            final_log_entry += f'  <Action>Skipped LLM assessment and loop (max_attempts=0), proceeding to agentic fallback.</Action>\n'
             final_log_entry += "</FinalActions>"
             _write_log_entry(log_path, final_log_entry)
+            # Skip to final stats (the while loop below will also be skipped since 0 < 0 is False)
+            initial_issues_count = -1  # Set for later reference
+        else:
+            if verbose:
+                console.print("Running initial assessment with fix_verification_errors...")
+            # Use actual strength/temp for realistic initial assessment
+            initial_fix_result = fix_verification_errors(
+                program=initial_program_content,
+                prompt=prompt,
+                code=initial_code_content,
+                output=initial_output,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                time=llm_time # Pass time
+            )
+            # 3e: Add cost
+            initial_cost = initial_fix_result.get('total_cost', 0.0)
+            total_cost += initial_cost
+            model_name = initial_fix_result.get('model_name') # Capture model name early
+            if verbose:
+                 console.print(f"Initial assessment cost: ${initial_cost:.6f}, Total cost: ${total_cost:.6f}")
 
-            # Step 7 (early exit): Print stats
-            console.print("\n[bold]--- Final Statistics ---[/bold]")
-            console.print(f"Initial Issues: {stats['initial_issues']}")
-            console.print(f"Final Issues: {stats['final_issues']}")
-            console.print(f"Best Iteration: {stats['best_iteration_num']} (Issues: {stats['best_iteration_issues']})")
-            console.print(f"Improvement (Issues Reduced): {stats['improvement_issues']}")
-            console.print(f"Improvement (Percent Towards 0 Issues): {stats['improvement_percent']:.2f}%")
-            console.print(f"Overall Status: {stats['status_message']}")
-            console.print(f"Total Attempts Made: {attempts}") # attempts is 0 here
-            console.print(f"Total Cost: ${total_cost:.6f}")
-            console.print(f"Model Used: {model_name or 'N/A'}")
-            # Step 8 (early exit): Return
-            return {
-                "success": overall_success,
-                "final_program": initial_program_content,
-                "final_code": initial_code_content,
-                "total_attempts": attempts, # attempts is 0
-                "total_cost": total_cost,
-                "model_name": model_name,
-                "statistics": stats,
+            # 3f: Extract initial issues
+            initial_issues_count = initial_fix_result.get('verification_issues_count', -1)
+            stats['initial_issues'] = initial_issues_count
+            if verbose:
+                console.print(f"Initial verification issues found: {initial_issues_count}")
+                if initial_fix_result.get('explanation'):
+                     console.print("Initial assessment explanation:")
+                     console.print(initial_fix_result['explanation'])
+
+        # The following checks only apply when we ran the LLM assessment (not skipped)
+        if not skip_llm:
+            # FIX: Add check for initial assessment error *before* checking success/budget
+            # Check if the fixer function returned its specific error state (None explanation/model)
+            if initial_fix_result.get('explanation') is None and initial_fix_result.get('model_name') is None:
+                error_msg = "Error: Fixer returned invalid/error state during initial assessment"
+                console.print(f"[bold red]{error_msg}. Aborting.[/bold red]")
+                stats['status_message'] = error_msg
+                stats['final_issues'] = -1 # Indicate unknown/error state
+                # Write final action log for error on initial check
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Error>{escape(error_msg)}</Error>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+                # Return failure state
+                return {
+                    "success": False,
+                    "final_program": initial_program_content,
+                    "final_code": initial_code_content,
+                    "total_attempts": 0,
+                    "total_cost": total_cost, # May be non-zero if error occurred after some cost
+                    "model_name": model_name, # May have been set before error
+                    "statistics": stats,
+                }
+
+            # 3g: Initialize best iteration tracker
+            # Store original paths as the 'backup' for iteration 0
+            best_iteration = {
+                'attempt': 0, # Use 0 for initial state
+                'program_backup': str(program_path), # Path to original
+                'code_backup': str(code_path),       # Path to original
+                'issues': initial_issues_count if initial_issues_count != -1 else float('inf')
             }
-        elif total_cost >= budget:
-             console.print(f"[bold yellow]Budget ${budget:.4f} exceeded during initial assessment (Cost: ${total_cost:.4f}). Aborting.[/bold yellow]")
-             stats['status_message'] = 'Budget exceeded on initial check'
-             stats['final_issues'] = stats['initial_issues'] # Final issues same as initial
+            stats['best_iteration_num'] = 0
+            stats['best_iteration_issues'] = best_iteration['issues']
 
-             # Write final action log for budget exceeded on initial check
-             final_log_entry = "<FinalActions>\n"
-             final_log_entry += f'  <Action>Budget exceeded on initial check.</Action>\n'
-             final_log_entry += "</FinalActions>"
-             _write_log_entry(log_path, final_log_entry)
+            # 3h: Check for immediate success or budget exceeded
+            if initial_issues_count == 0:
+                console.print("[bold green]Initial check found 0 verification issues. No fixing loop needed.[/bold green]")
+                overall_success = True
+                stats['final_issues'] = 0
+                stats['status_message'] = 'Success on initial check'
+                stats['improvement_issues'] = 0
+                stats['improvement_percent'] = 100.0 # Reached target of 0 issues
 
-             # No changes made, return initial state
-             return {
-                 "success": False,
-                 "final_program": initial_program_content,
-                 "final_code": initial_code_content,
-                 "total_attempts": 0,
-                 "total_cost": total_cost,
-                 "model_name": model_name,
-                 "statistics": stats,
-             }
+                # Write final action log for successful initial check
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>Process finished successfully on initial check.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+
+                # Step 7 (early exit): Print stats
+                console.print("\n[bold]--- Final Statistics ---[/bold]")
+                console.print(f"Initial Issues: {stats['initial_issues']}")
+                console.print(f"Final Issues: {stats['final_issues']}")
+                console.print(f"Best Iteration: {stats['best_iteration_num']} (Issues: {stats['best_iteration_issues']})")
+                console.print(f"Improvement (Issues Reduced): {stats['improvement_issues']}")
+                console.print(f"Improvement (Percent Towards 0 Issues): {stats['improvement_percent']:.2f}%")
+                console.print(f"Overall Status: {stats['status_message']}")
+                console.print(f"Total Attempts Made: {attempts}") # attempts is 0 here
+                console.print(f"Total Cost: ${total_cost:.6f}")
+                console.print(f"Model Used: {model_name or 'N/A'}")
+                # Step 8 (early exit): Return
+                return {
+                    "success": overall_success,
+                    "final_program": initial_program_content,
+                    "final_code": initial_code_content,
+                    "total_attempts": attempts, # attempts is 0
+                    "total_cost": total_cost,
+                    "model_name": model_name,
+                    "statistics": stats,
+                }
+            elif total_cost >= budget:
+                console.print(f"[bold yellow]Budget ${budget:.4f} exceeded during initial assessment (Cost: ${total_cost:.4f}). Aborting.[/bold yellow]")
+                stats['status_message'] = 'Budget exceeded on initial check'
+                stats['final_issues'] = stats['initial_issues'] # Final issues same as initial
+
+                # Write final action log for budget exceeded on initial check
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>Budget exceeded on initial check.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+
+                # No changes made, return initial state
+                return {
+                    "success": False,
+                    "final_program": initial_program_content,
+                    "final_code": initial_code_content,
+                    "total_attempts": 0,
+                    "total_cost": total_cost,
+                    "model_name": model_name,
+                    "statistics": stats,
+                }
 
     except Exception as e:
         console.print(f"[bold red]Error during initial assessment with fix_verification_errors: {e}[/bold red]")
