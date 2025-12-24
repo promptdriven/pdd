@@ -2520,6 +2520,76 @@ FAILED test_calculator_0.py::test_fail - AssertionError
         f"but got: {unit_test_file}"
 
 
+def test_fix_operation_runs_pytest_on_all_matching_test_files(orchestration_fixture, tmp_path):
+    """
+    Bug #156 Part 2: sync_orchestration should use pdd_files['test_files']
+    to run pytest on ALL matching test files, not just pdd_files['test'].
+
+    Current (buggy) behavior:
+    - pytest is invoked with only pdd_files['test']
+    - pdd_files['test_files'] is ignored even if present
+
+    Desired behavior:
+    - pytest is invoked with all files from pdd_files['test_files']
+    """
+    from unittest.mock import MagicMock
+
+    # Setup test files
+    test_dir = tmp_path / 'tests'
+    test_dir.mkdir(parents=True, exist_ok=True)
+    tracked_test = test_dir / 'test_calculator.py'
+    sibling_test = test_dir / 'test_calculator_0.py'
+    tracked_test.write_text('def test_pass(): pass')
+    sibling_test.write_text('def test_fail(): assert False')
+
+    # Create required files
+    (tmp_path / 'prompts').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'prompts' / 'calculator_python.prompt').write_text('prompt')
+    (tmp_path / 'src').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'src' / 'calculator.py').write_text('code')
+    (tmp_path / 'examples').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'examples' / 'calculator_example.py').write_text('example')
+
+    # KEY: Mock pdd_files to include 'test_files' with BOTH files
+    # This simulates what get_pdd_file_paths will return AFTER the fix
+    orchestration_fixture['get_pdd_file_paths'].return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+        'code': tmp_path / 'src' / 'calculator.py',
+        'example': tmp_path / 'examples' / 'calculator_example.py',
+        'test': tracked_test,  # Primary file (backward compat)
+        'test_files': [tracked_test, sibling_test],  # NEW: All test files
+    }
+
+    # Capture subprocess.run calls
+    captured_pytest_args = []
+    def capture_subprocess(args, **kwargs):
+        if isinstance(args, list) and 'pytest' in args:
+            captured_pytest_args.append(list(args))
+        return MagicMock(stdout="1 passed", stderr="", returncode=0)
+
+    # Trigger fix operation
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_subprocess):
+        with patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'):
+            with patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+                sync_orchestration(basename="calculator", language="python")
+
+    # Verify pytest was called
+    assert captured_pytest_args, "pytest should have been invoked"
+    pytest_args_str = ' '.join(str(arg) for arg in captured_pytest_args[0])
+
+    # CRITICAL ASSERTION: pytest must include the sibling file
+    # Current code: uses pdd_files['test'] only, ignores 'test_files' → FAILS
+    # After fix: uses pdd_files['test_files'] → PASSES
+    assert str(sibling_test) in pytest_args_str, \
+        f"Bug #156: sync_orchestration should use pdd_files['test_files']. " \
+        f"Expected {sibling_test} in args, got: {pytest_args_str}"
+
+
 # --- Bug #157: Crash Retry Infinite Loop Tests ---
 
 def test_crash_total_cost_includes_failed_operations(orchestration_fixture, tmp_path):
@@ -2714,3 +2784,66 @@ class TestStateUpdateAtomicity:
             f"BUG #159 FIXED! run_report and fingerprint are now written atomically. "
             f"Call order: {call_order}"
         )
+
+
+def test_final_state_handles_test_files_list(orchestration_fixture, tmp_path):
+    """
+    Bug #156: final_state dict comprehension crashes when pdd_files contains test_files list.
+
+    The return statement at line 1573 has:
+        'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items()}
+
+    This crashes with AttributeError when pdd_files['test_files'] is a list because
+    lists don't have .exists() method - only Path objects do.
+
+    TDD: This test should FAIL before fix, PASS after fix.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+
+    # Create test files
+    test_dir = tmp_path / 'tests'
+    test_dir.mkdir(parents=True, exist_ok=True)
+    tracked_test = test_dir / 'test_calculator.py'
+    sibling_test = test_dir / 'test_calculator_0.py'
+    tracked_test.write_text('def test_pass(): pass')
+    sibling_test.write_text('def test_fail(): assert False')
+
+    # Create other required files
+    (tmp_path / 'prompts' / 'calculator_python.prompt').write_text('prompt')
+    (tmp_path / 'src').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'src' / 'calculator.py').write_text('code')
+    (tmp_path / 'examples').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'examples' / 'calculator_example.py').write_text('example')
+
+    # KEY: Mock pdd_files to include 'test_files' as a LIST
+    # This is what triggers the bug at line 1573
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+        'code': tmp_path / 'src' / 'calculator.py',
+        'example': tmp_path / 'examples' / 'calculator_example.py',
+        'test': tracked_test,
+        'test_files': [tracked_test, sibling_test],  # LIST - not a Path!
+    }
+
+    # Simple workflow that reaches the return statement
+    mock_determine.side_effect = [
+        SyncDecision(operation='all_synced', reason='Already synced'),
+    ]
+
+    # Run sync - before fix this should crash with:
+    # AttributeError: 'list' object has no attribute 'exists'
+    result = sync_orchestration(basename="calculator", language="python")
+
+    # After fix: should succeed and final_state should NOT contain 'test_files'
+    assert result['success'] is True, f"Sync failed: {result.get('error')}"
+
+    # Verify final_state was built correctly (doesn't include test_files)
+    final_state = result.get('final_state', {})
+    assert 'test_files' not in final_state, \
+        "final_state should skip 'test_files' key to avoid calling .exists() on list"
+
+    # Verify the Path-based entries are correct
+    assert 'prompt' in final_state
+    assert 'code' in final_state
+    assert 'test' in final_state
