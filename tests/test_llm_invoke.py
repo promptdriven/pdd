@@ -1094,3 +1094,106 @@ def test_vertex_location_fallback_when_empty(mock_set_llm_cache):
                 # Assert vertex_location falls back to env var 'global'
                 call_kwargs = mock_completion.call_args[1]
                 assert call_kwargs.get('vertex_location') == 'global'
+
+
+# ==============================================================================
+# Test for API key input() hang bug fix
+#
+# Bug: When API key is missing, _ensure_api_key calls input() which in TUI
+# context goes through TUIStdinRedirector.request_input() with 300s timeout.
+# This causes apparent hang when user doesn't respond to the modal.
+# ==============================================================================
+
+class TestApiKeyInputHang:
+    """Tests for API key input() timeout behavior."""
+
+    def test_ensure_api_key_returns_false_when_input_empty(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that _ensure_api_key returns False immediately when user provides
+        empty input (simulating cancelled modal or timeout).
+
+        This test verifies the fix for the hang bug where the crash step would
+        wait indefinitely for API key input via TUI modal.
+        """
+        from pdd.llm_invoke import _ensure_api_key
+
+        model_info = {
+            'model': 'test-model',
+            'api_key': 'TEST_API_KEY'
+        }
+        newly_acquired_keys = {}
+
+        # Simulate empty input (user cancelled or timeout)
+        with patch.dict(os.environ, {}, clear=False):
+            # Remove the API key from environment if present
+            os.environ.pop('TEST_API_KEY', None)
+
+            # Mock input() to return empty string (simulating cancelled modal)
+            with patch('builtins.input', return_value=''):
+                result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+
+                # Should return False when no API key provided
+                assert result is False
+
+    def test_ensure_api_key_input_not_called_when_key_exists(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that input() is NOT called when API key already exists in environment.
+        This prevents unnecessary prompts that could cause TUI hangs.
+        """
+        from pdd.llm_invoke import _ensure_api_key
+
+        model_info = {
+            'model': 'test-model',
+            'api_key': 'EXISTING_API_KEY'
+        }
+        newly_acquired_keys = {}
+
+        with patch.dict(os.environ, {'EXISTING_API_KEY': 'sk-test-key'}):
+            with patch('builtins.input') as mock_input:
+                result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+
+                # Should return True and NOT call input()
+                assert result is True
+                mock_input.assert_not_called()
+
+    def test_llm_invoke_skips_model_on_missing_api_key(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that llm_invoke skips a model when API key is missing and user
+        provides empty input, then tries the next model.
+
+        This ensures the crash step doesn't hang when one model's API key
+        is unavailable - it should gracefully fall through to other models.
+        """
+        prompt = "Test prompt"
+        input_json = {"test": "data"}
+
+        # Mock: First model has missing key (user cancels prompt),
+        # second model has valid key
+        input_call_count = [0]
+        def mock_input_side_effect(prompt_text):
+            input_call_count[0] += 1
+            if input_call_count[0] == 1:
+                return ''  # User cancels first prompt
+            return 'valid-key-for-second'
+
+        mock_completion = MagicMock()
+        mock_completion.return_value = create_mock_litellm_response("Success", model_name='cheap-model')
+
+        # Only the second model (cheap-model) has API key; first model prompts
+        env_with_second_key = {
+            'ANTHROPIC_API_KEY': 'test-anthropic-key',  # For claude-3
+        }
+
+        with patch.dict(os.environ, env_with_second_key, clear=True):
+            # Remove OPENAI_API_KEY to force prompting for gpt-5-nano
+            os.environ.pop('OPENAI_API_KEY', None)
+
+            with patch('builtins.input', side_effect=mock_input_side_effect):
+                with patch('pdd.llm_invoke.litellm.completion', mock_completion):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001}):
+                        # Should successfully invoke with a model that has API key
+                        # (even though first model's key was cancelled)
+                        result = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5)
+
+                        # Verify we got a result
+                        assert result['result'] == "Success"
