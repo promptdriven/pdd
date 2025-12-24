@@ -98,6 +98,24 @@ except pd._config.config.OptionError:
     pass
 
 
+# --- Custom Exceptions ---
+
+class SchemaValidationError(Exception):
+    """Raised when LLM response fails Pydantic/JSON schema validation.
+
+    This exception triggers model fallback when caught at the outer exception
+    handler level, allowing the next candidate model to be tried.
+
+    Issue #168: Previously, validation errors only logged an error and continued
+    to the next batch item, never triggering model fallback.
+    """
+
+    def __init__(self, message: str, raw_response: Any = None, item_index: int = 0):
+        super().__init__(message)
+        self.raw_response = raw_response
+        self.item_index = item_index
+
+
 def _is_wsl_environment() -> bool:
     """
     Detect if we're running in WSL (Windows Subsystem for Linux) environment.
@@ -2237,9 +2255,14 @@ def llm_invoke(
                                 logger.error(f"[ERROR] Failed to parse response into {target_name} for item {i}: {parse_error}")
                                 # Use the string that was last attempted for parsing in the error message
                                 error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
-                                logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content)) # CORRECTED (or use f-string)
-                                results.append(f"ERROR: Failed to parse structured output. Raw: {repr(raw_result)}")
-                                continue # Skip appending result below if parsing failed
+                                logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content))
+                                # Issue #168: Raise SchemaValidationError to trigger model fallback
+                                # Previously this used `continue` which only skipped to the next batch item
+                                raise SchemaValidationError(
+                                    f"Failed to parse response into {target_name}: {parse_error}",
+                                    raw_response=raw_result,
+                                    item_index=i
+                                ) from parse_error
 
                             # Post-process: unescape newlines and repair Python syntax
                             _unescape_code_newlines(parsed_result)
@@ -2376,6 +2399,14 @@ def llm_invoke(
                 else:
                     logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} using existing key '{api_key_name}'. Trying next model.")
                     break # Break inner loop, try next model candidate
+
+            except SchemaValidationError as e:
+                # Issue #168: Schema validation failures now trigger model fallback
+                last_exception = e
+                logger.warning(f"[SCHEMA ERROR] Validation failed for {model_name_litellm}: {e}. Trying next model.")
+                if verbose:
+                    logger.debug(f"Raw response that failed validation: {repr(e.raw_response)}")
+                break  # Break inner loop, try next model candidate
 
             except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
                     openai.APIStatusError, openai.BadRequestError, openai.InternalServerError,
