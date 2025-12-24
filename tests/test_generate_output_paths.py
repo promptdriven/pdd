@@ -461,3 +461,531 @@ def test_sync_orchestration_example_scenario():
     assert not user_output_path.endswith(os.path.sep), "Path should not end with separator"
     # The path should be treated as a file, not a directory
 
+
+# =============================================================================
+# Issue #169 Regression Tests: Path Resolution Mode
+# =============================================================================
+#
+# These tests verify the fix for GitHub Issue #169: Path resolution regression
+# where running `pdd sync` from a subdirectory incorrectly resolved output paths
+# relative to .pddrc location instead of CWD.
+#
+# Bug: Commit 3c8b2371 introduced config_base_dir that changed path resolution
+# to always prioritize the .pddrc parent directory. This is correct for `fix`
+# but breaks `sync`.
+#
+# Solution: Added `path_resolution_mode` parameter:
+#   - "cwd" - resolves relative paths to current working directory (for sync)
+#   - "config_base" - resolves relative paths to .pddrc location (for fix, etc.)
+# =============================================================================
+
+from unittest.mock import patch, MagicMock
+
+
+class TestIssue169PathResolution:
+    """Tests for Issue #169: Path resolution regression in sync from subdirectory."""
+
+    @pytest.fixture
+    def project_structure(self, tmp_path):
+        """
+        Create a project structure that mimics the bug scenario:
+
+        project_root/           <- .pddrc here with generate_output_path: "src/"
+        └── examples/hello/     <- CWD here when running sync
+            └── hello.prompt
+        """
+        project_root = tmp_path / "project_root"
+        project_root.mkdir()
+
+        # Create .pddrc at project root
+        pddrc = project_root / ".pddrc"
+        pddrc.write_text("""
+contexts:
+  default:
+    defaults:
+      generate_output_path: src/
+      test_output_path: tests/
+      example_output_path: examples/
+""")
+
+        # Create subdirectory
+        subdir = project_root / "examples" / "hello"
+        subdir.mkdir(parents=True)
+
+        # Create prompt file in subdirectory
+        prompt_file = subdir / "hello_python.prompt"
+        prompt_file.write_text("Write a hello world function")
+
+        return {
+            "project_root": project_root,
+            "subdir": subdir,
+            "pddrc": pddrc,
+            "prompt_file": prompt_file,
+        }
+
+    def test_sync_from_subdirectory_resolves_paths_relative_to_cwd(
+        self, project_structure
+    ):
+        """
+        REGRESSION TEST for issue #169.
+
+        When running sync from a subdirectory with path_resolution_mode="cwd":
+        - CWD = project_root/examples/hello/
+        - .pddrc at project_root with generate_output_path: "src/"
+        - Result: CWD/src/hello.py (resolved from CWD, not .pddrc location)
+        """
+        project_root = project_structure["project_root"]
+        subdir = project_structure["subdir"]
+
+        # Context config from .pddrc
+        context_config = {
+            "generate_output_path": "src/",
+            "test_output_path": "tests/",
+            "example_output_path": "examples/",
+        }
+
+        # Save current CWD and change to subdir
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(subdir)
+
+            # Call generate_output_paths with path_resolution_mode="cwd"
+            # (as construct_paths now calls it for sync)
+            result = generate_output_paths(
+                command="sync",
+                output_locations={},
+                basename="hello",
+                language="python",
+                file_extension=".py",
+                context_config=context_config,
+                config_base_dir=str(project_root),  # .pddrc parent directory
+                path_resolution_mode="cwd",  # Sync uses CWD-relative paths
+            )
+
+            # For sync command, the key is 'generate_output_path'
+            generate_path = result.get("generate_output_path", "")
+
+            # With the fix, paths should resolve relative to CWD (subdir)
+            expected = str(subdir / "src" / "hello.py")
+            assert generate_path == expected, \
+                f"Expected {expected}, got {generate_path}"
+
+        finally:
+            os.chdir(original_cwd)
+
+    def test_fix_command_should_use_config_base_to_avoid_path_doubling(
+        self, project_structure
+    ):
+        """
+        Verifies the original bug that commit 3c8b2371 fixed.
+
+        Scenario:
+        - .pddrc at project root with generate_output_path: "backend/functions/src/"
+        - Running fix on backend/functions/prompts/calculator.prompt
+        - Without config_base_dir: path doubles to backend/functions/prompts/backend/functions/src/
+        - With config_base_dir: correctly resolves to backend/functions/src/
+        """
+        project_root = project_structure["project_root"]
+
+        # Simulate the scenario from commit 3c8b2371
+        context_config = {
+            "generate_output_path": "backend/functions/src/",
+            "test_output_path": "backend/functions/tests/",
+        }
+
+        # The input file is in a subdirectory
+        input_file_dir = str(project_root / "backend" / "functions" / "prompts")
+
+        # With config_base_dir (the fix from 3c8b2371):
+        # Relative paths should resolve from project root, not input file dir
+        # For fix command, the output keys are 'output_code', 'output_test', 'output_results'
+        result = generate_output_paths(
+            command="fix",
+            output_locations={},
+            basename="calculator",
+            language="python",
+            file_extension=".py",
+            context_config=context_config,
+            input_file_dir=input_file_dir,
+            config_base_dir=str(project_root),
+        )
+
+        # For fix command, 'output_code' maps to 'generate_output_path' in context config
+        generate_path = result.get("output_code", "")
+
+        # Should NOT have path doubling
+        assert "prompts/backend" not in generate_path, \
+            f"Path doubling bug: got {generate_path}"
+
+        # Should correctly resolve to project_root/backend/functions/src/
+        # Note: fix command uses _fixed suffix in filename
+        expected_path = str(project_root / "backend" / "functions" / "src" / "calculator_fixed.py")
+        assert generate_path == expected_path, \
+            f"Expected {expected_path}, got {generate_path}"
+
+    def test_absolute_paths_not_affected_by_resolution_mode(self, project_structure):
+        """
+        Absolute paths in .pddrc should not be affected by resolution mode.
+        """
+        project_root = project_structure["project_root"]
+
+        absolute_path = "/absolute/path/to/output/"
+        context_config = {
+            "generate_output_path": absolute_path,
+            "test_output_path": "/absolute/tests/",
+            "example_output_path": "/absolute/examples/",
+        }
+
+        result = generate_output_paths(
+            command="sync",
+            output_locations={},
+            basename="test",
+            language="python",
+            file_extension=".py",
+            context_config=context_config,
+            config_base_dir=str(project_root),
+        )
+
+        generate_path = result.get("generate_output_path", "")
+
+        # Absolute path should be used as-is
+        assert generate_path.startswith("/absolute/path/to/output/"), \
+            f"Absolute path should be preserved, got {generate_path}"
+
+    def test_cli_output_override_takes_priority_for_generate(self, project_structure):
+        """
+        CLI --output should take priority over .pddrc configuration.
+        This is priority level 1 in the resolution chain.
+        """
+        project_root = project_structure["project_root"]
+
+        context_config = {
+            "generate_output_path": "src/",
+        }
+
+        # CLI --output is passed via output_locations with key 'output' for generate command
+        cli_output = str(project_root / "custom_output" / "myfile.py")
+        output_locations = {
+            "output": cli_output,
+        }
+
+        result = generate_output_paths(
+            command="generate",
+            output_locations=output_locations,
+            basename="test",
+            language="python",
+            file_extension=".py",
+            context_config=context_config,
+            config_base_dir=str(project_root),
+        )
+
+        # For generate command, the key is 'output'
+        generate_path = result.get("output", "")
+
+        # CLI output should take priority
+        assert generate_path == cli_output, \
+            f"CLI --output should take priority, expected {cli_output}, got {generate_path}"
+
+    def test_sync_from_project_root_same_as_config_base(self, project_structure):
+        """
+        When CWD equals .pddrc location, both resolution modes should produce same result.
+        """
+        project_root = project_structure["project_root"]
+
+        context_config = {
+            "generate_output_path": "src/",
+            "test_output_path": "tests/",
+            "example_output_path": "examples/",
+        }
+
+        # When running from project root, CWD == config_base_dir
+        # Both modes should give the same result
+        result = generate_output_paths(
+            command="sync",
+            output_locations={},
+            basename="hello",
+            language="python",
+            file_extension=".py",
+            context_config=context_config,
+            config_base_dir=str(project_root),
+        )
+
+        generate_path = result.get("generate_output_path", "")
+
+        # Should resolve to project_root/src/hello.py
+        expected = str(project_root / "src" / "hello.py")
+        assert generate_path == expected, \
+            f"Expected {expected}, got {generate_path}"
+
+
+class TestIssue169EnvVarPathResolution:
+    """Tests for environment variable path resolution (Issue #169 related)."""
+
+    def test_env_var_relative_path_resolution(self, tmp_path):
+        """
+        Environment variable relative paths should follow the same resolution
+        logic as .pddrc paths.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        # Set environment variable with relative path
+        # For sync command, use PDD_GENERATE_OUTPUT_PATH
+        with patch.dict(os.environ, {"PDD_GENERATE_OUTPUT_PATH": "env_output/"}):
+            result = generate_output_paths(
+                command="sync",
+                output_locations={},
+                basename="test",
+                language="python",
+                file_extension=".py",
+                context_config={},  # No .pddrc config, will use env var
+                config_base_dir=str(project_root),
+            )
+
+        generate_path = result.get("generate_output_path", "")
+
+        # Env var relative path should be resolved using config_base_dir
+        assert str(project_root / "env_output") in generate_path, \
+            f"Env var path should resolve relative to config_base, got {generate_path}"
+
+    def test_env_var_absolute_path_not_affected(self, tmp_path):
+        """
+        Absolute paths in environment variables should not be modified.
+        """
+        absolute_env_path = "/absolute/env/path/"
+
+        with patch.dict(os.environ, {"PDD_GENERATE_OUTPUT_PATH": absolute_env_path}):
+            result = generate_output_paths(
+                command="sync",
+                output_locations={},
+                basename="test",
+                language="python",
+                file_extension=".py",
+                context_config={},
+                config_base_dir=str(tmp_path),
+            )
+
+        generate_path = result.get("generate_output_path", "")
+
+        # Absolute env path should be preserved
+        assert generate_path.startswith("/absolute/env/path/"), \
+            f"Absolute env path should be preserved, got {generate_path}"
+
+
+class TestIssue169PriorityChain:
+    """
+    Tests verifying the priority chain is maintained (Issue #169 related):
+    1. CLI --output (highest)
+    2. .pddrc context
+    3. Environment variables
+    4. Built-in defaults (lowest)
+    """
+
+    def test_cli_overrides_pddrc_for_generate(self, tmp_path):
+        """CLI --output should override .pddrc configuration for generate command."""
+        cli_path = str(tmp_path / "cli_output.py")
+
+        result = generate_output_paths(
+            command="generate",
+            output_locations={"output": cli_path},
+            basename="test",
+            language="python",
+            file_extension=".py",
+            context_config={"generate_output_path": "pddrc_path/"},
+            config_base_dir=str(tmp_path),
+        )
+
+        # For generate command, the key is 'output'
+        assert result.get("output") == cli_path
+
+    def test_pddrc_overrides_env_var_for_sync(self, tmp_path):
+        """
+        .pddrc configuration should override environment variables for sync.
+        """
+        with patch.dict(os.environ, {"PDD_GENERATE_OUTPUT_PATH": "env_path/"}):
+            result = generate_output_paths(
+                command="sync",
+                output_locations={},
+                basename="test",
+                language="python",
+                file_extension=".py",
+                context_config={"generate_output_path": "pddrc_path/"},
+                config_base_dir=str(tmp_path),
+            )
+
+        generate_path = result.get("generate_output_path", "")
+
+        # Should use .pddrc path, not env var
+        assert "pddrc_path" in generate_path, \
+            f".pddrc should override env var, got {generate_path}"
+        assert "env_path" not in generate_path
+
+    def test_env_var_used_when_no_pddrc_config_for_sync(self, tmp_path):
+        """
+        Environment variable should be used when no .pddrc configuration exists for sync.
+        """
+        with patch.dict(os.environ, {"PDD_GENERATE_OUTPUT_PATH": "env_output/"}):
+            result = generate_output_paths(
+                command="sync",
+                output_locations={},
+                basename="test",
+                language="python",
+                file_extension=".py",
+                context_config={},  # No .pddrc config
+                config_base_dir=str(tmp_path),
+            )
+
+        generate_path = result.get("generate_output_path", "")
+
+        # Should use env var path
+        assert "env_output" in generate_path, \
+            f"Should use env var when no .pddrc config, got {generate_path}"
+
+    def test_default_used_when_no_config_or_env_for_sync(self, tmp_path, monkeypatch):
+        """
+        Built-in defaults should be used when no config or env var exists for sync.
+        """
+        # Ensure env var is not set
+        monkeypatch.delenv("PDD_GENERATE_OUTPUT_PATH", raising=False)
+
+        result = generate_output_paths(
+            command="sync",
+            output_locations={},
+            basename="test",
+            language="python",
+            file_extension=".py",
+            context_config={},
+            config_base_dir=None,
+        )
+
+        generate_path = result.get("generate_output_path", "")
+
+        # Should use default naming (basename.ext in current directory)
+        assert "test.py" in generate_path, \
+            f"Should use default naming, got {generate_path}"
+
+
+class TestPathResolutionModeParameter:
+    """
+    Tests for the path_resolution_mode parameter (Issue #169).
+    """
+
+    def test_cwd_mode_resolves_relative_to_cwd(self, tmp_path):
+        """
+        When path_resolution_mode="cwd", relative paths should resolve relative to CWD.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        subdir = project_root / "subdir"
+        subdir.mkdir()
+
+        context_config = {
+            "generate_output_path": "src/",
+            "test_output_path": "tests/",
+            "example_output_path": "examples/",
+        }
+
+        # Save current CWD and change to subdir
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(subdir)
+
+            result = generate_output_paths(
+                command="sync",
+                output_locations={},
+                basename="hello",
+                language="python",
+                file_extension=".py",
+                context_config=context_config,
+                config_base_dir=str(project_root),
+                path_resolution_mode="cwd",
+            )
+
+            generate_path = result.get("generate_output_path", "")
+
+            # With path_resolution_mode="cwd", paths resolve relative to CWD (subdir)
+            expected = str(subdir / "src" / "hello.py")
+            assert generate_path == expected, \
+                f"Expected {expected}, got {generate_path}"
+
+        finally:
+            os.chdir(original_cwd)
+
+    def test_config_base_mode_resolves_relative_to_config_dir(self, tmp_path):
+        """
+        When path_resolution_mode="config_base" (default), relative paths resolve to config_base_dir.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        subdir = project_root / "subdir"
+        subdir.mkdir()
+
+        context_config = {
+            "generate_output_path": "src/",
+        }
+
+        # Save current CWD and change to subdir
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(subdir)
+
+            result = generate_output_paths(
+                command="fix",
+                output_locations={},
+                basename="hello",
+                language="python",
+                file_extension=".py",
+                context_config=context_config,
+                config_base_dir=str(project_root),
+                path_resolution_mode="config_base",  # Explicit default
+            )
+
+            generate_path = result.get("output_code", "")
+
+            # With path_resolution_mode="config_base", paths resolve relative to project_root
+            expected = str(project_root / "src" / "hello_fixed.py")
+            assert generate_path == expected, \
+                f"Expected {expected}, got {generate_path}"
+
+        finally:
+            os.chdir(original_cwd)
+
+    def test_default_mode_is_config_base(self, tmp_path):
+        """
+        When path_resolution_mode is not specified, it defaults to "config_base".
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        subdir = project_root / "subdir"
+        subdir.mkdir()
+
+        context_config = {
+            "generate_output_path": "src/",
+        }
+
+        # Save current CWD and change to subdir
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(subdir)
+
+            # Don't pass path_resolution_mode - should use default "config_base"
+            result = generate_output_paths(
+                command="fix",
+                output_locations={},
+                basename="hello",
+                language="python",
+                file_extension=".py",
+                context_config=context_config,
+                config_base_dir=str(project_root),
+            )
+
+            generate_path = result.get("output_code", "")
+
+            # Default should resolve relative to project_root (config_base behavior)
+            expected = str(project_root / "src" / "hello_fixed.py")
+            assert generate_path == expected, \
+                f"Expected {expected}, got {generate_path}"
+
+        finally:
+            os.chdir(original_cwd)
+
