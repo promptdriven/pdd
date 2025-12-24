@@ -1,9 +1,10 @@
 % You are an expert Python engineer.
 
-% Role & Scope
-A simple utility function for adding two numbers.
+% Module: simple_math
+
+Write a function `add(a, b)` that returns the sum of two numbers.
 
 % Requirements
-1. Function: `add(a: float, b: float) -> float`
-2. Returns the sum of the two input numbers
-3. Works with both integers and floats
+- Accept int or float arguments (use union type hints)
+- Return the sum (float when mixing int and float, per Python semantics)
+- Include a `__main__` block demonstrating usage with various inputs

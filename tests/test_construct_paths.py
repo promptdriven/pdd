@@ -320,6 +320,7 @@ def test_construct_paths_basename_extraction(tmpdir):
                     input_file_dir=ANY,
                     input_file_dirs={},
                     config_base_dir=None,
+                    path_resolution_mode="config_base",
                 )
         # Clean up dummy code file
         if dummy_code and dummy_code.exists():
@@ -758,6 +759,7 @@ def test_construct_paths_special_characters_in_filenames(tmpdir):
             input_file_dir=ANY,
             input_file_dirs={},
             config_base_dir=None,
+            path_resolution_mode="config_base",
         )
 
 
@@ -1068,8 +1070,8 @@ def test_construct_paths_sync_discovery_current_directory(tmpdir):
 
 def test_construct_paths_sync_discovery_honors_pddrc_generate_output_path_override(tmpdir):
     """
-    When generate_output_paths returns a default-root code path, construct_paths (sync discovery)
-    should still honor .pddrc context generate_output_path (e.g., 'pdd/') and place code under it.
+    Verify sync discovery mode correctly resolves paths relative to CWD using path_resolution_mode.
+    With path_resolution_mode="cwd", generate_output_paths should place code under CWD/pdd/.
     """
     input_file_paths = {}
     force = False
@@ -1084,14 +1086,12 @@ def test_construct_paths_sync_discovery_honors_pddrc_generate_output_path_overri
         "example_output_path": "examples/",
     }
 
-    # Fix current working directory for absolute resolution
     mock_cwd = Path("/project")
 
-    # Simulate generator returning a CWD-root location for code (problematic case)
-    # Establish mock CWD for this test
-    mock_cwd = Path("/project")
+    # With path_resolution_mode="cwd", generate_output_paths now correctly
+    # resolves paths relative to CWD
     mocked_gen_paths = {
-        "generate_output_path": str(mock_cwd / "simple_math.py"),
+        "generate_output_path": str(mock_cwd / "pdd" / "simple_math.py"),
         "test_output_path": str(mock_cwd / "tests" / "test_simple_math.py"),
         "example_output_path": str(mock_cwd / "examples" / "simple_math_example.py"),
     }
@@ -1107,15 +1107,15 @@ def test_construct_paths_sync_discovery_honors_pddrc_generate_output_path_overri
             input_file_paths, force, quiet, command, command_options
         )
 
-    # Code dir should reflect the .pddrc setting (under /project/pdd), not /root
+    # Code dir should reflect the .pddrc setting (under /project/pdd)
     assert resolved_config["code_dir"] == str(mock_cwd / "pdd")
     # Prompts directory should be root-level (sibling to pdd/)
     assert resolved_config["prompts_dir"] == "prompts"
 
 def test_construct_paths_sync_with_prompt_honors_pddrc_generate_output_path_override(tmpdir):
     """
-    In normal sync (with prompt_file given), ensure generate_output_path is overridden
-    to .pddrc's generate_output_path even if generator returns a default root path.
+    Verify sync with explicit prompt file correctly resolves paths relative to CWD.
+    With path_resolution_mode="cwd", generate_output_paths should place code under CWD/pdd/.
     """
     tmp_path = Path(str(tmpdir))
     # Create a prompt file so language/basename resolve normally
@@ -1128,10 +1128,12 @@ def test_construct_paths_sync_with_prompt_honors_pddrc_generate_output_path_over
     command = 'sync'
     command_options = {"basename": "simple_math", "language": "python"}
 
-    # Establish mock CWD for this test
     mock_cwd = Path("/project")
+
+    # With path_resolution_mode="cwd", generate_output_paths now correctly
+    # resolves paths relative to CWD
     mocked_gen_paths = {
-        "generate_output_path": str(mock_cwd / "simple_math.py"),
+        "generate_output_path": str(mock_cwd / "pdd" / "simple_math.py"),
         "test_output_path": str(mock_cwd / "tests" / "test_simple_math.py"),
         "example_output_path": str(mock_cwd / "examples" / "simple_math_example.py"),
     }
@@ -1141,8 +1143,6 @@ def test_construct_paths_sync_with_prompt_honors_pddrc_generate_output_path_over
         "test_output_path": "tests/",
         "example_output_path": "examples/",
     }
-
-    # mock_cwd defined above
 
     with patch('pdd.construct_paths.generate_output_paths', return_value=mocked_gen_paths), \
          patch('pdd.construct_paths._find_pddrc_file', return_value=Path('/fake/.pddrc')), \
@@ -1155,7 +1155,7 @@ def test_construct_paths_sync_with_prompt_honors_pddrc_generate_output_path_over
             input_file_paths, force, quiet, command, command_options
         )
 
-    # Output path should have been overridden to /project/pdd/simple_math.py
+    # Output path should be /project/pdd/simple_math.py
     assert Path(output_paths["generate_output_path"]).parent == mock_cwd / "pdd"
     assert resolved_config["code_dir"] == str(mock_cwd / "pdd")
 
@@ -1237,6 +1237,7 @@ def test_construct_paths_conflicting_language_specification(tmpdir):
             input_file_dir=ANY,
             input_file_dirs={},
             config_base_dir=None,
+            path_resolution_mode="config_base",
         )
         assert output_file_paths['output'] == str(mock_output_path)
 
@@ -1415,6 +1416,7 @@ def test_construct_paths_symbolic_links(tmpdir):
             input_file_dir=ANY,
             input_file_dirs={},
             config_base_dir=None,
+            path_resolution_mode="config_base",
         )
 
 # --- Fixture and tests below seem to use tmp_path_factory correctly ---
@@ -1514,6 +1516,7 @@ def test_construct_paths_generate_command(setup_test_files):
         input_file_dir=ANY,
         input_file_dirs={},
         config_base_dir=None,
+        path_resolution_mode="config_base",
     )
 
 
@@ -1978,6 +1981,7 @@ def test_construct_paths_handles_makefile_suffix_correctly_or_fails_if_buggy(tmp
             input_file_dir=ANY,
             input_file_dirs=ANY,
             config_base_dir=None,
+            path_resolution_mode="config_base",
         )
 
 

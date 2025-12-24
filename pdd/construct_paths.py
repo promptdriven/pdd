@@ -512,23 +512,8 @@ def construct_paths(
                 file_extension=".py", # Dummy extension
                 context_config=context_config,
                 config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
+                path_resolution_mode="cwd",  # Sync resolves paths relative to CWD
             )
-
-            # Honor .pddrc generate_output_path explicitly for sync discovery (robust to logger source)
-            try:
-                cfg_gen_dir = context_config.get("generate_output_path")
-                current_gen = output_paths_str.get("generate_output_path")
-                # Only override when generator placed code at CWD root (the problematic case)
-                if cfg_gen_dir and current_gen and Path(current_gen).parent.resolve() == Path.cwd().resolve():
-                    # Preserve the filename selected by generate_output_paths (e.g., basename + ext)
-                    gen_filename = Path(current_gen).name
-                    base_dir = Path.cwd()
-                    # Compose absolute path under configured directory
-                    abs_cfg_gen_dir = (base_dir / cfg_gen_dir).resolve() if not Path(cfg_gen_dir).is_absolute() else Path(cfg_gen_dir)
-                    output_paths_str["generate_output_path"] = str((abs_cfg_gen_dir / gen_filename).resolve())
-            except Exception:
-                # Best-effort override; fall back silently if anything goes wrong
-                pass
 
             # Infer base directories from a sample output path
             gen_path = Path(output_paths_str.get("generate_output_path", "src"))
@@ -770,24 +755,10 @@ def construct_paths(
             input_file_dir=input_file_dir,
             input_file_dirs=input_file_dirs,
             config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
+            # Sync resolves paths relative to CWD, other commands use config_base
+            path_resolution_mode="cwd" if command == "sync" else "config_base",
         )
 
-        # For sync, explicitly honor .pddrc generate_output_path even if generator logged as 'default'
-        if command == "sync":
-            try:
-                cfg_gen_dir = context_config.get("generate_output_path")
-                current_gen = output_paths_str.get("generate_output_path")
-                # Only override when generator placed code at CWD root (the problematic case)
-                if cfg_gen_dir and current_gen and Path(current_gen).parent.resolve() == Path.cwd().resolve():
-                    # Keep the filename chosen by generate_output_paths
-                    gen_filename = Path(current_gen).name
-                    # Resolve configured directory relative to CWD (or prompt file directory if available)
-                    base_dir = Path.cwd()
-                    abs_cfg_gen_dir = (base_dir / cfg_gen_dir).resolve() if not Path(cfg_gen_dir).is_absolute() else Path(cfg_gen_dir)
-                    output_paths_str["generate_output_path"] = str((abs_cfg_gen_dir / gen_filename).resolve())
-            except Exception:
-                # Non-fatal; fall back to whatever generate_output_paths returned
-                pass
         # Convert to Path objects for internal use
         output_paths_resolved: Dict[str, Path] = {k: Path(v) for k, v in output_paths_str.items()}
 
