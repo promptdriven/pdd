@@ -92,7 +92,7 @@ def test_cli_core_dump_does_not_propagate_exception(mock_main, mock_auto_update,
     mock_auto_update.assert_called_once_with()
 
 
-def test_core_dump_includes_file_contents(tmp_path):
+def test_core_dump_includes_file_contents(tmp_path, monkeypatch):
     """Test that core dump includes file contents from tracked files."""
     import json
     from pdd.core.dump import _write_core_dump, _build_issue_markdown
@@ -120,8 +120,8 @@ def test_core_dump_includes_file_contents(tmp_path):
         'review_examples': False
     }
 
-    # Change to temp directory for core dump output
-    os.chdir(tmp_path)
+    # Change to temp directory for core dump output (auto-restored by monkeypatch)
+    monkeypatch.chdir(tmp_path)
 
     # Write core dump
     _write_core_dump(mock_ctx, [('result', 0.5, 'test-model')], ['test'], 0.5)
@@ -162,7 +162,7 @@ def test_core_dump_includes_file_contents(tmp_path):
     assert "print('test')" in body_full
 
 
-def test_core_dump_auto_includes_meta_files(tmp_path):
+def test_core_dump_auto_includes_meta_files(tmp_path, monkeypatch):
     """Test that core dump automatically includes relevant meta files."""
     import json
     from pdd.core.dump import _write_core_dump
@@ -191,7 +191,7 @@ def test_core_dump_auto_includes_meta_files(tmp_path):
         'review_examples': False
     }
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
 
     # Write core dump with 'generate' command
     _write_core_dump(mock_ctx, [('result', 0.5, 'test-model')], ['generate'], 0.5)
@@ -209,7 +209,7 @@ def test_core_dump_auto_includes_meta_files(tmp_path):
         f"Meta file not auto-included: {list(file_contents.keys())}"
 
 
-def test_core_dump_handles_large_files(tmp_path):
+def test_core_dump_handles_large_files(tmp_path, monkeypatch):
     """Test that core dump marks large files as 'too large'."""
     import json
     from pdd.core.dump import _write_core_dump
@@ -234,7 +234,7 @@ def test_core_dump_handles_large_files(tmp_path):
         'review_examples': False
     }
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
 
     _write_core_dump(mock_ctx, [('result', 0.5, 'test-model')], ['test'], 0.5)
 
@@ -247,7 +247,7 @@ def test_core_dump_handles_large_files(tmp_path):
     assert file_contents[large_file_key] == "<too large>"
 
 
-def test_core_dump_handles_binary_files(tmp_path):
+def test_core_dump_handles_binary_files(tmp_path, monkeypatch):
     """Test that core dump marks binary files appropriately."""
     import json
     from pdd.core.dump import _write_core_dump
@@ -272,7 +272,7 @@ def test_core_dump_handles_binary_files(tmp_path):
         'review_examples': False
     }
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
 
     _write_core_dump(mock_ctx, [('result', 0.5, 'test-model')], ['test'], 0.5)
 
@@ -285,7 +285,7 @@ def test_core_dump_handles_binary_files(tmp_path):
     assert file_contents[binary_file_key] == "<binary>"
 
 
-def test_terminal_output_captured_in_core_dump(tmp_path):
+def test_terminal_output_captured_in_core_dump(tmp_path, monkeypatch):
     """Test that terminal output (stdout/stderr) is captured and included in core dump."""
     import json
     from pdd.core.dump import _write_core_dump
@@ -332,7 +332,7 @@ def test_terminal_output_captured_in_core_dump(tmp_path):
         'review_examples': False
     }
 
-    os.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
 
     # Write core dump with terminal output
     _write_core_dump(mock_ctx, [('result', 0.5, 'test-model')], ['test'], 0.5, terminal_output)
@@ -452,7 +452,7 @@ def test_terminal_output_in_issue_markdown(tmp_path):
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main', side_effect=KeyboardInterrupt())
-def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_path, runner):
+def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_path, runner, monkeypatch):
     """Test that core dump is written when KeyboardInterrupt (Ctrl+C) occurs."""
     import json
 
@@ -460,8 +460,8 @@ def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_pa
     test_prompt = tmp_path / "test.prompt"
     test_prompt.write_text("Test prompt for keyboard interrupt")
 
-    # Change to temp directory
-    os.chdir(tmp_path)
+    # Change to temp directory (auto-restored by monkeypatch)
+    monkeypatch.chdir(tmp_path)
 
     # Run with --core-dump and simulate keyboard interrupt
     result = runner.invoke(

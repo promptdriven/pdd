@@ -1171,126 +1171,94 @@ def sync_orchestration(
                     op_start_time = time.time()
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
-                    atomic_state = AtomicStateUpdate(basename, language)
+                    with AtomicStateUpdate(basename, language) as atomic_state:
 
-                    # --- Execute Operation ---
-                    try:
-                        if operation == 'auto-deps':
-                            temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
-                            original_content = pdd_files['prompt'].read_text(encoding='utf-8')
-                            result = auto_deps_main(
-                                ctx,
-                                prompt_file=str(pdd_files['prompt']),
-                                directory_path=examples_dir,
-                                auto_deps_csv_path="project_dependencies.csv",
-                                output=temp_output,
-                                force_scan=False,
-                                progress_callback=progress_callback_ref[0]
-                            )
-                            if Path(temp_output).exists():
-                                import shutil
-                                new_content = Path(temp_output).read_text(encoding='utf-8')
-                                if new_content != original_content:
-                                    shutil.move(temp_output, str(pdd_files['prompt']))
-                                else:
-                                    Path(temp_output).unlink()
-                                    result = (new_content, 0.0, 'no-changes')
-                        elif operation == 'generate':
-                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt']), output=str(pdd_files['code']), original_prompt_file_path=None, force_incremental_flag=False)
-                            # Clear stale run_report so crash/verify is required for newly generated code
-                            run_report_file = META_DIR / f"{basename}_{language}_run.json"
-                            run_report_file.unlink(missing_ok=True)
-                        elif operation == 'example':
-                            result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['example']))
-                        elif operation == 'crash':
-                            required_files = [pdd_files['code'], pdd_files['example']]
-                            missing_files = [f for f in required_files if not f.exists()]
-                            if missing_files:
-                                skipped_operations.append('crash')
-                                continue
-                            
-                            # Crash handling logic (simplified copy from original)
-                            current_run_report = read_run_report(basename, language)
-                            crash_log_content = ""
-                            
-                            # Check for crash condition (either run report says so, or we check manually)
-                            has_crash = False
-                            if current_run_report and current_run_report.exit_code != 0:
-                                has_crash = True
-                                crash_log_content = f"Test execution failed exit code: {current_run_report.exit_code}\n"
-                            else:
-                                # Manual check - run the example to see if it crashes
-                                env = os.environ.copy()
-                                src_dir = Path.cwd() / 'src'
-                                env['PYTHONPATH'] = f"{src_dir}:{env.get('PYTHONPATH', '')}"
-                                # Remove TUI-specific env vars that might contaminate subprocess
-                                for var in ['FORCE_COLOR', 'COLUMNS']:
-                                    env.pop(var, None)
-                                # Get language-appropriate run command from language_format.csv
-                                example_path = str(pdd_files['example'])
-                                run_cmd = get_run_command_for_file(example_path)
-                                if run_cmd:
-                                    # Use the language-specific interpreter (e.g., node for .js)
-                                    cmd_parts = run_cmd.split()
-                                else:
-                                    # Fallback to Python if no run command found
-                                    cmd_parts = ['python', example_path]
-                                # Use error-detection runner that handles server-style examples
-                                returncode, stdout, stderr = _run_example_with_error_detection(
-                                    cmd_parts,
-                                    env=env,
-                                    cwd=str(pdd_files['example'].parent),
-                                    timeout=60
+                        # --- Execute Operation ---
+                        try:
+                            if operation == 'auto-deps':
+                                temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
+                                original_content = pdd_files['prompt'].read_text(encoding='utf-8')
+                                result = auto_deps_main(
+                                    ctx,
+                                    prompt_file=str(pdd_files['prompt']),
+                                    directory_path=examples_dir,
+                                    auto_deps_csv_path="project_dependencies.csv",
+                                    output=temp_output,
+                                    force_scan=False,
+                                    progress_callback=progress_callback_ref[0]
                                 )
-
-                                class ExampleResult:
-                                    def __init__(self, rc, out, err):
-                                        self.returncode = rc
-                                        self.stdout = out
-                                        self.stderr = err
-
-                                ex_res = ExampleResult(returncode, stdout, stderr)
-                                if ex_res.returncode != 0:
-                                    has_crash = True
-                                    crash_log_content = f"Example failed exit code: {ex_res.returncode}\nSTDOUT:\n{ex_res.stdout}\nSTDERR:\n{ex_res.stderr}\n"
-                                    if "SyntaxError" in ex_res.stderr:
-                                         crash_log_content = "SYNTAX ERROR DETECTED:\n" + crash_log_content
-                                else:
-                                    # No crash - save run report with exit_code=0 so sync_determine_operation
-                                    # knows the example was tested and passed (prevents infinite loop)
-                                    # Include test_hash for staleness detection
-                                    test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
-                                    report = RunReport(
-                                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                                        exit_code=0,
-                                        tests_passed=1,
-                                        tests_failed=0,
-                                        coverage=0.0,
-                                        test_hash=test_hash
-                                    )
-                                    save_run_report(asdict(report), basename, language)
+                                if Path(temp_output).exists():
+                                    import shutil
+                                    new_content = Path(temp_output).read_text(encoding='utf-8')
+                                    if new_content != original_content:
+                                        shutil.move(temp_output, str(pdd_files['prompt']))
+                                    else:
+                                        Path(temp_output).unlink()
+                                        result = (new_content, 0.0, 'no-changes')
+                            elif operation == 'generate':
+                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt']), output=str(pdd_files['code']), original_prompt_file_path=None, force_incremental_flag=False)
+                                # Clear stale run_report so crash/verify is required for newly generated code
+                                run_report_file = META_DIR / f"{basename}_{language}_run.json"
+                                run_report_file.unlink(missing_ok=True)
+                            elif operation == 'example':
+                                result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['example']))
+                            elif operation == 'crash':
+                                required_files = [pdd_files['code'], pdd_files['example']]
+                                missing_files = [f for f in required_files if not f.exists()]
+                                if missing_files:
                                     skipped_operations.append('crash')
                                     continue
-                                    
-                            if has_crash:
-                                # Try auto-fix for common import errors before expensive agentic call
-                                auto_fixed, auto_fix_msg = _try_auto_fix_import_error(
-                                    crash_log_content,
-                                    pdd_files['code'],
-                                    pdd_files['example']
-                                )
-                                if auto_fixed:
-                                    log_sync_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg})
-                                    # Retry running the example after auto-fix
-                                    retry_returncode, retry_stdout, retry_stderr = _run_example_with_error_detection(
+                            
+                                # Crash handling logic (simplified copy from original)
+                                current_run_report = read_run_report(basename, language)
+                                crash_log_content = ""
+                            
+                                # Check for crash condition (either run report says so, or we check manually)
+                                has_crash = False
+                                if current_run_report and current_run_report.exit_code != 0:
+                                    has_crash = True
+                                    crash_log_content = f"Test execution failed exit code: {current_run_report.exit_code}\n"
+                                else:
+                                    # Manual check - run the example to see if it crashes
+                                    env = os.environ.copy()
+                                    src_dir = Path.cwd() / 'src'
+                                    env['PYTHONPATH'] = f"{src_dir}:{env.get('PYTHONPATH', '')}"
+                                    # Remove TUI-specific env vars that might contaminate subprocess
+                                    for var in ['FORCE_COLOR', 'COLUMNS']:
+                                        env.pop(var, None)
+                                    # Get language-appropriate run command from language_format.csv
+                                    example_path = str(pdd_files['example'])
+                                    run_cmd = get_run_command_for_file(example_path)
+                                    if run_cmd:
+                                        # Use the language-specific interpreter (e.g., node for .js)
+                                        cmd_parts = run_cmd.split()
+                                    else:
+                                        # Fallback to Python if no run command found
+                                        cmd_parts = ['python', example_path]
+                                    # Use error-detection runner that handles server-style examples
+                                    returncode, stdout, stderr = _run_example_with_error_detection(
                                         cmd_parts,
                                         env=env,
                                         cwd=str(pdd_files['example'].parent),
                                         timeout=60
                                     )
-                                    if retry_returncode == 0:
-                                        # Auto-fix worked! Save run report and continue
-                                        log_sync_event(basename, language, "auto_fix_success", {"message": auto_fix_msg})
+
+                                    class ExampleResult:
+                                        def __init__(self, rc, out, err):
+                                            self.returncode = rc
+                                            self.stdout = out
+                                            self.stderr = err
+
+                                    ex_res = ExampleResult(returncode, stdout, stderr)
+                                    if ex_res.returncode != 0:
+                                        has_crash = True
+                                        crash_log_content = f"Example failed exit code: {ex_res.returncode}\nSTDOUT:\n{ex_res.stdout}\nSTDERR:\n{ex_res.stderr}\n"
+                                        if "SyntaxError" in ex_res.stderr:
+                                             crash_log_content = "SYNTAX ERROR DETECTED:\n" + crash_log_content
+                                    else:
+                                        # No crash - save run report with exit_code=0 so sync_determine_operation
+                                        # knows the example was tested and passed (prevents infinite loop)
+                                        # Include test_hash for staleness detection
                                         test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                         report = RunReport(
                                             datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1301,77 +1269,68 @@ def sync_orchestration(
                                             test_hash=test_hash
                                         )
                                         save_run_report(asdict(report), basename, language)
-                                        result = (True, 0.0, 'auto-fix')
-                                        success = True
-                                        actual_cost = 0.0
-                                        model_name = 'auto-fix'
-                                        # Update crash_log_content for logging
-                                        crash_log_content = f"Auto-fixed: {auto_fix_msg}"
-                                        continue  # Skip crash_main, move to next operation
-                                    else:
-                                        # Auto-fix didn't fully work, update error log and proceed
-                                        crash_log_content = f"Auto-fix attempted ({auto_fix_msg}) but still failing:\nRETRY STDOUT:\n{retry_stdout}\nRETRY STDERR:\n{retry_stderr}\n"
+                                        skipped_operations.append('crash')
+                                        continue
+                                    
+                                if has_crash:
+                                    # Try auto-fix for common import errors before expensive agentic call
+                                    auto_fixed, auto_fix_msg = _try_auto_fix_import_error(
+                                        crash_log_content,
+                                        pdd_files['code'],
+                                        pdd_files['example']
+                                    )
+                                    if auto_fixed:
+                                        log_sync_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg})
+                                        # Retry running the example after auto-fix
+                                        retry_returncode, retry_stdout, retry_stderr = _run_example_with_error_detection(
+                                            cmd_parts,
+                                            env=env,
+                                            cwd=str(pdd_files['example'].parent),
+                                            timeout=60
+                                        )
+                                        if retry_returncode == 0:
+                                            # Auto-fix worked! Save run report and continue
+                                            log_sync_event(basename, language, "auto_fix_success", {"message": auto_fix_msg})
+                                            test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                            report = RunReport(
+                                                datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                                exit_code=0,
+                                                tests_passed=1,
+                                                tests_failed=0,
+                                                coverage=0.0,
+                                                test_hash=test_hash
+                                            )
+                                            save_run_report(asdict(report), basename, language)
+                                            result = (True, 0.0, 'auto-fix')
+                                            success = True
+                                            actual_cost = 0.0
+                                            model_name = 'auto-fix'
+                                            # Update crash_log_content for logging
+                                            crash_log_content = f"Auto-fixed: {auto_fix_msg}"
+                                            continue  # Skip crash_main, move to next operation
+                                        else:
+                                            # Auto-fix didn't fully work, update error log and proceed
+                                            crash_log_content = f"Auto-fix attempted ({auto_fix_msg}) but still failing:\nRETRY STDOUT:\n{retry_stdout}\nRETRY STDERR:\n{retry_stderr}\n"
 
-                                Path("crash.log").write_text(crash_log_content)
-                                try:
-                                    result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log", output=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
-                                except Exception as e:
-                                    print(f"Crash fix failed: {e}")
-                                    skipped_operations.append('crash')
+                                    Path("crash.log").write_text(crash_log_content)
+                                    try:
+                                        result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log", output=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
+                                    except Exception as e:
+                                        print(f"Crash fix failed: {e}")
+                                        skipped_operations.append('crash')
+                                        continue
+
+                            elif operation == 'verify':
+                                if not pdd_files['example'].exists():
+                                    skipped_operations.append('verify')
                                     continue
-
-                        elif operation == 'verify':
-                            if not pdd_files['example'].exists():
-                                skipped_operations.append('verify')
-                                continue
-                            result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
-                        elif operation == 'test':
-                            pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
-                            # Use merge=True when test file exists to preserve fixes and append new tests
-                            # instead of regenerating from scratch (which would overwrite fixes)
-                            test_file_exists = pdd_files['test'].exists()
-                            result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature)
-                            if pdd_files['test'].exists():
-                                _execute_tests_and_create_run_report(
-                                    pdd_files['test'],
-                                    basename,
-                                    language,
-                                    target_coverage,
-                                    code_file=pdd_files.get("code"),
-                                    atomic_state=atomic_state,
-                                    test_files=pdd_files.get('test_files'),  # Bug #156
-                                )
-                        elif operation == 'test_extend':
-                            # Extend existing tests to improve coverage
-                            # Uses existing_tests and merge=True to add more test cases
-                            pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
-                            if pdd_files['test'].exists():
-                                existing_test_path = str(pdd_files['test'])
-                                result = cmd_test_main(
-                                    ctx,
-                                    prompt_file=str(pdd_files['prompt']),
-                                    code_file=str(pdd_files['code']),
-                                    output=str(pdd_files['test']),
-                                    language=language,
-                                    coverage_report=None,
-                                    existing_tests=[existing_test_path],
-                                    target_coverage=target_coverage,
-                                    merge=True,
-                                    strength=strength,
-                                    temperature=temperature
-                                )
-                                _execute_tests_and_create_run_report(
-                                    pdd_files['test'],
-                                    basename,
-                                    language,
-                                    target_coverage,
-                                    code_file=pdd_files.get("code"),
-                                    atomic_state=atomic_state,
-                                    test_files=pdd_files.get('test_files'),  # Bug #156
-                                )
-                            else:
-                                # No existing test file, fall back to regular test generation
-                                result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
+                                result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
+                            elif operation == 'test':
+                                pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
+                                # Use merge=True when test file exists to preserve fixes and append new tests
+                                # instead of regenerating from scratch (which would overwrite fixes)
+                                test_file_exists = pdd_files['test'].exists()
+                                result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature)
                                 if pdd_files['test'].exists():
                                     _execute_tests_and_create_run_report(
                                         pdd_files['test'],
@@ -1382,176 +1341,215 @@ def sync_orchestration(
                                         atomic_state=atomic_state,
                                         test_files=pdd_files.get('test_files'),  # Bug #156
                                     )
-                        elif operation == 'fix':
-                            error_file_path = Path("fix_errors.log")
-                            # Capture errors using language-appropriate test command
-                            try:
-                                from .get_test_command import get_test_command_for_file
-                                test_cmd = get_test_command_for_file(str(pdd_files['test']), language)
-
-                                # Use clean env without TUI-specific vars
-                                clean_env = os.environ.copy()
-                                for var in ['FORCE_COLOR', 'COLUMNS']:
-                                    clean_env.pop(var, None)
-
-                                if test_cmd:
-                                    # Run language-appropriate test command
-                                    if language.lower() == 'python':
-                                        # Use pytest directly for Python
-                                        python_executable = detect_host_python_executable()
-                                        # Bug #156: Run pytest on ALL matching test files
-                                        test_files = pdd_files.get('test_files', [pdd_files['test']])
-                                        pytest_args = [python_executable, '-m', 'pytest'] + [str(f) for f in test_files] + ['-v', '--tb=short']
-                                        test_result = subprocess.run(
-                                            pytest_args,
-                                            capture_output=True, text=True, timeout=300,
-                                            stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True,
-                                            cwd=str(pdd_files['test'].parent)
-                                        )
-                                    else:
-                                        # Use shell command for non-Python
-                                        test_result = subprocess.run(
-                                            test_cmd,
-                                            shell=True,
-                                            capture_output=True, text=True, timeout=300,
-                                            stdin=subprocess.DEVNULL, env=clean_env,
-                                            cwd=str(pdd_files['test'].parent),
-                                            start_new_session=True
-                                        )
-                                    error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
+                            elif operation == 'test_extend':
+                                # Extend existing tests to improve coverage
+                                # Uses existing_tests and merge=True to add more test cases
+                                pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
+                                if pdd_files['test'].exists():
+                                    existing_test_path = str(pdd_files['test'])
+                                    result = cmd_test_main(
+                                        ctx,
+                                        prompt_file=str(pdd_files['prompt']),
+                                        code_file=str(pdd_files['code']),
+                                        output=str(pdd_files['test']),
+                                        language=language,
+                                        coverage_report=None,
+                                        existing_tests=[existing_test_path],
+                                        target_coverage=target_coverage,
+                                        merge=True,
+                                        strength=strength,
+                                        temperature=temperature
+                                    )
+                                    _execute_tests_and_create_run_report(
+                                        pdd_files['test'],
+                                        basename,
+                                        language,
+                                        target_coverage,
+                                        code_file=pdd_files.get("code"),
+                                        atomic_state=atomic_state,
+                                        test_files=pdd_files.get('test_files'),  # Bug #156
+                                    )
                                 else:
-                                    # No test command available - trigger agentic fallback with context
-                                    error_content = f"No test command available for {language}. Please run tests manually and provide error output."
-                            except Exception as e:
-                                error_content = f"Test execution error: {e}"
-                            error_file_path.write_text(error_content)
+                                    # No existing test file, fall back to regular test generation
+                                    result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
+                                    if pdd_files['test'].exists():
+                                        _execute_tests_and_create_run_report(
+                                            pdd_files['test'],
+                                            basename,
+                                            language,
+                                            target_coverage,
+                                            code_file=pdd_files.get("code"),
+                                            atomic_state=atomic_state,
+                                            test_files=pdd_files.get('test_files'),  # Bug #156
+                                        )
+                            elif operation == 'fix':
+                                error_file_path = Path("fix_errors.log")
+                                # Capture errors using language-appropriate test command
+                                try:
+                                    from .get_test_command import get_test_command_for_file
+                                    test_cmd = get_test_command_for_file(str(pdd_files['test']), language)
 
-                            # Bug #156 fix: Parse pytest output to find actual failing files
-                            # and pass the correct file to fix_main
-                            failing_files = extract_failing_files_from_output(error_content)
-                            unit_test_file_for_fix = str(pdd_files['test'])  # Default to tracked file
+                                    # Use clean env without TUI-specific vars
+                                    clean_env = os.environ.copy()
+                                    for var in ['FORCE_COLOR', 'COLUMNS']:
+                                        clean_env.pop(var, None)
 
-                            if failing_files:
-                                # Try to resolve the failing file paths
-                                test_dir = pdd_files['test'].parent
-                                tracked_file_name = pdd_files['test'].name
-
-                                # Check if the tracked file is among the failures
-                                tracked_in_failures = any(
-                                    Path(ff).name == tracked_file_name for ff in failing_files
-                                )
-
-                                if not tracked_in_failures:
-                                    # Failures are in a different file - use the first failing file
-                                    for ff in failing_files:
-                                        # Try to resolve the path relative to test directory
-                                        ff_path = Path(ff)
-                                        if ff_path.is_absolute() and ff_path.exists():
-                                            unit_test_file_for_fix = str(ff_path)
-                                            break
+                                    if test_cmd:
+                                        # Run language-appropriate test command
+                                        if language.lower() == 'python':
+                                            # Use pytest directly for Python
+                                            python_executable = detect_host_python_executable()
+                                            # Bug #156: Run pytest on ALL matching test files
+                                            test_files = pdd_files.get('test_files', [pdd_files['test']])
+                                            pytest_args = [python_executable, '-m', 'pytest'] + [str(f) for f in test_files] + ['-v', '--tb=short']
+                                            test_result = subprocess.run(
+                                                pytest_args,
+                                                capture_output=True, text=True, timeout=300,
+                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True,
+                                                cwd=str(pdd_files['test'].parent)
+                                            )
                                         else:
-                                            # Try to find it in the test directory
-                                            candidate = test_dir / ff_path.name
-                                            if candidate.exists():
-                                                unit_test_file_for_fix = str(candidate)
+                                            # Use shell command for non-Python
+                                            test_result = subprocess.run(
+                                                test_cmd,
+                                                shell=True,
+                                                capture_output=True, text=True, timeout=300,
+                                                stdin=subprocess.DEVNULL, env=clean_env,
+                                                cwd=str(pdd_files['test'].parent),
+                                                start_new_session=True
+                                            )
+                                        error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
+                                    else:
+                                        # No test command available - trigger agentic fallback with context
+                                        error_content = f"No test command available for {language}. Please run tests manually and provide error output."
+                                except Exception as e:
+                                    error_content = f"Test execution error: {e}"
+                                error_file_path.write_text(error_content)
+
+                                # Bug #156 fix: Parse pytest output to find actual failing files
+                                # and pass the correct file to fix_main
+                                failing_files = extract_failing_files_from_output(error_content)
+                                unit_test_file_for_fix = str(pdd_files['test'])  # Default to tracked file
+
+                                if failing_files:
+                                    # Try to resolve the failing file paths
+                                    test_dir = pdd_files['test'].parent
+                                    tracked_file_name = pdd_files['test'].name
+
+                                    # Check if the tracked file is among the failures
+                                    tracked_in_failures = any(
+                                        Path(ff).name == tracked_file_name for ff in failing_files
+                                    )
+
+                                    if not tracked_in_failures:
+                                        # Failures are in a different file - use the first failing file
+                                        for ff in failing_files:
+                                            # Try to resolve the path relative to test directory
+                                            ff_path = Path(ff)
+                                            if ff_path.is_absolute() and ff_path.exists():
+                                                unit_test_file_for_fix = str(ff_path)
                                                 break
-                                            # Also try the path as-is relative to cwd
-                                            if ff_path.exists():
-                                                unit_test_file_for_fix = str(ff_path.resolve())
-                                                break
+                                            else:
+                                                # Try to find it in the test directory
+                                                candidate = test_dir / ff_path.name
+                                                if candidate.exists():
+                                                    unit_test_file_for_fix = str(candidate)
+                                                    break
+                                                # Also try the path as-is relative to cwd
+                                                if ff_path.exists():
+                                                    unit_test_file_for_fix = str(ff_path.resolve())
+                                                    break
 
-                            result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
-                        elif operation == 'update':
-                            result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
-                        else:
-                            errors.append(f"Unknown operation {operation}")
-                            result = {'success': False}
+                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
+                            elif operation == 'update':
+                                result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
+                            else:
+                                errors.append(f"Unknown operation {operation}")
+                                result = {'success': False}
 
-                        # Result parsing
-                        if isinstance(result, dict):
-                            success = result.get('success', False)
-                            current_cost_ref[0] += result.get('cost', 0.0)
-                        elif isinstance(result, tuple) and len(result) >= 3:
-                            if operation == 'test': success = pdd_files['test'].exists()
-                            else: success = bool(result[0])
-                            cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
-                            current_cost_ref[0] += cost
-                        else:
-                            success = result is not None
+                            # Result parsing
+                            if isinstance(result, dict):
+                                success = result.get('success', False)
+                                current_cost_ref[0] += result.get('cost', 0.0)
+                            elif isinstance(result, tuple) and len(result) >= 3:
+                                if operation == 'test': success = pdd_files['test'].exists()
+                                else: success = bool(result[0])
+                                cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                                current_cost_ref[0] += cost
+                            else:
+                                success = result is not None
 
-                    except Exception as e:
-                        errors.append(f"Exception during '{operation}': {e}")
-                        success = False
-                    
-                    # Log update
-                    duration = time.time() - op_start_time
-                    actual_cost = 0.0
-                    model_name = "unknown"
-                    if success:
-                        if isinstance(result, dict):
-                             actual_cost = result.get('cost', 0.0)
-                             model_name = result.get('model', 'unknown')
-                        elif isinstance(result, tuple) and len(result) >= 3:
-                             actual_cost = result[-2] if len(result) >= 2 else 0.0
-                             model_name = result[-1] if len(result) >= 1 else 'unknown'
-                        last_model_name = str(model_name)
-                        operations_completed.append(operation)
-                        _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
-                        # Issue #159 fix: Commit both run_report and fingerprint atomically
-                        atomic_state._commit()
-
-                    update_sync_log_entry(log_entry, {'success': success, 'cost': actual_cost, 'model': model_name, 'error': errors[-1] if errors and not success else None}, duration)
-                    append_sync_log(basename, language, log_entry)
-
-                    # Post-operation checks (simplified)
-                    if success and operation == 'crash':
-                        # Re-run example to verify crash fix worked
-                        try:
-                             # Use clean env without TUI-specific vars
-                             clean_env = os.environ.copy()
-                             for var in ['FORCE_COLOR', 'COLUMNS']:
-                                 clean_env.pop(var, None)
-                             # Get language-appropriate run command
-                             example_path = str(pdd_files['example'])
-                             run_cmd = get_run_command_for_file(example_path)
-                             if run_cmd:
-                                 cmd_parts = run_cmd.split()
-                             else:
-                                 cmd_parts = ['python', example_path]
-                             # Use error-detection runner that handles server-style examples
-                             returncode, stdout, stderr = _run_example_with_error_detection(
-                                 cmd_parts,
-                                 env=clean_env,
-                                 cwd=str(pdd_files['example'].parent),
-                                 timeout=60
-                             )
-                             # Include test_hash for staleness detection
-                             test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
-                             report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
-                             save_run_report(asdict(report), basename, language)
                         except Exception as e:
-                             # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
-                             error_msg = f"Post-crash verification failed: {e}"
-                             errors.append(error_msg)
-                             log_sync_event(basename, language, "post_crash_verification_failed", {"error": str(e)})
+                            errors.append(f"Exception during '{operation}': {e}")
+                            success = False
                     
-                    if success and operation == 'fix':
-                        # Re-run tests to update run_report after successful fix
-                        # This prevents infinite loop by updating the state machine
-                        if pdd_files['test'].exists():
-                            _execute_tests_and_create_run_report(
-                                pdd_files['test'],
-                                basename,
-                                language,
-                                target_coverage,
-                                code_file=pdd_files.get("code"),
-                                atomic_state=atomic_state,
-                                test_files=pdd_files.get('test_files'),  # Bug #156
-                            )
+                        # Log update
+                        duration = time.time() - op_start_time
+                        actual_cost = 0.0
+                        model_name = "unknown"
+                        if success:
+                            if isinstance(result, dict):
+                                 actual_cost = result.get('cost', 0.0)
+                                 model_name = result.get('model', 'unknown')
+                            elif isinstance(result, tuple) and len(result) >= 3:
+                                 actual_cost = result[-2] if len(result) >= 2 else 0.0
+                                 model_name = result[-1] if len(result) >= 1 else 'unknown'
+                            last_model_name = str(model_name)
+                            operations_completed.append(operation)
+                            _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
+
+                        update_sync_log_entry(log_entry, {'success': success, 'cost': actual_cost, 'model': model_name, 'error': errors[-1] if errors and not success else None}, duration)
+                        append_sync_log(basename, language, log_entry)
+
+                        # Post-operation checks (simplified)
+                        if success and operation == 'crash':
+                            # Re-run example to verify crash fix worked
+                            try:
+                                 # Use clean env without TUI-specific vars
+                                 clean_env = os.environ.copy()
+                                 for var in ['FORCE_COLOR', 'COLUMNS']:
+                                     clean_env.pop(var, None)
+                                 # Get language-appropriate run command
+                                 example_path = str(pdd_files['example'])
+                                 run_cmd = get_run_command_for_file(example_path)
+                                 if run_cmd:
+                                     cmd_parts = run_cmd.split()
+                                 else:
+                                     cmd_parts = ['python', example_path]
+                                 # Use error-detection runner that handles server-style examples
+                                 returncode, stdout, stderr = _run_example_with_error_detection(
+                                     cmd_parts,
+                                     env=clean_env,
+                                     cwd=str(pdd_files['example'].parent),
+                                     timeout=60
+                                 )
+                                 # Include test_hash for staleness detection
+                                 test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                 report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
+                                 save_run_report(asdict(report), basename, language)
+                            except Exception as e:
+                                 # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
+                                 error_msg = f"Post-crash verification failed: {e}"
+                                 errors.append(error_msg)
+                                 log_sync_event(basename, language, "post_crash_verification_failed", {"error": str(e)})
                     
-                    if not success:
-                        errors.append(f"Operation '{operation}' failed.")
-                        break
+                        if success and operation == 'fix':
+                            # Re-run tests to update run_report after successful fix
+                            # This prevents infinite loop by updating the state machine
+                            if pdd_files['test'].exists():
+                                _execute_tests_and_create_run_report(
+                                    pdd_files['test'],
+                                    basename,
+                                    language,
+                                    target_coverage,
+                                    code_file=pdd_files.get("code"),
+                                    atomic_state=atomic_state,
+                                    test_files=pdd_files.get('test_files'),  # Bug #156
+                                )
+                    
+                        if not success:
+                            errors.append(f"Operation '{operation}' failed.")
+                            break
 
         except BaseException as e:
             errors.append(f"An unexpected error occurred in the orchestrator: {type(e).__name__}: {e}")
