@@ -1271,3 +1271,64 @@ def test_agentic_fallback_not_invoked_when_disabled(setup_test_environment, mock
     assert result["success"] is False
     assert result["total_cost"] == 0.001 + 0.002  # Only initial + attempt
     assert result["model_name"] == 'model-fixer'  # Last model used
+
+
+def test_max_attempts_zero_skips_loop_triggers_agentic(setup_test_environment, mocker):
+    """Test that max_attempts=0 skips the normal LLM loop and goes straight to agentic fallback.
+
+    When max_attempts=0:
+    - Validation should NOT reject it (unlike negative values)
+    - Normal LLM fix loop should be skipped entirely
+    - Agentic fallback should be triggered directly
+    """
+    env = setup_test_environment
+
+    # Runner for initial check only - loop should not run
+    env["mock_runner"].side_effect = [
+        (1, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG"),  # Initial run fails
+    ]
+
+    # Fixer should not be called at all since loop is skipped
+    env["mock_fixer"].side_effect = []
+
+    # Mock agentic fallback to succeed
+    mock_agentic = mocker.patch(
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
+        return_value=(True, "Fixed by agentic mode", 0.05, "agentic-cli", [str(env["code_file"])])
+    )
+
+    # Set max_attempts=0 - should be valid and skip loop
+    env["default_args"]["max_attempts"] = 0
+    env["default_args"]["agentic_fallback"] = True
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Verify the normal fixer was never called (loop skipped)
+    env["mock_fixer"].assert_not_called()
+
+    # Verify agentic fallback was called
+    mock_agentic.assert_called_once()
+
+    # Verify result shows success from agentic mode
+    assert result["success"] is True
+    assert result["total_attempts"] == 0  # No normal LLM attempts
+    assert result["model_name"] == "agentic-cli"
+
+
+def test_max_attempts_negative_still_rejected(setup_test_environment):
+    """Test that negative max_attempts values are still rejected.
+
+    Only max_attempts=0 should be valid (for agentic-only mode).
+    Negative values like -1 should still return failure with error message.
+    """
+    env = setup_test_environment
+
+    # Set max_attempts=-1 - should be rejected
+    env["default_args"]["max_attempts"] = -1
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Should fail with appropriate error
+    assert result["success"] is False
+    assert result["total_attempts"] == 0
+    assert result["total_cost"] == 0.0
