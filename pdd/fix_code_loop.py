@@ -57,10 +57,13 @@ def _safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_f
     """
     Call (possibly monkeypatched) run_agentic_crash and normalize its return.
     Maps arguments to the expected signature of run_agentic_crash.
+
+    Note: cwd parameter is accepted for compatibility but not passed to run_agentic_crash
+    as it determines the working directory from prompt_file.parent internally.
     """
     if not prompt_file:
         return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli", []
-    
+
     try:
         # Ensure inputs are Path objects as expected by run_agentic_crash
         call_args = {
@@ -71,8 +74,7 @@ def _safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_f
             "verbose": True,
             "quiet": False,
         }
-        if cwd is not None:
-            call_args["cwd"] = Path(cwd)
+        # Note: cwd is not passed - run_agentic_crash uses prompt_file.parent as project root
 
         res = run_agentic_crash(**call_args)
         return _normalize_agentic_result(res)
@@ -111,14 +113,21 @@ def run_process_with_output(cmd_args, timeout=300):
     """
     Runs a process, streaming stdout/stderr to the console while capturing them.
     Allows interaction via stdin.
+
+    Uses start_new_session=True to create a new process group, allowing us to
+    kill all child processes if the main process times out.
     """
+    import os
+    import signal
+
     try:
         proc = subprocess.Popen(
             cmd_args,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=0
+            bufsize=0,
+            start_new_session=True  # Create new process group for clean termination
         )
     except Exception as e:
         return -1, "", str(e)
@@ -133,29 +142,60 @@ def run_process_with_output(cmd_args, timeout=300):
                 if not chunk:
                     break
                 capture_list.append(chunk)
-            except (ValueError, IOError):
+            except (ValueError, IOError, OSError):
+                # OSError can occur when pipe is closed during read
                 break
 
-    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout))
-    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr))
+    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout), daemon=True)
+    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr), daemon=True)
 
     t_out.start()
     t_err.start()
 
+    timed_out = False
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+        timed_out = True
         captured_stderr.append(b"\n[Timeout]\n")
-    
-    t_out.join()
-    t_err.join()
-    
+
+    # Kill process and entire process group if needed
+    if timed_out or proc.returncode is None:
+        try:
+            # Kill entire process group to handle forked children
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            # Process group may already be dead
+            pass
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+    # Close pipes to unblock reader threads
+    try:
+        proc.stdout.close()
+    except Exception:
+        pass
+    try:
+        proc.stderr.close()
+    except Exception:
+        pass
+
+    # Wait for threads with timeout to prevent indefinite hangs
+    THREAD_JOIN_TIMEOUT = 5  # seconds
+    t_out.join(timeout=THREAD_JOIN_TIMEOUT)
+    t_err.join(timeout=THREAD_JOIN_TIMEOUT)
+
+    # If threads are still alive after timeout, log it (they're daemon threads so won't block exit)
+    if t_out.is_alive() or t_err.is_alive():
+        captured_stderr.append(b"\n[Thread join timeout - some output may be lost]\n")
+
     stdout_str = b"".join(captured_stdout).decode('utf-8', errors='replace')
     stderr_str = b"".join(captured_stderr).decode('utf-8', errors='replace')
-    
-    return proc.returncode, stdout_str, stderr_str
+
+    return proc.returncode if proc.returncode is not None else -1, stdout_str, stderr_str
 
 
 def fix_code_loop(
@@ -576,7 +616,8 @@ def fix_code_loop(
         except Exception as e:
             rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
 
-        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_crash(
+        rprint(f"[cyan]Attempting agentic fallback (prompt_file={prompt_file!r})...[/cyan]")
+        agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_crash(
             prompt_file=prompt_file,
             code_file=code_file,
             program_file=verification_program,
@@ -584,6 +625,8 @@ def fix_code_loop(
             cwd=Path(prompt_file).parent if prompt_file else None
         )
         total_cost += agent_cost
+        if not agent_success:
+            rprint(f"[bold red]Agentic fallback failed: {agent_msg}[/bold red]")
         if agent_changed_files:
             rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:

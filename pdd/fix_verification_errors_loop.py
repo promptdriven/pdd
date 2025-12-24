@@ -55,10 +55,13 @@ def _normalize_agentic_result(result):
 def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None):
     """
     Call (possibly monkeypatched) run_agentic_verify and normalize its return.
+
+    Note: cwd parameter is accepted for compatibility but not passed to run_agentic_verify
+    as it determines the working directory from prompt_file.parent internally.
     """
     if not prompt_file:
         return False, "Agentic verify requires a valid prompt file.", 0.0, "agentic-cli", []
-    
+
     try:
         res = run_agentic_verify(
             prompt_file=Path(prompt_file),
@@ -67,7 +70,7 @@ def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verificati
             verification_log_file=Path(verification_log_file),
             verbose=verbose,
             quiet=not verbose,
-            cwd=cwd
+            # Note: cwd is not passed - run_agentic_verify uses prompt_file.parent as project root
         )
         return _normalize_agentic_result(res)
     except Exception as e:
@@ -204,7 +207,8 @@ def fix_verification_errors_loop(
             f.write(pytest_output)
         
         agent_cwd = Path(prompt_file).parent if prompt_file else None
-        success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+        console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={prompt_file!r})...[/cyan]")
+        success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
             code_file=code_file,
             program_file=verification_program,
@@ -212,6 +216,8 @@ def fix_verification_errors_loop(
             verbose=verbose,
             cwd=agent_cwd,
         )
+        if not success:
+            console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
         if agent_changed_files:
             console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:
@@ -1012,9 +1018,9 @@ def fix_verification_errors_loop(
         overall_success = False
 
     if not overall_success and agentic_fallback:
-        console.print("[bold yellow]Initiating agentic fallback...[/bold yellow]")
+        console.print(f"[bold yellow]Initiating agentic fallback (prompt_file={prompt_file!r})...[/bold yellow]")
         agent_cwd = Path(prompt_file).parent if prompt_file else None
-        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+        agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
             code_file=code_file,
             program_file=verification_program,
@@ -1023,6 +1029,8 @@ def fix_verification_errors_loop(
             cwd=agent_cwd,
         )
         total_cost += agent_cost
+        if not agent_success:
+            console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
         if agent_changed_files:
             console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:

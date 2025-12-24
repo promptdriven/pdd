@@ -257,13 +257,16 @@ def fix_error_loop(unit_test_file: str,
             with open(error_log_path, "w") as f:
                 f.write(pytest_output)
             
-            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+            rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
+            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
                 prompt_file=prompt_file,
                 code_file=code_file,
                 unit_test_file=unit_test_file,
                 error_log_file=error_log_file,
                 cwd=Path(prompt_file).parent if prompt_file else None,
             )
+            if not success:
+                rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
             if agent_changed_files:
                 rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
                 for f in agent_changed_files:
@@ -634,7 +637,8 @@ def fix_error_loop(unit_test_file: str,
         except Exception as e:
             rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
 
-        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+        rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
+        agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=unit_test_file,
@@ -642,6 +646,8 @@ def fix_error_loop(unit_test_file: str,
             cwd=Path(prompt_file).parent if prompt_file else None,
         )
         total_cost += agent_cost
+        if not agent_success:
+            rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
         if agent_changed_files:
             rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:
