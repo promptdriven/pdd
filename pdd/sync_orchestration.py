@@ -253,7 +253,8 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         prompt_hash=current_hashes.get('prompt_hash'),
         code_hash=current_hashes.get('code_hash'),
         example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash')
+        test_hash=current_hashes.get('test_hash'),
+        test_files=current_hashes.get('test_files'),  # Bug #156
     )
 
     fingerprint_file = META_DIR / f"{basename}_{language}.json"
@@ -662,18 +663,33 @@ def _execute_tests_and_create_run_report(
     *,
     code_file: Optional[Path] = None,
     atomic_state: Optional['AtomicStateUpdate'] = None,
+    test_files: Optional[List[Path]] = None,  # Bug #156: Support multiple test files
 ) -> RunReport:
     """Execute tests and create a RunReport with actual results.
 
     Now supports multiple languages by using get_test_command_for_file()
     to determine the appropriate test runner.
+
+    Args:
+        test_file: Primary test file (for backward compat)
+        test_files: Optional list of all test files to run (Bug #156)
     """
     from .get_test_command import get_test_command_for_file
 
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    # Calculate test file hash for staleness detection
+    # Bug #156: Use test_files if provided, otherwise just the single test_file
+    all_test_files = test_files if test_files else [test_file]
+
+    # Calculate test file hash for staleness detection (primary file for backward compat)
     test_hash = calculate_sha256(test_file) if test_file.exists() else None
+
+    # Bug #156: Calculate hashes for ALL test files
+    test_file_hashes = {
+        f.name: calculate_sha256(f)
+        for f in all_test_files
+        if f.exists()
+    } if all_test_files else None
 
     # Use clean env without TUI-specific vars
     clean_env = os.environ.copy()
@@ -697,14 +713,19 @@ def _execute_tests_and_create_run_report(
             if not cov_target:
                 cov_target = basename or module_name
 
-            result = subprocess.run([
+            # Bug #156: Run pytest on ALL test files
+            pytest_args = [
                 python_executable, '-m', 'pytest',
-                str(test_file),
+            ] + [str(f) for f in all_test_files] + [
                 '-v',
                 '--tb=short',
                 f'--cov={cov_target}',
                 '--cov-report=term-missing'
-            ], capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
+            ]
+            result = subprocess.run(
+                pytest_args,
+                capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
+            )
 
             exit_code = result.returncode
             stdout = result.stdout + (result.stderr or '')
@@ -722,7 +743,8 @@ def _execute_tests_and_create_run_report(
                     tests_passed=0,
                     tests_failed=0,
                     coverage=0.0,
-                    test_hash=test_hash
+                    test_hash=test_hash,
+                    test_files=test_file_hashes,  # Bug #156
                 )
                 save_run_report(asdict(report), basename, language, atomic_state)
                 return report
@@ -752,7 +774,8 @@ def _execute_tests_and_create_run_report(
             tests_passed=tests_passed,
             tests_failed=tests_failed,
             coverage=coverage,
-            test_hash=test_hash
+            test_hash=test_hash,
+            test_files=test_file_hashes,  # Bug #156
         )
 
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception) as e:
@@ -762,7 +785,8 @@ def _execute_tests_and_create_run_report(
             tests_passed=0,
             tests_failed=1,
             coverage=0.0,
-            test_hash=test_hash
+            test_hash=test_hash,
+            test_files=test_file_hashes,  # Bug #156
         )
 
     save_run_report(asdict(report), basename, language, atomic_state)
@@ -1315,6 +1339,7 @@ def sync_orchestration(
                                     target_coverage,
                                     code_file=pdd_files.get("code"),
                                     atomic_state=atomic_state,
+                                    test_files=pdd_files.get('test_files'),  # Bug #156
                                 )
                         elif operation == 'test_extend':
                             # Extend existing tests to improve coverage
@@ -1342,6 +1367,7 @@ def sync_orchestration(
                                     target_coverage,
                                     code_file=pdd_files.get("code"),
                                     atomic_state=atomic_state,
+                                    test_files=pdd_files.get('test_files'),  # Bug #156
                                 )
                             else:
                                 # No existing test file, fall back to regular test generation
@@ -1354,6 +1380,7 @@ def sync_orchestration(
                                         target_coverage,
                                         code_file=pdd_files.get("code"),
                                         atomic_state=atomic_state,
+                                        test_files=pdd_files.get('test_files'),  # Bug #156
                                     )
                         elif operation == 'fix':
                             error_file_path = Path("fix_errors.log")
@@ -1372,8 +1399,11 @@ def sync_orchestration(
                                     if language.lower() == 'python':
                                         # Use pytest directly for Python
                                         python_executable = detect_host_python_executable()
+                                        # Bug #156: Run pytest on ALL matching test files
+                                        test_files = pdd_files.get('test_files', [pdd_files['test']])
+                                        pytest_args = [python_executable, '-m', 'pytest'] + [str(f) for f in test_files] + ['-v', '--tb=short']
                                         test_result = subprocess.run(
-                                            [python_executable, '-m', 'pytest', str(pdd_files['test']), '-v', '--tb=short'],
+                                            pytest_args,
                                             capture_output=True, text=True, timeout=300,
                                             stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True,
                                             cwd=str(pdd_files['test'].parent)
@@ -1516,6 +1546,7 @@ def sync_orchestration(
                                 target_coverage,
                                 code_file=pdd_files.get("code"),
                                 atomic_state=atomic_state,
+                                test_files=pdd_files.get('test_files'),  # Bug #156
                             )
                     
                     if not success:
@@ -1539,7 +1570,7 @@ def sync_orchestration(
             'skipped_operations': skipped_operations,
             'total_cost': current_cost_ref[0],
             'total_time': time.time() - start_time,
-            'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items()},
+            'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items() if p != 'test_files'},
             'errors': errors,
             'error': "; ".join(errors) if errors else None,  # Add this line
             'model_name': last_model_name,
