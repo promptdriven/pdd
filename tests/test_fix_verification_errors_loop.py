@@ -20,10 +20,13 @@ OUTPUT_DIR = "output"
 # --- Test Fixture ---
 
 @pytest.fixture
-def setup_test_environment(tmp_path, mocker):
+def setup_test_environment(tmp_path, mocker, monkeypatch):
     """Sets up a temporary environment for testing fix_verification_errors_loop."""
+    # Change cwd to tmp_path so .pdd/backups is created there
+    monkeypatch.chdir(tmp_path)
+
     # Create directories
-    pdd_dir = tmp_path / "pdd"
+    pdd_dir = tmp_path / ".pdd"
     pdd_dir.mkdir()
     output_path = tmp_path / OUTPUT_DIR
     output_path.mkdir()
@@ -242,8 +245,10 @@ def test_success_first_attempt(setup_test_environment):
     assert any("Kept modified code" in a.text for a in actions if a.text)
     assert log_root.find("FinalActions/Action").text == "Process finished successfully."
 
-    # Check backup file was created for iteration 1
-    backup_code_file = env["output_path"] / "code_module_iteration_1.py"
+    # Check backup file was created for iteration 1 in .pdd/backups/
+    backup_dirs = list((env["tmp_path"] / ".pdd" / "backups" / "code_module").glob("*"))
+    assert len(backup_dirs) == 1, f"Expected 1 backup dir, found {backup_dirs}"
+    backup_code_file = backup_dirs[0] / "code_1.py"
     assert backup_code_file.exists()
     assert backup_code_file.read_text(encoding="utf-8") == env["code_content_initial"] # Backup holds state *before* fix
 
@@ -298,7 +303,9 @@ def run():
     # The best iteration is attempt 1 (1 issue). The backup for attempt 1 was made *before* the fix,
     # so it contains the *initial* code. The function should restore from this backup.
     # The backup path is stored in best_iteration['code_backup']
-    best_backup_path = env["output_path"] / "code_module_iteration_1.py"
+    backup_dirs = list((env["tmp_path"] / ".pdd" / "backups" / "code_module").glob("*"))
+    assert len(backup_dirs) == 1, f"Expected 1 backup dir, found {backup_dirs}"
+    best_backup_path = backup_dirs[0] / "code_1.py"
     assert best_backup_path.exists()
     assert best_backup_path.read_text(encoding="utf-8") == env["code_content_initial"]
     # Check the final state of the main code file
@@ -375,12 +382,13 @@ def run():
     # assert final_actions.find("Action[contains(text(), 'Loop stopped as no changes were suggested')]') is not None # Original potentially failing line
     # assert final_actions.find("Action[contains(text(), 'Restored Best Iteration 1')]') is not None # Original potentially failing line
 
-    # Check backups exist
-    assert (env["output_path"] / "code_module_iteration_1.py").exists()
-    assert (env["output_path"] / "code_module_iteration_2.py").exists()
+    # Check backups exist in .pdd/backups/
+    backup_dir = backup_dirs[0]  # Already defined above
+    assert (backup_dir / "code_1.py").exists()
+    assert (backup_dir / "code_2.py").exists()
     # Check content of backups
-    assert (env["output_path"] / "code_module_iteration_1.py").read_text(encoding="utf-8") == env["code_content_initial"]
-    assert (env["output_path"] / "code_module_iteration_2.py").read_text(encoding="utf-8") == code_content_attempt1_fix
+    assert (backup_dir / "code_1.py").read_text(encoding="utf-8") == env["code_content_initial"]
+    assert (backup_dir / "code_2.py").read_text(encoding="utf-8") == code_content_attempt1_fix
 
 
 def test_budget_exceeded_in_loop(setup_test_environment):

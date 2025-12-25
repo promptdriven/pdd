@@ -841,35 +841,28 @@ class TestIssue169PriorityChain:
         assert "env_output" in generate_path, \
             f"Should use env var when no .pddrc config, got {generate_path}"
 
-    def test_default_used_when_no_config_or_env_for_sync(self, tmp_path):
+    def test_default_used_when_no_config_or_env_for_sync(self, tmp_path, monkeypatch):
         """
         Built-in defaults should be used when no config or env var exists for sync.
         """
         # Ensure env var is not set
-        env_backup = os.environ.get("PDD_GENERATE_OUTPUT_PATH")
-        if env_backup:
-            del os.environ["PDD_GENERATE_OUTPUT_PATH"]
+        monkeypatch.delenv("PDD_GENERATE_OUTPUT_PATH", raising=False)
 
-        try:
-            result = generate_output_paths(
-                command="sync",
-                output_locations={},
-                basename="test",
-                language="python",
-                file_extension=".py",
-                context_config={},
-                config_base_dir=None,
-            )
+        result = generate_output_paths(
+            command="sync",
+            output_locations={},
+            basename="test",
+            language="python",
+            file_extension=".py",
+            context_config={},
+            config_base_dir=None,
+        )
 
-            generate_path = result.get("generate_output_path", "")
+        generate_path = result.get("generate_output_path", "")
 
-            # Should use default naming (basename.ext in current directory)
-            assert "test.py" in generate_path, \
-                f"Should use default naming, got {generate_path}"
-        finally:
-            # Restore env var if it was set
-            if env_backup:
-                os.environ["PDD_GENERATE_OUTPUT_PATH"] = env_backup
+        # Should use default naming (basename.ext in current directory)
+        assert "test.py" in generate_path, \
+            f"Should use default naming, got {generate_path}"
 
 
 class TestPathResolutionModeParameter:
