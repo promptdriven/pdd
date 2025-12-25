@@ -10,12 +10,17 @@ from pdd.fix_error_loop import fix_error_loop
 
 
 @pytest.fixture
-def setup_files(tmp_path):
+def setup_files(tmp_path, monkeypatch):
     """
     Create temporary directories and files for testing,
     including a code file, test file, and a verification program.
     """
+    # Change cwd to tmp_path so .pdd/backups is created there
+    monkeypatch.chdir(tmp_path)
+
     # Create directories
+    pdd_dir = tmp_path / ".pdd"
+    pdd_dir.mkdir()
     code_dir = tmp_path / "pdd"
     code_dir.mkdir()
     test_dir = tmp_path / "tests"
@@ -46,6 +51,7 @@ def test_add():
     verify_file.write_text("print('Verification passed')")
 
     return {
+        "tmp_path": tmp_path,
         "code_file": code_file,
         "test_file": test_file,
         "verify_file": verify_file,
@@ -354,16 +360,16 @@ def test_backup_creation(setup_files):
                 agentic_fallback=False
             )
 
-    # Check for any backup files with a more general pattern
-    code_dir = files["code_file"].parent
-    print(f"Looking for backups in: {code_dir}")
-    all_files = list(code_dir.glob("*"))
-    print(f"All files: {all_files}")
-    backup_files = list(code_dir.glob("*_*.py"))
+    # Check for backup files in .pdd/backups/
+    backup_base = files["tmp_path"] / ".pdd" / "backups" / "add_functions"
+    print(f"Looking for backups in: {backup_base}")
+    backup_dirs = list(backup_base.glob("*")) if backup_base.exists() else []
+    print(f"Backup dirs: {backup_dirs}")
 
-    assert len(backup_files) >= 1, f"No backup files found in {code_dir}"
-    # Updated assertion - we just need to ensure a backup was created
-    assert backup_files, f"No backup files found in {code_dir}"
+    assert len(backup_dirs) >= 1, f"No backup dirs found in {backup_base}"
+    # Check that backup files were created
+    backup_files = list(backup_dirs[0].glob("*.py")) if backup_dirs else []
+    assert backup_files, f"No backup files found in {backup_dirs}"
 
 
 def test_missing_files():
