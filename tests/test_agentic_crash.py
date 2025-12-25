@@ -29,11 +29,11 @@ def setup_files(tmp_path):
     prompt_file = tmp_path / "prompt.md"
     prompt_file.write_text("Prompt content")
     
-    code_file = tmp_path / "code.py"
+    code_file = tmp_path / "buggy.py"
     code_file.write_text("print('Hello')")
     
     program_file = tmp_path / "program.py"
-    program_file.write_text("import code; code.main()")
+    program_file.write_text("import user_module; user_module.main()")
     
     crash_log = tmp_path / "crash.log"
     crash_log.write_text("Traceback (most recent call last):...")
