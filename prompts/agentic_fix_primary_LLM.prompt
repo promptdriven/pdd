@@ -19,9 +19,9 @@
 
 
 % ORIGINAL SPECIFICATION:
-<proompt_content> 
+<prompt_content> 
     {prompt_content}
-</proompt_content>
+</prompt_content>
 
 
 % ERROR LOG:
