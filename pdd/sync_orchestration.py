@@ -1196,12 +1196,18 @@ def sync_orchestration(
                                         Path(temp_output).unlink()
                                         result = (new_content, 0.0, 'no-changes')
                             elif operation == 'generate':
-                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt']), output=str(pdd_files['code']), original_prompt_file_path=None, force_incremental_flag=False)
+                                # Ensure code directory exists before generating
+                                pdd_files['code'].parent.mkdir(parents=True, exist_ok=True)
+                                # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
+                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
                                 # Clear stale run_report so crash/verify is required for newly generated code
                                 run_report_file = META_DIR / f"{basename}_{language}_run.json"
                                 run_report_file.unlink(missing_ok=True)
                             elif operation == 'example':
-                                result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['example']))
+                                # Ensure example directory exists before generating
+                                pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
+                                # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and example (config_base)
+                                result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), code_file=str(pdd_files['code'].resolve()), output=str(pdd_files['example'].resolve()))
                             elif operation == 'crash':
                                 required_files = [pdd_files['code'], pdd_files['example']]
                                 missing_files = [f for f in required_files if not f.exists()]
