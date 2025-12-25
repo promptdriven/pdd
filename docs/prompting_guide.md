@@ -18,6 +18,8 @@ If you are new to Prompt-Driven Development (PDD), follow this recipe:
 
 *Tip: Treat your prompt like source code. It is the single source of truth.*
 
+*For the conceptual foundation of why this works, see [The Mold Paradigm](prompt-driven-development-doctrine.md#the-mold-paradigm) in the doctrine.*
+
 ---
 
 ## Glossary
@@ -39,6 +41,8 @@ If you are new to Prompt-Driven Development (PDD), follow this recipe:
 - Tests accumulate across regenerations and act as a regression net; prompts and tests stay in sync.
 
 Contrast with interactive patching (Claude Code, Cursor): prompts are ephemeral instructions for local diffs. They are great for short, local fixes, but tend to drift from original intent as context is implicit and often lost. In PDD, prompts are versioned, explicit, and designed for batch, reproducible generation.
+
+For a deeper exploration of why this paradigm shift matters—and an analogy to manufacturing's wood‑to‑plastic transition—see [The Mold Paradigm](prompt-driven-development-doctrine.md#the-mold-paradigm) in the doctrine.
 
 ---
 

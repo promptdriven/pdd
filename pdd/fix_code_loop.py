@@ -320,10 +320,17 @@ def fix_code_loop(
     history_log = "<history>\n"
 
     # Create initial backups before any modifications
+    # Store in .pdd/backups/ to avoid polluting code/test directories
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     code_file_path = Path(code_file)
     verification_program_path = Path(verification_program)
-    original_code_backup = f"{code_file_path.stem}_original_backup{code_file_path.suffix}"
-    original_program_backup = f"{verification_program_path.stem}_original_backup{verification_program_path.suffix}"
+
+    backup_dir = Path.cwd() / '.pdd' / 'backups' / code_file_path.stem / timestamp
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    original_code_backup = str(backup_dir / f"code_original{code_file_path.suffix}")
+    original_program_backup = str(backup_dir / f"program_original{verification_program_path.suffix}")
 
     try:
         shutil.copy2(code_file, original_code_backup)
@@ -411,10 +418,9 @@ def fix_code_loop(
 
 
         # Create backup copies for this iteration BEFORE calling LLM
-        code_base, code_ext = os.path.splitext(code_file)
-        program_base, program_ext = os.path.splitext(verification_program)
-        code_backup_path = f"{code_base}_{current_iteration_number}{code_ext}"
-        program_backup_path = f"{program_base}_{current_iteration_number}{program_ext}"
+        # Store in .pdd/backups/ (backup_dir already created above)
+        code_backup_path = str(backup_dir / f"code_{current_iteration_number}{code_file_path.suffix}")
+        program_backup_path = str(backup_dir / f"program_{current_iteration_number}{verification_program_path.suffix}")
 
         try:
             shutil.copy2(code_file, code_backup_path)
