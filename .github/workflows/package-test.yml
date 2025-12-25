@@ -70,16 +70,20 @@ jobs:
           pip install dist/*.whl
 
       - name: Run pdd sync on hello example
+        timeout-minutes: 20
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         working-directory: examples/hello
         run: |
+          set -o pipefail  # Ensure pdd exit code propagates through pipe
+
           # Clean any existing generated files to test fresh generation
           rm -rf src/ tests/ examples/
 
           # Run sync in local mode with force flag
-          pdd --local --force sync hello
+          # Pipe through tee to log output and trigger non-TTY mode for CI
+          pdd --local --force sync hello 2>&1 | tee sync.log
 
       - name: Verify generated code exists
         working-directory: examples/hello
@@ -117,4 +121,5 @@ jobs:
           path: |
             examples/hello/.pdd/
             examples/hello/src/
+            examples/hello/sync.log
           retention-days: 7
