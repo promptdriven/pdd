@@ -1574,48 +1574,60 @@ def sync_orchestration(
             'model_name': last_model_name,
         }
 
-    # Instantiate and run Textual App
-    app = SyncApp(
-        basename=basename,
-        budget=budget,
-        worker_func=sync_worker_logic,
-        function_name_ref=current_function_name_ref,
-        cost_ref=current_cost_ref,
-        prompt_path_ref=prompt_path_ref,
-        code_path_ref=code_path_ref,
-        example_path_ref=example_path_ref,
-        tests_path_ref=tests_path_ref,
-        prompt_color_ref=prompt_box_color_ref,
-        code_color_ref=code_box_color_ref,
-        example_color_ref=example_box_color_ref,
-        tests_color_ref=tests_box_color_ref,
-        stop_event=stop_event,
-        progress_callback_ref=progress_callback_ref
-    )
+    # Detect headless mode (no TTY, CI environment, or quiet mode)
+    headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
 
-    # Store app reference so worker can access request_confirmation
-    app_ref[0] = app
+    if headless:
+        # Run worker logic directly without TUI in headless mode
+        if not quiet:
+            print(f"Running sync in headless mode (CI/non-TTY environment)...")
+        result = sync_worker_logic()
+        # No TUI app, so no worker_exception to check
+        worker_exception = None
+    else:
+        # Instantiate and run Textual App
+        app = SyncApp(
+            basename=basename,
+            budget=budget,
+            worker_func=sync_worker_logic,
+            function_name_ref=current_function_name_ref,
+            cost_ref=current_cost_ref,
+            prompt_path_ref=prompt_path_ref,
+            code_path_ref=code_path_ref,
+            example_path_ref=example_path_ref,
+            tests_path_ref=tests_path_ref,
+            prompt_color_ref=prompt_box_color_ref,
+            code_color_ref=code_box_color_ref,
+            example_color_ref=example_box_color_ref,
+            tests_color_ref=tests_box_color_ref,
+            stop_event=stop_event,
+            progress_callback_ref=progress_callback_ref
+        )
 
-    result = app.run()
-    
-    # Show exit animation if not quiet
-    if not quiet:
+        # Store app reference so worker can access request_confirmation
+        app_ref[0] = app
+
+        result = app.run()
+
+        # Show exit animation if not quiet
         from .sync_tui import show_exit_animation
         show_exit_animation()
-    
-    # Check for worker exception that might have caused a crash
-    if app.worker_exception:
-        print(f"\n[Error] Worker thread crashed with exception: {app.worker_exception}", file=sys.stderr)
-        
+
+        worker_exception = app.worker_exception
+
+    # Check for worker exception that might have caused a crash (TUI mode only)
+    if not headless and worker_exception:
+        print(f"\n[Error] Worker thread crashed with exception: {worker_exception}", file=sys.stderr)
+
         if hasattr(app, 'captured_logs') and app.captured_logs:
              print("\n[Captured Logs (last 20 lines)]", file=sys.stderr)
              for line in app.captured_logs[-20:]: # Print last 20 lines
                  print(f"  {line}", file=sys.stderr)
-        
+
         import traceback
         # Use trace module to print the stored exception's traceback if available
-        if hasattr(app.worker_exception, '__traceback__'):
-            traceback.print_exception(type(app.worker_exception), app.worker_exception, app.worker_exception.__traceback__, file=sys.stderr)
+        if hasattr(worker_exception, '__traceback__'):
+            traceback.print_exception(type(worker_exception), worker_exception, worker_exception.__traceback__, file=sys.stderr)
 
     if result is None:
         return {
