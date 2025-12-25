@@ -1193,6 +1193,30 @@ class TestApiKeyInputHang:
                 assert result is True
                 mock_input.assert_not_called()
 
+    def test_ensure_api_key_skips_input_when_pdd_force_set(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that _ensure_api_key returns False without prompting when PDD_FORCE is set.
+        This is the fix for CI environments where --force should skip all interactive prompts.
+        """
+        from pdd.llm_invoke import _ensure_api_key
+
+        model_info = {
+            'model': 'test-model',
+            'api_key': 'MISSING_API_KEY'
+        }
+        newly_acquired_keys = {}
+
+        # Set PDD_FORCE and ensure the API key doesn't exist
+        with patch.dict(os.environ, {'PDD_FORCE': '1'}, clear=False):
+            os.environ.pop('MISSING_API_KEY', None)
+
+            with patch('builtins.input') as mock_input:
+                result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+
+                # Should return False (skip this model) without calling input()
+                assert result is False
+                mock_input.assert_not_called()
+
     def test_llm_invoke_skips_model_on_missing_api_key(self, mock_load_models, mock_set_llm_cache):
         """
         Test that llm_invoke skips a model when API key is missing and user
