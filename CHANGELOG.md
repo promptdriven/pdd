@@ -1,5 +1,30 @@
 ## v0.0.91 (2025-12-24)
 
+### Feat
+
+- **Backup Directory Organization (Issue #174):** Moved all fix loop backup files from polluting source/test directories to `.pdd/backups/{module}/{timestamp}/` directory. Previously, backups like `module_1.py`, `module_2.py` would clutter the source directory; now they're stored as `.pdd/backups/module/20251224_143052/code_1.py` etc. Affects `fix_code_loop`, `fix_error_loop`, and `fix_verification_errors_loop`.
+
+- **Schema Validation Fallback (Issue #168):** Added `SchemaValidationError` exception to `llm_invoke.py`. When Pydantic/JSON schema validation fails, the error now triggers model fallback to try the next candidate model instead of just logging and skipping to the next batch item. This fixes cases where a model consistently returns malformed structured output.
+
+### Docs
+
+- **PDD Doctrine - The Mold Paradigm:** Expanded `docs/prompt-driven-development-doctrine.md` with ~300 lines covering the manufacturing analogy (wood carving → injection molding), the three capitals (test, prompt, grounding), tests as specification vs verification, compound returns of mold refinement, skill evolution for developers, and the complete analogy mapping table.
+
+### Data
+
+- **LLM Model Catalog Update:** Updated `data/llm_model.csv`:
+  - Updated GLM model from 4p6 to 4p7 with revised pricing ($0.60/$2.20)
+  - Enabled structured output (`True`) for DeepSeek v3.2-maas on Vertex AI
+
+### Deps
+
+- Updated `litellm[caching]` to version 1.80
+
+### Tests
+
+- Added ~700 lines of tests across `test_llm_invoke.py` and new `test_llm_invoke_integration.py` covering schema validation fallback behavior and model fallback on validation errors.
+- Added backup location verification tests in `test_fix_code_loop.py`, `test_fix_error_loop.py`, and `test_fix_verification_errors_loop.py` ensuring backups are created in `.pdd/backups/` directory.
+
 ## v0.0.90 (2025-12-23)
 
 ### Feat
