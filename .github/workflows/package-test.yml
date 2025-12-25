@@ -34,19 +34,18 @@ jobs:
           # Run from /tmp to ensure we only use packaged files
           cd /tmp
 
-          # Test include resolution using Python directly
-          # This tests the same code path as pdd update/generate
-          python -c "
-          from pdd.preprocess import preprocess
+          # Create test prompt with _python suffix (required for language detection)
+          echo '<include>docs/prompting_guide.md</include>' > test_include_python.prompt
 
-          result = preprocess('<include>docs/prompting_guide.md</include>')
+          # Run pdd preprocess CLI
+          pdd --quiet preprocess test_include_python.prompt --output preprocessed.txt
 
-          # Check that the include resolved (contains content from prompting_guide.md)
+          # Verify include was resolved correctly
           # Use 'PDD Mental Model' as marker since the title has special unicode chars
-          if 'PDD Mental Model' in result:
-              print('SUCCESS: Package includes resolved correctly')
-          else:
-              print('FAILURE: Package include not found or not resolved')
-              print('First 500 chars:', result[:500])
-              exit(1)
-          "
+          if grep -q "PDD Mental Model" preprocessed.txt; then
+            echo "SUCCESS: Package includes resolved correctly"
+          else
+            echo "FAILURE: Package include not found or not resolved"
+            head -20 preprocessed.txt
+            exit 1
+          fi
