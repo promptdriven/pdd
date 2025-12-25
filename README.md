@@ -466,7 +466,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 
 These options can be used with any command:
 
-- `--force`: Overwrite existing files without asking for confirmation (commonly used with `sync`).
+- `--force`: Skip all interactive prompts (file overwrites, API key requests). Useful for CI/automation.
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
   - 0.0: Cheapest available model
   - 0.5: Default base model

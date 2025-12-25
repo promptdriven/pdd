@@ -194,7 +194,7 @@ class PDDCLI(click.Group):
     "--force",
     is_flag=True,
     default=False,
-    help="Overwrite existing files without asking for confirmation (commonly used with 'sync' to update generated outputs).",
+    help="Skip all interactive prompts (file overwrites, API key requests). Useful for CI/automation.",
 )
 @click.option(
     "--strength",
@@ -296,6 +296,8 @@ def cli(
 
     ctx.ensure_object(dict)
     ctx.obj["force"] = force
+    if force:
+        os.environ['PDD_FORCE'] = '1'
     # Only set strength/temperature if explicitly provided (not None)
     # This allows .get("key", default) to return the default when CLI didn't pass a value
     if strength is not None:
