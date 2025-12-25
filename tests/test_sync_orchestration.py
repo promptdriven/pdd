@@ -2886,3 +2886,190 @@ def test_final_state_handles_test_files_list(orchestration_fixture, tmp_path):
     assert 'prompt' in final_state
     assert 'code' in final_state
     assert 'test' in final_state
+
+
+# --- Issue #176: Path Resolution Mismatch Tests ---
+
+class TestPathResolutionInSyncOperations:
+    """Tests for Issue #176 - path resolution mismatch between sync and generator functions.
+
+    Bug: code_generator_main uses the explicitly passed `output` parameter directly
+    (line 351 of code_generator_main.py). If that path is relative, it could fail
+    when construct_paths inside code_generator_main uses "config_base" resolution.
+
+    Fix: sync_orchestration must call .resolve() on paths before passing them.
+    """
+
+    @pytest.fixture
+    def path_resolution_test_env(self, tmp_path, monkeypatch):
+        """Set up environment where paths would be relative."""
+        # Create project structure
+        prompts_dir = tmp_path / "prompts"
+        src_dir = tmp_path / "src"
+        meta_dir = tmp_path / ".pdd" / "meta"
+        prompts_dir.mkdir()
+        src_dir.mkdir()
+        meta_dir.mkdir(parents=True)
+
+        prompt_file = prompts_dir / "test_module_python.prompt"
+        prompt_file.write_text("Test prompt content")
+
+        monkeypatch.chdir(tmp_path)
+
+        return {
+            'tmp_path': tmp_path,
+            'prompts_dir': prompts_dir,
+            'src_dir': src_dir,
+            'meta_dir': meta_dir,
+            'prompt_file': prompt_file,
+        }
+
+    def test_generate_operation_passes_absolute_paths(self, path_resolution_test_env):
+        """
+        Verify code_generator_main receives absolute paths for prompt_file and output.
+
+        Without fix: Paths like 'src/test_module.py' (relative) would be passed
+        With fix: Paths like '/tmp/.../src/test_module.py' (absolute) are passed
+        """
+        env = path_resolution_test_env
+
+        # Create RELATIVE Path objects (simulating the fallback case in sync_orchestration line 918)
+        pdd_files_with_relative_paths = {
+            'prompt': Path('prompts/test_module_python.prompt'),  # Relative!
+            'code': Path('src/test_module.py'),  # Relative!
+            'example': Path('context/test_module_example.py'),
+            'test': Path('tests/test_test_module.py'),
+        }
+
+        # Helper to run worker synchronously
+        def mock_sync_app_run(instance):
+            try:
+                return instance.worker_func()
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.META_DIR', env['meta_dir']):
+
+            # Configure SyncApp mock to capture and run worker_func
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.run = lambda: mock_sync_app_run(instance)
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure mocks
+            mock_get_paths.return_value = pdd_files_with_relative_paths
+            # sync_determine_operation is called in a loop - needs sequence ending with all_synced
+            mock_determine.side_effect = [
+                SyncDecision(operation='generate', reason='Code needs generation'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+            mock_code_gen.return_value = ("generated content", 1.0, "success")
+
+            # Call sync_orchestration
+            sync_orchestration(basename='test_module', language='python')
+
+            # Verify code_generator_main was called with ABSOLUTE paths
+            assert mock_code_gen.called, "code_generator_main should have been called"
+
+            # Get the call arguments - they're positional after ctx
+            call_args = mock_code_gen.call_args
+            # Arguments are passed as keyword args: prompt_file=..., output=...
+            if call_args.kwargs:
+                prompt_file_arg = call_args.kwargs.get('prompt_file')
+                output_arg = call_args.kwargs.get('output')
+            else:
+                # Positional: ctx, prompt_file, output, ...
+                prompt_file_arg = call_args[0][1] if len(call_args[0]) > 1 else None
+                output_arg = call_args[0][2] if len(call_args[0]) > 2 else None
+
+            # These assertions will FAIL without the .resolve() fix
+            assert prompt_file_arg is not None, "prompt_file argument not found"
+            assert output_arg is not None, "output argument not found"
+            assert prompt_file_arg.startswith('/'), \
+                f"prompt_file should be absolute, got: {prompt_file_arg}"
+            assert output_arg.startswith('/'), \
+                f"output should be absolute, got: {output_arg}"
+
+    def test_example_operation_passes_absolute_paths(self, path_resolution_test_env):
+        """Verify context_generator_main receives absolute paths."""
+        env = path_resolution_test_env
+
+        # Create code file so example operation can proceed
+        (env['src_dir'] / 'test_module.py').write_text("# code")
+
+        pdd_files_with_relative_paths = {
+            'prompt': Path('prompts/test_module_python.prompt'),
+            'code': Path('src/test_module.py'),
+            'example': Path('context/test_module_example.py'),  # Relative!
+            'test': Path('tests/test_test_module.py'),
+        }
+
+        # Helper to run worker synchronously
+        def mock_sync_app_run(instance):
+            try:
+                return instance.worker_func()
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.context_generator_main') as mock_context_gen, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.META_DIR', env['meta_dir']):
+
+            # Configure SyncApp mock to capture and run worker_func
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.run = lambda: mock_sync_app_run(instance)
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_get_paths.return_value = pdd_files_with_relative_paths
+            # sync_determine_operation is called in a loop - needs sequence ending with all_synced
+            mock_determine.side_effect = [
+                SyncDecision(operation='example', reason='Example needs generation'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+            mock_context_gen.return_value = ("example content", 1.0, "success")
+
+            sync_orchestration(basename='test_module', language='python')
+
+            assert mock_context_gen.called, "context_generator_main should have been called"
+
+            call_args = mock_context_gen.call_args
+            if call_args.kwargs:
+                prompt_file_arg = call_args.kwargs.get('prompt_file')
+                code_file_arg = call_args.kwargs.get('code_file')
+                output_arg = call_args.kwargs.get('output')
+            else:
+                prompt_file_arg = call_args[0][1] if len(call_args[0]) > 1 else None
+                code_file_arg = call_args[0][2] if len(call_args[0]) > 2 else None
+                output_arg = call_args[0][3] if len(call_args[0]) > 3 else None
+
+            assert prompt_file_arg is not None, "prompt_file argument not found"
+            assert code_file_arg is not None, "code_file argument not found"
+            assert output_arg is not None, "output argument not found"
+
+            assert prompt_file_arg.startswith('/'), \
+                f"prompt_file should be absolute: {prompt_file_arg}"
+            assert code_file_arg.startswith('/'), \
+                f"code_file should be absolute: {code_file_arg}"
+            assert output_arg.startswith('/'), \
+                f"output should be absolute: {output_arg}"
