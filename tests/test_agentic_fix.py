@@ -21,7 +21,7 @@ def _df():
 
 def _prep_files(tmp_path: Path):
     prompt = tmp_path / "prompt.txt"
-    code   = tmp_path / "code.py"
+    code   = tmp_path / "buggy.py"
     testf  = tmp_path / "test_file.py"
     err    = tmp_path / "error.log"
     prompt.write_text("prompt", encoding="utf-8")
@@ -104,7 +104,7 @@ def _has_cli(cmd: str) -> bool:
 
 def _mk_files(tmp_path: Path):
     p_prompt = tmp_path / "prompt.txt"
-    p_code   = tmp_path / "code.py"
+    p_code   = tmp_path / "buggy.py"
     p_test   = tmp_path / "test_dummy.py"
     p_err    = tmp_path / "error.log"
     p_prompt.write_text("Generate a simple function.", encoding="utf-8")
