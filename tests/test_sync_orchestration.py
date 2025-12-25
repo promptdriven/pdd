@@ -2,6 +2,7 @@
 
 import pytest
 import json
+import sys
 import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call, ANY
@@ -72,7 +73,8 @@ def orchestration_fixture(tmp_path):
          patch('pdd.sync_orchestration.save_run_report') as mock_save_report, \
          patch('pdd.sync_orchestration._display_sync_log') as mock_display_log, \
          patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp, \
-         patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths:
+         patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+         patch.object(sys.stdout, 'isatty', return_value=True):
 
         # Configure SyncApp mock to run worker synchronously
         mock_sync_app_instance = MagicMock()
