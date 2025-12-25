@@ -88,11 +88,11 @@ def mock_env(tmp_path):
     prompt_file = tmp_path / "prompt.md"
     prompt_file.write_text("Do X")
     
-    code_file = tmp_path / "code.py"
+    code_file = tmp_path / "buggy.py"
     code_file.write_text("print('hello')")
     
     program_file = tmp_path / "program.py"
-    program_file.write_text("import code")
+    program_file.write_text("import user_module")
     
     log_file = tmp_path / "verification_log.txt"
     log_file.write_text("Previous failure")
@@ -188,7 +188,7 @@ def test_agent_success_with_file_changes(mock_load, mock_run, mock_env):
     # Check changed files detection
     # Note: changed_files returns relative paths if possible, or absolute.
     # Since we are in mock_env["root"], relative paths should be used.
-    assert "code.py" in changed
+    assert "buggy.py" in changed
     assert "new_helper.py" in changed
     assert len(changed) == 2
 
