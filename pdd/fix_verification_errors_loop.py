@@ -310,6 +310,11 @@ def fix_verification_errors_loop(
     program_contents = "" # Keep track of current contents
     code_contents = ""    # Keep track of current contents
 
+    # Create backup directory in .pdd/backups/ to avoid polluting code/test directories
+    backup_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = Path.cwd() / '.pdd' / 'backups' / code_path.stem / backup_timestamp
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
     # --- Step 3: Determine Initial State ---
     if verbose:
         console.print("[bold cyan]Step 3: Determining Initial State...[/bold cyan]")
@@ -539,9 +544,9 @@ def fix_verification_errors_loop(
         #     code_contents = code_path.read_text(encoding="utf-8")
         # except IOError as e: ...
 
-        # 4d: Create backups
-        program_backup_path = program_path.with_stem(f"{program_path.stem}_iteration_{current_attempt}").with_suffix(program_path.suffix)
-        code_backup_path = code_path.with_stem(f"{code_path.stem}_iteration_{current_attempt}").with_suffix(code_path.suffix)
+        # 4d: Create backups in .pdd/backups/ (backup_dir already created above)
+        program_backup_path = backup_dir / f"program_{current_attempt}{program_path.suffix}"
+        code_backup_path = backup_dir / f"code_{current_attempt}{code_path.suffix}"
         try:
             # Copy from the *current* state before this iteration's fix
             program_path.write_text(program_contents, encoding="utf-8") # Ensure file matches memory state

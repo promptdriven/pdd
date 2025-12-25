@@ -538,3 +538,94 @@ class TestAgenticVerifyFallbackBugs:
 
         assert success is False, "Should fail with empty prompt_file"
         assert "prompt file" in msg.lower(), f"Error message should mention prompt file: {msg}"
+
+
+class TestBackupLocation:
+    """
+    Tests to verify that backup files (including example/program files) are stored
+    in .pdd/backups/ instead of polluting the working directory.
+    """
+
+    @patch("pdd.fix_code_loop.fix_code_module_errors")
+    def test_program_backup_stored_in_pdd_backups(self, mock_fix_code_module_errors, tmp_path, monkeypatch):
+        """
+        Test that when fix_code_loop runs, the verification program (example file)
+        backups are stored in .pdd/backups/ and NOT in the working directory.
+
+        This prevents versioned files like foo_example_1.py from polluting
+        the examples directory and being picked up by glob patterns.
+        """
+        # Change to temp directory
+        monkeypatch.chdir(tmp_path)
+
+        # Create .pdd directory
+        pdd_dir = tmp_path / ".pdd"
+        pdd_dir.mkdir()
+
+        # Create a verification program (simulating an example file)
+        example_file = tmp_path / "my_module_example.py"
+        example_file.write_text("print('Example that will fail')\nraise ValueError('fail')")
+
+        # Create a code file
+        code_file = tmp_path / "my_module.py"
+        code_file.write_text("def my_func(): return 'broken'")
+
+        # Mock fix_code_module_errors to simulate a fix attempt
+        def mock_fix(*args, **kwargs):
+            return (
+                True, True,  # update_program, update_code
+                "print('Fixed example')",  # fixed_program
+                "def my_func(): return 'fixed'",  # fixed_code
+                "LLM analysis",
+                0.5,  # cost
+                "mock-model"
+            )
+        mock_fix_code_module_errors.side_effect = mock_fix
+
+        # Run fix_code_loop
+        success, final_program, final_code, attempts, cost, model = fix_code_loop(
+            code_file=str(code_file),
+            prompt="Test prompt",
+            verification_program=str(example_file),
+            strength=0.5,
+            temperature=0.5,
+            max_attempts=2,
+            budget=10.0,
+            error_log_file=str(tmp_path / "error.log"),
+            verbose=False,
+        )
+
+        # Verify backups are in .pdd/backups/, NOT in the working directory
+        backup_base = tmp_path / ".pdd" / "backups" / "my_module"
+        assert backup_base.exists(), f"Backup directory should exist at {backup_base}"
+
+        # Find the timestamp subdirectory
+        backup_dirs = list(backup_base.glob("*"))
+        assert len(backup_dirs) >= 1, f"Should have at least one backup timestamp dir, found: {backup_dirs}"
+
+        backup_dir = backup_dirs[0]
+
+        # Check that program (example) backup exists in .pdd/backups/
+        program_backups = list(backup_dir.glob("program_*.py"))
+        assert len(program_backups) >= 1, f"Should have program backup in {backup_dir}, found: {list(backup_dir.glob('*'))}"
+
+        # Check that code backup exists in .pdd/backups/
+        code_backups = list(backup_dir.glob("code_*.py"))
+        assert len(code_backups) >= 1, f"Should have code backup in {backup_dir}"
+
+        # IMPORTANT: Verify NO versioned files in working directory
+        # Old behavior would create my_module_example_1.py in the working directory
+        old_style_backups = list(tmp_path.glob("my_module_example_*.py"))
+        assert len(old_style_backups) == 0, (
+            f"Should NOT have versioned example files in working directory, "
+            f"but found: {old_style_backups}"
+        )
+
+        # Also check no versioned code files in working directory
+        old_style_code_backups = list(tmp_path.glob("my_module_*.py"))
+        # Filter out the original file
+        old_style_code_backups = [f for f in old_style_code_backups if f.name != "my_module.py" and f.name != "my_module_example.py"]
+        assert len(old_style_code_backups) == 0, (
+            f"Should NOT have versioned code files in working directory, "
+            f"but found: {old_style_code_backups}"
+        )
