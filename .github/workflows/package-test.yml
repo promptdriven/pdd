@@ -29,25 +29,24 @@ jobs:
         run: |
           pip install dist/*.whl
 
-      - name: Test package includes with real pdd command
+      - name: Test package includes resolve correctly
         run: |
           # Run from /tmp to ensure we only use packaged files
           cd /tmp
 
-          # Create test prompt using a packaged include
-          echo '<include>docs/prompting_guide.md</include>' > test_include.prompt
+          # Test include resolution using Python directly
+          # This tests the same code path as pdd update/generate
+          python -c "
+          from pdd.preprocess import preprocess
 
-          # Run pdd preprocess (local, no LLM calls)
-          pdd preprocess test_include.prompt --output preprocessed.txt
+          result = preprocess('<include>docs/prompting_guide.md</include>')
 
-          # Verify the main include was resolved (contains content from prompting_guide.md)
-          # Note: The guide itself contains example <include> tags that won't resolve,
-          # so we check for positive content rather than absence of errors
-          # Use "PDD Mental Model" as marker since the title has special unicode chars
-          if grep -q "PDD Mental Model" preprocessed.txt; then
-            echo "SUCCESS: Package includes resolved correctly"
-          else
-            echo "FAILURE: Package include not found or not resolved"
-            head -50 preprocessed.txt
-            exit 1
-          fi
+          # Check that the include resolved (contains content from prompting_guide.md)
+          # Use 'PDD Mental Model' as marker since the title has special unicode chars
+          if 'PDD Mental Model' in result:
+              print('SUCCESS: Package includes resolved correctly')
+          else:
+              print('FAILURE: Package include not found or not resolved')
+              print('First 500 chars:', result[:500])
+              exit(1)
+          "
