@@ -383,17 +383,18 @@ def fix_error_loop(unit_test_file: str,
             break
 
         # We only attempt to fix if test is failing or has warnings:
-        # Let's create backups:
-        unit_test_dir, unit_test_name = os.path.split(unit_test_file)
-        code_dir, code_name = os.path.split(code_file)
-        unit_test_backup = os.path.join(
-            unit_test_dir,
-            f"{os.path.splitext(unit_test_name)[0]}_{iteration}_{errors}_{fails}_{warnings}_{timestamp}.py"
-        )
-        code_backup = os.path.join(
-            code_dir,
-            f"{os.path.splitext(code_name)[0]}_{iteration}_{errors}_{fails}_{warnings}_{timestamp}.py"
-        )
+        # Let's create backups in .pdd/backups/ to avoid polluting code/test directories
+        code_name = os.path.basename(code_file)
+        code_basename = os.path.splitext(code_name)[0]
+        unit_test_name = os.path.basename(unit_test_file)
+        unit_test_ext = os.path.splitext(unit_test_name)[1]
+        code_ext = os.path.splitext(code_name)[1]
+
+        backup_dir = Path.cwd() / '.pdd' / 'backups' / code_basename / timestamp
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        unit_test_backup = str(backup_dir / f"test_{iteration}_{errors}_{fails}_{warnings}{unit_test_ext}")
+        code_backup = str(backup_dir / f"code_{iteration}_{errors}_{fails}_{warnings}{code_ext}")
         try:
             shutil.copy(unit_test_file, unit_test_backup)
             shutil.copy(code_file, code_backup)
