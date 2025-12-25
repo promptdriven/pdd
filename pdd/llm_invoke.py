@@ -825,6 +825,12 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         return True
     else:
         logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
+
+        # Skip prompting if --force flag is set (non-interactive mode)
+        if os.environ.get('PDD_FORCE'):
+            logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")
+            return False
+
         try:
             # Interactive prompt
             user_provided_key = input(f"Please enter the API key for {key_name}: ").strip()
