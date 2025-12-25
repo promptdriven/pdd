@@ -29,9 +29,19 @@ FIREBASE_API_KEY_ENV_VAR = "NEXT_PUBLIC_FIREBASE_API_KEY"
 GITHUB_CLIENT_ID_ENV_VAR = "GITHUB_CLIENT_ID"
 PDD_APP_NAME = "PDD Code Generator"
 
-# Cloud function URL
-CLOUD_GENERATE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode"
+# Cloud function URL - can be overridden via PDD_CLOUD_URL for testing
+DEFAULT_CLOUD_GENERATE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode"
 CLOUD_REQUEST_TIMEOUT = 400  # seconds
+
+def get_cloud_url() -> str:
+    """Get cloud URL, allowing override via PDD_CLOUD_URL environment variable.
+
+    This enables testing against local emulator or staging environments:
+    - Local: http://127.0.0.1:5555/prompt-driven-development/us-central1/generateCode
+    - Staging: https://us-central1-prompt-driven-development-stg.cloudfunctions.net/generateCode
+    - Production: (default) https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode
+    """
+    return os.environ.get("PDD_CLOUD_URL", DEFAULT_CLOUD_GENERATE_URL)
 
 console = Console()
 
@@ -773,30 +783,39 @@ def code_generator_main(
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
                 
                 jwt_token: Optional[str] = None
-                try:
-                    firebase_api_key_val = os.environ.get(FIREBASE_API_KEY_ENV_VAR)
-                    github_client_id_val = os.environ.get(GITHUB_CLIENT_ID_ENV_VAR)
 
-                    if not firebase_api_key_val: raise AuthError(f"{FIREBASE_API_KEY_ENV_VAR} not set.")
-                    if not github_client_id_val: raise AuthError(f"{GITHUB_CLIENT_ID_ENV_VAR} not set.")
+                # Check for pre-injected token (for testing/CI environments)
+                injected_token = os.environ.get("PDD_JWT_TOKEN")
+                if injected_token:
+                    jwt_token = injected_token
+                    if verbose:
+                        console.print("[info]Using injected JWT token from PDD_JWT_TOKEN[/info]")
+                else:
+                    # Standard authentication via GitHub Device Flow
+                    try:
+                        firebase_api_key_val = os.environ.get(FIREBASE_API_KEY_ENV_VAR)
+                        github_client_id_val = os.environ.get(GITHUB_CLIENT_ID_ENV_VAR)
 
-                    jwt_token = asyncio.run(get_jwt_token(
-                        firebase_api_key=firebase_api_key_val,
-                        github_client_id=github_client_id_val,
-                        app_name=PDD_APP_NAME
-                    ))
-                except (AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError) as e:
-                    console.print(f"[yellow]Cloud authentication/token error: {e}. Falling back to local execution.[/yellow]")
-                    current_execution_is_local = True
-                except Exception as e:
-                    console.print(f"[yellow]Unexpected error during cloud authentication: {e}. Falling back to local execution.[/yellow]")
-                    current_execution_is_local = True
+                        if not firebase_api_key_val: raise AuthError(f"{FIREBASE_API_KEY_ENV_VAR} not set.")
+                        if not github_client_id_val: raise AuthError(f"{GITHUB_CLIENT_ID_ENV_VAR} not set.")
+
+                        jwt_token = asyncio.run(get_jwt_token(
+                            firebase_api_key=firebase_api_key_val,
+                            github_client_id=github_client_id_val,
+                            app_name=PDD_APP_NAME
+                        ))
+                    except (AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError) as e:
+                        console.print(f"[yellow]Cloud authentication/token error: {e}. Falling back to local execution.[/yellow]")
+                        current_execution_is_local = True
+                    except Exception as e:
+                        console.print(f"[yellow]Unexpected error during cloud authentication: {e}. Falling back to local execution.[/yellow]")
+                        current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
                     payload = {"promptContent": processed_prompt_for_cloud, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     try:
-                        response = requests.post(CLOUD_GENERATE_URL, json=payload, headers=headers, timeout=CLOUD_REQUEST_TIMEOUT)
+                        response = requests.post(get_cloud_url(), json=payload, headers=headers, timeout=CLOUD_REQUEST_TIMEOUT)
                         response.raise_for_status()
                         
                         response_data = response.json()
