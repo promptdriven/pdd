@@ -1578,6 +1578,8 @@ def sync_orchestration(
     headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
 
     if headless:
+        # Set PDD_FORCE to also skip API key prompts in headless mode
+        os.environ['PDD_FORCE'] = '1'
         # Run worker logic directly without TUI in headless mode
         if not quiet:
             print(f"Running sync in headless mode (CI/non-TTY environment)...")
