@@ -49,3 +49,72 @@ jobs:
             head -20 preprocessed.txt
             exit 1
           fi
+
+  test-sync:
+    name: Test PDD Sync
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build and install package
+        run: |
+          pip install build
+          python -m build
+          pip install dist/*.whl
+
+      - name: Run pdd sync on hello example
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        working-directory: examples/hello
+        run: |
+          # Clean any existing generated files to test fresh generation
+          rm -rf src/ tests/ examples/
+
+          # Run sync in local mode with force flag
+          pdd --local --force sync hello
+
+      - name: Verify generated code exists
+        working-directory: examples/hello
+        run: |
+          # Check that src/hello.py was generated
+          if [ ! -f "src/hello.py" ]; then
+            echo "FAILURE: src/hello.py was not generated"
+            exit 1
+          fi
+          echo "SUCCESS: Generated file exists"
+          cat src/hello.py
+
+      - name: Run generated code
+        working-directory: examples/hello
+        run: |
+          # Execute the generated hello.py
+          cd src
+          OUTPUT=$(python -c "from hello import hello; hello()")
+
+          # Verify output contains "hello"
+          if echo "$OUTPUT" | grep -qi "hello"; then
+            echo "SUCCESS: Generated code runs correctly"
+            echo "Output: $OUTPUT"
+          else
+            echo "FAILURE: Output did not contain 'hello'"
+            echo "Output: $OUTPUT"
+            exit 1
+          fi
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdd-sync-logs
+          path: |
+            examples/hello/.pdd/
+            examples/hello/src/
+          retention-days: 7
