@@ -1241,9 +1241,9 @@ class TestApiKeyInputHang:
 def test_llm_invoke_pydantic_validation_failure_triggers_model_fallback(mock_load_models, mock_set_llm_cache):
     """Test that Pydantic validation failure triggers model fallback.
 
-    BUG (Issue #168): When validation fails, `continue` at line 2242 advances to
-    the next batch item instead of triggering model fallback. This test will FAIL
-    until the bug is fixed.
+    BUG (Issue #168): Previously, when validation failed, the code used `continue`,
+    which advanced to the next batch item instead of triggering model fallback.
+    This test verifies that model fallback occurs correctly.
     """
     # All API keys needed so multiple models can be tried
     all_keys = {
@@ -1433,7 +1433,7 @@ def test_llm_invoke_dict_response_missing_field_triggers_fallback(mock_load_mode
             # EXPECTED after fix: Model fallback happened (2+ calls)
             assert mock_completion.call_count >= 2, \
                 f"Expected model fallback (2+ calls), but only {mock_completion.call_count} call(s) made. " \
-                "BUG: Dict validation at line 2082 is not triggering fallback to next model."
+                "BUG: Dict validation is not triggering fallback to the next model."
 
             # EXPECTED after fix: Result is valid Pydantic object from second model
             assert isinstance(response['result'], CodeFixLikeModel), \
