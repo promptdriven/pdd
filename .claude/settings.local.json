@@ -9,7 +9,7 @@
       "Bash(BACKUP_DIR=\"/tmp/pdd_backup_$(date +%Y%m%d_%H%M%S)\")",
       "Bash(python -m pytest tests/test_fix_error_loop.py -v)",
       "Bash(ls:*)",
-      "Bash(unzip:*)"
+      "Bash(unzip:*)",
       "Bash(grep:*)",
       "Bash(mkdir:*)",
       "Bash(../pdd-local sync simple_test)",
