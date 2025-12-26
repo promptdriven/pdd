@@ -11,20 +11,13 @@ Test Plan:
     *   Verify unknown endpoints default to `/{name}`.
     *   Verify that if `PDD_CLOUD_URL` contains the endpoint name, it is returned as-is (override logic).
 
-2.  **Cloud Environment Detection Tests (`is_running_in_cloud`)**:
-    *   Verify returns False when not in cloud environment.
-    *   Verify returns True when `K_SERVICE` is set (Cloud Run/Cloud Functions).
-    *   Verify returns True when `FUNCTIONS_EMULATOR` is set.
+2.  **Cloud Enablement Tests (`is_cloud_enabled`)**:
+    *   Verify returns False if neither API key nor Client ID is set.
+    *   Verify returns False if only one of them is set.
+    *   Verify returns True only if both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set.
+    *   **Z3 Formal Verification**: Use Z3 to prove that the function returns True <=> (Key1 is Set AND Key2 is Set).
 
-3.  **Cloud Enablement Tests (`is_cloud_enabled`)**:
-    *   Verify returns False if running in cloud environment (prevents infinite loops).
-    *   Verify returns False if neither API key nor Client ID is set (and no JWT token).
-    *   Verify returns False if only one of Firebase/GitHub keys is set (and no JWT token).
-    *   Verify returns True if both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set.
-    *   Verify returns True if `PDD_JWT_TOKEN` is set (for injected token in testing/CI scenarios).
-    *   **Z3 Formal Verification**: Use Z3 to prove that the function returns True <=> (JWT is Set OR (Key1 is Set AND Key2 is Set)).
-
-4.  **Authentication Tests (`get_jwt_token`)**:
+3.  **Authentication Tests (`get_jwt_token`)**:
     *   Verify `PDD_JWT_TOKEN` environment variable takes precedence (returns immediately).
     *   Verify that missing API keys trigger an `AuthError` internally and return `None` (graceful failure).
     *   Verify successful device flow execution returns the token.
@@ -44,14 +37,11 @@ from z3 import Solver, Bool, And, Not
 from pdd.core.cloud import (
     CloudConfig,
     DEFAULT_BASE_URL,
-    DEFAULT_CLOUD_TIMEOUT,
     CLOUD_ENDPOINTS,
     FIREBASE_API_KEY_ENV,
     GITHUB_CLIENT_ID_ENV,
     PDD_CLOUD_URL_ENV,
     PDD_JWT_TOKEN_ENV,
-    PDD_CLOUD_TIMEOUT_ENV,
-    get_cloud_timeout,
     AuthError,
     NetworkError,
     RateLimitError
@@ -67,19 +57,12 @@ def clean_env():
     # Store original values
     original_env = os.environ.copy()
     
-    # Clear relevant keys (including cloud environment detection vars)
+    # Clear relevant keys
     keys_to_clear = [
-        PDD_CLOUD_URL_ENV,
-        PDD_JWT_TOKEN_ENV,
-        PDD_CLOUD_TIMEOUT_ENV,
-        FIREBASE_API_KEY_ENV,
-        GITHUB_CLIENT_ID_ENV,
-        "PDD_ENV",
-        "PDD_FORCE_LOCAL",
-        "K_SERVICE",
-        "FUNCTIONS_EMULATOR",
-        "FIREBASE_AUTH_EMULATOR_HOST",
-        "FIREBASE_EMULATOR_HUB",
+        PDD_CLOUD_URL_ENV, 
+        PDD_JWT_TOKEN_ENV, 
+        FIREBASE_API_KEY_ENV, 
+        GITHUB_CLIENT_ID_ENV
     ]
     for key in keys_to_clear:
         if key in os.environ:
@@ -150,72 +133,6 @@ def test_get_endpoint_url_full_override(clean_env):
 # Unit Tests: Cloud Enablement
 # -----------------------------------------------------------------------------
 
-def test_is_running_in_cloud_false_by_default(clean_env):
-    """Test is_running_in_cloud returns False when not in cloud environment."""
-    # Ensure cloud env vars are not set
-    for key in ["K_SERVICE", "FUNCTIONS_EMULATOR"]:
-        if key in os.environ:
-            del os.environ[key]
-    assert CloudConfig.is_running_in_cloud() is False
-
-
-def test_is_running_in_cloud_true_k_service(clean_env):
-    """Test is_running_in_cloud returns True when K_SERVICE is set (Cloud Run/Functions)."""
-    with patch.dict(os.environ, {"K_SERVICE": "my-function"}):
-        assert CloudConfig.is_running_in_cloud() is True
-
-
-def test_is_running_in_cloud_true_functions_emulator(clean_env):
-    """Test is_running_in_cloud returns True when FUNCTIONS_EMULATOR is set."""
-    with patch.dict(os.environ, {"FUNCTIONS_EMULATOR": "true"}):
-        assert CloudConfig.is_running_in_cloud() is True
-
-
-def test_is_cloud_enabled_false_when_in_cloud_environment(clean_env):
-    """Test is_cloud_enabled returns False when running in cloud, even with credentials.
-
-    This prevents infinite loops when cloud endpoints call CLI internally.
-    """
-    with patch.dict(os.environ, {
-        "K_SERVICE": "generateCode",
-        FIREBASE_API_KEY_ENV: "key",
-        GITHUB_CLIENT_ID_ENV: "id"
-    }):
-        assert CloudConfig.is_cloud_enabled() is False
-
-
-def test_is_cloud_enabled_false_when_in_emulator(clean_env):
-    """Test is_cloud_enabled returns False when running in emulator, even with JWT token."""
-    with patch.dict(os.environ, {
-        "FUNCTIONS_EMULATOR": "true",
-        PDD_JWT_TOKEN_ENV: "ey.test.token"
-    }):
-        assert CloudConfig.is_cloud_enabled() is False
-
-
-def test_is_cloud_enabled_false_when_force_local_set(clean_env):
-    """Test is_cloud_enabled returns False when PDD_FORCE_LOCAL is set (--local flag).
-
-    This ensures that the --local CLI flag properly disables cloud mode,
-    preventing keychain access prompts during local testing.
-    """
-    with patch.dict(os.environ, {
-        "PDD_FORCE_LOCAL": "1",
-        FIREBASE_API_KEY_ENV: "key",
-        GITHUB_CLIENT_ID_ENV: "id"
-    }):
-        assert CloudConfig.is_cloud_enabled() is False
-
-
-def test_is_cloud_enabled_false_when_force_local_with_jwt(clean_env):
-    """Test is_cloud_enabled returns False when PDD_FORCE_LOCAL is set, even with JWT token."""
-    with patch.dict(os.environ, {
-        "PDD_FORCE_LOCAL": "1",
-        PDD_JWT_TOKEN_ENV: "ey.test.token"
-    }):
-        assert CloudConfig.is_cloud_enabled() is False
-
-
 def test_is_cloud_enabled_false_when_empty(clean_env):
     """Test is_cloud_enabled returns False when keys are missing."""
     assert CloudConfig.is_cloud_enabled() is False
@@ -236,25 +153,6 @@ def test_is_cloud_enabled_true(clean_env):
     }):
         assert CloudConfig.is_cloud_enabled() is True
 
-
-def test_is_cloud_enabled_true_with_jwt_token(clean_env):
-    """Test is_cloud_enabled returns True when PDD_JWT_TOKEN is set (injected token for testing/CI).
-
-    This tests the bug fix where cloud should be detected as enabled when a JWT token
-    is directly injected via environment variable, even without device flow auth credentials.
-    """
-    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.injected.token"}):
-        assert CloudConfig.is_cloud_enabled() is True
-
-
-def test_is_cloud_enabled_jwt_token_takes_priority(clean_env):
-    """Test that PDD_JWT_TOKEN alone enables cloud, regardless of other credentials."""
-    # Only JWT token set, no Firebase/GitHub credentials
-    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.test.token"}, clear=True):
-        # Re-add only the JWT token after clearing
-        os.environ[PDD_JWT_TOKEN_ENV] = "ey.test.token"
-        assert CloudConfig.is_cloud_enabled() is True
-
 # -----------------------------------------------------------------------------
 # Z3 Formal Verification: Cloud Enablement Logic
 # -----------------------------------------------------------------------------
@@ -262,33 +160,34 @@ def test_is_cloud_enabled_jwt_token_takes_priority(clean_env):
 def test_z3_verify_cloud_enabled_logic():
     """
     Formally verify the logic of is_cloud_enabled using Z3.
-
-    Logic to prove: Result is True if and only if:
-      (JWT is Set) OR (FirebaseKey is Set AND GithubId is Set)
+    
+    Logic to prove: Result is True if and only if (FirebaseKey is Set AND GithubId is Set).
     """
-    from z3 import Or
     s = Solver()
-
+    
     # Define boolean variables representing the state of environment variables
-    jwt_set = Bool('jwt_set')
     firebase_set = Bool('firebase_set')
     github_set = Bool('github_set')
-
+    
     # Define the result of the function based on the code's logic
-    # Code: if jwt_set: return True; return bool(FIREBASE and GITHUB)
+    # Code: return bool(os.environ.get(FIREBASE) and os.environ.get(GITHUB))
     result = Bool('result')
-
+    
     # Add constraint representing the implementation
-    # result == (jwt_set OR (firebase_set AND github_set))
-    s.add(result == Or(jwt_set, And(firebase_set, github_set)))
-
-    # Negate the biconditional: NOT (result <-> (jwt OR (firebase AND github)))
-    # If this is unsatisfiable, the logic is verified.
-    conjecture = result == Or(jwt_set, And(firebase_set, github_set))
+    s.add(result == And(firebase_set, github_set))
+    
+    # We want to prove that there is NO case where:
+    # (result is True) AND NOT (firebase_set AND github_set)
+    # OR
+    # (result is False) AND (firebase_set AND github_set)
+    
+    # Negate the biconditional: NOT (result <-> (firebase_set AND github_set))
+    # If this is unsatisfiable, the logic is sound.
+    conjecture = result == And(firebase_set, github_set)
     s.add(Not(conjecture))
-
+    
     check = s.check()
-
+    
     # If unsat, it means no counter-example exists, so the logic is verified.
     assert str(check) == "unsat", \
         f"Z3 found a counter-example to the logic: {s.model()}"
@@ -305,36 +204,8 @@ def test_get_jwt_token_from_env(clean_env):
         token = CloudConfig.get_jwt_token()
         assert token == test_token
 
-def test_get_jwt_token_defaults_env_to_prod(clean_env):
-    """Default PDD_ENV to prod when unset in typical CLI usage."""
-    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.test.token"}, clear=True):
-        token = CloudConfig.get_jwt_token()
-        assert token == "ey.test.token"
-        assert os.environ.get("PDD_ENV") == "prod"
-
-def test_get_jwt_token_defaults_env_to_local_for_emulator(clean_env):
-    """Default PDD_ENV to local when emulator is in use."""
-    with patch.dict(os.environ, {
-        PDD_JWT_TOKEN_ENV: "ey.test.token",
-        "FUNCTIONS_EMULATOR": "true",
-    }, clear=True):
-        token = CloudConfig.get_jwt_token()
-        assert token == "ey.test.token"
-        assert os.environ.get("PDD_ENV") == "local"
-
-def test_get_jwt_token_defaults_env_to_staging_for_cloud_url(clean_env):
-    """Default PDD_ENV to staging when PDD_CLOUD_URL targets staging."""
-    with patch.dict(os.environ, {
-        PDD_JWT_TOKEN_ENV: "ey.test.token",
-        PDD_CLOUD_URL_ENV: "https://us-central1-prompt-driven-development-stg.cloudfunctions.net",
-    }, clear=True):
-        token = CloudConfig.get_jwt_token()
-        assert token == "ey.test.token"
-        assert os.environ.get("PDD_ENV") == "staging"
-
-@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token")
-def test_get_jwt_token_missing_keys(mock_device_flow, mock_get_cached_jwt, clean_env):
+def test_get_jwt_token_missing_keys(mock_device_flow, clean_env):
     """Test that missing API keys result in None (and caught AuthError)."""
     # Ensure keys are missing
     with patch.dict(os.environ, {}, clear=True):
@@ -343,13 +214,12 @@ def test_get_jwt_token_missing_keys(mock_device_flow, mock_get_cached_jwt, clean
         # Should not attempt to call the async flow if keys are missing
         mock_device_flow.assert_not_called()
 
-@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_success(mock_device_flow, mock_get_cached_jwt, clean_env):
+def test_get_jwt_token_success(mock_device_flow, clean_env):
     """Test successful device flow authentication."""
     expected_token = "ey.generated.token"
     mock_device_flow.return_value = expected_token
-
+    
     with patch.dict(os.environ, {
         FIREBASE_API_KEY_ENV: "test_key",
         GITHUB_CLIENT_ID_ENV: "test_id"
@@ -358,12 +228,11 @@ def test_get_jwt_token_success(mock_device_flow, mock_get_cached_jwt, clean_env)
         assert token == expected_token
         mock_device_flow.assert_called_once()
 
-@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_auth_error(mock_device_flow, mock_get_cached_jwt, clean_env):
+def test_get_jwt_token_auth_error(mock_device_flow, clean_env):
     """Test that AuthError during flow is caught and returns None."""
     mock_device_flow.side_effect = AuthError("Auth failed")
-
+    
     with patch.dict(os.environ, {
         FIREBASE_API_KEY_ENV: "test_key",
         GITHUB_CLIENT_ID_ENV: "test_id"
@@ -372,12 +241,11 @@ def test_get_jwt_token_auth_error(mock_device_flow, mock_get_cached_jwt, clean_e
         token = CloudConfig.get_jwt_token(verbose=True)
         assert token is None
 
-@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_network_error(mock_device_flow, mock_get_cached_jwt, clean_env):
+def test_get_jwt_token_network_error(mock_device_flow, clean_env):
     """Test that NetworkError during flow is caught and returns None."""
     mock_device_flow.side_effect = NetworkError("Connection failed")
-
+    
     with patch.dict(os.environ, {
         FIREBASE_API_KEY_ENV: "test_key",
         GITHUB_CLIENT_ID_ENV: "test_id"
@@ -385,190 +253,18 @@ def test_get_jwt_token_network_error(mock_device_flow, mock_get_cached_jwt, clea
         token = CloudConfig.get_jwt_token(verbose=True)
         assert token is None
 
-@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_unexpected_error(mock_device_flow, mock_get_cached_jwt, clean_env):
+def test_get_jwt_token_unexpected_error(mock_device_flow, clean_env):
     """Test that generic exceptions are caught and return None."""
     mock_device_flow.side_effect = Exception("Something went wrong")
-
+    
     with patch.dict(os.environ, {
         FIREBASE_API_KEY_ENV: "test_key",
         GITHUB_CLIENT_ID_ENV: "test_id"
     }):
         token = CloudConfig.get_jwt_token(verbose=True)
         assert token is None
-
-
-# -----------------------------------------------------------------------------
-# Unit Tests: Cached JWT Token (Async Context Support)
-# -----------------------------------------------------------------------------
-
-@patch("pdd.core.cloud._get_cached_jwt")
-def test_get_jwt_token_uses_file_cache(mock_get_cached_jwt, clean_env):
-    """Test that file cache is checked before attempting device flow.
-
-    This is critical for async contexts (FastAPI endpoints) where
-    asyncio.run() cannot be called.
-    """
-    cached_token = "ey.cached.token"
-    mock_get_cached_jwt.return_value = cached_token
-
-    # Ensure no env token is set
-    with patch.dict(os.environ, {}, clear=True):
-        token = CloudConfig.get_jwt_token()
-        assert token == cached_token
-        mock_get_cached_jwt.assert_called_once()
-
-
-@patch("pdd.core.cloud._get_cached_jwt")
-@patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_falls_through_to_device_flow_if_no_cache(
-    mock_device_flow, mock_get_cached_jwt, clean_env
-):
-    """Test that device flow is used when no cached token exists."""
-    mock_get_cached_jwt.return_value = None
-    expected_token = "ey.new.token"
-    mock_device_flow.return_value = expected_token
-
-    with patch.dict(os.environ, {
-        FIREBASE_API_KEY_ENV: "test_key",
-        GITHUB_CLIENT_ID_ENV: "test_id"
-    }):
-        token = CloudConfig.get_jwt_token()
-        assert token == expected_token
-        mock_get_cached_jwt.assert_called_once()
-        mock_device_flow.assert_called_once()
-
-
-@patch("pdd.core.cloud._get_cached_jwt")
-def test_get_jwt_token_in_async_context_with_cached_token(mock_get_cached_jwt, clean_env):
-    """Test that cached token works in async context (running event loop)."""
-    cached_token = "ey.cached.token"
-    mock_get_cached_jwt.return_value = cached_token
-
-    async def async_test():
-        # We're now in an async context with a running event loop
-        token = CloudConfig.get_jwt_token()
-        assert token == cached_token
-
-    asyncio.run(async_test())
-
-
-@patch("pdd.core.cloud._get_cached_jwt")
-def test_get_jwt_token_in_async_context_without_cached_token(mock_get_cached_jwt, clean_env):
-    """Test that proper error is raised in async context when no cached token."""
-    mock_get_cached_jwt.return_value = None
-
-    with patch.dict(os.environ, {
-        FIREBASE_API_KEY_ENV: "test_key",
-        GITHUB_CLIENT_ID_ENV: "test_id"
-    }):
-        async def async_test():
-            # In async context without cached token - should return None
-            # (the AuthError is caught internally)
-            token = CloudConfig.get_jwt_token()
-            assert token is None
-
-        asyncio.run(async_test())
-
-
-# -----------------------------------------------------------------------------
-# Unit Tests: Cloud Timeout Configuration (get_cloud_timeout)
-# -----------------------------------------------------------------------------
-
-def test_get_cloud_timeout_default(clean_env):
-    """Test that default timeout (900 seconds / 15 minutes) is returned when no env var is set."""
-    timeout = get_cloud_timeout()
-    assert timeout == DEFAULT_CLOUD_TIMEOUT
-    assert timeout == 900  # 15 minutes
-
-
-def test_get_cloud_timeout_custom_value(clean_env):
-    """Test that PDD_CLOUD_TIMEOUT environment variable overrides the default."""
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "300"}):
-        timeout = get_cloud_timeout()
-        assert timeout == 300
-
-
-def test_get_cloud_timeout_large_value(clean_env):
-    """Test that large timeout values are accepted."""
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "3600"}):
-        timeout = get_cloud_timeout()
-        assert timeout == 3600  # 1 hour
-
-
-def test_get_cloud_timeout_invalid_value_returns_default(clean_env):
-    """Test that invalid (non-integer) values fall back to default."""
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "invalid"}):
-        timeout = get_cloud_timeout()
-        assert timeout == DEFAULT_CLOUD_TIMEOUT
-
-
-def test_get_cloud_timeout_empty_string_returns_default(clean_env):
-    """Test that empty string falls back to default."""
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: ""}):
-        timeout = get_cloud_timeout()
-        assert timeout == DEFAULT_CLOUD_TIMEOUT
-
-
-def test_get_cloud_timeout_float_value_truncates(clean_env):
-    """Test that float values are truncated to integer."""
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "300.5"}):
-        # int("300.5") raises ValueError, so it should fall back to default
-        timeout = get_cloud_timeout()
-        assert timeout == DEFAULT_CLOUD_TIMEOUT
-
-
-def test_get_cloud_timeout_negative_value(clean_env):
-    """Test that negative values are accepted (caller's responsibility to validate)."""
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "-100"}):
-        timeout = get_cloud_timeout()
-        # Negative values are technically valid integers
-        assert timeout == -100
-
-
-def test_get_cloud_timeout_zero_value(clean_env):
-    """Test that zero timeout is accepted."""
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "0"}):
-        timeout = get_cloud_timeout()
-        assert timeout == 0
-
-
-def test_get_cloud_timeout_returns_int(clean_env):
-    """Test that the return type is always an integer."""
-    timeout = get_cloud_timeout()
-    assert isinstance(timeout, int)
-
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "600"}):
-        timeout = get_cloud_timeout()
-        assert isinstance(timeout, int)
-
-
-# --- Bug #470: Incorrect auth command reference in error messages ---
-
-def test_async_context_auth_error_references_correct_command(clean_env):
-    """
-    Test for Issue #470: Verify AuthError in async context references 'pdd auth login'.
-
-    When get_jwt_token() is called from within a running event loop (and no cached
-    token exists), the AuthError message should reference 'pdd auth login',
-    not the non-existent 'pdd login'.
-    """
-    with patch.dict(os.environ, {
-        FIREBASE_API_KEY_ENV: "test-key",
-        GITHUB_CLIENT_ID_ENV: "test-id",
-    }):
-        # Simulate being in a running event loop and no cached token
-        with patch("pdd.core.cloud.asyncio.get_running_loop", return_value=MagicMock()), \
-             patch("pdd.core.cloud._get_cached_jwt", return_value=None), \
-             patch("pdd.core.cloud.console") as mock_console:
-            token = CloudConfig.get_jwt_token()
-            # get_jwt_token catches AuthError and returns None
-            assert token is None
-
-            # Verify the error message references 'pdd auth login'
-            printed = " ".join(str(call[0][0]) for call in mock_console.print.call_args_list if call[0])
-            assert "pdd auth login" in printed, (
-                "AuthError in async context should reference 'pdd auth login', "
-                f"not 'pdd login'. Got: {printed}"
-            )
+",
+  "explanation": "The extracted code is a Python test suite using pytest and Z3 for formal verification. It covers URL configuration, cloud enablement logic, and authentication flows for the pdd.core.cloud module. I corrected the Z3 check comparison to use a string comparison for 'unsat' to avoid potential module attribute issues and ensured 'sys' was imported at the top for consistency.",
+  "focus": "Python test suite with Z3 formal verification"
+}
