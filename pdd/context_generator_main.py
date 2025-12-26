@@ -12,12 +12,12 @@ from rich.console import Console
 from rich.panel import Panel
 from .construct_paths import construct_paths
 from .context_generator import context_generator
+from .core.cloud import CloudConfig
 from .get_jwt_token import get_jwt_token, AuthError, NetworkError, TokenError, RateLimitError
 from .preprocess import preprocess
 from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE
 
 console = Console()
-CLOUD_FUNCTION_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net/generateExample"
 CLOUD_TIMEOUT_SECONDS = 400.0
 
 def _validate_and_fix_python_syntax(code: str, quiet: bool) -> str:
@@ -90,7 +90,8 @@ async def _run_cloud_generation(prompt_content: str, code_content: str, language
     payload = {"promptContent": processed_prompt, "codeContent": code_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
     async with httpx.AsyncClient(timeout=CLOUD_TIMEOUT_SECONDS) as client:
         try:
-            response = await client.post(CLOUD_FUNCTION_URL, json=payload, headers=headers)
+            cloud_url = CloudConfig.get_endpoint_url("generateExample")
+            response = await client.post(cloud_url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
             generated_code = data.get("generatedExample", "")

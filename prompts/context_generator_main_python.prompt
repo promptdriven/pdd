@@ -93,7 +93,7 @@
       - Use a request timeout of 400 seconds.
       - Send JSON payload with fields: `{ "promptContent": <prompt_content>, "codeContent": <code_content>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`.
         % Note: A time/effort field (e.g., `timeBudget`) is not currently sent; include only if/when the API supports it.
-      - Cloud endpoint: `https://us-central1-prompt-driven-development.cloudfunctions.net/generateExample`
+      - Cloud endpoint: Use `CloudConfig.get_endpoint_url("generateExample")` from `pdd.core.cloud` to get the endpoint URL. This allows overriding via `PDD_CLOUD_URL` environment variable for testing against local emulators or staging environments.
       - Expected response fields: `generatedExample`, `totalCost`, `modelName`.
    3. If cloud execution fails (auth/network/HTTP/JSON errors, timeout, or missing code):
       - Log a warning and automatically fall back to local execution.
