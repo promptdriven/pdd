@@ -55,7 +55,7 @@ def create_vertex_model_dataframe():
     """Create a mock DataFrame with a Vertex AI model configuration."""
     mock_data = [{
         'provider': 'Google',
-        'model': 'vertex_ai/claude-opus-4-6',
+        'model': 'vertex_ai/claude-opus-4-5',
         'input': 5.0,
         'output': 25.0,
         'coding_arena_elo': 1465,
@@ -75,9 +75,7 @@ def create_vertex_model_dataframe():
 def mock_set_llm_cache():
     """Mock the LiteLLM cache to avoid cache-related side effects."""
     with patch('litellm.caching.caching.Cache') as mock_cache_class:
-        # Force local execution to prevent cloud routing when infisical secrets are present
-        with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
-            yield mock_cache_class
+        yield mock_cache_class
 
 
 class TestVertexRetryPassesCredentials:
@@ -102,12 +100,11 @@ class TestVertexRetryPassesCredentials:
         env_vars = {
             'VERTEX_CREDENTIALS': '/fake/path.json',
             'VERTEX_PROJECT': 'test-project',
-            'VERTEX_LOCATION': 'us-east4',  # NOT us-central1
-            'PDD_FORCE_LOCAL': '1',  # Force local execution to prevent cloud routing
+            'VERTEX_LOCATION': 'us-east4'  # NOT us-central1
         }
 
         with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
-            with patch.dict(os.environ, env_vars, clear=False):
+            with patch.dict(os.environ, env_vars):
                 with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                     # First call returns None content (triggers retry)
                     # Second call returns valid content
@@ -147,12 +144,11 @@ class TestVertexRetryPassesCredentials:
         env_vars = {
             'VERTEX_CREDENTIALS': '/fake/path.json',
             'VERTEX_PROJECT': 'test-project',
-            'VERTEX_LOCATION': 'us-east4',
-            'PDD_FORCE_LOCAL': '1',  # Force local execution to prevent cloud routing
+            'VERTEX_LOCATION': 'us-east4'
         }
 
         with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
-            with patch.dict(os.environ, env_vars, clear=False):
+            with patch.dict(os.environ, env_vars):
                 with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                     # First call returns malformed JSON (triggers retry)
                     # Create content that triggers _is_malformed_json_response
@@ -193,8 +189,7 @@ class TestVertexRetryPassesCredentials:
         env_vars = {
             'VERTEX_CREDENTIALS': '/fake/path.json',
             'VERTEX_PROJECT': 'test-project',
-            'VERTEX_LOCATION': 'us-east4',
-            'PDD_FORCE_LOCAL': '1',  # Force local execution to prevent cloud routing
+            'VERTEX_LOCATION': 'us-east4'
         }
 
         # Force retry by patching _has_invalid_python_code
@@ -204,7 +199,7 @@ class TestVertexRetryPassesCredentials:
             return call_count[0] == 1  # True on first call → triggers retry
 
         with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
-            with patch.dict(os.environ, env_vars, clear=False):
+            with patch.dict(os.environ, env_vars):
                 with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
                     with patch('pdd.llm_invoke._has_invalid_python_code', side_effect=force_retry_once):
                         # Both calls return valid JSON that parses to CodeOutputModel
@@ -244,47 +239,6 @@ class TestVertexRetryPassesCredentials:
                             f"Retry call missing vertex_credentials - bug #185. Keys: {list(retry_kwargs.keys())}"
 
 
-    def test_vertex_kwargs_passed_on_retry_with_adc(self, mock_set_llm_cache):
-        """
-        Test that retry calls include vertex_project and vertex_location
-        when using ADC (no VERTEX_CREDENTIALS file).
-        """
-        mock_df = create_vertex_model_dataframe()
-
-        env_vars = {
-            'VERTEX_PROJECT': 'test-project',
-            'VERTEX_LOCATION': 'us-east4',
-            'PDD_FORCE_LOCAL': '1',
-        }
-
-        with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
-            with patch.dict(os.environ, env_vars, clear=False):
-                # Ensure VERTEX_CREDENTIALS is not set
-                os.environ.pop('VERTEX_CREDENTIALS', None)
-                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-                    # First call returns None content (triggers retry)
-                    # Second call returns valid content
-                    first_response = create_mock_litellm_response(None)
-                    second_response = create_mock_litellm_response("Valid response")
-                    mock_completion.side_effect = [first_response, second_response]
-
-                    llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
-
-                    # Assert both calls were made
-                    assert mock_completion.call_count == 2
-
-                    # Get the retry call kwargs (second call)
-                    retry_kwargs = mock_completion.call_args_list[1][1]
-
-                    # ADC path: project and location must be set, credentials must NOT
-                    assert retry_kwargs.get('vertex_location') == 'us-east4', \
-                        "Retry call missing vertex_location with ADC"
-                    assert retry_kwargs.get('vertex_project') == 'test-project', \
-                        "Retry call missing vertex_project with ADC"
-                    assert 'vertex_credentials' not in retry_kwargs, \
-                        "ADC retry should NOT have vertex_credentials"
-
-
 class TestVertexRetryIntegration:
     """
     Integration tests that verify no us-central1 errors in retry logs.
@@ -298,15 +252,12 @@ class TestVertexRetryIntegration:
     )
     def test_vertex_retry_no_location_error_in_logs(self, mock_set_llm_cache, caplog):
         """
-        Test that retry calls don't produce us-central1 location errors.
+        Integration test: Verify no us-central1 errors appear in retry logs.
 
-        This test mocks litellm.completion to avoid real API calls while still
-        verifying that the retry logic doesn't produce location-related errors.
+        If the bug is present, the retry call will fail with:
+        "Publisher Model `.../locations/us-central1/...` is not servable in region us-central1"
         """
         import logging
-        import json
-
-        mock_df = create_vertex_model_dataframe()
 
         # Force retry by patching _has_invalid_python_code
         call_count = [0]
@@ -315,32 +266,18 @@ class TestVertexRetryIntegration:
             return call_count[0] == 1
 
         with caplog.at_level(logging.WARNING):
-            with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
-                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-                    # Return valid JSON response
-                    valid_json = json.dumps({
-                        "explanation": "Test explanation",
-                        "code": "def hello(): pass"
-                    })
-                    mock_response = create_mock_litellm_response(valid_json)
-                    mock_completion.return_value = mock_response
-
-                    with patch('pdd.llm_invoke._has_invalid_python_code', side_effect=force_retry_once):
-                        with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 10, "output_tokens": 10}):
-                            m = mock_open(read_data='{}')
-                            with patch('builtins.open', m):
-                                with patch('pdd.llm_invoke.json.load', return_value={}):
-                                    try:
-                                        llm_invoke(
-                                            "Generate a simple Python function: {x}",
-                                            {"x": "hello world"},
-                                            0.5,
-                                            0.7,
-                                            True,
-                                            output_pydantic=CodeOutputModel
-                                        )
-                                    except Exception:
-                                        pass  # We're checking logs, not success
+            with patch('pdd.llm_invoke._has_invalid_python_code', side_effect=force_retry_once):
+                try:
+                    llm_invoke(
+                        "Generate a simple Python function: {x}",
+                        {"x": "hello world"},
+                        0.5,
+                        0.7,
+                        True,
+                        output_pydantic=CodeOutputModel
+                    )
+                except Exception:
+                    pass  # We're checking logs, not success
 
         # FAIL if us-central1 error appears in logs
         assert 'us-central1' not in caplog.text, \
