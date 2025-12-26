@@ -21,8 +21,14 @@ from .construct_paths import (
 )
 from .sync_orchestration import sync_orchestration
 
-# A simple regex for basename validation to prevent path traversal or other injection
-VALID_BASENAME_CHARS = re.compile(r"^[a-zA-Z0-9_-]+$")
+# Regex for basename validation supporting subdirectory paths (e.g., 'core/cloud')
+# Allows: alphanumeric, underscore, hyphen, and forward slash for subdirectory paths
+# Structure inherently prevents:
+#   - Path traversal (..) - dot not in character class
+#   - Leading slash (/abs) - must start with [a-zA-Z0-9_-]+
+#   - Trailing slash (path/) - must end with [a-zA-Z0-9_-]+
+#   - Double slash (a//b) - requires characters between slashes
+VALID_BASENAME_CHARS = re.compile(r"^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$")
 
 
 def _validate_basename(basename: str) -> None:
@@ -32,7 +38,7 @@ def _validate_basename(basename: str) -> None:
     if not VALID_BASENAME_CHARS.match(basename):
         raise click.UsageError(
             f"Basename '{basename}' contains invalid characters. "
-            "Only alphanumeric, underscore, and hyphen are allowed."
+            "Only alphanumeric, underscore, hyphen, and forward slash (for subdirectories) are allowed."
         )
 
 
@@ -41,18 +47,28 @@ def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
     Detects all available languages for a given basename by finding
     matching prompt files in the prompts directory.
     Excludes runtime languages (LLM) as they cannot form valid development units.
+
+    Supports subdirectory basenames like 'core/cloud':
+    - For basename 'core/cloud', searches in prompts/core/ for cloud_*.prompt files
+    - The stem comparison only uses the filename part ('cloud'), not the path ('core/cloud')
     """
     development_languages = []
     if not prompts_dir.is_dir():
         return []
 
+    # For subdirectory basenames, extract just the name part for stem comparison
+    if '/' in basename:
+        name_part = basename.rsplit('/', 1)[1]  # 'cloud' from 'core/cloud'
+    else:
+        name_part = basename
+
     pattern = f"{basename}_*.prompt"
     for prompt_file in prompts_dir.glob(pattern):
-        # stem is 'basename_language'
+        # stem is the filename without extension (e.g., 'cloud_python')
         stem = prompt_file.stem
-        # Ensure the file starts with the exact basename followed by an underscore
-        if stem.startswith(f"{basename}_"):
-            potential_language = stem[len(basename) + 1 :]
+        # Ensure the file starts with the exact name part followed by an underscore
+        if stem.startswith(f"{name_part}_"):
+            potential_language = stem[len(name_part) + 1 :]
             try:
                 if _is_known_language(potential_language):
                     # Exclude runtime languages (LLM) as they cannot form valid development units

@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.91-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.92-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.91
+Current version: 0.0.92
 
 To check your installed version, run:
 ```
@@ -466,7 +466,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 
 These options can be used with any command:
 
-- `--force`: Overwrite existing files without asking for confirmation (commonly used with `sync`).
+- `--force`: Skip all interactive prompts (file overwrites, API key requests). Useful for CI/automation.
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
   - 0.0: Cheapest available model
   - 0.5: Default base model

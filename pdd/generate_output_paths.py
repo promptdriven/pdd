@@ -156,17 +156,38 @@ CONTEXT_CONFIG_MAP: Dict[str, Dict[str, str]] = {
 # --- Helper Function ---
 
 def _get_default_filename(command: str, output_key: str, basename: str, language: str, file_extension: str) -> str:
-    """Generates the default filename based on the command and output key."""
+    """Generates the default filename based on the command and output key.
+
+    Supports subdirectory basenames like 'core/cloud'. When the basename contains
+    a forward slash, the directory structure is preserved in the output:
+    - Directory part (e.g., 'core/') is prepended to the final filename
+    - Pattern is applied only to the name part (e.g., 'cloud')
+
+    Example: basename='core/cloud', pattern='test_{basename}{ext}'
+    Result: 'core/test_cloud.py' (NOT 'test_core/cloud.py')
+    """
     try:
+        # Split basename into directory and name components for subdirectory support
+        if '/' in basename:
+            dir_part, name_part = basename.rsplit('/', 1)
+            dir_prefix = dir_part + '/'
+        else:
+            dir_prefix = ''
+            name_part = basename
+
         pattern = DEFAULT_FILENAMES[command][output_key]
+
         # Use specific extension if in pattern, otherwise use language extension
         if '{ext}' in pattern:
-             # Ensure file_extension starts with '.' if not empty
+            # Ensure file_extension starts with '.' if not empty
             effective_extension = file_extension if file_extension.startswith('.') or not file_extension else '.' + file_extension
-            return pattern.format(basename=basename, language=language, ext=effective_extension)
+            filename = pattern.format(basename=name_part, language=language, ext=effective_extension)
         else:
             # Pattern already contains the full extension (e.g., .prompt, .log, .csv)
-             return pattern.format(basename=basename, language=language) # ext might not be needed
+            filename = pattern.format(basename=name_part, language=language)
+
+        # Prepend directory part to preserve subdirectory structure
+        return dir_prefix + filename
     except KeyError:
         logger.error(f"Default filename pattern not found for command '{command}', output key '{output_key}'.")
         # Fallback or raise error - returning a basic fallback for now

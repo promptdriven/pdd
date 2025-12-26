@@ -439,43 +439,35 @@ def test_llm_invoke_auth_error_new_key_retry(mock_load_models, mock_set_llm_cach
     input_json = {"test": "data"}
     mock_input = MagicMock()
     mock_input.side_effect = ["bad_key_initially", "good_key_later"]
-    def mock_setenv(key, value):
-        os.environ[key] = value
-    def mock_delenv(key):
-        if key in os.environ:
-            del os.environ[key]
     mock_completion = MagicMock()
     mock_request = MagicMock(spec=httpx.Request)
     mock_request.url = "http://fakeurl.com/api"
     mock_response_obj = MagicMock(spec=httpx.Response)
     mock_response_obj.request = mock_request
-    mock_response_obj.status_code = 401 
+    mock_response_obj.status_code = 401
     mock_headers = MagicMock()
-    mock_headers.get.return_value = None 
+    mock_headers.get.return_value = None
     mock_response_obj.headers = mock_headers
     auth_error = openai.AuthenticationError(message="Invalid API Key", response=mock_response_obj, body=None)
     mock_successful_response = create_mock_litellm_response("Success after retry", model_name='gpt-5-nano')
     mock_completion.side_effect = [auth_error, mock_successful_response]
 
-    with patch('builtins.open', mock_open()), \
+    # Use patch.dict to properly isolate the environment, removing all API keys
+    # This ensures no API keys are present, forcing the code to prompt for them
+    env_without_api_keys = {k: v for k, v in os.environ.items()
+                           if not k.endswith('_API_KEY') and k != 'PDD_FORCE'}
+
+    with patch.dict(os.environ, env_without_api_keys, clear=True), \
+         patch('builtins.open', mock_open()), \
          patch('builtins.input', mock_input), \
-         patch('os.environ.__setitem__', mock_setenv), \
-         patch('os.environ.__delitem__', mock_delenv), \
          patch('pdd.llm_invoke.litellm.completion', mock_completion), \
          patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
-        original_env_value = os.environ.pop(model_key_name, None)
-        try:
-            response = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5, verbose=True) 
-            assert response['result'] == "Success after retry"
-            assert response['model_name'] == 'gpt-5-nano'
-            assert mock_input.call_count == 2
-            assert mock_completion.call_count == 2
-            assert os.environ.get(model_key_name) == "good_key_later"
-        finally:
-            if original_env_value is not None:
-                os.environ[model_key_name] = original_env_value
-            elif model_key_name in os.environ:
-                 del os.environ[model_key_name]
+        response = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5, verbose=True)
+        assert response['result'] == "Success after retry"
+        assert response['model_name'] == 'gpt-5-nano'
+        assert mock_input.call_count == 2
+        assert mock_completion.call_count == 2
+        assert os.environ.get(model_key_name) == "good_key_later"
 
 
 def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, caplog): # Changed capsys to caplog
@@ -1191,6 +1183,30 @@ class TestApiKeyInputHang:
 
                 # Should return True and NOT call input()
                 assert result is True
+                mock_input.assert_not_called()
+
+    def test_ensure_api_key_skips_input_when_pdd_force_set(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that _ensure_api_key returns False without prompting when PDD_FORCE is set.
+        This is the fix for CI environments where --force should skip all interactive prompts.
+        """
+        from pdd.llm_invoke import _ensure_api_key
+
+        model_info = {
+            'model': 'test-model',
+            'api_key': 'MISSING_API_KEY'
+        }
+        newly_acquired_keys = {}
+
+        # Set PDD_FORCE and ensure the API key doesn't exist
+        with patch.dict(os.environ, {'PDD_FORCE': '1'}, clear=False):
+            os.environ.pop('MISSING_API_KEY', None)
+
+            with patch('builtins.input') as mock_input:
+                result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+
+                # Should return False (skip this model) without calling input()
+                assert result is False
                 mock_input.assert_not_called()
 
     def test_llm_invoke_skips_model_on_missing_api_key(self, mock_load_models, mock_set_llm_cache):
