@@ -130,10 +130,41 @@ _MULTI_FILE_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
+
+def _is_suspicious_path(path: str) -> bool:
+    """
+    Reject paths that look like LLM artifacts or template variables.
+
+    This defends against:
+    - Single/double character filenames (e.g., 'C', 'E', 'T' from agent misbehavior)
+    - Template variables like {path}, {code_abs} captured by regex
+    - Other LLM-generated garbage patterns
+
+    Returns True if the path should be rejected.
+    """
+    if not path:
+        return True
+    # Get the basename for validation
+    base_name = Path(path).name
+    # Reject single or double character filenames (too short to be legitimate)
+    if len(base_name) <= 2:
+        return True
+    # Reject template variable patterns like {path}, {code_abs}
+    if '{' in base_name or '}' in base_name:
+        return True
+    # Reject paths that are just dots like "..", "..."
+    if base_name.strip('.') == '':
+        return True
+    return False
+
+
 def _extract_files_from_output(*blobs: str) -> Dict[str, str]:
     """
     Parse stdout/stderr blobs and collect all emitted file blocks into {path: content}.
     Returns an empty dict if none found.
+
+    Note: Suspicious paths (single-char, template variables) are rejected to prevent
+    LLM artifacts from being written to disk.
     """
     out: Dict[str, str] = {}
     for blob in blobs:
@@ -143,6 +174,9 @@ def _extract_files_from_output(*blobs: str) -> Dict[str, str]:
             path = (m.group(1) or "").strip()
             body = m.group(2) or ""
             if path and body != "":
+                if _is_suspicious_path(path):
+                    _info(f"[yellow]Skipping suspicious path from LLM output: {path!r}[/yellow]")
+                    continue
                 out[path] = body
     return out
 
@@ -549,10 +583,16 @@ def _normalize_target_path(
 ) -> Optional[Path]:
     """
     Resolve an emitted path to a safe file path we should write:
+    - reject suspicious paths (single-char, template variables)
     - make path absolute under project root
     - allow direct match, primary-file match (with/without _fixed), or basename search
     - create new files only if allow_new is True
     """
+    # Early rejection of suspicious paths (defense against LLM artifacts)
+    if _is_suspicious_path(emitted_path):
+        _info(f"[yellow]Skipping suspicious path: {emitted_path!r}[/yellow]")
+        return None
+
     p = Path(emitted_path)
     if not p.is_absolute():
         p = (project_root / emitted_path).resolve()
