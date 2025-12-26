@@ -39,6 +39,13 @@ def _parse_llm_bool(value: str) -> bool:
     else:
         return llm_str in {"1", "true", "yes", "on"}
 
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an env var is set to a truthy value."""
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
     """Runs a git command and returns (return_code, stdout, stderr)."""
@@ -755,7 +762,8 @@ def code_generator_main(
             if verbose:
                 console.print(Panel("Performing full code generation...", title="[blue]Mode[/blue]", expand=False))
             
-            current_execution_is_local = is_local_execution_preferred
+            cloud_only = _env_flag_enabled("PDD_CLOUD_ONLY") or _env_flag_enabled("PDD_NO_LOCAL_FALLBACK")
+            current_execution_is_local = is_local_execution_preferred and not cloud_only
             
             if not current_execution_is_local:
                 if verbose: console.print("Attempting cloud code generation...")
@@ -769,6 +777,9 @@ def code_generator_main(
                 jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
 
                 if not jwt_token:
+                    if cloud_only:
+                        console.print("[red]Cloud authentication failed.[/red]")
+                        raise click.UsageError("Cloud authentication failed")
                     console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
                     current_execution_is_local = True
 
@@ -786,11 +797,17 @@ def code_generator_main(
                         model_name = response_data.get("modelName", "cloud_model")
 
                         if not generated_code_content:
+                            if cloud_only:
+                                console.print("[red]Cloud execution returned no code.[/red]")
+                                raise click.UsageError("Cloud execution returned no code")
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
                              console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
                     except requests.exceptions.Timeout:
+                        if cloud_only:
+                            console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                            raise click.UsageError("Cloud execution timed out")
                         console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
@@ -818,12 +835,21 @@ def code_generator_main(
                             raise click.UsageError(f"Invalid request: {err_content}")
                         else:
                             # Recoverable errors (5xx, unexpected errors): fall back to local
+                            if cloud_only:
+                                console.print(f"[red]Cloud HTTP error ({status_code}): {err_content}[/red]")
+                                raise click.UsageError(f"Cloud HTTP error ({status_code}): {err_content}")
                             console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                     except requests.exceptions.RequestException as e:
+                        if cloud_only:
+                            console.print(f"[red]Cloud network error: {e}[/red]")
+                            raise click.UsageError(f"Cloud network error: {e}")
                         console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except json.JSONDecodeError:
+                        if cloud_only:
+                            console.print("[red]Cloud returned invalid JSON.[/red]")
+                            raise click.UsageError("Cloud returned invalid JSON")
                         console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
                         current_execution_is_local = True
             
