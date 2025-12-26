@@ -230,7 +230,8 @@ if PROJECT_ROOT is None: # Fallback to CWD if no method succeeded
     warnings.warn(f"Could not determine project root automatically. Using current working directory: {PROJECT_ROOT}. Ensure this is the intended root or set the PDD_PATH environment variable.")
 
 
-ENV_PATH = PROJECT_ROOT / ".env"
+# ENV_PATH is set after _is_env_path_package_dir is defined (see below)
+
 # --- Determine LLM_MODEL_CSV_PATH ---
 # Prioritize ~/.pdd/llm_model.csv, then a project .pdd from the current CWD,
 # then PROJECT_ROOT (which may be set from PDD_PATH), else fall back to package.
@@ -289,6 +290,14 @@ def _is_env_path_package_dir(env_path: Path) -> bool:
         return env_path == pkg_path or str(env_path).startswith(str(pkg_path))
     except Exception:
         return False
+
+# ENV_PATH: Use CWD-based project root when PDD_PATH points to package directory
+# This ensures .env is written to the user's project, not the installed package location
+if _is_env_path_package_dir(PROJECT_ROOT):
+    ENV_PATH = project_root_from_cwd / ".env"
+    logger.debug(f"PDD_PATH points to package; using ENV_PATH from CWD: {ENV_PATH}")
+else:
+    ENV_PATH = PROJECT_ROOT / ".env"
 
 # Selection order
 if user_model_csv_path.is_file():
@@ -805,6 +814,45 @@ def _sanitize_api_key(key_value: str) -> str:
     return sanitized
 
 
+def _save_key_to_env_file(key_name: str, value: str, env_path: Path) -> None:
+    """Save or update a key in the .env file.
+
+    - Replaces existing key in-place (no comment + append)
+    - Removes old commented versions of the same key (Issue #183)
+    - Preserves all other content
+    """
+    lines = []
+    if env_path.exists():
+        with open(env_path, 'r') as f:
+            lines = f.readlines()
+
+    new_lines = []
+    key_replaced = False
+    prefix = f"{key_name}="
+    prefix_spaced = f"{key_name} ="
+
+    for line in lines:
+        stripped = line.strip()
+        # Skip old commented versions of this key (cleanup accumulation)
+        if stripped.startswith(f"# {prefix}") or stripped.startswith(f"# {prefix_spaced}"):
+            continue
+        elif stripped.startswith(prefix) or stripped.startswith(prefix_spaced):
+            # Replace in-place
+            new_lines.append(f'{key_name}="{value}"\n')
+            key_replaced = True
+        else:
+            new_lines.append(line)
+
+    # Add key if not found
+    if not key_replaced:
+        if new_lines and not new_lines[-1].endswith('\n'):
+            new_lines.append('\n')
+        new_lines.append(f'{key_name}="{value}"\n')
+
+    with open(env_path, 'w') as f:
+        f.writelines(new_lines)
+
+
 def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, bool], verbose: bool) -> bool:
     """Checks for API key in env, prompts user if missing, and updates .env."""
     key_name = model_info.get('api_key')
@@ -848,39 +896,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
             # Update .env file
             try:
-                lines = []
-                if ENV_PATH.exists():
-                    with open(ENV_PATH, 'r') as f:
-                        lines = f.readlines()
-
-                new_lines = []
-                # key_updated = False
-                prefix = f"{key_name}="
-                prefix_spaced = f"{key_name} =" # Handle potential spaces
-
-                for line in lines:
-                    stripped_line = line.strip()
-                    if stripped_line.startswith(prefix) or stripped_line.startswith(prefix_spaced):
-                        # Comment out the old key
-                        new_lines.append(f"# {line}")
-                        # key_updated = True # Indicates we found an old line to comment
-                    elif stripped_line.startswith(f"# {prefix}") or stripped_line.startswith(f"# {prefix_spaced}"):
-                         # Keep already commented lines as they are
-                         new_lines.append(line)
-                    else:
-                        new_lines.append(line)
-
-                # Append the new key, ensuring quotes for robustness
-                new_key_line = f'{key_name}="{user_provided_key}"\n'
-                # Add newline before if file not empty and doesn't end with newline
-                if new_lines and not new_lines[-1].endswith('\n'):
-                     new_lines.append('\n')
-                new_lines.append(new_key_line)
-
-
-                with open(ENV_PATH, 'w') as f:
-                    f.writelines(new_lines)
-
+                _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
                 logger.info(f"API key '{key_name}' saved to {ENV_PATH}.")
                 logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
                        "Ensure this file is kept secure and is included in your .gitignore.")
