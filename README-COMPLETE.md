@@ -10,7 +10,6 @@ Unique to this approach, **each PDD prompt is a mini-spec of a single output fil
 
 By contrast, prompts in typical AI coding tools are instead incremental patch requests, and these tools will unpredictably update any combination of files in response to a  prompt.   PDD is an excellent complement to such tools - for long-lived codebases and tasks that are repeatedly rebuilt as they evolve, use PDD; for more incremental, one-off, or ephemeral tasks, use agentic coders, such as Claude, Codex, etc.
 
-
 <p align="center">
   <img src="docs/videos/handpaint_demo.gif" alt="PDD Handpaint Demo" />
 </p>
@@ -49,7 +48,7 @@ From here your pdd installation is complete.   For the most convenience, set up 
 ## Configure your API keys & shell
 
 ```bash
-# Creates api-env and llm_model.csv config files in ~/.pdd, updates shell init.
+# Creates api-env and llm_model.csv config files in ~/.pdd, add tab completions, and updates shell init.
 # It also writes a starter prompt (success_python.prompt) for you to try.   
 
 # Re-run this any time to update keys or reinstall completions.   
@@ -65,6 +64,8 @@ pdd setup
 
 (If you skip this step, PDD commands will print a reminder banner so you can finish onboarding later.)
 
+Optional: at this poing you can [begin customizing PDD behavior](README-ADVANCED-CONFIGURATION.md#minimum-configuration)
+
 <br><br>
 ## Then try it out:
 ```bash
@@ -76,7 +77,7 @@ pdd generate success_python.prompt
 
 ## Next steps:
 
-* Review [PDD Basic Concepts](README-CONCEPTS.md) to understand the concepts behind the prompt-driven approach.
+* Review [PDD Fundamental Concepts and Practices](README-CONCEPTS.md) to get oriented to the PDD approach.
 
 * Start incorporating individual [Prompt-Driven Workflows](README-WORKFLOWS.md) into your development cycle.
 
@@ -496,7 +497,7 @@ The primary command is **`sync`**, which automatically executes the complete PDD
 ## PDD Version
 This document covers the latest version of PDD. 
 
-- The current version: 0.0.88
+- The current version: 0.0.91
 
 To check your installed version, run:
 ```
@@ -563,7 +564,6 @@ These options can be used with any command:
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
 - `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
-- `report-core`: Report a bug by creating a GitHub issue with the core dump file.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
 
@@ -1805,6 +1805,28 @@ pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv s
 
 Update prompts based on code changes. This command operates in two primary modes:
 
+**Agentic Prompt Optimization (Default)**
+
+The `update` command uses an agentic AI (Claude Code, Gemini, or Codex) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+
+1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
+2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
+3. **Remove Duplication**: Eliminates redundant content that duplicates included files
+4. **Validate**: Ensures the prompt is human-readable and can reliably regenerate the code
+
+This produces prompts that are more concise while remaining clear to developers and reliable for code generation.
+
+**Prerequisites**: Requires one of these CLI tools installed and configured:
+- `claude` (Anthropic Claude Code)
+- `gemini` (Google Gemini CLI)
+- `codex` (OpenAI Codex CLI)
+
+If no agentic CLI is available, the command automatically falls back to the legacy 2-stage LLM update process.
+
+**Test-Aware Updates**: When tests exist for a module (e.g., `test_my_module.py`, `test_my_module_1.py`), the agentic update automatically discovers and considers them. Behaviors verified by tests don't need to be explicitly specified in the prompt, resulting in more compact prompts.
+
+**Modes:**
+
 1.  **Repository-Wide Mode (Default)**: When run with no file arguments, `pdd update` scans the entire repository. It finds all code/prompt pairs, creates any missing prompt files, and updates all of them based on the latest Git changes. This is the easiest way to keep your entire project in sync.
 
 2.  **Single-File Mode**: When you provide file arguments, the command operates on a specific file. There are three distinct use cases for this mode:
@@ -1856,6 +1878,7 @@ Options:
 - `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
+- `--simple`: Use the legacy 2-stage LLM update process instead of the default agentic mode. Useful when agentic CLIs are not available or for faster updates.
 
 Example (overwrite original prompt - default behavior):
 ```
@@ -1863,6 +1886,14 @@ pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_fact
 # This overwrites factorial_calculator_python.prompt in place
 ```
 
+Example (agentic vs simple mode):
+```bash
+# Default: Agentic mode (uses claude/gemini/codex for intelligent optimization)
+pdd update --git my_module_python.prompt src/my_module.py
+
+# Legacy: Simple 2-stage LLM update (faster, no agentic CLI required)
+pdd update --simple --git my_module_python.prompt src/my_module.py
+```
 
 <br>
 
@@ -2188,9 +2219,34 @@ python pdd/update_model_costs.py [--csv-path path/to/your/project/llm_model.csv]
 
 ## Configuration
 
-PDD supports multiple configuration methods to customize its behavior for different project structures and contexts.
+Beyond installing PDD and setting up your model provider keys, PDD supports multiple configuration  methods to customize its behavior for individual projects and personalized software engineering workflows.
 
-### Configuration Priority
+- [A Bare Minimum Configuration](#minimum-configuration)
+- [Configuration Value Precedence](#configuration-value-precedence)
+- [`.pddrc` Project Configuration File](#project-configuration-file-pddrc)
+- [Environment Variables](#environment-variables)
+- [Model Configuration with `llm_model.csv`](#model-configuration)
+- [Virtual Environment Installation](#virtual-environment-installation)
+
+<a name="minimum-configuration"></a>
+### A Bare Minimum Configuration
+
+A very basic configuration setup which tells PDD where to put code, examples, and tests:
+
+```bash
+# Add to .bashrc, .zshrc, or equivalent
+export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
+export PDD_EXAMPLE_OUTPUT_PATH=/path/to/examples/
+export PDD_TEST_OUTPUT_PATH=/path/to/tests/
+export PDD_AUTO_UPDATE=true
+```
+
+It also tells PDD to automatically install PDD-CLI updates (PDD_AUTO_UPDATE=true).
+
+Beyond these, PDD offers a variety of variables to control behavior, as below.
+
+<a name="configuration-value-precedence"></a>
+### Configuration Value Precedence
 
 PDD resolves configuration settings in the following order (highest to lowest priority):
 
@@ -2361,7 +2417,7 @@ contexts:
 
 The `.pddrc` approach is recommended for team projects as it ensures consistent configuration across all team members and can be version controlled.
 
-
+<a name="model-configuration"></a>
 ## Model Configuration (`llm_model.csv`)
 
 PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. When running commands locally (e.g., using the `update_model_costs.py` utility or potentially local execution modes if implemented), PDD determines which configuration file to use based on the following priority:
@@ -2370,7 +2426,7 @@ PDD uses a CSV file (`llm_model.csv`) to store information about available AI mo
 2.  **Project-specific:** `<PROJECT_ROOT>/.pdd/llm_model.csv` - If the user-specific file is not found, PDD looks for the file within the `.pdd` directory of the determined project root (based on `PDD_PATH` or auto-detection).
 3.  **Package default:** If neither of the above exist, PDD falls back to the default configuration bundled with the package installation.
 
-This tiered approach allows for both shared project configurations and individual user overrides, while ensuring PDD works out-of-the-box without requiring manual configuration.
+This tiered approach allows for both shared project configurations and individual user overrides, while ensuring PDD works out-of-the-box without requiring manual configuration.  
 
 
 The CSV includes columns for:
@@ -2389,11 +2445,7 @@ For proper model identifiers to use in your custom configuration, refer to the [
 (*Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*)
 
 ---
-
-
-
-## Advanced Installation Options
-
+<a name="virtual-environment-installation"></a>
 ### Virtual Environment Installation
 ```bash
 # Create virtual environment
@@ -2419,7 +2471,7 @@ pip install pdd-cli
 <a name="what-is-pdd-cloud"></a>
 ## What is PDD Cloud?
 
-PDD Cloud maximizes ease-of-use and reliability of code generation using its proprietary **PDD Context Memory** technology.   
+PDD Cloud maximizes ease-of-use and reliability of code generation using its proprietary [Autmoted Grounding](#automated-grounding)
 
 Currently in invite-only Beta testing, PDD Cloud is not enabled for most users.  Your PDD Commands will default to local-only execution.
 
@@ -2429,7 +2481,7 @@ Currently in invite-only Beta testing, PDD Cloud is not enabled for most users. 
 
 #### 1. **The best available code generation**
 - correctness, reproducibility, and reliability are all built-in
-- built-in **PDD Context Memory** - your code improves the more you use PDD
+- built-in [Automated Grounding](#automated-grounding) - your code improves the more you use PDD
 
 
 #### 2. **Hands-free setup and operation**
@@ -2456,15 +2508,16 @@ PDD Cloud includes Automated Grounding, which dramatically improves code output 
 
 PDD Cloud maintains the history of your prompts and output code.  This history of an output file captures everything you have ever specified about that code file.  Automatic Grounding selects the best portions of that history to inject into prompts during `pdd generate`.   The result is stable outputs over time.
 
-Without Automatic Grounding, you may experience issues such as these:
-    - function signatures change when you re-generate
-    - features decompose into different functions and objects each time you generate
-    - etc.
+Without Automated Grounding, you may experience issues such as these:
+- function signatures change when you re-generate
+- features decompose into different functions and objects each time you generate
+- etc.
+
 As a result, you will spend more time iterating on prompt details in order to control the LLM generation, along with time spent re-generating and re-testing.
 
-But with PDD Cloud, Automatic Generation remembers the most relevant and salient characteristics described in the prompt/code history, and selects the best ones to guide the LLM in creating correct and stable outputs, as described.
+But with PDD Cloud, Automated Grounding remembers the most relevant and salient characteristics described in the prompt/code history, and selects the best ones to guide the LLM in creating correct and stable outputs, as described.
 
-For a more detailed treatment, see [Automated Grounding](docs/prompting_guide.md#automated-grounding)
+For a more detailed treatment, see [Automated Grounding](docs/prompting_guide.md#automated-grounding) in the prompting guide.
 
 
 ---
@@ -2532,6 +2585,8 @@ PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with la
 - Response caching for improved performance
 - Smart token usage tracking and cost estimation
 - Interactive API key acquisition when keys are missing
+
+For detailed information about configuring the models available for PDD use, see [Model Configuration](README-ADVANCED-CONFIGURATION.md#model-configuration) in the Advanced Configuration README.
 
 ### Important Note: 
 When keys are missing from the shell environment, PDD commands will prompt for them interactively and securely store them in your local `.env` file.  
