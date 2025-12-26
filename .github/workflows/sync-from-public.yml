@@ -70,6 +70,7 @@ jobs:
             'README.md'
             'requirements.txt'
             'pyproject.toml'
+            'docs/*.md'
           )
 
           # Add prompts for pdd_cap
