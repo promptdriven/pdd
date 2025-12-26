@@ -633,7 +633,13 @@ def construct_paths(
 
     # ------------- Step 2: basename --------------------------
     try:
-        basename = _extract_basename(command, input_paths)
+        # For sync, example, and test commands, prefer the basename from command_options if provided.
+        # This preserves subdirectory paths like 'core/cloud' which would otherwise
+        # be lost when extracting from the prompt file path.
+        if command in ("sync", "example", "test") and command_options.get("basename"):
+            basename = command_options["basename"]
+        else:
+            basename = _extract_basename(command, input_paths)
     except ValueError as exc:
          # Check if it's the specific error from the initial check (now done at start)
          # This try/except might not be needed if initial check is robust

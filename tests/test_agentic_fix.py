@@ -21,7 +21,7 @@ def _df():
 
 def _prep_files(tmp_path: Path):
     prompt = tmp_path / "prompt.txt"
-    code   = tmp_path / "code.py"
+    code   = tmp_path / "buggy.py"
     testf  = tmp_path / "test_file.py"
     err    = tmp_path / "error.log"
     prompt.write_text("prompt", encoding="utf-8")
@@ -58,7 +58,9 @@ def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
     # Short-circuit harvest path to succeed — NOTE: uses leading underscore (private function)
     monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
 
-    ok, msg, cost, model, changed_files = run_agentic_fix(p_prompt, p_code, p_test, p_err)
+    ok, msg, cost, model, changed_files = run_agentic_fix(
+        p_prompt, p_code, p_test, p_err, cwd=tmp_path
+    )
     assert ok is True
     assert isinstance(changed_files, list)
     assert "successful" in msg.lower()
@@ -85,6 +87,7 @@ def test_run_agentic_fix_handles_no_keys(monkeypatch, tmp_path):
         code_file=str(p_code),
         unit_test_file=str(p_test),
         error_log_file=str(p_err),
+        cwd=tmp_path,
     )
     assert isinstance(changed_files, list)
     assert ok is False
@@ -104,7 +107,7 @@ def _has_cli(cmd: str) -> bool:
 
 def _mk_files(tmp_path: Path):
     p_prompt = tmp_path / "prompt.txt"
-    p_code   = tmp_path / "code.py"
+    p_code   = tmp_path / "buggy.py"
     p_test   = tmp_path / "test_dummy.py"
     p_err    = tmp_path / "error.log"
     p_prompt.write_text("Generate a simple function.", encoding="utf-8")
@@ -157,6 +160,7 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
         code_file=str(p_code),
         unit_test_file=str(p_test),
         error_log_file=str(p_err),
+        cwd=tmp_path,
     )
     assert isinstance(changed_files, list)
 
