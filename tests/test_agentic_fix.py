@@ -6,7 +6,12 @@ from unittest.mock import patch, MagicMock
 import pandas as pd
 import pytest
 
-from pdd.agentic_fix import run_agentic_fix, _verify_and_log
+from pdd.agentic_fix import (
+    run_agentic_fix,
+    _verify_and_log,
+    _is_suspicious_path,
+    _extract_files_from_output,
+)
 
 
 def _df():
@@ -579,3 +584,107 @@ class TestCwdHandling:
                 f"Code path should reference {module_dir}, got: {content[:200]}"
             assert str(other_dir / "src" / "hello.py") not in content, \
                 "Code path should NOT reference the process cwd (other_dir)"
+
+
+class TestSuspiciousPathDetection:
+    """Tests for the _is_suspicious_path() function and its integration.
+
+    This tests the defense against LLM artifacts like:
+    - Single-character filenames (C, E, T from agent misbehavior)
+    - Template variables ({path}, {code_abs}) captured by regex
+    """
+
+    def test_single_char_paths_are_suspicious(self):
+        """Single character filenames should be rejected."""
+        assert _is_suspicious_path("C") is True
+        assert _is_suspicious_path("E") is True
+        assert _is_suspicious_path("T") is True
+        assert _is_suspicious_path("X") is True
+        assert _is_suspicious_path("/tmp/C") is True
+        assert _is_suspicious_path("./E") is True
+
+    def test_double_char_paths_are_suspicious(self):
+        """Double character filenames should also be rejected."""
+        assert _is_suspicious_path("ab") is True
+        assert _is_suspicious_path("/foo/xy") is True
+
+    def test_template_variables_are_suspicious(self):
+        """Template variable patterns like {path} should be rejected."""
+        assert _is_suspicious_path("{path}") is True
+        assert _is_suspicious_path("{code_abs}") is True
+        assert _is_suspicious_path("{test_abs}") is True
+        assert _is_suspicious_path("/some/dir/{path}") is True
+        assert _is_suspicious_path("file_{name}.py") is True
+
+    def test_dot_only_paths_are_suspicious(self):
+        """Paths that are just dots should be rejected."""
+        assert _is_suspicious_path("..") is True
+        assert _is_suspicious_path("...") is True
+
+    def test_empty_path_is_suspicious(self):
+        """Empty paths should be rejected."""
+        assert _is_suspicious_path("") is True
+        assert _is_suspicious_path(None) is True  # type: ignore
+
+    def test_legitimate_paths_are_not_suspicious(self):
+        """Normal file paths should NOT be rejected."""
+        assert _is_suspicious_path("hello.py") is False
+        assert _is_suspicious_path("src/main.py") is False
+        assert _is_suspicious_path("/Users/test/code.py") is False
+        assert _is_suspicious_path("test_module.py") is False
+        assert _is_suspicious_path("__init__.py") is False
+        assert _is_suspicious_path(".gitignore") is False
+        assert _is_suspicious_path("Makefile") is False
+
+    def test_three_char_paths_are_allowed(self):
+        """Three+ character filenames should be allowed."""
+        assert _is_suspicious_path("foo") is False
+        assert _is_suspicious_path("bar") is False
+        assert _is_suspicious_path("abc") is False
+
+
+class TestExtractFilesFromOutputWithSuspiciousPathRejection:
+    """Tests that _extract_files_from_output rejects suspicious paths."""
+
+    def test_rejects_single_char_paths(self):
+        """Should reject single-char paths from LLM output."""
+        blob = "<<<BEGIN_FILE:C>>>some content<<<END_FILE:C>>>"
+        result = _extract_files_from_output(blob)
+        assert "C" not in result
+        assert result == {}
+
+    def test_rejects_template_variable_paths(self):
+        """Should reject template variable paths like {path}."""
+        blob = "<<<BEGIN_FILE:{path}>>>some code<<<END_FILE:{path}>>>"
+        result = _extract_files_from_output(blob)
+        assert "{path}" not in result
+        assert result == {}
+
+    def test_rejects_code_abs_template(self):
+        """Should reject {code_abs} template variable."""
+        blob = "<<<BEGIN_FILE:{code_abs}>>>def hello(): pass<<<END_FILE:{code_abs}>>>"
+        result = _extract_files_from_output(blob)
+        assert "{code_abs}" not in result
+        assert result == {}
+
+    def test_allows_legitimate_paths(self):
+        """Should allow legitimate file paths."""
+        blob = "<<<BEGIN_FILE:hello.py>>>def hello(): print('hello')<<<END_FILE:hello.py>>>"
+        result = _extract_files_from_output(blob)
+        assert "hello.py" in result
+        assert "def hello():" in result["hello.py"]
+
+    def test_mixed_paths_filters_suspicious(self):
+        """Should filter suspicious paths while keeping legitimate ones."""
+        blob = """
+        <<<BEGIN_FILE:C>>>bad<<<END_FILE:C>>>
+        <<<BEGIN_FILE:hello.py>>>good content<<<END_FILE:hello.py>>>
+        <<<BEGIN_FILE:{path}>>>template garbage<<<END_FILE:{path}>>>
+        <<<BEGIN_FILE:test_file.py>>>test content<<<END_FILE:test_file.py>>>
+        """
+        result = _extract_files_from_output(blob)
+        assert "C" not in result
+        assert "{path}" not in result
+        assert "hello.py" in result
+        assert "test_file.py" in result
+        assert len(result) == 2
