@@ -113,7 +113,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             resolved_output = output
         else:
             resolved_output = output_file_paths.get("output")
-        is_local = ctx.params.get("local", False) if ctx.params else False
+        is_local = ctx.obj.get("local", False)
         strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
         verbose = ctx.obj.get('verbose', False)
