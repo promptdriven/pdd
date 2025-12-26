@@ -8,6 +8,7 @@
 %   - 'time' (float | None): Relative thinking time in [0.0–1.0], or None if not set.
 %   - 'force' (bool): Overwrite existing output files without prompting.
 %   - 'quiet' (bool): Suppress non-essential output.
+%   - 'local' (bool): Use local execution instead of cloud execution.
 %   - 'context' (str | None): Optional context directory override.
 %   - 'confirm_callback' (Callable | None): Optional TUI confirmation callback.
 %
