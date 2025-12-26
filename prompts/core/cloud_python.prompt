@@ -1,0 +1,38 @@
+% You are an expert Python engineer. Create a centralized cloud configuration module for PDD CLI commands.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  A configuration module that provides consistent cloud URL and JWT token handling
+  across all cloud-enabled PDD commands (generate, fix, test, sync, etc.).
+
+% Requirements
+  1) Class: `CloudConfig` with all static methods
+  2) `get_base_url()`: Return cloud base URL; allow override via `PDD_CLOUD_URL` env var
+     - Default: `https://us-central1-prompt-driven-development.cloudfunctions.net`
+     - Strip trailing slash from custom URLs
+  3) `get_endpoint_url(endpoint_name)`: Return full URL for named endpoint
+     - If `PDD_CLOUD_URL` already contains the endpoint name, return it as-is
+     - Otherwise, append path from `CLOUD_ENDPOINTS` dict or default to `/{endpoint_name}`
+  4) `get_jwt_token(verbose, app_name)`: Return JWT token or None
+     - First check `PDD_JWT_TOKEN` env var (for testing/CI)
+     - Fall back to device flow auth via `get_jwt_token` from `..get_jwt_token`
+     - Catch all auth exceptions and return None on failure
+  5) `is_cloud_enabled()`: Return True if both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set
+  6) Export module-level constants for env var names and cloud endpoints
+  7) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
+
+% Constants
+  - `FIREBASE_API_KEY_ENV = "NEXT_PUBLIC_FIREBASE_API_KEY"`
+  - `GITHUB_CLIENT_ID_ENV = "GITHUB_CLIENT_ID"`
+  - `PDD_CLOUD_URL_ENV = "PDD_CLOUD_URL"`
+  - `PDD_JWT_TOKEN_ENV = "PDD_JWT_TOKEN"`
+  - `CLOUD_ENDPOINTS` dict with keys: generateCode, syncState, trackUsage, getCreditBalance
+
+% Dependencies
+  - Import auth functions and exceptions from `..get_jwt_token`
+  - Use `asyncio.run()` for the async device flow
+  - Use `rich.console.Console` for status messages
+
+<pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
+<pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>

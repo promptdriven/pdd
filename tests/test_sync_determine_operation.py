@@ -2246,6 +2246,42 @@ def test_get_pdd_file_paths_respects_pddrc_with_PDD_PATH(pdd_test_environment, m
     assert paths["test"].as_posix().endswith("tests/test_simple_math.py")
 
 
+def test_get_pdd_file_paths_with_subdirectory_basename(pdd_test_environment, monkeypatch):
+    """Should preserve subdirectory structure in output paths.
+
+    For basename='core/cloud', paths should be:
+    - code: pdd/core/cloud.py (NOT pdd/cloud.py)
+    - test: tests/core/test_cloud.py (NOT tests/test_cloud.py)
+    - example: examples/core/cloud_example.py (NOT examples/cloud_example.py)
+
+    This test validates the fix for the bug where subdirectory prefixes were
+    being dropped from output paths.
+    """
+    _write_pddrc_here()
+
+    # Create prompt file in subdirectory
+    prompts_core_dir = Path("prompts") / "core"
+    prompts_core_dir.mkdir(parents=True, exist_ok=True)
+    (prompts_core_dir / "cloud_python.prompt").write_text("Write a cloud module")
+
+    repo_root = Path(__file__).parent.parent
+    monkeypatch.setenv("PDD_PATH", str(repo_root))
+
+    paths = get_pdd_file_paths(basename="core/cloud", language="python", prompts_dir="prompts")
+
+    # Verify subdirectory is preserved in all paths
+    code_path = paths["code"].as_posix()
+    test_path = paths["test"].as_posix()
+    example_path = paths["example"].as_posix()
+
+    assert "core/cloud.py" in code_path, \
+        f"Expected 'core/cloud.py' in code path, got {code_path}"
+    assert "core/test_cloud.py" in test_path, \
+        f"Expected 'core/test_cloud.py' in test path, got {test_path}"
+    assert "core/cloud_example.py" in example_path, \
+        f"Expected 'core/cloud_example.py' in example path, got {example_path}"
+
+
 # --- Regression Tests: All Files Exist But Workflow Incomplete ---
 
 class TestAllFilesExistWorkflowIncomplete:
