@@ -55,9 +55,18 @@ META_DIR = get_meta_dir()
 LOCKS_DIR = get_locks_dir()
 
 # Export constants for other modules
-__all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision', 
+__all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision',
            'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
            '_check_example_success_history']
+
+
+def _safe_basename(basename: str) -> str:
+    """Sanitize basename for use in metadata filenames.
+
+    Replaces '/' with '_' to prevent path interpretation when the basename
+    contains subdirectory components (e.g., 'core/cloud' -> 'core_cloud').
+    """
+    return basename.replace('/', '_')
 
 
 @dataclass
@@ -102,7 +111,7 @@ class SyncLock:
     def __init__(self, basename: str, language: str):
         self.basename = basename
         self.language = language
-        self.lock_file = get_locks_dir() / f"{basename}_{language}.lock"
+        self.lock_file = get_locks_dir() / f"{_safe_basename(basename)}_{language}.lock"
         self.fd = None
         self.current_pid = os.getpid()
     
@@ -483,7 +492,7 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
     """Reads and validates the JSON fingerprint file."""
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
-    fingerprint_file = meta_dir / f"{basename}_{language}.json"
+    fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language}.json"
     
     if not fingerprint_file.exists():
         return None
@@ -510,7 +519,7 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
     """Reads and validates the JSON run report file."""
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
-    run_report_file = meta_dir / f"{basename}_{language}_run.json"
+    run_report_file = meta_dir / f"{_safe_basename(basename)}_{language}_run.json"
     
     if not run_report_file.exists():
         return None
@@ -888,7 +897,7 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     
     # Strategy 2b: Look for historical run reports with exit_code == 0
     # Check all run report files in the meta directory that match the pattern
-    run_report_pattern = f"{basename}_{language}_run"
+    run_report_pattern = f"{_safe_basename(basename)}_{language}_run"
     for file in meta_dir.glob(f"{run_report_pattern}*.json"):
         try:
             with open(file, 'r') as f:
