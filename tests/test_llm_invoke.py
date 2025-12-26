@@ -1674,3 +1674,39 @@ class TestEnvPathLocation:
 
         result = _detect_project_root_from_cwd()
         assert result == project
+
+
+# --- Tests for Language-Aware Python Validation (Issue: JavaScript false positives) ---
+
+def test_javascript_code_does_not_trigger_python_validation(mock_load_models, mock_set_llm_cache, caplog):
+    """Test that JavaScript code with 'return' does not trigger Python syntax validation.
+
+    JavaScript code containing 'return ' matches _looks_like_python_code() pattern,
+    causing ast.parse() to fail and log "Invalid Python syntax" warnings.
+    When language="javascript" is passed, validation should be skipped.
+    """
+    import logging
+    caplog.set_level(logging.WARNING)
+
+    model_key_name = "OPENAI_API_KEY"
+
+    # Valid JavaScript that contains 'return' (matches _looks_like_python_code pattern)
+    js_code = 'function isPalindrome(str) { return str === str.split("").reverse().join(""); }'
+
+    response_json = json.dumps({"explanation": "JavaScript function", "code": js_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response(response_json, model_name='gpt-5-nano')
+            mock_completion.return_value = mock_response
+
+            result = llm_invoke(
+                prompt="Write JavaScript",
+                input_json={},
+                output_pydantic=CodeOutputModel,
+                language="javascript",  # NEW PARAMETER - skip Python validation
+            )
+
+    # Should NOT log Python syntax warning for JavaScript
+    assert "invalid python syntax" not in caplog.text.lower(), \
+        f"JavaScript should not trigger Python validation. Logs: {caplog.text}"

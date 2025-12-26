@@ -1324,6 +1324,7 @@ def llm_invoke(
     time: float = 0.25,
     use_batch_mode: bool = False,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
+    language: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -2301,7 +2302,8 @@ def llm_invoke(
 
                             # Check if code fields still have invalid Python syntax after repair
                             # If so, retry without cache to get a fresh response
-                            if _has_invalid_python_code(parsed_result):
+                            # Skip validation for non-Python languages to avoid false positives
+                            if language in (None, "python") and _has_invalid_python_code(parsed_result):
                                 logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
                                 if not use_batch_mode and prompt and input_json is not None:
                                     # Add a small variation to bypass cache
