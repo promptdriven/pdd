@@ -38,6 +38,7 @@ from .sync_determine_operation import (
     read_run_report,
     calculate_sha256,
     calculate_current_hashes,
+    _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -54,17 +55,7 @@ from . import DEFAULT_STRENGTH
 
 
 # --- Helper Functions ---
-
-def _safe_basename(basename: str) -> str:
-    """Sanitize basename for use in metadata filenames.
-
-    Replaces '/' with '_' to prevent path interpretation when the basename
-    contains subdirectory components (e.g., 'core/cloud' -> 'core_cloud').
-
-    This ensures metadata files like 'core_cloud_python_sync.log' remain flat
-    in the .pdd/meta/ directory rather than creating nested directories.
-    """
-    return basename.replace('/', '_')
+# Note: _safe_basename is imported from sync_determine_operation
 
 
 # --- Atomic State Update (Issue #159 Fix) ---
