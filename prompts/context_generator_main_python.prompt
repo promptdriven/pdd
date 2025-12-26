@@ -1,7 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'context_generator_main', that will be the CLI wrapper for generating example code from a prompt file and an existing code file. This function will use 'construct_paths' to resolve and read the prompt and code file contents and to compute output locations; it will then invoke 'context_generator' and handle saving the result.
 
-<include>./context/python_preamble.prompt</include>
-<include>./context/ctx_obj_params.prompt</include>
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+<context.ctx_obj_params><include>context/ctx_obj_params.prompt</include></context.ctx_obj_params>
 
 % Here are the inputs and outputs of the function:
     Inputs:
@@ -20,15 +20,32 @@
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:
       <construct_paths_example>
-      <include>context/construct_paths_example.py</include>
+      <context.construct_paths><include>context/construct_paths_example.py</include></context.construct_paths>
       </construct_paths_example>
 
       - Here is an example of how to use the `context_generator` function. Note that `context_generator` is expected to accept a `time` parameter (e.g., for setting a timeout or duration). The example should reflect this:
       <context_generator_example>
-      <include>context/context_generator_example.py</include>
+      <context.context_generator><include>context/context_generator_example.py</include></context.context_generator>
       </context_generator_example>
+
+      - Here is an example of a similar main wrapper function:
+      <code_generator_main_example>
+      <context.generate.7.code_generator_main><include>context/generate/7/code_generator_main.py</include></context.generate.7.code_generator_main>
+      </code_generator_main_example>
+
+      - Here is an example of how to use the `get_jwt_token` function to get the JWT_TOKEN:
+      <get_jwt_token_example>
+      <context.get_jwt_token><include>context/get_jwt_token_example.py</include></context.get_jwt_token>
+      </get_jwt_token_example>
+      % The `get_jwt_token` function is an async function and must be run with `asyncio.run`.
+      % The implementation expects environment variables `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID` to be set
+      % and passes them to `get_jwt_token(firebase_api_key=..., github_client_id=..., app_name="PDD Example Generator")`.
    </internal_example_modules>
 
+   % Here is how to call the cloud version of the example generator when not using the `--local` flag.
+   <cloud_example_generator_example>
+      <docs.api_documentation><include>../docs/api-documentation.md</include></docs.api_documentation>
+   </cloud_example_generator_example>
 </examples>
 
 % Implementation details that must be reflected in the wrapper:
@@ -49,6 +66,12 @@
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.
         * Otherwise, write to the explicit `output` path provided by the user.
         * Only write the file if example generation returned non-None content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
+    - Python syntax validation (for Python language only):
+        * Before saving, validate that the generated code is valid Python syntax using `ast.parse`.
+        * If syntax is invalid, attempt to fix a common LLM failure pattern: JSON metadata garbage appended at the end of the file (e.g., lines containing `"explanation":`, `"focus":`, `"description":`, `"code":`).
+        * The fix strategy: scan backwards from the end, find where JSON garbage starts, then binary search backwards to find the last valid Python code.
+        * Print warnings about syntax errors and fix attempts (respecting quiet mode for status messages, but always print fix failure messages).
+        * Save the fixed code if successful; otherwise save as-is with a warning.
     - Printing behavior:
         * When not quiet: print success/failure status, model name, total cost, and the save path if applicable.
         * Regardless of quiet: print a "Generated Example Code:" header and the example code if it exists; otherwise print a message indicating no example code was produced.
@@ -58,5 +81,21 @@
 
 % Here is the README for the cli command that has details of how the 'example' command works. Be sure to support the necessary global options like verbose, strength, temperature, and time (retrieved as `ctx.obj.get('time')`) for the context_generator function.
    <cli_command_readme>
-   <include>./README.md</include>
+   <context.change.15.README><include>context/change/15/README.md</include></context.change.15.README>
    </cli_command_readme>
+
+% Cloud vs Local Execution Strategy:
+   1. If the `--local` flag is explicitly provided, use local execution directly.
+   2. Otherwise, attempt cloud execution first:
+      - Read prompt and code file contents.
+      - Preprocess the prompt content to expand includes: call `preprocess(prompt_text, recursive=True, double_curly_brackets=False)`.
+      - Obtain a JWT via `get_jwt_token` using `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID`.
+      - Use a request timeout of 400 seconds.
+      - Send JSON payload with fields: `{ "promptContent": <prompt_content>, "codeContent": <code_content>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`.
+        % Note: A time/effort field (e.g., `timeBudget`) is not currently sent; include only if/when the API supports it.
+      - Cloud endpoint: `https://us-central1-prompt-driven-development.cloudfunctions.net/generateExample`
+      - Expected response fields: `generatedExample`, `totalCost`, `modelName`.
+   3. If cloud execution fails (auth/network/HTTP/JSON errors, timeout, or missing code):
+      - Log a warning and automatically fall back to local execution.
+   4. For local execution, call the local context_generator function.
+   5. For both modes, if `verbose` is true, print relevant execution information using Rich panels.

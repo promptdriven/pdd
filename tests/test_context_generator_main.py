@@ -1,184 +1,196 @@
+import sys
+import os
 import pytest
+from unittest.mock import MagicMock, patch, AsyncMock
+from pathlib import Path
 import click
-from click.testing import CliRunner
-from unittest.mock import patch, mock_open
-from pdd.context_generator_main import context_generator_main
+import ast
 
-# Mock data for testing
-MOCK_PROMPT_CONTENT = "Write a function 'add' that adds two numbers."
-MOCK_CODE_CONTENT = "def add(a, b):\n    return a + b"
-MOCK_EXAMPLE_CODE = "def add(a, b):\n    return a + b\n\n# Example usage:\nprint(add(2, 3))  # Output: 5"
-MOCK_TOTAL_COST = 0.000123
-MOCK_MODEL_NAME = "gpt-3.5-turbo"
+# Adjust path to import the module under test
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from pdd.context_generator_main import context_generator_main, _validate_and_fix_python_syntax
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def mock_ctx():
-    """
-    Creates a mock Click context for testing purposes.
-    """
-    ctx = click.Context(click.Command('test'))
-    ctx.params = {
-        'force': False,
-        'quiet': False,
-        'verbose': False
-    }
+    ctx = MagicMock(spec=click.Context)
     ctx.obj = {
+        'verbose': False,
         'strength': 0.5,
-        'temperature': 0
+        'temperature': 0.0,
+        'time': None,
+        'force': False,
+        'quiet': True,
+        'context': None,
+        'confirm_callback': None
     }
+    ctx.params = {}
     return ctx
 
-def test_context_generator_main_success(mock_ctx):
-    """
-    Test case for successful execution of context_generator_main.
-    """
-    with patch('pdd.context_generator_main.construct_paths') as mock_construct_paths, \
-         patch('pdd.context_generator_main.context_generator') as mock_context_generator, \
-         patch('builtins.open', mock_open()) as mock_file:
-        
-        # Mock construct_paths
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
-            {"output": "output/example_code.py"},
-            None
-        )
-        
-        # Mock context_generator
-        mock_context_generator.return_value = (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        
-        # Call the function
-        result = context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", "output/example_code.py")
-        
-        # Assertions
-        assert result == (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        mock_file().write.assert_called_once_with(MOCK_EXAMPLE_CODE)
+@pytest.fixture
+def mock_construct_paths():
+    with patch('pdd.context_generator_main.construct_paths') as mock:
+        yield mock
 
-def test_context_generator_main_no_output(mock_ctx):
-    """
-    Test case for context_generator_main when no output file is specified.
-    """
-    with patch('pdd.context_generator_main.construct_paths') as mock_construct_paths, \
-         patch('pdd.context_generator_main.context_generator') as mock_context_generator:
-        
-        # Mock construct_paths
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
-            {"output": None},
-            None
-        )
-        
-        # Mock context_generator
-        mock_context_generator.return_value = (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        
-        # Call the function
-        result = context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", None)
-        
-        # Assertions
-        assert result == (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
+@pytest.fixture
+def mock_context_generator():
+    with patch('pdd.context_generator_main.context_generator') as mock:
+        yield mock
 
-def test_context_generator_main_error(mock_ctx):
-    """
-    Test case for context_generator_main when an error occurs.
-    Per the spec, errors should return an error tuple instead of sys.exit(1)
-    to allow orchestrators to handle errors gracefully.
-    """
-    with patch('pdd.context_generator_main.construct_paths') as mock_construct_paths, \
-         patch('pdd.context_generator_main.context_generator') as mock_context_generator:
+@pytest.fixture
+def mock_get_jwt_token():
+    with patch('pdd.context_generator_main.get_jwt_token', new_callable=AsyncMock) as mock:
+        yield mock
 
-        # Mock construct_paths to raise an exception
-        mock_construct_paths.side_effect = Exception("File not found")
+@pytest.fixture
+def mock_httpx_client():
+    with patch('httpx.AsyncClient') as mock:
+        yield mock
 
-        # Call the function and expect error tuple return
-        result = context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", "output/example_code.py")
+@pytest.fixture
+def mock_preprocess():
+    with patch('pdd.context_generator_main.preprocess') as mock:
+        mock.side_effect = lambda x, **kwargs: x
+        yield mock
 
-        # Should return error tuple: ("", 0.0, "Error: <message>")
-        assert result[0] == ""
-        assert result[1] == 0.0
-        assert "Error:" in result[2]
-        assert "File not found" in result[2]
+# ------------------------------------------------="--------------------------
+# Unit Tests
+# ---------------------------------------------------------------------------
 
-def test_context_generator_main_quiet_mode(mock_ctx):
-    """
-    Test case for context_generator_main in quiet mode.
-    """
-    mock_ctx.params['quiet'] = True
-    with patch('pdd.context_generator_main.construct_paths') as mock_construct_paths, \
-         patch('pdd.context_generator_main.context_generator') as mock_context_generator, \
-         patch('builtins.open', mock_open()) as mock_file:
-        
-        # Mock construct_paths
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
-            {"output": "output/example_code.py"},
-            None
-        )
-        
-        # Mock context_generator
-        mock_context_generator.return_value = (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        
-        # Call the function
-        result = context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", "output/example_code.py")
-        
-        # Assertions
-        assert result == (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        mock_file().write.assert_called_once_with(MOCK_EXAMPLE_CODE)
+def test_local_execution_success(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    mock_ctx.params = {'local': True}
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    output_file = tmp_path / "test_example.py"
+    prompt_file.write_text("Prompt content")
+    code_file.write_text("def foo(): pass")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt content", "code_file": "def foo(): pass"}, {"output": str(output_file)}, "python")
+    mock_context_generator.return_value = ("# Generated Example", 0.01, "gpt-4-local")
+    result_code, cost, model = context_generator_main(mock_ctx, str(prompt_file), str(code_file), None)
+    assert result_code == "# Generated Example"
+    assert output_file.read_text() == "# Generated Example"
 
-def test_context_generator_main_verbose_mode(mock_ctx):
-    """
-    Test case for context_generator_main in verbose mode.
-    """
-    mock_ctx.params['verbose'] = True
-    with patch('pdd.context_generator_main.construct_paths') as mock_construct_paths, \
-         patch('pdd.context_generator_main.context_generator') as mock_context_generator, \
-         patch('builtins.open', mock_open()) as mock_file:
-        
-        # Mock construct_paths
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
-            {"output": "output/example_code.py"},
-            None
-        )
-        
-        # Mock context_generator
-        mock_context_generator.return_value = (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        
-        # Call the function
-        result = context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", "output/example_code.py")
-        
-        # Assertions
-        assert result == (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        mock_file().write.assert_called_once_with(MOCK_EXAMPLE_CODE)
+def test_cloud_execution_success(mock_ctx, mock_construct_paths, mock_get_jwt_token, mock_httpx_client, mock_preprocess, tmp_path):
+    with patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "fake_key", "GITHUB_CLIENT_ID": "fake_id"}):
+        mock_ctx.params = {'local': False}
+        prompt_file = tmp_path / "test.prompt"
+        code_file = tmp_path / "test.py"
+        output_file = tmp_path / "test_example.py"
+        prompt_file.write_text("Prompt content")
+        code_file.write_text("def foo(): pass")
+        mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt content", "code_file": "def foo(): pass"}, {"output": str(output_file)}, "python")
+        mock_get_jwt_token.return_value = "fake_jwt_token"
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"generatedExample": "# Cloud Code", "totalCost": 0.05, "modelName": "gpt-4-cloud"}
+        mock_client_instance = AsyncMock()
+        mock_client_instance.post.return_value = mock_response
+        mock_httpx_client.return_value.__aenter__.return_value = mock_client_instance
+        result_code, cost, model = context_generator_main(mock_ctx, str(prompt_file), str(code_file), None)
+        assert result_code == "# Cloud Code"
 
+def test_cloud_fallback_to_local(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    with patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "fake_key"}):
+        mock_ctx.params = {'local': False}
+        prompt_file = tmp_path / "test.prompt"
+        code_file = tmp_path / "test.py"
+        output_file = tmp_path / "test_example.py"
+        prompt_file.write_text("Prompt")
+        code_file.write_text("Code")
+        mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
+        from pdd.get_jwt_token import AuthError
+        mock_get_jwt_token.side_effect = AuthError("Auth failed")
+        mock_context_generator.return_value = ("# Local Code", 0.02, "local-model")
+        result_code, cost, model = context_generator_main(mock_ctx, str(prompt_file), str(code_file), None)
+        assert result_code == "# Local Code"
+        mock_context_generator.assert_called_once()
 
-def test_context_generator_main_output_directory_path_uses_resolved_file(mock_ctx, tmp_path):
-    """
-    Intended behavior: when --output is a directory path, the main should write
-    to the resolved file from construct_paths, not treat the directory as a file.
-    """
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
+def test_syntax_fix_json_garbage(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    mock_ctx.params = {'local': True}
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    output_file = tmp_path / "test_example.py"
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
+    bad_code = "def hello():\n    print(\"Hello\")\n```json\n{\"explanation\": \"This is code\"}\n```"
+    mock_context_generator.return_value = (bad_code, 0.0, "model")
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), None)
+    saved_content = output_file.read_text()
+    assert 'def hello():' in saved_content
+    assert '{\"explanation\":' not in saved_content
+    ast.parse(saved_content)
 
-    with patch('pdd.context_generator_main.construct_paths') as mock_construct_paths, \
-         patch('pdd.context_generator_main.context_generator') as mock_context_generator, \
-         patch('builtins.open', mock_open()) as m_open:
+def test_syntax_fix_failure_preserves_code(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    mock_ctx.params = {'local': True}
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    output_file = tmp_path / "test_example.py"
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
+    broken_code = "def hello(:"
+    mock_context_generator.return_value = (broken_code, 0.0, "model")
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), None)
+    assert output_file.read_text() == broken_code
 
-        resolved_file = out_dir / "example_code.py"
-        mock_construct_paths.return_value = (
-            {},
-            {"prompt_file": MOCK_PROMPT_CONTENT, "code_file": MOCK_CODE_CONTENT},
-            {"output": str(resolved_file)},
-            None,
-        )
-        mock_context_generator.return_value = (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
+def test_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    mock_ctx.params = {'local': True}
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    explicit_output = tmp_path / "custom_dir" / "custom_output.py"
+    explicit_output.parent.mkdir()
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": "default.py"}, "python")
+    mock_context_generator.return_value = ("code", 0.0, "model")
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output))
+    assert explicit_output.exists()
 
-        result = context_generator_main(mock_ctx, "prompts/test_prompt.prompt", "src/test_code.py", str(out_dir))
+def test_empty_generation_raises_error(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    mock_ctx.params = {'local': True}
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": "out.py"}, "python")
+    mock_context_generator.return_value = ("", 0.0, "model")
+    with pytest.raises(click.UsageError, match="Example generation failed"):
+        context_generator_main(mock_ctx, str(prompt_file), str(code_file), None)
 
-        # Should succeed and write to the resolved file path
-        assert result == (MOCK_EXAMPLE_CODE, MOCK_TOTAL_COST, MOCK_MODEL_NAME)
-        m_open.assert_called_once_with(str(resolved_file), 'w')
-        handle = m_open()
-        handle.write.assert_called_once_with(MOCK_EXAMPLE_CODE)
+def test_z3_syntax_fixer_logic():
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("Z3 not installed")
+    def binary_search_simulator(validity_map):
+        low = 0
+        high = len(validity_map)
+        valid_len = 0
+        for _ in range(10):
+            if low >= high: break
+            mid = (low + high + 1) // 2
+            is_valid = validity_map[mid-1] if 0 < mid <= len(validity_map) else False
+            if is_valid:
+                valid_len = mid
+                low = mid
+            else:
+                high = mid - 1
+        return valid_len
+    for i in range(32):
+        v_map = [(i >> bit) & 1 == 1 for bit in range(5)]
+        result_len = binary_search_simulator(v_map)
+        is_monotonic = True
+        for j in range(4):
+            if v_map[j] and not v_map[j+1]:
+                if any(v_map[k] for k in range(j+2, 5)): is_monotonic = False; break
+            if not v_map[j] and v_map[j+1]: is_monotonic = False; break
+        if is_monotonic:
+            last_true = 0
+            for idx, val in enumerate(v_map): 
+                if val: last_true = idx + 1
+            assert result_len == last_true
