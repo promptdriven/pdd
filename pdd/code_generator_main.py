@@ -1,6 +1,5 @@
 import os
 import re
-import asyncio
 import json
 import pathlib
 import shlex
@@ -21,16 +20,10 @@ from .construct_paths import construct_paths
 from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
-from .get_jwt_token import get_jwt_token, AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
+from .core.cloud import CloudConfig
 from .python_env_detector import detect_host_python_executable
 
-# Environment variable names for Firebase/GitHub auth
-FIREBASE_API_KEY_ENV_VAR = "NEXT_PUBLIC_FIREBASE_API_KEY" 
-GITHUB_CLIENT_ID_ENV_VAR = "GITHUB_CLIENT_ID"
-PDD_APP_NAME = "PDD Code Generator"
-
-# Cloud function URL
-CLOUD_GENERATE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode"
+# Cloud request timeout
 CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
@@ -45,6 +38,13 @@ def _parse_llm_bool(value: str) -> bool:
         return False
     else:
         return llm_str in {"1", "true", "yes", "on"}
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an env var is set to a truthy value."""
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
@@ -762,7 +762,8 @@ def code_generator_main(
             if verbose:
                 console.print(Panel("Performing full code generation...", title="[blue]Mode[/blue]", expand=False))
             
-            current_execution_is_local = is_local_execution_preferred
+            cloud_only = _env_flag_enabled("PDD_CLOUD_ONLY") or _env_flag_enabled("PDD_NO_LOCAL_FALLBACK")
+            current_execution_is_local = is_local_execution_preferred and not cloud_only
             
             if not current_execution_is_local:
                 if verbose: console.print("Attempting cloud code generation...")
@@ -772,31 +773,22 @@ def code_generator_main(
                 processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
                 
-                jwt_token: Optional[str] = None
-                try:
-                    firebase_api_key_val = os.environ.get(FIREBASE_API_KEY_ENV_VAR)
-                    github_client_id_val = os.environ.get(GITHUB_CLIENT_ID_ENV_VAR)
+                # Get JWT token via CloudConfig (handles both injected tokens and device flow)
+                jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
 
-                    if not firebase_api_key_val: raise AuthError(f"{FIREBASE_API_KEY_ENV_VAR} not set.")
-                    if not github_client_id_val: raise AuthError(f"{GITHUB_CLIENT_ID_ENV_VAR} not set.")
-
-                    jwt_token = asyncio.run(get_jwt_token(
-                        firebase_api_key=firebase_api_key_val,
-                        github_client_id=github_client_id_val,
-                        app_name=PDD_APP_NAME
-                    ))
-                except (AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError) as e:
-                    console.print(f"[yellow]Cloud authentication/token error: {e}. Falling back to local execution.[/yellow]")
-                    current_execution_is_local = True
-                except Exception as e:
-                    console.print(f"[yellow]Unexpected error during cloud authentication: {e}. Falling back to local execution.[/yellow]")
+                if not jwt_token:
+                    if cloud_only:
+                        console.print("[red]Cloud authentication failed.[/red]")
+                        raise click.UsageError("Cloud authentication failed")
+                    console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
                     payload = {"promptContent": processed_prompt_for_cloud, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
+                    cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
-                        response = requests.post(CLOUD_GENERATE_URL, json=payload, headers=headers, timeout=CLOUD_REQUEST_TIMEOUT)
+                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=CLOUD_REQUEST_TIMEOUT)
                         response.raise_for_status()
                         
                         response_data = response.json()
@@ -805,21 +797,59 @@ def code_generator_main(
                         model_name = response_data.get("modelName", "cloud_model")
 
                         if not generated_code_content:
+                            if cloud_only:
+                                console.print("[red]Cloud execution returned no code.[/red]")
+                                raise click.UsageError("Cloud execution returned no code")
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
                              console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
                     except requests.exceptions.Timeout:
+                        if cloud_only:
+                            console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                            raise click.UsageError("Cloud execution timed out")
                         console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
+                        status_code = e.response.status_code if e.response else 0
                         err_content = e.response.text[:200] if e.response else "No response content"
-                        console.print(f"[yellow]Cloud HTTP error ({e.response.status_code}): {err_content}. Falling back to local.[/yellow]")
-                        current_execution_is_local = True
+
+                        # Non-recoverable errors: do NOT fall back to local
+                        if status_code == 402:  # Insufficient credits
+                            try:
+                                error_data = e.response.json()
+                                current_balance = error_data.get("currentBalance", "unknown")
+                                estimated_cost = error_data.get("estimatedCost", "unknown")
+                                console.print(f"[red]Insufficient credits. Current balance: {current_balance}, estimated cost: {estimated_cost}[/red]")
+                            except Exception:
+                                console.print(f"[red]Insufficient credits: {err_content}[/red]")
+                            raise click.UsageError("Insufficient credits for cloud code generation")
+                        elif status_code == 401:  # Authentication error
+                            console.print(f"[red]Authentication failed: {err_content}[/red]")
+                            raise click.UsageError("Cloud authentication failed")
+                        elif status_code == 403:  # Authorization error (not approved)
+                            console.print(f"[red]Access denied: {err_content}[/red]")
+                            raise click.UsageError("Access denied - user not approved")
+                        elif status_code == 400:  # Validation error (e.g., empty prompt)
+                            console.print(f"[red]Invalid request: {err_content}[/red]")
+                            raise click.UsageError(f"Invalid request: {err_content}")
+                        else:
+                            # Recoverable errors (5xx, unexpected errors): fall back to local
+                            if cloud_only:
+                                console.print(f"[red]Cloud HTTP error ({status_code}): {err_content}[/red]")
+                                raise click.UsageError(f"Cloud HTTP error ({status_code}): {err_content}")
+                            console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
+                            current_execution_is_local = True
                     except requests.exceptions.RequestException as e:
+                        if cloud_only:
+                            console.print(f"[red]Cloud network error: {e}[/red]")
+                            raise click.UsageError(f"Cloud network error: {e}")
                         console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except json.JSONDecodeError:
+                        if cloud_only:
+                            console.print("[red]Cloud returned invalid JSON.[/red]")
+                            raise click.UsageError("Cloud returned invalid JSON")
                         console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
                         current_execution_is_local = True
             

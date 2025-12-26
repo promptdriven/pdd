@@ -38,6 +38,7 @@ from .sync_determine_operation import (
     read_run_report,
     calculate_sha256,
     calculate_current_hashes,
+    _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -51,6 +52,10 @@ from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
 from .pytest_output import extract_failing_files_from_output
 from . import DEFAULT_STRENGTH
+
+
+# --- Helper Functions ---
+# Note: _safe_basename is imported from sync_determine_operation
 
 
 # --- Atomic State Update (Issue #159 Fix) ---
@@ -151,7 +156,7 @@ class AtomicStateUpdate:
 
 def load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]:
     """Load sync log entries for a basename and language."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     if not log_file.exists():
         return []
     try:
@@ -193,7 +198,7 @@ def update_sync_log_entry(entry: Dict[str, Any], result: Dict[str, Any], duratio
 
 def append_sync_log(basename: str, language: str, entry: Dict[str, Any]):
     """Append completed log entry to the sync log file."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     META_DIR.mkdir(parents=True, exist_ok=True)
     with open(log_file, 'a') as f:
         f.write(json.dumps(entry) + '\n')
@@ -217,7 +222,7 @@ def save_run_report(report: Dict[str, Any], basename: str, language: str,
         language: The programming language.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
-    report_file = META_DIR / f"{basename}_{language}_run.json"
+    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
     if atomic_state:
         # Buffer for atomic write
         atomic_state.set_run_report(report, report_file)
@@ -257,7 +262,7 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         test_files=current_hashes.get('test_files'),  # Bug #156
     )
 
-    fingerprint_file = META_DIR / f"{basename}_{language}.json"
+    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language}.json"
     if atomic_state:
         # Buffer for atomic write
         atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
@@ -801,7 +806,7 @@ def _create_mock_context(**kwargs) -> click.Context:
 
 def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
     """Displays the sync log for a given basename and language."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     if not log_file.exists():
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
@@ -1196,12 +1201,18 @@ def sync_orchestration(
                                         Path(temp_output).unlink()
                                         result = (new_content, 0.0, 'no-changes')
                             elif operation == 'generate':
-                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt']), output=str(pdd_files['code']), original_prompt_file_path=None, force_incremental_flag=False)
+                                # Ensure code directory exists before generating
+                                pdd_files['code'].parent.mkdir(parents=True, exist_ok=True)
+                                # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
+                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
                                 # Clear stale run_report so crash/verify is required for newly generated code
-                                run_report_file = META_DIR / f"{basename}_{language}_run.json"
+                                run_report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
                                 run_report_file.unlink(missing_ok=True)
                             elif operation == 'example':
-                                result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['example']))
+                                # Ensure example directory exists before generating
+                                pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
+                                # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and example (config_base)
+                                result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), code_file=str(pdd_files['code'].resolve()), output=str(pdd_files['example'].resolve()))
                             elif operation == 'crash':
                                 required_files = [pdd_files['code'], pdd_files['example']]
                                 missing_files = [f for f in required_files if not f.exists()]
@@ -1574,48 +1585,62 @@ def sync_orchestration(
             'model_name': last_model_name,
         }
 
-    # Instantiate and run Textual App
-    app = SyncApp(
-        basename=basename,
-        budget=budget,
-        worker_func=sync_worker_logic,
-        function_name_ref=current_function_name_ref,
-        cost_ref=current_cost_ref,
-        prompt_path_ref=prompt_path_ref,
-        code_path_ref=code_path_ref,
-        example_path_ref=example_path_ref,
-        tests_path_ref=tests_path_ref,
-        prompt_color_ref=prompt_box_color_ref,
-        code_color_ref=code_box_color_ref,
-        example_color_ref=example_box_color_ref,
-        tests_color_ref=tests_box_color_ref,
-        stop_event=stop_event,
-        progress_callback_ref=progress_callback_ref
-    )
+    # Detect headless mode (no TTY, CI environment, or quiet mode)
+    headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
 
-    # Store app reference so worker can access request_confirmation
-    app_ref[0] = app
+    if headless:
+        # Set PDD_FORCE to also skip API key prompts in headless mode
+        os.environ['PDD_FORCE'] = '1'
+        # Run worker logic directly without TUI in headless mode
+        if not quiet:
+            print(f"Running sync in headless mode (CI/non-TTY environment)...")
+        result = sync_worker_logic()
+        # No TUI app, so no worker_exception to check
+        worker_exception = None
+    else:
+        # Instantiate and run Textual App
+        app = SyncApp(
+            basename=basename,
+            budget=budget,
+            worker_func=sync_worker_logic,
+            function_name_ref=current_function_name_ref,
+            cost_ref=current_cost_ref,
+            prompt_path_ref=prompt_path_ref,
+            code_path_ref=code_path_ref,
+            example_path_ref=example_path_ref,
+            tests_path_ref=tests_path_ref,
+            prompt_color_ref=prompt_box_color_ref,
+            code_color_ref=code_box_color_ref,
+            example_color_ref=example_box_color_ref,
+            tests_color_ref=tests_box_color_ref,
+            stop_event=stop_event,
+            progress_callback_ref=progress_callback_ref
+        )
 
-    result = app.run()
-    
-    # Show exit animation if not quiet
-    if not quiet:
+        # Store app reference so worker can access request_confirmation
+        app_ref[0] = app
+
+        result = app.run()
+
+        # Show exit animation if not quiet
         from .sync_tui import show_exit_animation
         show_exit_animation()
-    
-    # Check for worker exception that might have caused a crash
-    if app.worker_exception:
-        print(f"\n[Error] Worker thread crashed with exception: {app.worker_exception}", file=sys.stderr)
-        
+
+        worker_exception = app.worker_exception
+
+    # Check for worker exception that might have caused a crash (TUI mode only)
+    if not headless and worker_exception:
+        print(f"\n[Error] Worker thread crashed with exception: {worker_exception}", file=sys.stderr)
+
         if hasattr(app, 'captured_logs') and app.captured_logs:
              print("\n[Captured Logs (last 20 lines)]", file=sys.stderr)
              for line in app.captured_logs[-20:]: # Print last 20 lines
                  print(f"  {line}", file=sys.stderr)
-        
+
         import traceback
         # Use trace module to print the stored exception's traceback if available
-        if hasattr(app.worker_exception, '__traceback__'):
-            traceback.print_exception(type(app.worker_exception), app.worker_exception, app.worker_exception.__traceback__, file=sys.stderr)
+        if hasattr(worker_exception, '__traceback__'):
+            traceback.print_exception(type(worker_exception), worker_exception, worker_exception.__traceback__, file=sys.stderr)
 
     if result is None:
         return {

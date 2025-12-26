@@ -7,13 +7,13 @@ from pdd import DEFAULT_STRENGTH
 # Assume the code under test is in pdd/generate_output_paths.py
 # Adjust the import path if necessary based on your project structure
 try:
-    from pdd.generate_output_paths import generate_output_paths, COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES, ENV_VAR_MAP
+    from pdd.generate_output_paths import generate_output_paths, COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES, ENV_VAR_MAP, _get_default_filename
 except ImportError:
     # If running directly from the tests directory, adjust sys.path
     # This assumes your tests are in a 'tests' directory and 'pdd' is a sibling
     pdd_module_path = Path(__file__).parent.parent / 'pdd'
     sys.path.insert(0, str(pdd_module_path.parent))
-    from pdd.generate_output_paths import generate_output_paths, COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES, ENV_VAR_MAP
+    from pdd.generate_output_paths import generate_output_paths, COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES, ENV_VAR_MAP, _get_default_filename
 
 
 # --- Test Constants ---
@@ -988,4 +988,104 @@ class TestPathResolutionModeParameter:
 
         finally:
             os.chdir(original_cwd)
+
+
+# =============================================================================
+# Subdirectory Basename Support Tests
+# =============================================================================
+#
+# These tests verify support for subdirectory basenames like 'core/cloud'.
+# When a basename contains a forward slash, the directory structure should be
+# preserved in the output path, with filename patterns applied only to the
+# final component (the actual name, not the directory part).
+#
+# Example: basename="core/cloud" with pattern="test_{basename}{ext}"
+# - WRONG: test_core/cloud.py (forward slash interpreted as path separator in pattern)
+# - RIGHT: core/test_cloud.py (directory preserved, pattern applied to name only)
+# =============================================================================
+
+
+class TestSubdirectoryBasenameSupport:
+    """Tests for subdirectory basename support (e.g., 'core/cloud')."""
+
+    def test_get_default_filename_with_subdirectory_basename(self):
+        """Should preserve directory structure in output paths.
+
+        _get_default_filename splits basename, applies pattern to name part,
+        and prepends directory part.
+        """
+        # Test code generation: {basename}{ext} -> core/cloud.py
+        result = _get_default_filename("sync", "generate_output_path", "core/cloud", "python", ".py")
+        assert result == "core/cloud.py", f"Expected 'core/cloud.py', got '{result}'"
+
+        # Test test generation: test_{basename}{ext} -> core/test_cloud.py (NOT test_core/cloud.py)
+        result = _get_default_filename("sync", "test_output_path", "core/cloud", "python", ".py")
+        assert result == "core/test_cloud.py", f"Expected 'core/test_cloud.py', got '{result}'"
+
+        # Test example generation: {basename}_example{ext} -> core/cloud_example.py
+        result = _get_default_filename("sync", "example_output_path", "core/cloud", "python", ".py")
+        assert result == "core/cloud_example.py", f"Expected 'core/cloud_example.py', got '{result}'"
+
+    def test_get_default_filename_deeply_nested_subdirectory(self):
+        """Should handle deeply nested subdirectory basenames."""
+        # Test deeply nested: commands/cli/generate -> commands/cli/test_generate.py
+        result = _get_default_filename("sync", "test_output_path", "commands/cli/generate", "python", ".py")
+        assert result == "commands/cli/test_generate.py", f"Expected 'commands/cli/test_generate.py', got '{result}'"
+
+    def test_get_default_filename_flat_basename_unchanged(self):
+        """Flat basenames (no slash) should work exactly as before."""
+        # Existing behavior should be preserved
+        result = _get_default_filename("sync", "generate_output_path", "calculator", "python", ".py")
+        assert result == "calculator.py", f"Expected 'calculator.py', got '{result}'"
+
+        result = _get_default_filename("sync", "test_output_path", "calculator", "python", ".py")
+        assert result == "test_calculator.py", f"Expected 'test_calculator.py', got '{result}'"
+
+    def test_generate_output_paths_with_subdirectory_basename(self, tmp_path):
+        """Full integration test: generate_output_paths should handle subdirectory basenames."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        context_config = {
+            "generate_output_path": "pdd/",
+            "test_output_path": "tests/",
+            "example_output_path": "examples/",
+        }
+
+        result = generate_output_paths(
+            command="sync",
+            output_locations={},
+            basename="core/cloud",
+            language="python",
+            file_extension=".py",
+            context_config=context_config,
+            config_base_dir=str(project_root),
+        )
+
+        # All paths should preserve subdirectory structure
+        generate_path = result.get("generate_output_path", "")
+        test_path = result.get("test_output_path", "")
+        example_path = result.get("example_output_path", "")
+
+        # Expected: pdd/core/cloud.py, tests/core/test_cloud.py, examples/core/cloud_example.py
+        expected_generate = str(project_root / "pdd" / "core" / "cloud.py")
+        expected_test = str(project_root / "tests" / "core" / "test_cloud.py")
+        expected_example = str(project_root / "examples" / "core" / "cloud_example.py")
+
+        assert generate_path == expected_generate, \
+            f"Expected {expected_generate}, got {generate_path}"
+        assert test_path == expected_test, \
+            f"Expected {expected_test}, got {test_path}"
+        assert example_path == expected_example, \
+            f"Expected {expected_example}, got {example_path}"
+
+    def test_fix_command_with_subdirectory_basename(self):
+        """Fix command patterns should also support subdirectory basenames."""
+        # test_{basename}_fixed{ext} -> core/test_cloud_fixed.py (NOT test_core/cloud_fixed.py)
+        result = _get_default_filename("fix", "output_test", "core/cloud", "python", ".py")
+        assert result == "core/test_cloud_fixed.py", f"Expected 'core/test_cloud_fixed.py', got '{result}'"
+
+        # {basename}_fixed{ext} -> core/cloud_fixed.py
+        result = _get_default_filename("fix", "output_code", "core/cloud", "python", ".py")
+        assert result == "core/cloud_fixed.py", f"Expected 'core/cloud_fixed.py', got '{result}'"
 

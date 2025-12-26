@@ -55,9 +55,39 @@ META_DIR = get_meta_dir()
 LOCKS_DIR = get_locks_dir()
 
 # Export constants for other modules
-__all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision', 
+__all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision',
            'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
            '_check_example_success_history']
+
+
+def _safe_basename(basename: str) -> str:
+    """Sanitize basename for use in metadata filenames.
+
+    Replaces '/' with '_' to prevent path interpretation when the basename
+    contains subdirectory components (e.g., 'core/cloud' -> 'core_cloud').
+    """
+    return basename.replace('/', '_')
+
+
+def _extract_name_part(basename: str) -> tuple:
+    """Extract directory and name parts from a subdirectory basename.
+
+    For subdirectory basenames like 'core/cloud', separates the directory
+    prefix from the actual name so that filename patterns can be applied
+    correctly.
+
+    Args:
+        basename: The full basename, possibly containing subdirectory path.
+
+    Returns:
+        Tuple of (dir_prefix, name_part):
+        - 'core/cloud' -> ('core/', 'cloud')
+        - 'calculator' -> ('', 'calculator')
+    """
+    if '/' in basename:
+        dir_part, name_part = basename.rsplit('/', 1)
+        return dir_part + '/', name_part
+    return '', basename
 
 
 @dataclass
@@ -102,7 +132,7 @@ class SyncLock:
     def __init__(self, basename: str, language: str):
         self.basename = basename
         self.language = language
-        self.lock_file = get_locks_dir() / f"{basename}_{language}.lock"
+        self.lock_file = get_locks_dir() / f"{_safe_basename(basename)}_{language}.lock"
         self.fd = None
         self.current_pid = os.getpid()
     
@@ -261,13 +291,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if code_dir and not code_dir.endswith('/'):
                     code_dir = code_dir + '/'
                 
-                # Construct the full paths
-                test_path = f"{test_dir}test_{basename}.{extension}"
-                example_path = f"{example_dir}{basename}_example.{extension}"
-                code_path = f"{code_dir}{basename}.{extension}"
-                
+                # Extract directory and name parts for subdirectory basename support
+                dir_prefix, name_part = _extract_name_part(basename)
+
+                # Construct the full paths (preserving subdirectory structure)
+                test_path = f"{test_dir}{dir_prefix}test_{name_part}.{extension}"
+                example_path = f"{example_dir}{dir_prefix}{name_part}_example.{extension}"
+                code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
+
                 logger.debug(f"Final paths: test={test_path}, example={example_path}, code={code_path}")
-                
+
                 # Convert to Path objects
                 test_path = Path(test_path)
                 example_path = Path(example_path)
@@ -275,7 +308,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
                 # Bug #156: Find all matching test files
                 test_dir_path = test_path.parent
-                test_stem = f"test_{basename}"
+                test_stem = f"test_{name_part}"
                 if test_dir_path.exists():
                     matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
                 else:
@@ -296,16 +329,17 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
-                fallback_test_path = Path(f"test_{basename}.{extension}")
+                dir_prefix, name_part = _extract_name_part(basename)
+                fallback_test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
                 # Bug #156: Find matching test files even in fallback
                 if Path('.').exists():
-                    fallback_matching = sorted(Path('.').glob(f"test_{basename}*.{extension}"))
+                    fallback_matching = sorted(Path('.').glob(f"{dir_prefix}test_{name_part}*.{extension}"))
                 else:
                     fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
                 return {
                     'prompt': Path(prompt_path),
-                    'code': Path(f"{basename}.{extension}"),
-                    'example': Path(f"{basename}_example.{extension}"),
+                    'code': Path(f"{dir_prefix}{name_part}.{extension}"),
+                    'example': Path(f"{dir_prefix}{name_part}_example.{extension}"),
                     'test': fallback_test_path,
                     'test_files': fallback_matching or [fallback_test_path]  # Bug #156
                 }
@@ -336,7 +370,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             code_dir = resolved_config.get('generate_output_path', './')
             if code_dir and not code_dir.endswith('/'):
                 code_dir = code_dir + '/'
-            code_path = f"{code_dir}{basename}.{extension}"
+            dir_prefix, name_part = _extract_name_part(basename)
+            code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
         
         # Get configured paths for example and test files using construct_paths
         # Note: construct_paths requires files to exist, so we need to handle the case
@@ -353,26 +388,31 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             try:
                 # Get example path using example command
                 # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
+                # Pass basename in command_options to preserve subdirectory structure
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                    force=True, quiet=True, command="example", command_options={},
+                    force=True, quiet=True, command="example",
+                    command_options={"basename": basename},
                     context_override=context_override,
                     path_resolution_mode="cwd"
                 )
-                example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
+                dir_prefix, name_part = _extract_name_part(basename)
+                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
 
                 # Get test path using test command - handle case where test file doesn't exist yet
+                # Pass basename in command_options to preserve subdirectory structure
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                        force=True, quiet=True, command="test", command_options={},
+                        force=True, quiet=True, command="test",
+                        command_options={"basename": basename},
                         context_override=context_override,
                         path_resolution_mode="cwd"
                     )
-                    test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
                 except FileNotFoundError:
                     # Test file doesn't exist yet - create default path
-                    test_path = Path(f"test_{basename}.{get_extension(language)}")
+                    test_path = Path(f"{dir_prefix}test_{name_part}.{get_extension(language)}")
                 
             finally:
                 # Clean up temporary file if we created it
@@ -391,25 +431,29 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             try:
                 # Get configured directories by using construct_paths with just the prompt file
                 # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
+                # Pass basename in command_options to preserve subdirectory structure
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path},
-                    force=True, quiet=True, command="example", command_options={},
+                    force=True, quiet=True, command="example",
+                    command_options={"basename": basename},
                     context_override=context_override,
                     path_resolution_mode="cwd"
                 )
-                example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
+                dir_prefix, name_part = _extract_name_part(basename)
+                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
 
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path},
-                        force=True, quiet=True, command="test", command_options={},
+                        force=True, quiet=True, command="test",
+                        command_options={"basename": basename},
                         context_override=context_override,
                         path_resolution_mode="cwd"
                     )
-                    test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
                 except Exception:
                     # If test path construction fails, use default naming
-                    test_path = Path(f"test_{basename}.{get_extension(language)}")
+                    test_path = Path(f"{dir_prefix}test_{name_part}.{get_extension(language)}")
                 
             except Exception:
                 # Final fallback to deriving from code path if all else fails
@@ -429,7 +473,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
         # Bug #156: Find all matching test files
         test_dir = test_path.parent
-        test_stem = f"test_{basename}"
+        _, name_part_for_glob = _extract_name_part(basename)
+        test_stem = f"test_{name_part_for_glob}"
         extension = get_extension(language)
         if test_dir.exists():
             matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
@@ -443,22 +488,23 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
-        
+
     except Exception as e:
         # Fallback to simple naming if construct_paths fails
         extension = get_extension(language)
-        test_path = Path(f"test_{basename}.{extension}")
+        dir_prefix, name_part = _extract_name_part(basename)
+        test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
         # Bug #156: Try to find matching test files even in fallback
         test_dir = Path('.')
-        test_stem = f"test_{basename}"
+        test_stem = f"{dir_prefix}test_{name_part}"
         if test_dir.exists():
             matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
         else:
             matching_test_files = [test_path] if test_path.exists() else []
         return {
             'prompt': Path(prompts_dir) / f"{basename}_{language}.prompt",
-            'code': Path(f"{basename}.{extension}"),
-            'example': Path(f"{basename}_example.{extension}"),
+            'code': Path(f"{dir_prefix}{name_part}.{extension}"),
+            'example': Path(f"{dir_prefix}{name_part}_example.{extension}"),
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
@@ -483,7 +529,7 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
     """Reads and validates the JSON fingerprint file."""
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
-    fingerprint_file = meta_dir / f"{basename}_{language}.json"
+    fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language}.json"
     
     if not fingerprint_file.exists():
         return None
@@ -510,7 +556,7 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
     """Reads and validates the JSON run report file."""
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
-    run_report_file = meta_dir / f"{basename}_{language}_run.json"
+    run_report_file = meta_dir / f"{_safe_basename(basename)}_{language}_run.json"
     
     if not run_report_file.exists():
         return None
@@ -888,7 +934,7 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     
     # Strategy 2b: Look for historical run reports with exit_code == 0
     # Check all run report files in the meta directory that match the pattern
-    run_report_pattern = f"{basename}_{language}_run"
+    run_report_pattern = f"{_safe_basename(basename)}_{language}_run"
     for file in meta_dir.glob(f"{run_report_pattern}*.json"):
         try:
             with open(file, 'r') as f:
