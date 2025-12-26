@@ -238,13 +238,60 @@ def test_sync_no_prompt_files_found(mock_project_dir, mock_construct_paths):
         )
 
 
-@pytest.mark.parametrize("invalid_name", ["", "invalid/name", "bad!name", "name with space"])
+@pytest.mark.parametrize("invalid_name", ["", "bad!name", "name with space"])
 def test_sync_invalid_basename(invalid_name):
     """Tests that an error is raised for invalid basenames."""
     ctx = create_mock_context({})
     with pytest.raises(click.UsageError):
         sync_main(
             ctx, invalid_name, max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
+        )
+
+
+def test_validate_basename_with_subdirectory(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+    """Should accept subdirectory basenames like 'core/cloud'.
+
+    This test will FAIL initially - confirms the bug exists.
+    After fix: basenames with forward slashes representing subdirectory paths should be valid.
+    """
+    # Create prompt file in subdirectory structure
+    (mock_project_dir / "prompts" / "core").mkdir(parents=True, exist_ok=True)
+    (mock_project_dir / "prompts" / "core" / "cloud_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.5,
+        "model_name": "gpt-4",
+        "summary": "All steps completed.",
+    }
+
+    ctx = create_mock_context({})
+
+    # This should NOT raise - subdirectory basenames should be valid
+    results, total_cost, model = sync_main(
+        ctx, "core/cloud", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
+    )
+
+    assert results["overall_success"] is True
+
+
+@pytest.mark.parametrize("invalid_path", [
+    "../escape",      # Path traversal attempt
+    "/absolute",      # Absolute path (leading slash)
+    "core/",          # Trailing slash
+    "core//double",   # Double slashes
+    "..",             # Just dotdot
+    "./relative",     # Dot slash
+])
+def test_validate_basename_rejects_path_traversal(invalid_path):
+    """Should reject path traversal attempts and malformed paths.
+
+    Security: Basenames with path traversal patterns should be rejected.
+    """
+    ctx = create_mock_context({})
+    with pytest.raises(click.UsageError):
+        sync_main(
+            ctx, invalid_path, max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
         )
 
 

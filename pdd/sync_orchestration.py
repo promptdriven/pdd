@@ -53,6 +53,20 @@ from .pytest_output import extract_failing_files_from_output
 from . import DEFAULT_STRENGTH
 
 
+# --- Helper Functions ---
+
+def _safe_basename(basename: str) -> str:
+    """Sanitize basename for use in metadata filenames.
+
+    Replaces '/' with '_' to prevent path interpretation when the basename
+    contains subdirectory components (e.g., 'core/cloud' -> 'core_cloud').
+
+    This ensures metadata files like 'core_cloud_python_sync.log' remain flat
+    in the .pdd/meta/ directory rather than creating nested directories.
+    """
+    return basename.replace('/', '_')
+
+
 # --- Atomic State Update (Issue #159 Fix) ---
 
 @dataclass
@@ -151,7 +165,7 @@ class AtomicStateUpdate:
 
 def load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]:
     """Load sync log entries for a basename and language."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     if not log_file.exists():
         return []
     try:
@@ -193,7 +207,7 @@ def update_sync_log_entry(entry: Dict[str, Any], result: Dict[str, Any], duratio
 
 def append_sync_log(basename: str, language: str, entry: Dict[str, Any]):
     """Append completed log entry to the sync log file."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     META_DIR.mkdir(parents=True, exist_ok=True)
     with open(log_file, 'a') as f:
         f.write(json.dumps(entry) + '\n')
@@ -217,7 +231,7 @@ def save_run_report(report: Dict[str, Any], basename: str, language: str,
         language: The programming language.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
-    report_file = META_DIR / f"{basename}_{language}_run.json"
+    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
     if atomic_state:
         # Buffer for atomic write
         atomic_state.set_run_report(report, report_file)
@@ -257,7 +271,7 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         test_files=current_hashes.get('test_files'),  # Bug #156
     )
 
-    fingerprint_file = META_DIR / f"{basename}_{language}.json"
+    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language}.json"
     if atomic_state:
         # Buffer for atomic write
         atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
@@ -801,7 +815,7 @@ def _create_mock_context(**kwargs) -> click.Context:
 
 def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
     """Displays the sync log for a given basename and language."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     if not log_file.exists():
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
@@ -1201,7 +1215,7 @@ def sync_orchestration(
                                 # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
                                 result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
                                 # Clear stale run_report so crash/verify is required for newly generated code
-                                run_report_file = META_DIR / f"{basename}_{language}_run.json"
+                                run_report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
                                 run_report_file.unlink(missing_ok=True)
                             elif operation == 'example':
                                 # Ensure example directory exists before generating
