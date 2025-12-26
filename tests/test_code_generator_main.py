@@ -15,8 +15,12 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main, CLOUD_GENERATE_URL, CLOUD_REQUEST_TIMEOUT
+from pdd.code_generator_main import code_generator_main, CLOUD_REQUEST_TIMEOUT
+from pdd.core.cloud import CloudConfig
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
+
+# Get the cloud URL for assertions in tests
+CLOUD_GENERATE_URL = CloudConfig.get_endpoint_url("generateCode")
 from pdd import DEFAULT_TIME # Ensure DEFAULT_TIME is available if mock_ctx doesn't always set 'time'
 
 # Constants for mocking
@@ -182,10 +186,11 @@ def mock_incremental_generator_fixture(monkeypatch):
 # --- End Mocks for PDD internal functions ---
 
 # --- Start Mocks for External Dependencies ---
-@pytest.fixture(autouse=True) 
+@pytest.fixture(autouse=True)
 def mock_get_jwt_token_fixture(monkeypatch):
-    mock = AsyncMock(return_value="test_jwt_token")
-    monkeypatch.setattr("pdd.code_generator_main.get_jwt_token", mock)
+    # Mock CloudConfig.get_jwt_token since we no longer import get_jwt_token directly
+    mock = MagicMock(return_value="test_jwt_token")
+    monkeypatch.setattr("pdd.code_generator_main.CloudConfig.get_jwt_token", mock)
     return mock
 
 @pytest.fixture(autouse=True) 
@@ -488,7 +493,8 @@ def test_full_gen_cloud_fallback_scenarios(
     mock_pdd_preprocess_fixture.return_value = "Preprocessed fallback prompt"
 
     if isinstance(cloud_error, AuthError):
-        mock_get_jwt_token_fixture.side_effect = cloud_error
+        # CloudConfig.get_jwt_token catches AuthError internally and returns None
+        mock_get_jwt_token_fixture.return_value = None
     elif cloud_error == "NO_CODE_RETURNED":
         mock_response = MagicMock(spec=requests.Response)
         mock_response.json.return_value = {"totalCost": 0.01, "modelName": "cloud_model_no_code"} 
@@ -543,7 +549,7 @@ def test_full_gen_cloud_fallback_scenarios(
 def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
     mock_pdd_preprocess_fixture,
-    mock_local_generator_fixture, mock_rich_console_fixture, monkeypatch 
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_get_jwt_token_fixture, monkeypatch
 ):
     mock_ctx.obj['local'] = False
     prompt_file_path = temp_dir_setup["prompts_dir"] / "env_var_prompt_python.prompt"
@@ -553,19 +559,16 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     mock_construct_paths_fixture.return_value = (
         {},  # resolved_config
         {"prompt_file": "Env var test prompt"},
-        {"output": output_file_path_str}, 
-        "python" 
+        {"output": output_file_path_str},
+        "python"
     )
-    
-    monkeypatch.delenv("NEXT_PUBLIC_FIREBASE_API_KEY", raising=False)
-    
-    async def mock_get_jwt_token_with_check_for_this_test(firebase_api_key, **kwargs):
-        if not os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"): 
-            raise AuthError("Firebase API key not set.")
-        return "test_jwt_token"
-    
+
+    # CloudConfig.get_jwt_token returns None when env vars are missing
+    # (it catches the AuthError internally)
+    mock_get_jwt_token_fixture.return_value = None
+
     code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
-    
+
     # Local fallback should call generator with preprocess_prompt=False now
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     assert called_kwargs["prompt"] == "Env var test prompt"

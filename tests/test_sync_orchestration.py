@@ -6,6 +6,7 @@ import sys
 import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call, ANY
+import os
 
 from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
@@ -59,7 +60,11 @@ def orchestration_fixture(tmp_path):
                 "errors": [f"{type(e).__name__}: {e}"]
             }
 
-    with patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+    # Clear CI environment variable to prevent headless mode detection in tests
+    env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+    with patch.dict(os.environ, env_without_ci, clear=True), \
+         patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
          patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
          patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
          patch('pdd.sync_orchestration.auto_deps_main') as mock_auto_deps, \
