@@ -251,8 +251,7 @@ def test_sync_invalid_basename(invalid_name):
 def test_validate_basename_with_subdirectory(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
     """Should accept subdirectory basenames like 'core/cloud'.
 
-    This test will FAIL initially - confirms the bug exists.
-    After fix: basenames with forward slashes representing subdirectory paths should be valid.
+    Basenames with forward slashes representing subdirectory paths are valid.
     """
     # Create prompt file in subdirectory structure
     (mock_project_dir / "prompts" / "core").mkdir(parents=True, exist_ok=True)

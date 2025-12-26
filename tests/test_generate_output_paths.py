@@ -1011,9 +1011,8 @@ class TestSubdirectoryBasenameSupport:
     def test_get_default_filename_with_subdirectory_basename(self):
         """Should preserve directory structure in output paths.
 
-        This test will FAIL initially - confirms the bug exists.
-        After fix: _get_default_filename should split basename, apply pattern to name part,
-        and prepend directory part.
+        _get_default_filename splits basename, applies pattern to name part,
+        and prepends directory part.
         """
         # Test code generation: {basename}{ext} -> core/cloud.py
         result = _get_default_filename("sync", "generate_output_path", "core/cloud", "python", ".py")
