@@ -1983,6 +1983,12 @@ def llm_invoke(
                 if verbose:
                     logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
 
+                # Build retry kwargs with provider credentials from litellm_kwargs
+                # Issue #185: Retry calls were missing vertex_location, vertex_project, etc.
+                retry_provider_kwargs = {k: v for k, v in litellm_kwargs.items()
+                                         if k in ('vertex_credentials', 'vertex_project', 'vertex_location',
+                                                  'api_key', 'base_url', 'api_base')}
+
                 # --- 7. Process Response ---
                 results = []
                 thinking_outputs = []
@@ -2033,7 +2039,8 @@ def llm_invoke(
                                         messages=retry_messages,
                                         temperature=current_temperature,
                                         response_format=response_format,
-                                        **time_kwargs
+                                        **time_kwargs,
+                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                     )
                                     # Re-enable cache - restore original configured cache (restore to original state, even if None)
                                     litellm.cache = configured_cache
@@ -2072,7 +2079,8 @@ def llm_invoke(
                                         messages=retry_messages,
                                         temperature=current_temperature,
                                         response_format=response_format,
-                                        **time_kwargs
+                                        **time_kwargs,
+                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                     )
                                     # Re-enable cache
                                     litellm.cache = original_cache
@@ -2308,7 +2316,8 @@ def llm_invoke(
                                             messages=retry_messages,
                                             temperature=current_temperature,
                                             response_format=response_format,
-                                            **time_kwargs
+                                            **time_kwargs,
+                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                         )
                                         # Re-enable cache
                                         litellm.cache = original_cache
