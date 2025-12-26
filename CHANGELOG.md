@@ -1,3 +1,31 @@
+## v0.0.92 (2025-12-25)
+
+### Feat
+
+- add cloud configuration examples and enhance path handling
+- support subdirectory basenames in output path generation
+- implement environment variable checks for cloud execution in code generator
+- enhance error handling for cloud execution in code generator
+- add centralized cloud configuration module for PDD CLI
+- enhance cloud URL configuration and authentication handling
+- enhance backup organization and schema validation
+
+### Fix
+
+- resolve path resolution mismatch in sync_orchestration
+- mock isatty in test fixture for headless mode compatibility
+- extend --force to skip API key prompts in CI/headless environments
+- add headless mode detection for CI/non-TTY environments
+- add timeout and non-TTY mode for pdd sync in CI
+- rename code.py to buggy.py in agentic test fixtures
+- correct typo in prompt tag from <proompt_content> to <prompt_content>
+- package docs and add fallback path resolution for includes
+
+### Refactor
+
+- remove local _safe_basename function and update tests for subdirectory handling
+- centralize cloud configuration and authentication handling
+
 ## v0.0.91 (2025-12-24)
 
 ### Feat
