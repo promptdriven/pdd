@@ -2,29 +2,35 @@
 
 ### Feat
 
-- add cloud configuration examples and enhance path handling
-- support subdirectory basenames in output path generation
-- implement environment variable checks for cloud execution in code generator
-- enhance error handling for cloud execution in code generator
-- add centralized cloud configuration module for PDD CLI
-- enhance cloud URL configuration and authentication handling
-- enhance backup organization and schema validation
+- **Centralized Cloud Configuration:** Added `pdd/core/cloud.py` module providing `CloudConfig` class for consistent cloud URL configuration and JWT token handling across all cloud-enabled commands. Supports `PDD_CLOUD_URL` for testing against different environments (local emulator, staging, production) and `PDD_JWT_TOKEN` for pre-injected tokens in CI/CD pipelines.
+
+- **Subdirectory Basename Support:** Updated `generate_output_paths`, `sync_main`, and `sync_orchestration` to handle module basenames with subdirectory paths (e.g., `core/cloud`). Directory structure is preserved in output filenames: `core/cloud` with pattern `test_{basename}.py` produces `core/test_cloud.py`.
+
+- **Enhanced Cloud Error Handling:** Cloud code generation now distinguishes between recoverable errors (5xx, timeouts → local fallback) and non-recoverable errors (401 auth, 402 insufficient credits, 403 access denied, 400 validation → immediate failure with clear error message). Added `PDD_CLOUD_ONLY` and `PDD_NO_LOCAL_FALLBACK` env vars to disable local fallback.
+
+- **CI/Headless Mode Detection:** Added automatic TTY detection for CI/non-interactive environments. When `--force` is set and running in headless mode (non-TTY), API key prompts are skipped and cloud authentication failures fail gracefully instead of blocking on user input.
 
 ### Fix
 
-- resolve path resolution mismatch in sync_orchestration
-- mock isatty in test fixture for headless mode compatibility
-- extend --force to skip API key prompts in CI/headless environments
-- add headless mode detection for CI/non-TTY environments
-- add timeout and non-TTY mode for pdd sync in CI
-- rename code.py to buggy.py in agentic test fixtures
-- correct typo in prompt tag from <proompt_content> to <prompt_content>
-- package docs and add fallback path resolution for includes
+- **Path Resolution Mismatch (Issue #177):** Fixed `sync_orchestration` to use absolute paths when calling `code_generator_main` and `context_generator_main`, preventing path resolution mode conflicts between sync (`cwd`) and generate (`config_base`). Also ensures output directories exist before writing.
 
-### Refactor
+- **Package Include Resolution (Issue #175):** `preprocess.py` now falls back to package directory when resolving `<include>` directives, allowing bundled docs like `docs/prompting_guide.md` to be found after pip/wheel installation.
 
-- remove local _safe_basename function and update tests for subdirectory handling
-- centralize cloud configuration and authentication handling
+- **Sync Log Subdirectory Handling:** All sync log and fingerprint file operations now use `_safe_basename()` to properly handle subdirectory basenames in filenames.
+
+- **Prompt Tag Typo:** Corrected `<proompt_content>` to `<prompt_content>` in agentic fix prompt.
+
+- **Agentic Test Fixtures:** Renamed `code.py` to `buggy.py` in agentic test fixtures to avoid confusion with module names.
+
+### CI
+
+- **Package Install Test Workflow:** Added `.github/workflows/package-test.yml` to validate that packaged PDD correctly resolves `<include>` directives for bundled docs when installed via pip/wheel (not editable install).
+
+### Tests
+
+- Added 266 lines of tests in `tests/core/test_cloud.py` covering `CloudConfig` URL resolution, JWT token handling, and environment variable precedence.
+- Added subdirectory basename tests in `test_generate_output_paths.py` and `test_sync_orchestration.py`.
+- Added headless mode and force flag tests across sync and code generator modules.
 
 ## v0.0.91 (2025-12-24)
 
