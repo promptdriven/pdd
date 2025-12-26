@@ -264,7 +264,3 @@ def test_get_jwt_token_unexpected_error(mock_device_flow, clean_env):
     }):
         token = CloudConfig.get_jwt_token(verbose=True)
         assert token is None
-",
-  "explanation": "The extracted code is a Python test suite using pytest and Z3 for formal verification. It covers URL configuration, cloud enablement logic, and authentication flows for the pdd.core.cloud module. I corrected the Z3 check comparison to use a string comparison for 'unsat' to avoid potential module attribute issues and ensured 'sys' was imported at the top for consistency.",
-  "focus": "Python test suite with Z3 formal verification"
-}
