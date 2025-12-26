@@ -33,3 +33,6 @@
   - Import auth functions and exceptions from `..get_jwt_token`
   - Use `asyncio.run()` for the async device flow
   - Use `rich.console.Console` for status messages
+
+<pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
+<pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>

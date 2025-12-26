@@ -1,0 +1,10 @@
+{
+  "pdd_version": "0.0.91",
+  "timestamp": "2025-12-26T06:29:57.644496+00:00",
+  "command": "crash",
+  "prompt_hash": "30fa3a8051de2f1d1acdf17884bfe56b1d5e4c066fccfa733b04d2cf4c88b7e9",
+  "code_hash": "1e0ef465e7bc73e32488db4794fe18443f71edf78bfe540099448605db57da67",
+  "example_hash": "4ff33d961b949bc512affb79542b8400174731d88754144a2563e1200499e9fe",
+  "test_hash": null,
+  "test_files": {}
+}

@@ -5,6 +5,8 @@ Provides consistent cloud URL configuration and JWT token handling
 across all cloud-enabled commands (generate, fix, test, sync, etc.).
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 from typing import Optional
