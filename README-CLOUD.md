@@ -9,7 +9,7 @@
 <a name="what-is-pdd-cloud"></a>
 ## What is PDD Cloud?
 
-PDD Cloud maximizes ease-of-use and reliability of code generation using its proprietary [Autmoted Grounding](#automated-grounding)
+PDD Cloud maximizes ease-of-use and reliability of code generation using its proprietary [Automated Grounding](#automated-grounding)
 
 Currently in invite-only Beta testing, PDD Cloud is not enabled for most users.  Your PDD Commands will default to local-only execution.
 
@@ -36,7 +36,7 @@ Currently in invite-only Beta testing, PDD Cloud is not enabled for most users. 
 
 #### 5. **Collaboration**: 
 - share prompts and generated code with team members
-- access community **PDD Context Memory** to further strengthen your project reliability, and reduce development time
+- access community contributions to **Automated Grounding** to further strengthen your project reliability, and reduce development time
 
 <br><br>
 
@@ -71,7 +71,7 @@ In the dashbaord, you can
 - View usage statistics
 - Manage team access
 - Configure default settings
-- Control access to the community shared **Memory Recall** spaces
+- Control access to the community shared **my Recall** spaces
 - Track costs
 
 <br>
