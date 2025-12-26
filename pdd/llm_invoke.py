@@ -1478,6 +1478,8 @@ def llm_invoke(
                 "messages": formatted_messages,
                 # Use a local adjustable temperature to allow provider-specific fallbacks
                 "temperature": current_temperature,
+                # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
+                "num_retries": 2,
             }
 
             api_key_name_from_csv = model_info.get('api_key') # From CSV

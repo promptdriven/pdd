@@ -536,14 +536,108 @@ def test_full_gen_cloud_fallback_scenarios(
     else:
         mock_local_generator_fixture.assert_not_called()
     
-    mock_get_jwt_token_fixture.side_effect = None 
-    mock_get_jwt_token_fixture.return_value = "test_jwt_token" 
+    mock_get_jwt_token_fixture.side_effect = None
+    mock_get_jwt_token_fixture.return_value = "test_jwt_token"
     mock_requests_post_fixture.side_effect = None
     default_mock_response = MagicMock(spec=requests.Response)
     default_mock_response.json.return_value = {"generatedCode": DEFAULT_MOCK_GENERATED_CODE, "totalCost": DEFAULT_MOCK_COST, "modelName": "cloud_model"}
     default_mock_response.status_code = 200
     default_mock_response.raise_for_status = MagicMock()
     mock_requests_post_fixture.return_value = default_mock_response
+
+
+# Tests for non-recoverable HTTP errors that should NOT fall back to local
+@pytest.mark.parametrize("status_code, error_message, expected_match", [
+    (402, "Insufficient credits", "Insufficient credits"),
+    (401, "Invalid token", "Cloud authentication failed"),
+    (403, "User not approved", "Access denied"),
+    (400, "Empty prompt not allowed", "Invalid request"),
+])
+def test_full_gen_cloud_non_recoverable_http_errors(
+    status_code, error_message, expected_match, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture,
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+):
+    """Test that HTTP 402, 401, 403, 400 errors raise UsageError instead of falling back to local."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "non_recoverable_prompt_python.prompt"
+    create_file(prompt_file_path, "Non-recoverable test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "non_recoverable_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": "Non-recoverable test prompt"},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = "Preprocessed prompt"
+
+    # Create mock response with the specific status code
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.status_code = status_code
+    mock_response.text = error_message
+    mock_response.json.return_value = {"error": error_message, "currentBalance": 0, "estimatedCost": 0.05}
+
+    http_error = requests.exceptions.HTTPError(response=mock_response)
+    http_error.response = mock_response
+    mock_requests_post_fixture.side_effect = http_error
+
+    # Should raise click.UsageError, NOT fall back to local
+    with pytest.raises(click.UsageError, match=expected_match):
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+    # Local generator should NOT have been called
+    mock_local_generator_fixture.assert_not_called()
+
+    # Reset mocks for next test
+    mock_requests_post_fixture.side_effect = None
+    default_mock_response = MagicMock(spec=requests.Response)
+    default_mock_response.json.return_value = {"generatedCode": DEFAULT_MOCK_GENERATED_CODE, "totalCost": DEFAULT_MOCK_COST, "modelName": "cloud_model"}
+    default_mock_response.status_code = 200
+    default_mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = default_mock_response
+
+
+def test_full_gen_cloud_insufficient_credits_displays_balance(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture,
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+):
+    """Test that HTTP 402 error displays current balance and estimated cost from response."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "credits_prompt_python.prompt"
+    create_file(prompt_file_path, "Credits test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "credits_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Credits test prompt"},
+        {"output": output_file_path_str},
+        "python"
+    )
+
+    # Create 402 response with balance info
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.status_code = 402
+    mock_response.text = "Insufficient credits"
+    mock_response.json.return_value = {"error": "Insufficient credits", "currentBalance": 0.02, "estimatedCost": 0.05}
+
+    http_error = requests.exceptions.HTTPError(response=mock_response)
+    http_error.response = mock_response
+    mock_requests_post_fixture.side_effect = http_error
+
+    with pytest.raises(click.UsageError, match="Insufficient credits"):
+        code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
+
+    # Check that balance info was printed
+    printed_messages = [str(call_args[0][0]) for call_args in mock_rich_console_fixture.call_args_list if call_args[0]]
+    assert any("0.02" in msg and "0.05" in msg for msg in printed_messages), \
+        f"Expected balance/cost info in output. Got: {printed_messages}"
+
+    # Reset
+    mock_requests_post_fixture.side_effect = None
 
 
 def test_full_gen_cloud_missing_env_vars_fallback_to_local(

@@ -794,9 +794,32 @@ def code_generator_main(
                         console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
+                        status_code = e.response.status_code if e.response else 0
                         err_content = e.response.text[:200] if e.response else "No response content"
-                        console.print(f"[yellow]Cloud HTTP error ({e.response.status_code}): {err_content}. Falling back to local.[/yellow]")
-                        current_execution_is_local = True
+
+                        # Non-recoverable errors: do NOT fall back to local
+                        if status_code == 402:  # Insufficient credits
+                            try:
+                                error_data = e.response.json()
+                                current_balance = error_data.get("currentBalance", "unknown")
+                                estimated_cost = error_data.get("estimatedCost", "unknown")
+                                console.print(f"[red]Insufficient credits. Current balance: {current_balance}, estimated cost: {estimated_cost}[/red]")
+                            except Exception:
+                                console.print(f"[red]Insufficient credits: {err_content}[/red]")
+                            raise click.UsageError("Insufficient credits for cloud code generation")
+                        elif status_code == 401:  # Authentication error
+                            console.print(f"[red]Authentication failed: {err_content}[/red]")
+                            raise click.UsageError("Cloud authentication failed")
+                        elif status_code == 403:  # Authorization error (not approved)
+                            console.print(f"[red]Access denied: {err_content}[/red]")
+                            raise click.UsageError("Access denied - user not approved")
+                        elif status_code == 400:  # Validation error (e.g., empty prompt)
+                            console.print(f"[red]Invalid request: {err_content}[/red]")
+                            raise click.UsageError(f"Invalid request: {err_content}")
+                        else:
+                            # Recoverable errors (5xx, unexpected errors): fall back to local
+                            console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
+                            current_execution_is_local = True
                     except requests.exceptions.RequestException as e:
                         console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
                         current_execution_is_local = True
