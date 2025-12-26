@@ -1,9 +1,34 @@
 
 ## Configuration
 
-PDD supports multiple configuration methods to customize its behavior for different project structures and contexts.
+Beyond installing PDD and setting up your model provider keys, PDD supports multiple configuration  methods to customize its behavior for individual projects and personalized software engineering workflows.
 
-### Configuration Priority
+- [A Bare Minimum Configuration](#minimum-configuration)
+- [Configuration Value Precedence](#configuration-value-precedence)
+- [`.pddrc` Project Configuration File](#project-configuration-file-pddrc)
+- [Environment Variables](#environment-variables)
+- [Model Configuration with `llm_model.csv`](#model-configuration)
+- [Virtual Environment Installation](#virtual-environment-installation)
+
+<a name="minimum-configuration"></a>
+### A Bare Minimum Configuration
+
+A very basic configuration setup which tells PDD where to put code, examples, and tests:
+
+```bash
+# Add to .bashrc, .zshrc, or equivalent
+export PDD_GENERATE_OUTPUT_PATH=/path/to/generated/code/
+export PDD_EXAMPLE_OUTPUT_PATH=/path/to/examples/
+export PDD_TEST_OUTPUT_PATH=/path/to/tests/
+export PDD_AUTO_UPDATE=true
+```
+
+It also tells PDD to automatically install PDD-CLI updates (PDD_AUTO_UPDATE=true).
+
+Beyond these, PDD offers a variety of variables to control behavior, as below.
+
+<a name="configuration-value-precedence"></a>
+### Configuration Value Precedence
 
 PDD resolves configuration settings in the following order (highest to lowest priority):
 
@@ -174,7 +199,7 @@ contexts:
 
 The `.pddrc` approach is recommended for team projects as it ensures consistent configuration across all team members and can be version controlled.
 
-
+<a name="model-configuration"></a>
 ## Model Configuration (`llm_model.csv`)
 
 PDD uses a CSV file (`llm_model.csv`) to store information about available AI models, their costs, capabilities, and required API key names. When running commands locally (e.g., using the `update_model_costs.py` utility or potentially local execution modes if implemented), PDD determines which configuration file to use based on the following priority:
@@ -183,7 +208,7 @@ PDD uses a CSV file (`llm_model.csv`) to store information about available AI mo
 2.  **Project-specific:** `<PROJECT_ROOT>/.pdd/llm_model.csv` - If the user-specific file is not found, PDD looks for the file within the `.pdd` directory of the determined project root (based on `PDD_PATH` or auto-detection).
 3.  **Package default:** If neither of the above exist, PDD falls back to the default configuration bundled with the package installation.
 
-This tiered approach allows for both shared project configurations and individual user overrides, while ensuring PDD works out-of-the-box without requiring manual configuration.
+This tiered approach allows for both shared project configurations and individual user overrides, while ensuring PDD works out-of-the-box without requiring manual configuration.  
 
 
 The CSV includes columns for:
@@ -202,11 +227,7 @@ For proper model identifiers to use in your custom configuration, refer to the [
 (*Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*)
 
 ---
-
-
-
-## Advanced Installation Options
-
+<a name="virtual-environment-installation"></a>
 ### Virtual Environment Installation
 ```bash
 # Create virtual environment

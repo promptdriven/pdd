@@ -10,7 +10,6 @@ Unique to this approach, **each PDD prompt is a mini-spec of a single output fil
 
 By contrast, prompts in typical AI coding tools are instead incremental patch requests, and these tools will unpredictably update any combination of files in response to a  prompt.   PDD is an excellent complement to such tools - for long-lived codebases and tasks that are repeatedly rebuilt as they evolve, use PDD; for more incremental, one-off, or ephemeral tasks, use agentic coders, such as Claude, Codex, etc.
 
-
 <p align="center">
   <img src="docs/videos/handpaint_demo.gif" alt="PDD Handpaint Demo" />
 </p>
@@ -49,7 +48,7 @@ From here your pdd installation is complete.   For the most convenience, set up 
 ## Configure your API keys & shell
 
 ```bash
-# Creates api-env and llm_model.csv config files in ~/.pdd, updates shell init.
+# Creates api-env and llm_model.csv config files in ~/.pdd, add tab completions, and updates shell init.
 # It also writes a starter prompt (success_python.prompt) for you to try.   
 
 # Re-run this any time to update keys or reinstall completions.   
@@ -65,6 +64,8 @@ pdd setup
 
 (If you skip this step, PDD commands will print a reminder banner so you can finish onboarding later.)
 
+Optional: at this poing you can [begin customizing PDD behavior](README-ADVANCED-CONFIGURATION.md#minimum-configuration)
+
 <br><br>
 ## Then try it out:
 ```bash
@@ -76,7 +77,7 @@ pdd generate success_python.prompt
 
 ## Next steps:
 
-* Review [PDD Basic Concepts](README-CONCEPTS.md) to understand the concepts behind the prompt-driven approach.
+* Review [PDD Fundamental Concepts and Practices](README-CONCEPTS.md) to get oriented to the PDD approach.
 
 * Start incorporating individual [Prompt-Driven Workflows](README-WORKFLOWS.md) into your development cycle.
 

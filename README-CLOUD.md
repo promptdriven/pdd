@@ -9,7 +9,7 @@
 <a name="what-is-pdd-cloud"></a>
 ## What is PDD Cloud?
 
-PDD Cloud maximizes ease-of-use and reliability of code generation using its proprietary **PDD Context Memory** technology.   
+PDD Cloud maximizes ease-of-use and reliability of code generation using its proprietary [Autmoted Grounding](#automated-grounding)
 
 Currently in invite-only Beta testing, PDD Cloud is not enabled for most users.  Your PDD Commands will default to local-only execution.
 
@@ -19,7 +19,7 @@ Currently in invite-only Beta testing, PDD Cloud is not enabled for most users. 
 
 #### 1. **The best available code generation**
 - correctness, reproducibility, and reliability are all built-in
-- built-in **PDD Context Memory** - your code improves the more you use PDD
+- built-in [Automated Grounding](#automated-grounding) - your code improves the more you use PDD
 
 
 #### 2. **Hands-free setup and operation**
@@ -46,15 +46,16 @@ PDD Cloud includes Automated Grounding, which dramatically improves code output 
 
 PDD Cloud maintains the history of your prompts and output code.  This history of an output file captures everything you have ever specified about that code file.  Automatic Grounding selects the best portions of that history to inject into prompts during `pdd generate`.   The result is stable outputs over time.
 
-Without Automatic Grounding, you may experience issues such as these:
-    - function signatures change when you re-generate
-    - features decompose into different functions and objects each time you generate
-    - etc.
+Without Automated Grounding, you may experience issues such as these:
+- function signatures change when you re-generate
+- features decompose into different functions and objects each time you generate
+- etc.
+
 As a result, you will spend more time iterating on prompt details in order to control the LLM generation, along with time spent re-generating and re-testing.
 
-But with PDD Cloud, Automatic Generation remembers the most relevant and salient characteristics described in the prompt/code history, and selects the best ones to guide the LLM in creating correct and stable outputs, as described.
+But with PDD Cloud, Automated Grounding remembers the most relevant and salient characteristics described in the prompt/code history, and selects the best ones to guide the LLM in creating correct and stable outputs, as described.
 
-For a more detailed treatment, see [Automated Grounding](docs/prompting_guide.md#automated-grounding)
+For a more detailed treatment, see [Automated Grounding](docs/prompting_guide.md#automated-grounding) in the prompting guide.
 
 
 ---
@@ -122,6 +123,8 @@ PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with la
 - Response caching for improved performance
 - Smart token usage tracking and cost estimation
 - Interactive API key acquisition when keys are missing
+
+For detailed information about configuring the models available for PDD use, see [Model Configuration](README-ADVANCED-CONFIGURATION.md#model-configuration) in the Advanced Configuration README.
 
 ### Important Note: 
 When keys are missing from the shell environment, PDD commands will prompt for them interactively and securely store them in your local `.env` file.  
