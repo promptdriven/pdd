@@ -1,14 +1,7 @@
 
 % Goal: Write a function `fix_code_loop` that attempts to fix errors in a code module through multiple LLM-driven iterations, with verbose mode and agentic fallback for non-Python or stuck scenarios.
 
-<include>context/python_preamble.prompt</include>
-
-<module_dependencies>
-  <pdd.agentic_crash><include>context/agentic_crash_example.py</include></pdd.agentic_crash>
-  <pdd.agentic_langtest><include>context/agentic_langtest_example.py</include></pdd.agentic_langtest>
-  <pdd.get_language><include>context/get_language_example.py</include></pdd.get_language>
-  <pdd.fix_code_module_errors><include>context/fix_code_module_errors_example.py</include></pdd.fix_code_module_errors>
-</module_dependencies>
+% Dependencies: pdd.agentic_crash.run_agentic_crash, pdd.agentic_langtest.default_verify_cmd_for, pdd.get_language.get_language, pdd.fix_code_module_errors.fix_code_module_errors
 
 % Signature
   fix_code_loop(
@@ -21,32 +14,32 @@
   # On failure: success=False, final_program="", final_code="" (even if originals restored)
 
 % Helpers
-  - `_normalize_agentic_result(result)`: Normalize 2/3/4/5-tuple from run_agentic_crash to 5-tuple.
-  - `_safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None)`: Wrapper that returns failure if prompt_file empty. Maps verification_program → program_file, error_log_file → crash_log_file. Pass `cwd=Path(prompt_file).parent` when calling.
-  - `run_process_with_output(cmd_args, timeout=300)`: Subprocess with threaded byte-by-byte streaming capture. Returns (returncode, stdout, stderr).
+  - `_normalize_agentic_result(result)`: Normalize 2/3/4/5-tuple from run_agentic_crash to 5-tuple (success, msg, cost, model, changed_files).
+  - `_safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None)`: Wrapper that returns failure if prompt_file empty. Maps verification_program → program_file, error_log_file → crash_log_file.
+  - `run_process_with_output(cmd_args, timeout=300)`: Subprocess with threaded byte-by-byte streaming capture, process group termination on timeout. Returns (returncode, stdout, stderr).
   - `ProcessResult`: Simple class holding returncode, stdout, stderr.
 
 % Process
-  0. Validate files: code_file missing → FileNotFoundError; verification_program missing → return failure. Non-Python: run default_verify_cmd_for, trigger agentic fallback on failure or return success.
+  0. Validate files: code_file missing → FileNotFoundError; verification_program missing → return failure. Non-Python: get verify command via default_verify_cmd_for; if None, trigger agentic fallback directly; else run it and fallback on failure or return success.
 
-  1. Remove error_log_file if exists. Create backups: `{stem}_original_backup{suffix}`.
+  1. Remove error_log_file if exists. Create backups in `.pdd/backups/{stem}/{timestamp}/`.
 
   2. Init: attempts=0, total_cost=0.0, success=False, model_name=None, history_log="<history>\n".
 
   3. Loop while attempts < max_attempts and total_cost <= budget:
      - Run verification (300s timeout), append <verification> with <status>/<output>/<error> CDATA.
      - Success (rc=0): break. Failure: add <current_error>, check limits.
-     - Create per-attempt backups: `{base}_{N}{ext}`.
+     - Create per-attempt backups in same backup directory.
      - Call fix_code_module_errors, append <fixing> with <llm_analysis>/<decision>/<cost>/<model>.
-     - Write history to error_log_file. Accumulate cost.
+     - Write history to error_log_file. Accumulate cost and increment attempts.
      - Stop if budget exceeded or no changes suggested.
-     - Apply fixes, then increment attempts.
+     - Apply fixes.
 
-  4. On failure: restore original backups. Always cleanup backups. Write final history.
+  4. On failure: restore original backups. Cleanup backup files. Write final history.
 
   5. Success: read final contents. Failure: return empty strings.
 
-  6. If failure + agentic_fallback: ensure error_log_file exists, call _safe_run_agentic_crash with `cwd=Path(prompt_file).parent`, re-read on success.
+  6. If failure + agentic_fallback: ensure error_log_file exists, call _safe_run_agentic_crash, re-read on success.
 
   7. Return (success, final_program, final_code, attempts, total_cost, model_name).
 

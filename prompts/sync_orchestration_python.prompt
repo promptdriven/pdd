@@ -118,6 +118,8 @@ from .sync_determine_operation import (
     SyncLock,
     read_run_report,
     calculate_sha256,
+    calculate_current_hashes,
+    _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -129,12 +131,13 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
+from .pytest_output import extract_failing_files_from_output
 from . import DEFAULT_STRENGTH
 ```
 
 ### Function-Scope Imports
 
-- `calculate_current_hashes`, `Fingerprint` - in `_save_operation_fingerprint()`
+- `Fingerprint` - in `_save_operation_fingerprint()`
 - `datetime, timezone` from datetime - in `_save_operation_fingerprint()`
 - `get_extension` - at the start of `sync_orchestration()`
 - `get_test_command_for_file` from `.get_test_command` - in `_execute_tests_and_create_run_report()` and fix operation
@@ -142,6 +145,7 @@ from . import DEFAULT_STRENGTH
 - `show_exit_animation` - after `app.run()` completes
 - `shutil` - inside auto-deps operation block
 - `traceback` - in exception handlers
+- `tempfile` - in `AtomicStateUpdate` for atomic file writes
 
 ### Standard Library
 
@@ -163,8 +167,9 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 4. **crash**: Fix runtime errors to make code executable
 5. **verify**: Verify against prompt intent (unless `--skip-verify`)
 6. **test**: Generate unit tests (unless `--skip-tests`)
-7. **fix**: Resolve test failures
-8. **update**: Back-propagate learnings to prompt
+7. **test_extend**: Add more tests to improve coverage when below target
+8. **fix**: Resolve test failures
+9. **update**: Back-propagate learnings to prompt
 
 Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`, `analyze_conflict`
 
@@ -184,11 +189,25 @@ When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language}_sy
 6. After `app.run()` completes, check `app.worker_exception` for worker thread crashes; print error and traceback to stderr
 7. If `app.run()` returns None, return error dict indicating sync was interrupted
 
+### Headless Mode
+
+Detect headless mode when `quiet=True`, no TTY (`not sys.stdout.isatty()`), or CI environment (`os.environ.get('CI')`). In headless mode:
+- Set `PDD_FORCE=1` to skip API key prompts
+- Run `sync_worker_logic()` directly without TUI
+- Skip exit animation
+
 ### State Persistence
 
 After each successful operation:
 - Save a `Fingerprint` to disk with current file hashes
 - This advances the state machine for subsequent `sync_determine_operation` calls
+
+### Atomic State Updates
+
+Use `AtomicStateUpdate` context manager (Issue #159 fix) to ensure run_report and fingerprint are written atomically:
+- Write to temp file, then `os.replace()` for atomic rename
+- On exception, rollback (clean up temp files, don't commit)
+- Prevents state desynchronization from partial writes
 
 ### Skip Handling
 
@@ -202,11 +221,15 @@ When `skip_verify` or `skip_tests` is set:
 - After **generate**: Delete stale run_report to force re-validation
 - After **crash**: Re-run example to verify fix, update run report
 - After **fix**: Re-run tests to update run report
-- After **test**: Execute tests to create initial run report
+- After **test** and **test_extend**: Execute tests to create/update run report
 
 ### Multi-Language Test Support
 
 For non-Python languages, use `get_test_command_for_file()` to determine the appropriate test runner command (see `get_test_command_example` in dependencies). The `_parse_test_output()` helper parses output from pytest, Jest/Vitest/Mocha, go test, and cargo test.
+
+### Multiple Test Files (Bug #156)
+
+Support tracking multiple test files via `test_files` in `pdd_files`. Use `extract_failing_files_from_output()` to parse pytest output and find actual failing files. When running fix, pass the correct failing test file to `fix_main()`.
 
 ## Helper Functions
 
@@ -217,14 +240,17 @@ Implement these helpers for state management:
 - `update_sync_log_entry(entry, result, duration)` - Add execution results to log entry
 - `append_sync_log(basename, language, entry)` - Append entry to log file
 - `log_sync_event(basename, language, event, details)` - Log system events (lock_acquired, budget_warning, etc.)
-- `save_run_report(report, basename, language)` - Save RunReport dict to enable state progression
-- `_save_operation_fingerprint(basename, language, operation, paths, cost, model)` - Save fingerprint after success
+- `save_run_report(report, basename, language, atomic_state=None)` - Save RunReport dict; supports atomic writes via optional `AtomicStateUpdate`
+- `_save_operation_fingerprint(basename, language, operation, paths, cost, model, atomic_state=None)` - Save fingerprint after success; supports atomic writes
 - `_display_sync_log(basename, language, verbose)` - Format and display sync log
 - `_create_mock_context(**kwargs)` - Create Click context for command execution
 - `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage); supports Python (pytest), JavaScript/TypeScript (Jest/Vitest/Mocha), Go, and Rust (cargo test)
-- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None)` - Run tests with coverage using language-appropriate test command and parse results
+- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)` - Run tests with coverage; supports multiple test files (Bug #156)
 - `_python_cov_target_for_code_file(code_file)` - Determine dotted module path for pytest-cov
 - `_python_cov_target_for_test_and_code(test_file, code_file, fallback)` - Analyze test imports to pick best `--cov` target
+- `_detect_example_errors(output)` - Detect Python tracebacks and ERROR log messages in example output
+- `_try_auto_fix_import_error(error_output, code_file, example_file)` - Auto-fix common import errors (sys.path issues, missing packages) before expensive agentic fix
+- `_run_example_with_error_detection(cmd_parts, env, cwd, timeout=60)` - Run example with error detection; handles server-style blocking examples
 
 ## Error Handling
 
@@ -242,6 +268,8 @@ Detect and break infinite loops with these limits:
 - Test-fix alternation: Break after 2 cycles
 - Consecutive fix operations: Break after 5
 - Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
+- Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3) - Bug #157 fix
+- Consecutive test_extend operations: Break after `MAX_TEST_EXTEND_ATTEMPTS` (2) and accept current coverage
 
 ### Budget and Lock Management
 
@@ -269,8 +297,22 @@ Handle command results in multiple formats:
 ```python
 # Module level
 MAX_CONSECUTIVE_TESTS = 3  # Break after this many consecutive test operations
+MAX_TEST_EXTEND_ATTEMPTS = 2  # Accept current coverage after this many extend attempts
+MAX_CONSECUTIVE_CRASHES = 3  # Break crash loop after this many attempts (Bug #157)
 
 # Inside sync_worker_logic()
 MAX_CYCLE_REPEATS = 2  # Break crash-verify and test-fix cycles after this many repetitions
 ```
+
+## Classes
+
+### AtomicStateUpdate
+
+Context manager for atomic state updates (Issue #159 fix):
+- `__init__(basename, language)` - Initialize with module info
+- `set_run_report(report, path)` - Buffer run report for atomic write
+- `set_fingerprint(fingerprint, path)` - Buffer fingerprint for atomic write
+- `_atomic_write(data, target_path)` - Write via temp file + `os.replace()`
+- `_commit()` - Write all buffered state on successful exit
+- `_rollback()` - Clean up temp files on exception
 
