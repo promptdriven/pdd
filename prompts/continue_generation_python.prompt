@@ -1,59 +1,31 @@
-% You are an expert Python Software Engineer. Your goal is to write a Python function, "continue_generation", that will complete the generation of a prompt using a large language model.
+% You are an expert Python Software Engineer. Write a function `continue_generation` that completes LLM output generation through iterative continuation.
 
 <include>./context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
+% Inputs/Outputs
     Inputs:
-        - 'formatted_input_prompt': A string containing the input prompt with all variables substituted in.
-        - 'llm_output': A string containing the current output from the LLM that needs to be checked for completeness and will be appended with additional generations to create final_llm_output.
-        - 'strength': A float value between 0 and 1 representing the strength parameter for the LLM model, used to influence the model's behavior.
-        - 'temperature': A float value between 0 and 1 representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
-        - 'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
-        - 'verbose': A boolean that indicates whether to print out the details of the function. Default is False.
+        - 'formatted_input_prompt': str - The input prompt with all variables substituted.
+        - 'llm_output': str - Current LLM output to be continued.
+        - 'strength': float (0-1) - Strength parameter for the LLM.
+        - 'temperature': float (0-1) - Temperature parameter for the LLM.
+        - 'time': float (0-1) - Thinking effort for LLM. Default is DEFAULT_TIME.
+        - 'language': Optional[str] - Language hint passed to llm_invoke/unfinished_prompt. Default is None.
+        - 'verbose': bool - Print details if True. Default is False.
     Outputs:
-        - 'final_llm_output': A string containing the complete output from the LLM after all necessary continuations.
-        - 'total_cost': A float value representing the total cost of running the function.
-        - 'model_name': A string containing the name of the selected LLM model.
+        - Tuple of (final_llm_output: str, total_cost: float, model_name: str)
 
-% Here are examples of how to use internal modules:
+% Dependencies
 <internal_example_modules>
-    % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>./context/preprocess_example.py</include></preprocess_example>
-
-    % For loading prompt templates: <load_prompt_template_example><include>./context/load_prompt_template_example.py</include></load_prompt_template_example>
-
-    % For running prompts with llm_invoke: <llm_invoke_example><include>./context/llm_invoke_example.py</include></llm_invoke_example>
-
-    % Example usage of the unfinished_prompt function: <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+    <llm_invoke_example><include>./context/llm_invoke_example.py</include></llm_invoke_example>
+    <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
 </internal_example_modules>
 
-% Use a strength of .5 and a temperature of 0 for the unfinished_prompt function.
-
-% Steps to be followed by the function:
-    Step 1. Load these prompt templates using load_prompt_template:
-        - 'continue_generation_LLM'
-        - 'trim_results_start_LLM'
-        - 'trim_results_LLM'
-    Step 2. Preprocess the prompts from Step 1 using the preprocess function (with recursive but no doubling of curly brackets) using the preprocess module.
-    Step 3. Run the trim_results_start_LLM prompt through llm_invoke:
-        - a. Pass the following string parameters: 'LLM_OUTPUT': llm_output
-        - b. Use strength=DEFAULT_STRENGTH, temperature=0, and the input 'time' parameter
-        - c. Extract the 'code_block' from the Pydantic output
-    Step 3. Enter a loop for continuing generation:
-        a. Run the continue_generation_LLM prompt through llm_invoke:
-           - Pass 'FORMATTED_INPUT_PROMPT' and 'LLM_OUTPUT' (code_block) as parameters
-           - Use the provided strength, temperature, and the input 'time' parameter
-        b. Check if generation is complete using unfinished_prompt:
-           - Pass the last 600 characters of the output
-           - If incomplete, append the continue_result to code_block and loop
-           - If complete:
-             * Run trim_results_LLM prompt through llm_invoke with:
-               - 'CONTINUED_GENERATION': continue_result
-               - 'GENERATED_RESULTS': last 200 chars of code_block
-               - strength=DEFAULT_STRENGTH, temperature=0, and the input 'time' parameter
-             * Extract 'trimmed_continued_generation' from Pydantic output
-             * Append to code_block and break loop
-        c. Print loop count if verbose is True
-    Step 4. Pretty print the final code_block if verbose is True
-    Step 5. Return the code_block as final_llm_output, sum of all llm_invoke costs as total_cost, and model_name from the continue_generation_LLM invoke
-
-% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.
+% Requirements
+1. Load and preprocess three prompt templates: 'continue_generation_LLM', 'trim_results_start_LLM', 'trim_results_LLM' (recursive, no double curly brackets).
+2. Use Pydantic models for structured trim outputs (explanation + extracted field).
+3. First trim the start of llm_output using trim_results_start_LLM with EXTRACTION_STRENGTH, temperature=0.
+4. Loop: continue generation with continue_generation_LLM, check last 600 chars with unfinished_prompt (strength=0.5, temperature=0).
+5. On completion: trim the continuation with trim_results_LLM (EXTRACTION_STRENGTH, temperature=0), append, and exit.
+6. Track and return total cost from all llm_invoke calls; return model_name from continue_generation_LLM call.
+7. Pass 'language' parameter to all llm_invoke and unfinished_prompt calls.
+8. Validate inputs: strength and temperature must be 0-1, llm_output cannot be empty.

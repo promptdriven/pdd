@@ -76,7 +76,8 @@ def test_code_generator_valid_input_complete(
         temperature=0.5,
         time=None,
         verbose=True,
-        output_schema=None
+        output_schema=None,
+        language='python',
     )
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
@@ -129,7 +130,8 @@ def test_code_generator_valid_input_incomplete(
         temperature=0.7,
         time=None,
         verbose=False,
-        output_schema=None
+        output_schema=None,
+        language='python',
     )
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
@@ -391,7 +393,7 @@ def test_generate_loops_when_unfinished_never_true(monkeypatch):
         return {"result": initial_code, "cost": 0.0, "model_name": "mock"}
 
     # Continue/trimming LLM calls inside continue_generation
-    def cont_llm_invoke_stub(*, prompt, input_json, strength, temperature, time, verbose=False, output_pydantic=None):
+    def cont_llm_invoke_stub(*, prompt, input_json, strength, temperature, time, verbose=False, output_pydantic=None, language=None):
         text_prompt = str(prompt)
         # Trim start prompt (typed output)
         if "expert editor and JSON creator" in text_prompt:
