@@ -1,25 +1,32 @@
 import sys
 import os
 
-# Add the source directory to the system path to allow importing the module.
-# The module is located in the '../src' directory relative to this script.
+# Add the src directory to the system path to allow importing the hello module
+# This ensures the example is portable and can find the module relative to this script's location
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_path = os.path.join(current_dir, '..', 'src')
 sys.path.append(src_path)
 
-# Import the specific function from the module
 from hello import hello
 
-def main():
+def run_example():
     """
-    Demonstrates the usage of the hello module.
+    Demonstrates the usage of the hello function from the hello module.
+
+    Input Parameters:
+        None
+
+    Output:
+        Prints "hello" to the standard output.
     """
-    print("Calling hello() function:")
+    print("--- Running hello() example ---")
     
     # Call the hello function
-    # Input: None
-    # Output: Prints "hello" to standard output
+    # This function takes no arguments and returns None.
+    # Its primary side effect is printing to the console.
     hello()
 
+    print("--- Example complete ---")
+
 if __name__ == "__main__":
-    main()
+    run_example()
