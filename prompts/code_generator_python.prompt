@@ -1,16 +1,17 @@
-% You are an expert Python engineer. Your goal is to write a python function, "code_generator", that will compile a prompt into a code file. 
+% You are an expert Python engineer. Your goal is to write a python function, "code_generator", that will compile a prompt into a code file.
 
 <include>../context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'prompt' - A string containing the raw prompt to be processed.
         'language' - A string that is the language type (e.g. python, bash) of file that will be outputed by the LLM.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
-        'time' - A float in [0,1] or None that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME. If None, treat as DEFAULT_TIME before invoking llm_invoke.
+        'time' - A float in [0,1] or None that controls the thinking effort for the LLM model, passed to llm_invoke. Default is None.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
         'preprocess_prompt' - A boolean that indicates whether to preprocess the prompt. Default is True.
+        'output_schema' - An optional dict (JSON schema) to enforce structured output. Default is None.
     Outputs:
         'runnable_code' - A string that is runnable code
         'total_cost' - A float that is the total cost of all LLM calls within this function (initial generation, unfinished check, continuation if used, and postprocess)
@@ -48,18 +49,19 @@
     Step 1. Conditionally preprocess the raw prompt using the preprocess function from the preprocess module based on the value of 'preprocess_prompt'. If 'preprocess_prompt' is True, preprocess the prompt; otherwise, use the raw prompt directly. When preprocessing, it is acceptable to enable options such as double_curly_brackets=True and recursive=False to preserve placeholders and avoid over-expansion.
 
     Step 2. Generate the initial response as follows:
-        - If the prompt contains embedded data URLs (e.g., 'data:image/...;base64,...'), split the prompt into alternating text and image parts (preserving order) and call llm_invoke with messages=[{role: 'user', content: [{type: 'image_url', image_url: {url: ...}}, {type: 'text', text: ...}, ...]}] and the provided strength, temperature, time, and verbose.
-        - Otherwise, call llm_invoke with the (preprocessed or raw) prompt, input_json={}, and the provided strength, temperature, time, and verbose.
+        - If the prompt contains embedded data URLs (e.g., 'data:image/...;base64,...'), split the prompt into alternating text and image parts (preserving order) and call llm_invoke with messages=[{role: 'user', content: [{type: 'image_url', image_url: {url: ...}}, {type: 'text', text: ...}, ...]}] and the provided strength, temperature, time, verbose, output_schema, and language.
+        - Otherwise, call llm_invoke with the (preprocessed or raw) prompt, input_json={}, and the provided strength, temperature, time, verbose, output_schema, and language.
 
     Step 3. Detect if the generation is incomplete using the unfinished_prompt function (use strength=0.5, temperature=0.0) by passing in the last 600 characters of the output of Step 2. Pass through language, time, and verbose.
-        - a. If incomplete, call the continue_generation function to complete the generation and set final_output to that result.
+        - a. If incomplete, call the continue_generation function to complete the generation and set final_output to that result. Pass through language, time, and verbose.
         - b. Else, set final_output to the initial model output.
 
-    Step 4. Postprocess the final_output using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant. Use temperature=0.0 and pass through language, time, and verbose.
+    Step 4. Postprocess the final_output:
+        - If language is "json" (case-insensitive) or output_schema is provided, skip extraction: if final_output is a string, return it as-is; otherwise, serialize it with json.dumps.
+        - Otherwise, use the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant. Use temperature=0.0 and pass through language, time, and verbose.
 
     Step 5. Return the runnable_code, total_cost and model_name.
 
 % Validation and defaults:
     - Validate non-empty 'prompt' and 'language'.
     - Enforce 0 ≤ strength ≤ 1 and 0 ≤ temperature ≤ 2.
-    - Enforce 0 ≤ time ≤ 1 when provided; if time is None, substitute DEFAULT_TIME before llm_invoke.
