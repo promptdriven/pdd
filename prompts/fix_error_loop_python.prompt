@@ -1,20 +1,20 @@
-% You are an expert Python Software Engineer. Write a module containing the `fix_error_loop` function that implements an iterative, agentic workflow to fix errors in unit tests and code using an LLM.
+% You are an expert Python Software Engineer. Your goal is to write a robust Python module containing the `fix_error_loop` function and its associated helpers. This module implements an iterative, agentic workflow to fix errors in unit tests and their corresponding code files using an LLM.
 
 ### Role and Scope:
-Core execution engine for automated code-repair. Manages fix attempt lifecycle: run tests, capture failures, invoke LLM for repairs, verify, and fall back to agentic fix if the loop fails. Handles state management (backups/restoration) and detailed logging.
+This module acts as the core execution engine for an automated code-repair system. It manages the lifecycle of a "fix attempt," which includes running tests, capturing failures, invoking an LLM to suggest repairs, verifying those repairs, and falling back to a more powerful agentic fix if the iterative loop fails. It is responsible for state management (backups and restoration) and detailed logging.
 
 ### Requirements:
-1.  **Iterative Fixing:** `fix_error_loop` resolves code/test mismatches over multiple iterations (up to `max_attempts`), tracking failures, errors, and warnings.
-2.  **Statistics & Improvement:** Maintain a `stats` dictionary tracking initial/final states, improvement percentages, and `best_iteration`.
-3.  **Structured XML Logging:** Dictionary-based log formatted into XML tags (`<pytest_output>`, `<fix_attempt>`, `<verification_output>`) per iteration, written to `error_log_file`.
-4.  **Best State Recovery:** If final iteration isn't best (prioritize: lowest errors → fails → warnings), restore from best iteration backups.
-5.  **Verification Step:** After code updates, run verification via `detect_host_python_executable`. On non-zero exit, restore backup and log restoration.
-6.  **Agentic Fallback:** If loop fails and budget remains, invoke `run_agentic_fix`. Ensure `error_log_file` is populated before agent call.
-7.  **Non-Python Support:** Detect by extension, use `default_verify_cmd_for` for initial verification. If it fails, skip pytest loop and go directly to agentic fallback.
-8.  **Budget Management:** Accumulate `total_cost` from LLM calls; stop immediately if `budget` exceeded.
-9.  **Output Contract:** Return 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
-    *   If tests pass initially: return actual file contents, `0` attempts, `0.0` cost, empty model name.
-10. **Result Normalization:** `_normalize_agentic_result` handles 2/3/4/5-tuple returns from agentic fix, extracting `changed_files` if available.
+1.  **Iterative Fixing Logic:** The `fix_error_loop` must attempt to resolve code/test mismatches over multiple iterations (up to `max_attempts`). It must track failures, errors, and warnings at each step.
+2.  **Statistics & Improvement Tracking:** Maintain a `stats` dictionary to track initial/final states, improvement percentages, and identify the `best_iteration`.
+3.  **Structured XML Logging:** Implement a dictionary-based log structure. This must be formatted into a string using XML tags (`<pytest_output>`, `<fix_attempt>`, `<verification_output>`) for each iteration and written to `error_log_file`.
+4.  **Best State Recovery:** If the final iteration is not the most successful (prioritizing lowest errors, then fails, then warnings), the module must restore the file contents from the best recorded iteration backups.
+5.  **Verification Step:** After every code update, run a verification program using `detect_host_python_executable`. If the verification returns a non-zero exit code, restore the previous code backup immediately and log the restoration.
+6.  **Agentic Fallback:** If the loop finishes without total success and budget remains, invoke `run_agentic_fix`. Ensure the `error_log_file` is populated with the current state before the agent is called.
+7.  **Non-Python Support:** Detect non-Python files by extension. Use `default_verify_cmd_for` to run initial verification. If it fails, skip the standard pytest loop and go directly to the agentic fallback.
+8.  **Cost & Budget Management:** Accumulate `total_cost` from LLM calls and stop the loop immediately if the `budget` is exceeded.
+9.  **Output Contract:** Return a 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
+    *   *Note:* If tests pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and an empty string for `model_name`.
+10. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
 
 ### Public Interface:
 
@@ -34,74 +34,93 @@ def fix_error_loop(
     time: float = DEFAULT_TIME,
     agentic_fallback: bool = True
 ) -> tuple[bool, str, str, int, float, str]:
-    """Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)"""
+    """
+    Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
+    """
 ```
 
 ### Internal Data Structures:
 
-**`stats` dictionary:**
+**`stats` dictionary** - Tracks improvement metrics across iterations:
 ```python
 stats = {
-    "initial_fails": int, "initial_errors": int, "initial_warnings": int,
-    "final_fails": int, "final_errors": int, "final_warnings": int,
-    "best_iteration": int | str | None,  # iteration number, "final", or 0
-    "iterations_info": list,
-    "improvement": {"fails_reduced": int, "errors_reduced": int, "warnings_reduced": int, "percent_improvement": float}
+    "initial_fails": int,      # Failures from initial test run
+    "initial_errors": int,     # Errors from initial test run
+    "initial_warnings": int,   # Warnings from initial test run
+    "final_fails": int,        # Final failure count (initialized to 0)
+    "final_errors": int,       # Final error count (initialized to 0)
+    "final_warnings": int,     # Final warning count (initialized to 0)
+    "best_iteration": int | str | None,  # Iteration number, "final", or 0 (initially passing)
+    "iterations_info": list,   # Per-iteration stats
+    "improvement": {           # Added at end
+        "fails_reduced": int,
+        "errors_reduced": int,
+        "warnings_reduced": int,
+        "percent_improvement": float  # 100 if initially zero issues
+    }
 }
 ```
 
-**`_normalize_agentic_result` mapping:**
-| Input | Output |
-|-------|--------|
-| 5-tuple | `(success, msg, cost, model, changed_files)` directly |
-| 4-tuple | add `changed_files=[]` |
-| 3-tuple | add `model="agentic-cli"`, `changed_files=[]` |
-| 2-tuple | add `cost=0.0`, `model="agentic-cli"`, `changed_files=[]` |
+**`_normalize_agentic_result` mapping** - Handles variable return shapes from `run_agentic_fix`:
+| Input Shape | Mapping |
+|-------------|---------|
+| 5-tuple | `(success, msg, cost, model, changed_files)` → use directly |
+| 4-tuple | `(success, msg, cost, model)` → `changed_files=[]` |
+| 3-tuple | `(success, msg, cost)` → `model="agentic-cli"`, `changed_files=[]` |
+| 2-tuple | `(success, msg)` → `cost=0.0`, `model="agentic-cli"`, `changed_files=[]` |
 
-Returns: `(bool, str, float, str, List[str])`
+Returns normalized 5-tuple: `(bool, str, float, str, List[str])`
 
 ### Control Flow:
 
 ```mermaid
 stateDiagram-v2
     [*] --> Init: validate files exist
+
     Init --> InitialTest: run pytest or verify cmd
+
     InitialTest --> NonPythonFallback: non-Python && fails
     InitialTest --> NonPythonPass: non-Python && passes
     InitialTest --> FixLoop: Python (always enters loop)
 
     state FixLoop {
         [*] --> CheckSuccess
-        CheckSuccess --> ReadFiles_InLoop: success=true (break, read files HERE)
+        CheckSuccess --> ReadFiles_InLoop: success=true
+        ReadFiles_InLoop --> [*]: break (files read HERE for initially_passing!)
+
         CheckSuccess --> CreateBackups: success=false
         CreateBackups --> UpdateBestIteration
-        UpdateBestIteration --> CallLLMFix
+        UpdateBestIteration --> CallLLMFix: fix_errors_from_unit_tests
         CallLLMFix --> IncrementAttempts: fix_attempts++
         IncrementAttempts --> WriteFiles
         WriteFiles --> RunVerification
         RunVerification --> RestoreBackup: verification fails
         RestoreBackup --> RerunPytest
         RunVerification --> RerunPytest: verification passes
-        RerunPytest --> CheckSuccess
+        RerunPytest --> CheckSuccess: update success
     }
 
-    FixLoop --> PostLoop
+    FixLoop --> PostLoop: loop exits
+
     PostLoop --> RestoreBest: !success && best_attempt!=None
     PostLoop --> SetFinal: success OR best_attempt==None
     RestoreBest --> ReadFiles_PostLoop
     SetFinal --> ReadFiles_PostLoop: stats["best_iteration"]="final"
     ReadFiles_PostLoop --> PrintSummary: skip read if initially_passing
+
     PrintSummary --> AgenticFallback: !success && budget remains
     PrintSummary --> Return: success
+
     AgenticFallback --> Return
     NonPythonFallback --> Return
     NonPythonPass --> Return
+
     Return --> [*]
 ```
 
 Notes:
 - ALL Python files enter FixLoop (even initially-passing)
-- Initially-passing: CheckSuccess → ReadFiles_InLoop → break → PostLoop → SetFinal
+- Initially-passing: CheckSuccess → ReadFiles_InLoop → break → PostLoop → SetFinal (stats="final")
 - `fix_attempts` counts LLM calls, not loop iterations
 - PostLoop skips file read for initially_passing (already read in loop)
 
@@ -131,16 +150,22 @@ Notes:
 </internal_modules>
 
 ### Instructions:
-1.  **`run_pytest_on_file(test_file)`**: Use `run_pytest_and_capture_output`. Extract failures/errors/warnings from first JSON result. Combine `standard_output` and `standard_error` for log.
-2.  **`format_log_for_output(log_structure)`**: Convert iteration list to string with XML tags and `iteration=n` attributes. First iteration includes initial test output.
-3.  **`fix_error_loop`**:
-    *   **Init**: Setup stats, best iteration tracker (use `sys.maxsize` for comparison), structured log.
-    *   **Initial Check**: Run pytest (or verify for non-Python). Exit early if passing per output contract.
-    *   **Loop**: Create timestamped backups (`filename_iter_err_fail_warn_timestamp.ext`), call `fix_errors_from_unit_tests` with `formatted_log`, update files, verify, re-run pytest.
-    *   **Finalize**: Compare final to best iteration, restore if needed. Print `rich` summary with percentage reduction.
-4.  **Agentic Fallback**: `_safe_run_agentic_fix` calls agent and normalizes result. Ensure `error_log_file` written before call. If no iterations ran, write initial state. Log `agent_changed_files` to console.
-5.  **Console Output**: Use `rich.print` as `rprint`. Implement `escape_brackets` helper to prevent Rich from parsing square brackets.
+1.  **Implement `run_pytest_on_file(test_file)`**: Use `run_pytest_and_capture_output`. Extract failures, errors, and warnings from the first result in the JSON. Combine `standard_output` and `standard_error` for the log.
+2.  **Implement `format_log_for_output(log_structure)`**: Convert the iteration list into a string. Ensure the first iteration includes the initial test output. Use XML tags with `iteration=n` attributes.
+3.  **Implement `fix_error_loop`**:
+    *   **Initialization**: Setup stats, best iteration tracker (using `sys.maxsize` for initial comparison), and the structured log.
+    *   **Initial Check**: Run pytest (or verification for non-Python). If initially passing, exit early per the output contract.
+    *   **The Loop**: 
+        *   Create timestamped backups: `filename_iter_err_fail_warn_timestamp.py`.
+        *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context.
+        *   Update files, run verification, and re-run pytest to update the state.
+    *   **Finalization**: Compare final state to the best iteration and restore if necessary. Print a `rich` summary of improvements including percentage reduction.
+4.  **Agentic Fallback Logic**: Implement `_safe_run_agentic_fix` which calls the agent and passes the result through `_normalize_agentic_result`. 
+    * Ensure the `error_log_file` is written to disk before the agent is called. 
+    * If no iterations were run, write the initial state and pytest output to the log file.
+    * Log the list of `agent_changed_files` to the console if the agent modifies files.
+5.  **Console Output**: Use `rich.print` (as `rprint`). Implement an `escape_brackets` helper to prevent Rich from parsing square brackets in logs.
 
 ### Deliverables:
-*   Standalone Python file with `run_pytest_on_file`, `format_log_for_output`, `fix_error_loop`, and normalization helpers.
-*   Include `if __name__ == "__main__":` block with sample execution using mock parameters.
+*   A standalone Python file containing `run_pytest_on_file`, `format_log_for_output`, `fix_error_loop`, and the normalization helpers.
+*   The module must include an `if __name__ == "__main__":` block demonstrating a sample execution with mock parameters.
