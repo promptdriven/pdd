@@ -1,51 +1,69 @@
-% Write function "fix_verification_errors_loop" that iteratively fixes code errors by comparing program execution output against the original prompt's intent.
+% Goal: Write a function `fix_verification_errors_loop` that iteratively fixes code errors by running a program and comparing output against the prompt's intent, with secondary verification and agentic fallback.
 
-<include>context/python_preamble.prompt</include>
+% Dependencies: pdd.fix_verification_errors.fix_verification_errors, pdd.agentic_verify.run_agentic_verify, pdd.agentic_langtest.default_verify_cmd_for, pdd.get_language.get_language, pdd.python_env_detector.detect_host_python_executable
 
-% Signature:
-def fix_verification_errors_loop(
-    program_file: str,           # Python program exercising code_file
-    code_file: str,              # Code being verified/fixed
-    prompt: str,                 # Prompt defining intended behavior
-    prompt_file: str,            # Path to prompt file (for agentic fallback)
-    verification_program: str,   # Secondary verification program (must exist)
-    strength: float,             # [0,1] LLM model strength
-    temperature: float,          # [0,1] LLM temperature
-    max_attempts: int,           # Max fix attempts
-    budget: float,               # Max cost allowed
+% Signature
+  fix_verification_errors_loop(
+    program_file: str, code_file: str, prompt: str, prompt_file: str,
+    verification_program: str, strength: float, temperature: float,
+    max_attempts: int, budget: float,
     verification_log_file: str = "verification.log",
-    output_code_path: Optional[str] = None,
-    output_program_path: Optional[str] = None,
-    verbose: bool = False,
-    program_args: Optional[list[str]] = None,
-    llm_time: float = DEFAULT_TIME,
-    agentic_fallback: bool = True,
-) -> Dict[str, Any]:  # Returns: success, final_program, final_code, total_attempts, total_cost, model_name, statistics
+    output_code_path: Optional[str] = None, output_program_path: Optional[str] = None,
+    verbose: bool = False, program_args: Optional[list[str]] = None,
+    llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True
+  ) -> Dict[str, Any]
+  # Returns: {success, final_program, final_code, total_attempts, total_cost, model_name, statistics}
 
-% Dependencies:
-<fix_verification_errors_example>
-    <include>context/fix_verification_errors_example.py</include>
-</fix_verification_errors_example>
-<agentic_verify_example><include>context/agentic_verify_example.py</include></agentic_verify_example>
-<agentic_langtest_example><include>context/agentic_langtest_example.py</include></agentic_langtest_example>
-<get_language_example><include>context/get_language_example.py</include></get_language_example>
+% Helpers
+  - `_normalize_agentic_result(result)`: Normalize 2/3/4/5-tuple from run_agentic_verify to 5-tuple (success, msg, cost, model, changed_files).
+  - `_safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose, cwd)`: Wrapper that returns failure if prompt_file empty; normalizes result.
+  - `_run_program(program_path, args, timeout)`: Run Python program via subprocess, return (returncode, combined_output). Uses detect_host_python_executable. Runs from staging root (parent of parent).
+  - `_write_log_entry(log_file_path, xml_content)`: Append XML string to log file.
 
-% Algorithm:
-1. Non-Python targets (.py check): bypass loop, use get_language()/default_verify_cmd_for(), invoke run_agentic_verify
-2. Validate inputs (files exist, params in range); return failure with empty statistics if invalid
-3. Initial assessment: run program_file, call fix_verification_errors
-   - Abort on error sentinel (explanation=None AND model_name=None)
-   - Return success if verification_issues_count == 0; return failure if budget exceeded
-4. Main loop (attempts < max_attempts, budget not exceeded):
-   - Run program, backup files, call fix_verification_errors
-   - If code changed: run verification_program; apply if passes, discard if fails
-   - Track best iteration (lowest issues where verification passed)
-   - Break on success (0 issues + verified) or no effective changes
-5. Final: return success if any verification passed; else restore best/original state
-6. Agentic fallback: if failed and agentic_fallback=True, invoke run_agentic_verify with `cwd=Path(prompt_file).parent` to ensure paths resolve correctly
+% Process
+  0. Non-Python check: If code_file doesn't end in .py, use get_language()/default_verify_cmd_for() to get verify command. If no command available, trigger agentic fallback directly. Otherwise run verification and trigger agentic fallback on failure.
 
-% XML Logging (xml.sax.saxutils.escape):
-<InitialState>, <Iteration attempt="N"> (with <SecondaryVerification passed="true/false">), <FinalActions>
+  1. Validate inputs: files exist, 0≤strength≤1, 0≤temperature≤1, max_attempts≥0, budget≥0. Return failure with empty statistics if invalid.
 
-% Deliverables:
-Implement to pass all tests in tests/test_fix_verification_errors_loop.py. Include helpers for subprocess execution and log writing.
+  2. Init: Remove existing log file. Create backups in `.pdd/backups/{stem}/{timestamp}/`. Read initial file contents. Run program to get initial output.
+
+  3. Initial assessment (unless max_attempts=0 which skips to agentic):
+     - Call fix_verification_errors with initial state.
+     - Abort on error sentinel (explanation=None AND model_name=None).
+     - Return success immediately if verification_issues_count==0.
+     - Return failure if budget exceeded.
+     - Track best iteration (attempt 0 = initial state).
+
+  4. Main loop (while attempts < max_attempts and budget not exceeded):
+     - Run program, create per-attempt backups.
+     - Call fix_verification_errors, track cost.
+     - Abort on fixer error (-1 issues).
+     - If code changed: run verification_program; if passes, keep changes and track any_verification_passed; if fails, restore from memory.
+     - Update best_iteration if current issues < previous best and verification passed.
+     - Break on success (0 issues + verified) or no effective changes.
+
+  5. Final state:
+     - If verification passed at any point, mark as success.
+     - Else restore best iteration or original state.
+     - Calculate improvement statistics.
+
+  6. Agentic fallback: If failed and agentic_fallback=True, invoke run_agentic_verify with cwd=Path(prompt_file).parent. Update success and re-read files on agent success.
+
+  7. Return result dict with statistics including initial_issues, final_issues, best_iteration_num, improvement_percent.
+
+% XML Logging (use xml.sax.saxutils.escape):
+  <InitialState timestamp="...">
+    <ProgramFile>...</ProgramFile><CodeFile>...</CodeFile>
+    <ExitCode>...</ExitCode><Output>...</Output>
+  </InitialState>
+  <Iteration attempt="N" timestamp="...">
+    <ProgramExecution><ExitCode>...</ExitCode><OutputBeforeFix>...</OutputBeforeFix></ProgramExecution>
+    <Backups><Program>...</Program><Code>...</Code></Backups>
+    <InputsToFixer>...</InputsToFixer>
+    <FixerResult total_cost="..." model_name="..." verification_issues_count="...">...</FixerResult>
+    <SecondaryVerification passed="true/false"><ExitCode>...</ExitCode><Output>...</Output></SecondaryVerification>
+    <Action>...</Action><Status>...</Status>
+  </Iteration>
+  <FinalActions><Action>...</Action></FinalActions>
+
+% Statistics dict includes: initial_issues, final_issues, best_iteration_num, best_iteration_issues, improvement_issues, improvement_percent, status_message
