@@ -44,7 +44,7 @@ def mock_context_generator():
 
 @pytest.fixture
 def mock_get_jwt_token():
-    with patch('pdd.context_generator_main.get_jwt_token', new_callable=AsyncMock) as mock:
+    with patch('pdd.context_generator_main.CloudConfig.get_jwt_token') as mock:
         yield mock
 
 @pytest.fixture
@@ -103,8 +103,8 @@ def test_cloud_fallback_to_local(mock_ctx, mock_construct_paths, mock_context_ge
         prompt_file.write_text("Prompt")
         code_file.write_text("Code")
         mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
-        from pdd.get_jwt_token import AuthError
-        mock_get_jwt_token.side_effect = AuthError("Auth failed")
+        # CloudConfig.get_jwt_token returns None when auth fails
+        mock_get_jwt_token.return_value = None
         mock_context_generator.return_value = ("# Local Code", 0.02, "local-model")
         result_code, cost, model = context_generator_main(mock_ctx, str(prompt_file), str(code_file), None)
         assert result_code == "# Local Code"
