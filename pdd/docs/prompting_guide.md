@@ -75,6 +75,7 @@ Notes:
 
 ---
 
+<a name="automated-grounding"></a>
 ## Automated Grounding (PDD Cloud)
 
 Unlike standard LLM interactions where every request is a blank slate, PDD Cloud uses **Automated Grounding** to prevent "implementation drift."
