@@ -629,3 +629,113 @@ class TestBackupLocation:
             f"Should NOT have versioned code files in working directory, "
             f"but found: {old_style_code_backups}"
         )
+
+
+class TestNonPythonAgenticFallback:
+    """Tests for non-Python language handling and agentic fallback."""
+
+    def test_non_python_no_verify_command_triggers_agentic_fallback(self, tmp_path, monkeypatch):
+        """
+        When a non-Python file (e.g., Java) has no verify command available,
+        fix_code_loop should trigger agentic fallback directly instead of raising ValueError.
+        """
+        # Create a Java code file
+        code_file = tmp_path / "Calculator.java"
+        code_file.write_text("public class Calculator { public int add(int a, int b) { return a + b; } }")
+
+        # Create a Java example file
+        example_file = tmp_path / "CalculatorExample.java"
+        example_file.write_text("public class CalculatorExample { public static void main(String[] args) {} }")
+
+        # Create a prompt file
+        prompt_file = tmp_path / "calculator.prompt"
+        prompt_file.write_text("Create a calculator class")
+
+        error_log = tmp_path / "error.log"
+
+        # Mock default_verify_cmd_for to return None (no verify command for Java without maven/gradle)
+        monkeypatch.setattr(
+            "pdd.fix_code_loop.default_verify_cmd_for",
+            lambda lang, program: None
+        )
+
+        # Mock get_language to return 'java'
+        monkeypatch.setattr(
+            "pdd.fix_code_loop.get_language",
+            lambda ext: "java"
+        )
+
+        # Mock _safe_run_agentic_crash to return success
+        mock_agentic_called = []
+        def mock_agentic(**kwargs):
+            mock_agentic_called.append(kwargs)
+            return True, "Fixed successfully", 0.5, "claude-agentic", []
+
+        monkeypatch.setattr(
+            "pdd.fix_code_loop._safe_run_agentic_crash",
+            mock_agentic
+        )
+
+        monkeypatch.chdir(tmp_path)
+
+        # Call fix_code_loop - should NOT raise ValueError
+        success, final_program, final_code, attempts, cost, model = fix_code_loop(
+            code_file=str(code_file),
+            prompt="Create a calculator class",
+            verification_program=str(example_file),
+            strength=0.5,
+            temperature=0.1,
+            max_attempts=3,
+            budget=5.0,
+            error_log_file=str(error_log),
+            verbose=False,
+            prompt_file=str(prompt_file),
+            agentic_fallback=True
+        )
+
+        # Verify agentic fallback was called
+        assert len(mock_agentic_called) == 1, "Agentic fallback should be called once"
+        assert success is True
+        assert "agentic" in model.lower()
+
+    def test_non_python_no_verify_command_creates_error_log(self, tmp_path, monkeypatch):
+        """
+        When triggering agentic fallback for non-Python without verify command,
+        an error log should be created if it doesn't exist.
+        """
+        code_file = tmp_path / "Calculator.java"
+        code_file.write_text("public class Calculator {}")
+
+        example_file = tmp_path / "CalculatorExample.java"
+        example_file.write_text("public class CalculatorExample {}")
+
+        prompt_file = tmp_path / "calculator.prompt"
+        prompt_file.write_text("Create a calculator")
+
+        error_log = tmp_path / "error.log"
+
+        monkeypatch.setattr("pdd.fix_code_loop.default_verify_cmd_for", lambda lang, program: None)
+        monkeypatch.setattr("pdd.fix_code_loop.get_language", lambda ext: "java")
+        monkeypatch.setattr("pdd.fix_code_loop._safe_run_agentic_crash",
+                          lambda **kwargs: (True, "Fixed", 0.5, "claude", []))
+
+        monkeypatch.chdir(tmp_path)
+
+        fix_code_loop(
+            code_file=str(code_file),
+            prompt="test",
+            verification_program=str(example_file),
+            strength=0.5,
+            temperature=0.1,
+            max_attempts=3,
+            budget=5.0,
+            error_log_file=str(error_log),
+            verbose=False,
+            prompt_file=str(prompt_file),
+            agentic_fallback=True
+        )
+
+        # Error log should exist and contain meaningful content
+        assert error_log.exists()
+        content = error_log.read_text()
+        assert "java" in content.lower() or "verification" in content.lower()
