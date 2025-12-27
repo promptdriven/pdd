@@ -1,6 +1,6 @@
 provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
 OpenAI,gpt-5-nano,0.05,0.4,1249,,OPENAI_API_KEY,0,True,none,
-Google,vertex_ai/gemini-3-flash-preview,0.5,3.0,1430,,VERTEX_CREDENTIALS,0,True,effort,
+Google,vertex_ai/gemini-3-flash-preview,0.5,3.0,1430,,VERTEX_CREDENTIALS,0,True,effort,global
 Google,gemini/gemini-3-pro-preview,1.25,10.0,1487,,GEMINI_API_KEY,0,True,effort,
 Google,vertex_ai/claude-sonnet-4-5,3.0,15.0,1370,,VERTEX_CREDENTIALS,128000,True,budget,
 Google,vertex_ai/gemini-3-pro-preview,1.25,10.0,1487,,VERTEX_CREDENTIALS,0,True,effort,
@@ -10,7 +10,7 @@ OpenAI,gpt-5.1-codex,1.25,10.0,1478,,OPENAI_API_KEY,0,True,effort,
 OpenAI,gpt-5.1-codex-max,1.25,10.0,1480,,OPENAI_API_KEY,0,True,effort,
 Google,vertex_ai/deepseek-ai/deepseek-v3.2-maas,0.28,0.42,1450,,VERTEX_CREDENTIALS,0,True,effort,global
 Fireworks,fireworks_ai/accounts/fireworks/models/qwen3-coder-480b-a35b-instruct,0.45,1.80,1363,,FIREWORKS_API_KEY,0,False,none,
-Google,vertex_ai/claude-opus-4-5,5.0,25.0,1465,,VERTEX_CREDENTIALS,128000,True,budget,
+Google,vertex_ai/claude-opus-4-5,5.0,25.0,1465,,VERTEX_CREDENTIALS,128000,True,budget,global
 OpenAI,openai/mlx-community/Qwen3-30B-A3B-4bit,0,0,1040,http://localhost:8080,,0,False,none,
 lm_studio,lm_studio/openai-gpt-oss-120b-mlx-6,0.0001,0,1082,http://localhost:1234/v1,,0,True,effort,
 Fireworks,fireworks_ai/accounts/fireworks/models/glm-4p7,0.60,2.20,1481,,FIREWORKS_API_KEY,0,False,none,
