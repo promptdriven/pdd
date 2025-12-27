@@ -13,7 +13,7 @@ from rich.panel import Panel
 from .construct_paths import construct_paths
 from .context_generator import context_generator
 from .core.cloud import CloudConfig
-from .get_jwt_token import get_jwt_token, AuthError, NetworkError, TokenError, RateLimitError
+# get_jwt_token imports removed - using CloudConfig.get_jwt_token() instead
 from .preprocess import preprocess
 from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE
 
@@ -73,17 +73,8 @@ async def _run_cloud_generation(prompt_content: str, code_content: str, language
         processed_prompt = preprocess(prompt_content, recursive=True, double_curly_brackets=False)
     except Exception as e:
         return None, 0.0, f"Preprocessing failed: {e}"
-    firebase_api_key = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY")
-    github_client_id = os.environ.get("GITHUB_CLIENT_ID")
-    if not firebase_api_key:
-        return None, 0.0, "NEXT_PUBLIC_FIREBASE_API_KEY not set."
-    app_name = "Prompt Driven Development"
-    if pdd_env and pdd_env not in ["local", "prod"]:
-        app_name = f"{app_name} ({pdd_env})"
-    try:
-        token = await get_jwt_token(firebase_api_key=firebase_api_key, github_client_id=github_client_id, app_name=app_name)
-    except (AuthError, NetworkError, TokenError, RateLimitError) as e:
-        return None, 0.0, f"Authentication failed: {e}"
+    # Use CloudConfig.get_jwt_token() which checks PDD_JWT_TOKEN first
+    token = CloudConfig.get_jwt_token(verbose=verbose)
     if not token:
         return None, 0.0, "Failed to obtain JWT token."
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
