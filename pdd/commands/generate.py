@@ -184,7 +184,13 @@ def example(
 
 @click.command("test")
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("code_file", type=click.Path(exists=True, dir_okay=False), required=False, default=None)
+@click.option(
+    "--example",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to example file. Use instead of CODE_FILE to generate tests from prompt + example.",
+)
 @click.option(
     "--output",
     type=click.Path(writable=True),
@@ -192,9 +198,9 @@ def example(
     help="Specify where to save the generated test file (file or directory).",
 )
 @click.option(
-    "--language", 
-    type=str, 
-    default=None, 
+    "--language",
+    type=str,
+    default=None,
     help="Specify the programming language."
 )
 @click.option(
@@ -226,7 +232,8 @@ def example(
 def test(
     ctx: click.Context,
     prompt_file: str,
-    code_file: str,
+    code_file: Optional[str],
+    example: Optional[str],
     output: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
@@ -234,14 +241,24 @@ def test(
     target_coverage: Optional[float],
     merge: bool,
 ) -> Optional[Tuple[str, float, str]]:
-    """Generate unit tests for a given prompt and implementation."""
+    """Generate unit tests for a given prompt and implementation.
+    You can provide either CODE_FILE (the implementation) or --example (an example file).
+    When using --example, tests are generated based on the prompt intent and example usage
+    """
     try:
+        # Validate that exactly one of code_file or example is provided
+        if code_file and example:
+            raise click.UsageError("Cannot specify both CODE_FILE and --example. Choose one.")
+        if not code_file and not example:
+            raise click.UsageError("Must specify either CODE_FILE or --example.")
+
         # Convert empty tuple to None for cmd_test_main compatibility
         existing_tests_list = list(existing_tests) if existing_tests else None
         test_code, total_cost, model_name = cmd_test_main(
             ctx=ctx,
             prompt_file=prompt_file,
             code_file=code_file,
+            example_file=example,
             output=output,
             language=language,
             coverage_report=coverage_report,
