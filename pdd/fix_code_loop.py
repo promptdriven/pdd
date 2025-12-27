@@ -257,7 +257,37 @@ def fix_code_loop(
         lang = get_language(os.path.splitext(code_file)[1])
         verify_cmd = default_verify_cmd_for(lang, verification_program)
         if not verify_cmd:
-            raise ValueError(f"No default verification command for language: {lang}")
+            # No verify command available (e.g., Java without maven/gradle).
+            # Trigger agentic fallback directly using any existing error log.
+            rprint(f"[cyan]No verification command for {lang}. Triggering agentic fallback directly...[/cyan]")
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            # Read existing error content or create minimal log
+            if not error_log_path.exists() or error_log_path.stat().st_size == 0:
+                with open(error_log_path, "w") as f:
+                    f.write(f"No verification command available for language: {lang}\n")
+                    f.write("Agentic fix will attempt to resolve the issue.\n")
+
+            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_crash(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                program_file=verification_program,
+                crash_log_file=error_log_file,
+                cwd=Path(prompt_file).parent if prompt_file else None
+            )
+            final_program = ""
+            final_code = ""
+            try:
+                with open(verification_program, "r") as f:
+                    final_program = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return success, final_program, final_code, 1, agent_cost, agent_model
         
         verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
         pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
