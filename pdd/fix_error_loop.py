@@ -224,8 +224,44 @@ def fix_error_loop(unit_test_file: str,
             lang = get_language(os.path.splitext(code_file)[1])
             verify_cmd = default_verify_cmd_for(lang, unit_test_file)
             if not verify_cmd:
-                raise ValueError(f"No default verification command for language: {lang}")
-            
+                # No verify command available (e.g., Java without maven/gradle).
+                # Trigger agentic fallback directly.
+                rprint(f"[cyan]No verification command for {lang}. Triggering agentic fallback directly...[/cyan]")
+                error_log_path = Path(error_log_file)
+                error_log_path.parent.mkdir(parents=True, exist_ok=True)
+                if not error_log_path.exists() or error_log_path.stat().st_size == 0:
+                    with open(error_log_path, "w") as f:
+                        f.write(f"No verification command available for language: {lang}\n")
+                        f.write("Agentic fix will attempt to resolve the issue.\n")
+
+                rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
+                success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    unit_test_file=unit_test_file,
+                    error_log_file=error_log_file,
+                    cwd=Path(prompt_file).parent if prompt_file else None,
+                )
+                if not success:
+                    rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
+                if agent_changed_files:
+                    rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+                    for f in agent_changed_files:
+                        rprint(f"  • {f}")
+                final_unit_test = ""
+                final_code = ""
+                try:
+                    with open(unit_test_file, "r") as f:
+                        final_unit_test = f.read()
+                except Exception:
+                    pass
+                try:
+                    with open(code_file, "r") as f:
+                        final_code = f.read()
+                except Exception:
+                    pass
+                return success, final_unit_test, final_code, 1, agent_cost, agent_model
+
             verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL)
             pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
             if verify_result.returncode == 0:

@@ -196,8 +196,55 @@ def fix_verification_errors_loop(
         lang = get_language(os.path.splitext(code_file)[1])
         verify_cmd = default_verify_cmd_for(lang, verification_program)
         if not verify_cmd:
-            raise ValueError(f"No default verification command for language: {lang}")
-        
+            # No verify command available (e.g., Java without maven/gradle).
+            # Trigger agentic fallback directly.
+            console.print(f"[cyan]No verification command for {lang}. Triggering agentic fallback directly...[/cyan]")
+            verification_log_path = Path(verification_log_file)
+            verification_log_path.parent.mkdir(parents=True, exist_ok=True)
+            # Create minimal error log if it doesn't exist
+            if not verification_log_path.exists() or verification_log_path.stat().st_size == 0:
+                with open(verification_log_path, "w") as f:
+                    f.write(f"No verification command available for language: {lang}\n")
+                    f.write("Agentic fix will attempt to resolve the issue.\n")
+
+            agent_cwd = Path(prompt_file).parent if prompt_file else None
+            console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={prompt_file!r})...[/cyan]")
+            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                program_file=verification_program,
+                verification_log_file=verification_log_file,
+                verbose=verbose,
+                cwd=agent_cwd,
+            )
+            if not success:
+                console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
+            if agent_changed_files:
+                console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+                for f in agent_changed_files:
+                    console.print(f"  • {f}")
+            final_program = ""
+            final_code = ""
+            try:
+                with open(verification_program, "r") as f:
+                    final_program = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return {
+                "success": success,
+                "final_program": final_program,
+                "final_code": final_code,
+                "total_attempts": 1,
+                "total_cost": agent_cost,
+                "model_name": agent_model,
+                "statistics": {},
+            }
+
         verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
         pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
         console.print("[cyan]Non-Python target detected. Triggering agentic fallback...[/cyan]")
