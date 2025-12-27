@@ -1704,7 +1704,7 @@ def test_javascript_code_does_not_trigger_python_validation(mock_load_models, mo
                 prompt="Write JavaScript",
                 input_json={},
                 output_pydantic=CodeOutputModel,
-                language="javascript",  # NEW PARAMETER - skip Python validation
+                language="javascript",  # Skip Python validation
             )
 
     # Should NOT log Python syntax warning for JavaScript
