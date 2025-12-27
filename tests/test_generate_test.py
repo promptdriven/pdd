@@ -105,3 +105,131 @@ def test_generate_test_different_languages(monkeypatch):
         )
         assert isinstance(result, tuple)
         assert len(result) == 3
+
+
+# --- Tests for Issue #212: Generate tests from prompt + example ---
+
+@pytest.fixture
+def example_inputs():
+    """Fixture for example-based test generation (Issue #212)."""
+    return {
+        'prompt': 'Write a function called hello that prints "hello" to stdout',
+        'example': '''import sys
+sys.path.append("../src")
+from hello import hello
+
+def main():
+    # Call hello function - should print "hello"
+    hello()
+
+if __name__ == "__main__":
+    main()
+''',
+        'strength': 0.5,
+        'temperature': 0.0,
+        'language': 'python'
+    }
+
+
+def test_generate_test_with_example_successful(example_inputs, monkeypatch):
+    """Test that generate_test works with example parameter (Issue #212)."""
+    # Avoid dependence on structured output in continuation by stubbing continue_generation
+    def _stub_continue(formatted_input_prompt, llm_output, strength, temperature, time=0.25, language=None, verbose=False):
+        return (llm_output, 0.0, "stub-model")
+    monkeypatch.setattr("pdd.generate_test.continue_generation", _stub_continue)
+
+    result = generate_test(
+        prompt=example_inputs['prompt'],
+        code=None,  # No code provided
+        example=example_inputs['example'],
+        strength=example_inputs['strength'],
+        temperature=example_inputs['temperature'],
+        language=example_inputs['language']
+    )
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+    unit_test, total_cost, model_name = result
+    assert isinstance(unit_test, str)
+    assert isinstance(total_cost, float)
+    assert isinstance(model_name, str)
+    assert total_cost >= 0
+
+
+def test_generate_test_with_example_verbose(example_inputs, monkeypatch):
+    """Test verbose output with example mode (Issue #212)."""
+    def _stub_continue(formatted_input_prompt, llm_output, strength, temperature, time=0.25, language=None, verbose=False):
+        return (llm_output, 0.0, "stub-model")
+    monkeypatch.setattr("pdd.generate_test.continue_generation", _stub_continue)
+
+    result = generate_test(
+        prompt=example_inputs['prompt'],
+        code=None,
+        example=example_inputs['example'],
+        strength=example_inputs['strength'],
+        temperature=example_inputs['temperature'],
+        language=example_inputs['language'],
+        verbose=True
+    )
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+
+
+def test_generate_test_with_example_uses_correct_template(example_inputs, monkeypatch):
+    """Test that example mode uses the correct prompt template (Issue #212)."""
+    loaded_templates = []
+
+    original_load = None
+    def mock_load_template(name):
+        loaded_templates.append(name)
+        # Return a minimal valid template
+        return "Generate tests for {prompt_that_generated_code} using {example}"
+
+    monkeypatch.setattr("pdd.generate_test.load_prompt_template", mock_load_template)
+
+    # Mock preprocess to return input unchanged
+    monkeypatch.setattr("pdd.generate_test.preprocess", lambda x, **kwargs: x)
+
+    # Mock llm_invoke
+    monkeypatch.setattr("pdd.generate_test.llm_invoke", lambda **kwargs: {
+        'result': 'def test_example(): pass',
+        'cost': 0.01,
+        'model_name': 'test-model'
+    })
+
+    # Mock unfinished_prompt
+    monkeypatch.setattr("pdd.generate_test.unfinished_prompt", lambda **kwargs: ("", True, 0.0, "test-model"))
+
+    # Mock postprocess
+    monkeypatch.setattr("pdd.generate_test.postprocess", lambda x, **kwargs: (x, 0.0, "test-model"))
+
+    result = generate_test(
+        prompt=example_inputs['prompt'],
+        code=None,
+        example=example_inputs['example'],
+        strength=0.5,
+        temperature=0.0,
+        language='python'
+    )
+
+    # Verify the example template was loaded
+    assert "generate_test_from_example_LLM" in loaded_templates
+
+
+def test_generate_test_with_example_invalid_template(example_inputs, monkeypatch):
+    """Test error when example template is not found (Issue #212)."""
+    def mock_load_template(name):
+        if name == "generate_test_from_example_LLM":
+            return None
+        return "valid template"
+
+    monkeypatch.setattr("pdd.generate_test.load_prompt_template", mock_load_template)
+
+    with pytest.raises(ValueError, match="Failed to load generate_test_from_example_LLM prompt template"):
+        generate_test(
+            prompt=example_inputs['prompt'],
+            code=None,
+            example=example_inputs['example'],
+            strength=0.5,
+            temperature=0.0,
+            language='python'
+        )

@@ -558,3 +558,198 @@ def test_cmd_test_main_multiple_existing_tests_concatenated(tmp_path):
                 "Content from test_file_1 should be in existing_tests"
             assert "test 2 content" in existing_tests_content, \
                 "Content from test_file_2 should be in existing_tests"
+
+
+# --- Tests for Issue #212: Generate tests from prompt + example ---
+
+@pytest.fixture
+def mock_example_files_fixture():
+    """
+    Returns default file paths for example-based test generation (Issue #212).
+    """
+    return {
+        "prompt_file": "fake_prompt_file.prompt",
+        "example_file": "fake_example.py",
+        "output": "fake_test_output.py",
+    }
+
+
+def test_cmd_test_main_with_example_file(mock_ctx_fixture, mock_example_files_fixture):
+    """
+    Test that cmd_test_main works with example_file instead of code_file (Issue #212).
+    """
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {
+                "prompt_file": "prompt_contents",
+                "example_file": "example_contents",
+            },
+            {"output": mock_example_files_fixture["output"]},
+            "python"
+        )
+        mock_generate_test.return_value = ("generated_tests", 0.10, "test_model")
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_example_files_fixture["prompt_file"],
+            code_file=None,  # No code file
+            example_file=mock_example_files_fixture["example_file"],
+            output=mock_example_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify generate_test was called with example parameter
+        mock_generate_test.assert_called_once()
+        call_kwargs = mock_generate_test.call_args.kwargs
+        assert call_kwargs.get("example") == "example_contents", \
+            "generate_test should receive example content"
+        assert call_kwargs.get("code") is None, \
+            "code should be None in example mode"
+
+        # Verify result
+        assert result == ("generated_tests", 0.10, "test_model")
+
+
+def test_cmd_test_main_example_mode_verbose(mock_ctx_fixture, mock_example_files_fixture):
+    """
+    Test verbose output in example mode (Issue #212).
+    """
+    mock_ctx_fixture.obj["verbose"] = True
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "prompt_file": "prompt_contents",
+                "example_file": "example_contents",
+            },
+            {"output": mock_example_files_fixture["output"]},
+            "python"
+        )
+        mock_generate_test.return_value = ("generated_tests", 0.10, "test_model")
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_example_files_fixture["prompt_file"],
+            code_file=None,
+            example_file=mock_example_files_fixture["example_file"],
+            output=mock_example_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        assert result[0] == "generated_tests"
+
+
+def test_cmd_test_main_example_mode_module_name_extraction():
+    """
+    Test that module name is correctly extracted from example filename (Issue #212).
+
+    For example: "hello_example.py" should extract module name "hello".
+    """
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.obj = {
+        "verbose": False,
+        "force": False,
+        "quiet": False,
+        "time": 0.25,
+        "context": None,
+        "confirm_callback": None,
+    }
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "prompt_file": "prompt_contents",
+                "example_file": "example_contents",
+            },
+            {"output": "test_hello.py"},
+            "python"
+        )
+        mock_generate_test.return_value = ("generated_tests", 0.10, "test_model")
+
+        cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="hello_python.prompt",
+            code_file=None,
+            example_file="hello_example.py",  # Should extract "hello" as module name
+            output="test_hello.py",
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify module_name was correctly extracted
+        call_kwargs = mock_generate_test.call_args.kwargs
+        assert call_kwargs.get("module_name") == "hello", \
+            f"Expected module_name 'hello', got {call_kwargs.get('module_name')}"
+
+
+def test_cmd_test_main_example_mode_coverage_not_supported():
+    """
+    Test that coverage mode with example file is not supported (uses code mode for coverage).
+    """
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.obj = {
+        "verbose": False,
+        "force": False,
+        "quiet": False,
+        "time": 0.25,
+        "context": None,
+        "confirm_callback": None,
+    }
+
+    # Note: Coverage mode requires code_file, not example_file
+    # This test verifies the behavior when example_file is used (coverage should not trigger)
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests, \
+         patch("builtins.open", mock_open()):
+
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "prompt_file": "prompt_contents",
+                "example_file": "example_contents",
+            },
+            {"output": "test_output.py"},
+            "python"
+        )
+        mock_generate_test.return_value = ("generated_tests", 0.10, "test_model")
+
+        cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="test.prompt",
+            code_file=None,
+            example_file="example.py",
+            output="test_output.py",
+            language=None,
+            coverage_report=None,  # No coverage report with example mode
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify generate_test was called (not increase_tests)
+        mock_generate_test.assert_called_once()
+        mock_increase_tests.assert_not_called()

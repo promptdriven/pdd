@@ -17,7 +17,7 @@ from .increase_tests import increase_tests
 def cmd_test_main(
     ctx: click.Context,
     prompt_file: str,
-    code_file: str,
+    code_file: str | None,
     output: str | None,
     language: str | None,
     coverage_report: str | None,
@@ -26,23 +26,27 @@ def cmd_test_main(
     merge: bool | None,
     strength: float | None = None,
     temperature: float | None = None,
+    example_file: str | None = None,
 ) -> tuple[str, float, str]:
     """
     CLI wrapper for generating or enhancing unit tests.
 
-    Reads a prompt file and a code file, generates unit tests using the `generate_test` function,
-    and handles the output location.
+    Reads a prompt file and either a code file or example file, generates unit tests
+    using the `generate_test` function, and handles the output location.
 
     Args:
         ctx (click.Context): The Click context object.
         prompt_file (str): Path to the prompt file.
-        code_file (str): Path to the code file.
+        code_file (str | None): Path to the code file. Mutually exclusive with example_file.
         output (str | None): Path to save the generated test file.
         language (str | None): Programming language.
         coverage_report (str | None): Path to the coverage report file.
         existing_tests (list[str] | None): Paths to the existing unit test files.
         target_coverage (float | None): Desired code coverage percentage.
         merge (bool | None): Whether to merge new tests with existing tests.
+        strength (float | None): Model strength parameter.
+        temperature (float | None): Model temperature parameter.
+        example_file (str | None): Generate tests from prompt + example instead of prompt + code.
 
     Returns:
         tuple[str, float, str]: Generated unit test code, total cost, and model name.
@@ -59,9 +63,15 @@ def cmd_test_main(
     param_strength = strength  # Store the parameter value for later resolution
     param_temperature = temperature  # Store the parameter value for later resolution
 
+    use_example_mode = example_file is not None
+
     if verbose:
         print(f"[bold blue]Prompt file:[/bold blue] {prompt_file}")
-        print(f"[bold blue]Code file:[/bold blue] {code_file}")
+        if use_example_mode:
+            print(f"[bold blue]Example file:[/bold blue] {example_file}")
+            print("[bold yellow]Mode: Generating tests from prompt[/bold yellow]")
+        else:
+            print(f"[bold blue]Code file:[/bold blue] {code_file}")
         if output:
             print(f"[bold blue]Output:[/bold blue] {output}")
         if language:
@@ -71,8 +81,11 @@ def cmd_test_main(
     try:
         input_file_paths = {
             "prompt_file": prompt_file,
-            "code_file": code_file,
         }
+        if use_example_mode:
+            input_file_paths["example_file"] = example_file
+        else:
+            input_file_paths["code_file"] = code_file
         if coverage_report:
             input_file_paths["coverage_report"] = coverage_report
         if existing_tests:
@@ -139,25 +152,51 @@ def cmd_test_main(
         # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
         return "", 0.0, "Error: Output file path could not be determined"
 
-    source_file_path_for_prompt = str(Path(code_file).expanduser().resolve())
+    # Determine source file path and module name based on mode
+    if use_example_mode:
+        example_path = Path(example_file)
+        example_stem = example_path.stem
+        if example_stem.endswith("_example"):
+            module_name_for_prompt = example_stem[:-8]  
+        else:
+            module_name_for_prompt = example_stem
+        source_file_path_for_prompt = str(example_path.expanduser().resolve())
+    else:
+        source_file_path_for_prompt = str(Path(code_file).expanduser().resolve())
+        module_name_for_prompt = Path(source_file_path_for_prompt).stem if source_file_path_for_prompt else ""
+
     test_file_path_for_prompt = str(Path(output_file).expanduser().resolve())
-    module_name_for_prompt = Path(source_file_path_for_prompt).stem if source_file_path_for_prompt else ""
 
     # Generate or enhance unit tests
     if not coverage_report:
         try:
-            unit_test, total_cost, model_name = generate_test(
-                input_strings["prompt_file"],
-                input_strings["code_file"],
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                language=language,
-                verbose=verbose,
-                source_file_path=source_file_path_for_prompt,
-                test_file_path=test_file_path_for_prompt,
-                module_name=module_name_for_prompt,
-            )
+            if use_example_mode:
+                unit_test, total_cost, model_name = generate_test(
+                    input_strings["prompt_file"],
+                    code=None, 
+                    example=input_strings["example_file"],
+                    strength=strength,
+                    temperature=temperature,
+                    time=time,
+                    language=language,
+                    verbose=verbose,
+                    source_file_path=source_file_path_for_prompt,
+                    test_file_path=test_file_path_for_prompt,
+                    module_name=module_name_for_prompt,
+                )
+            else:
+                unit_test, total_cost, model_name = generate_test(
+                    input_strings["prompt_file"],
+                    code=input_strings["code_file"],
+                    strength=strength,
+                    temperature=temperature,
+                    time=time,
+                    language=language,
+                    verbose=verbose,
+                    source_file_path=source_file_path_for_prompt,
+                    test_file_path=test_file_path_for_prompt,
+                    module_name=module_name_for_prompt,
+                )
         except Exception as exception:
             # A general exception is caught to handle various errors that can occur
             # during the test generation process, which involves external model
