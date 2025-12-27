@@ -5,10 +5,11 @@
 % Here are the inputs and outputs of the function:
     Inputs:
         'prompt_text' - A string containing the prompt text to analyze.
-        'strength' - A float that is the strength of the LLM model to use for the analysis. Default is 0.5. Range is between 0 and 1.
+        'strength' - A float that is the strength of the LLM model to use for the analysis. Default is DEFAULT_STRENGTH. Range is between 0 and 1.
         'temperature' - A float that is the temperature of the LLM model to use for the analysis. Default is 0. Range is between 0 and 1.
-        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
+        'language' - An optional string hint for the language of the prompt (e.g., "python"). Default is None.
+        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
     Outputs as a tuple:
         'reasoning' - A string containing the structured reasoning for the completeness assessment.
         'is_finished' - A boolean indicating whether the prompt is complete (True) or incomplete (False).
@@ -29,12 +30,15 @@
     </internal_modules>
 
 % This function will do the following:
+    Step 0. Fast syntactic check: If the text appears to be Python (language="python" or heuristic detection), try ast.parse(). If it succeeds, return immediately with is_finished=True, cost=0.0, and model_name="syntactic_check".
     Step 1. Load the 'unfinished_prompt_LLM' file.
-    Step 2. Run the prompt text through the model using llm_invoke, passing the 'time' parameter to control the LLM's thinking effort.
+    Step 2. Run the prompt text through the model using llm_invoke, passing the 'time' and 'language' parameters.
         2a. Pass the following string parameters to the prompt during invoke:
             - 'PROMPT_TEXT'
+            - 'LANGUAGE' (if provided)
         2c. The Pydantic output of the invoke will have the keys 'reasoning' and 'is_finished'.
-    Step 3. Return the 'reasoning' string and 'is_finished' boolean from the output, and the 'total_cost' float, and 'model_name' string.
+    Step 3. Validate the result is a PromptAnalysis instance (raise TypeError if not).
+    Step 4. Return the 'reasoning' string and 'is_finished' boolean from the output, and the 'total_cost' float, and 'model_name' string.
 
 % Additional requirements:
     1. Import 'print' from rich as 'rprint' to distinguish it from regular print
@@ -42,4 +46,3 @@
     3. Implement a fallback mechanism for displaying input text:
         - Try using rprint first
         - If rich printing fails, fall back to regular print
-    4. Ensure all error messages and status updates use rich formatting through rprint

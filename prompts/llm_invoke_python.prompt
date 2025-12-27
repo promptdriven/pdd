@@ -36,8 +36,10 @@
         'temperature' - Floating point number indicating the temperature of the LLM.
         'verbose' - Boolean indicating whether to print extra information.
         'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
+        'output_schema' - Optional. Raw JSON schema dictionary as an alternative to output_pydantic. Validated via jsonschema if available.
         'time' - Optional. Floating point number between 0 and 1 representing the relative amount of thinking effort requested. Default is 0.25. How this is interpreted depends on the selected model's 'reasoning_type' specified in the CSV.
         'use_batch_mode' - Optional. Boolean indicating whether to use batch processing if supported by the model/provider via LiteLLM (default: False).
+        'language' - Optional. Language hint (e.g., "python", "javascript"). When not "python" or None, skip Python-specific code validation/repair to avoid false positives.
     Output (dictionary):
         'result' - Output from the LLM model (string or Pydantic object) OR **a list of outputs** if `use_batch_mode` was True.
         'cost' - Total cost of the invoke run, calculated via a LiteLLM callback and the `litellm.completion_cost` function.
@@ -56,12 +58,11 @@
             i. Prompt the user interactively using `input(f"Please enter the API key for {key_name}: ")`.
             ii. Basic validation: Ensure the user provided some input (not empty string).
             iii. Set the environment variable for the current process: `os.environ[key_name] = user_provided_key`.
-            iv. **Update `.env` file:** 
+            iv. **Update `.env` file:**
                 - Read the contents of the `.env` file (in the project root).
-                - Create a new list of lines.
-                - Iterate through the original lines: If a line starts with `{key_name}=` (or `{key_name} =`), prepend it with `# ` (comment it out) before adding to the new list. Otherwise, add the line as is.
-                - Append the new key entry to the new list: `f'{key_name}="{user_provided_key}"\n'`.
-                - Write the entire new list of lines back to the `.env` file, overwriting its contents.
+                - Replace existing key in-place (no comment + append); remove old commented versions of the same key to prevent accumulation.
+                - If key doesn't exist, append the new key entry: `f'{key_name}="{user_provided_key}"\n'`.
+                - Write the updated lines back to the `.env` file.
             v. **Security Warning:** Print a message warning the user that the key has been saved to the `.env` file and to ensure this file is kept secure and not committed to version control.
             vi. **Mark key as newly acquired:** Set a flag indicating that the key for this `key_name` was just obtained from the user in this session.
         d. **If the key EXISTS:** Proceed silently. Ensure the "newly acquired" flag for this key is false.
@@ -79,18 +80,20 @@
     6. **LLM Invocation:**
         - For OpenAI gpt-5* models, call the OpenAI Responses API (not LiteLLM completion) to support reasoning parameters. Responses API does not accept `temperature`; log when it is skipped.
         - Otherwise, call `litellm.completion` or `litellm.batch_completion` with the selected model, formatted messages, other parameters, and any `model_specific_params` derived from the `time` parameter.
-    7. **Retry Logic:** 
+    7. **Retry Logic:**
         a. **On Invocation Failure:** If the call in Step 5 fails:
             i. **Check for Authentication Error:** If the exception is an `openai.AuthenticationError` (LiteLLM maps errors to OpenAI types) AND the "newly acquired" flag for the current `key_name` is true:
                 - Print a message indicating the provided key for `{key_name}` was likely incorrect.
                 - **Go back to Step 4.c.i** to re-prompt the user for the *same* `{key_name}`.
                 - After obtaining and saving the new key, **retry Step 5** with the *same* model.
-            ii. **Other Errors or Existing Key Failure:** If the error is not an `AuthenticationError`, or if the key was already present (not newly acquired), proceed to try the next model:
+            ii. **Schema Validation Failure:** If Pydantic/JSON validation fails, trigger model fallback to try the next candidate model.
+            iii. **Other Errors or Existing Key Failure:** If the error is not an `AuthenticationError`, or if the key was already present (not newly acquired), proceed to try the next model:
                 - Get the next candidate model from the sorted list generated in Step 3.
                 - If no more candidate models exist, raise the last encountered exception.
                 - If a next model exists, **go back to Step 4.a** to check/acquire the API key for this *new* model.
         b. **Special diagnostics:** In WSL environments, detect and warn on authentication errors likely caused by stray carriage returns in API keys; suggest re-entering/sanitizing keys.
         c. **Cache-bypass retry for corrupted content:** If a successful response contains `None` content (likely corrupted cache), retry once with a slightly modified prompt to bypass cache; restore cache afterward.
+        d. **Preserve provider credentials in retries:** When retrying (for None content, malformed JSON, or invalid Python code), pass provider-specific credentials (e.g., `vertex_credentials`, `vertex_project`, `vertex_location`) that were used in the original call.
     8. **Response Handling:** Process the LiteLLM response, extract results, cost, tokens, etc.
         a. **Thinking Output:** Extract reasoning/thinking output if available. **Check common locations within the LiteLLM response object, such as `response._hidden_params['thinking']` or potentially within `response.choices[0].message` attributes (like `reasoning_content`), handling potential `AttributeError` or `KeyError` exceptions gracefully.**
     9. **Return Output:** Return the standard output dictionary.
@@ -123,7 +126,7 @@
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name.
     - Otherwise, the base model name is defined by the `DEFAULT_LLM_MODEL` constant imported from `pdd/__init__.py`.
     - Read the `llm_model.csv` file to get all necessary model details. **The script first checks for `~/.pdd/llm_model.csv` and uses it if it exists; otherwise, it uses the file located at `<PROJECT_ROOT>/.pdd/llm_model.csv` (where `<PROJECT_ROOT>` is determined as described in Startup Behavior).**
-    - The CSV contains the LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, **`reasoning_type` (e.g., 'none', 'budget', 'effort')**, **`max_reasoning_tokens` (only used if `reasoning_type` is 'budget')**, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "anthropic/claude-3-7-sonnet-20250219"). **It is assumed that a separate utility keeps the cost, structured_output, `reasoning_type`, and `max_reasoning_tokens` data in this CSV up-to-date.**
+    - The CSV contains the LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, **`reasoning_type` (e.g., 'none', 'budget', 'effort')**, **`max_reasoning_tokens` (only used if `reasoning_type` is 'budget')**, structured_output flag, optional `location` column for Vertex AI per-model location overrides, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "anthropic/claude-3-7-sonnet-20250219"). **It is assumed that a separate utility keeps the cost, structured_output, `reasoning_type`, and `max_reasoning_tokens` data in this CSV up-to-date.**
     - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).** **If the `api_key` name in the CSV is empty or exactly `"EXISTING_KEY"`, assume the key is handled externally (e.g., via IAM roles or mock setups) and skip the interactive check/acquisition process (Steps 4.b-4.vi).**
     - When strength < 0.5:
         - Identify available candidate models based on the filtered CSV data.
@@ -151,7 +154,8 @@
         - **If `reasoning_type` is 'budget'**: Check if `max_reasoning_tokens` > 0. If so, calculate `budget = int(time * max_reasoning_tokens)`. If `budget > 0`, pass the provider-specific parameter(s): Anthropic uses `thinking={\"type\":\"enabled\",\"budget_tokens\":budget}`; omit for providers without a known mapping.
         - **If `reasoning_type` is 'effort'**: Map `time` to a category (\"low\": 0-0.3, \"medium\": >0.3-0.7, \"high\": >0.7-1.0). Prefer provider-specific handling: for OpenAI gpt-5* use Responses API `reasoning={\"effort\": category, \"summary\": \"auto\"}`; otherwise pass `reasoning_effort=category` when supported.
         - Default `time` is 0.25.
-    - **Structured Output**: If `output_pydantic` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model to `response_format` or similar). For OpenAI gpt-5* via Responses API, if the installed SDK supports `response_format`, pass a Pydantic-derived JSON schema; otherwise validate client-side. If `False` (or validation fails), use fallback parsing: **attempt to extract a JSON block (e.g., finding the first `{` and last `}`), clean potential markdown fences (like ```json ... ```), and re-attempt Pydantic validation on the cleaned string.**
+    - **Structured Output**: If `output_pydantic` or `output_schema` is provided, check the `structured_output` flag from the CSV. If `True`, use LiteLLM's mechanism for structured output (e.g., passing the Pydantic model or JSON schema to `response_format`). For OpenAI gpt-5* via Responses API, use `text.format` with `json_schema`. If `False` (or validation fails), use fallback parsing: **attempt to extract a JSON block, clean markdown fences, and re-attempt validation.**
+    - **Provider-specific structured output handling**: For LM Studio, use `extra_body` to bypass `drop_params` stripping the schema. For Groq, use simple `json_object` mode with schema instruction in the system prompt (Groq's tool_use often fails).
     - **Batch Mode**: If `use_batch_mode` is True, use `litellm.batch_completion` and adapt input/output handling for lists.
 
 % Provider-Level Prompt Caching Note:
