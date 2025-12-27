@@ -1,3 +1,18 @@
+## v0.0.93 (2025-12-27)
+
+### Feat
+
+- enhance prompt functions with language support and output schema
+- add update command to Makefile for prompt updates based on code changes
+- add language parameter to various functions for improved language handling
+- implement .env file key management and improve project root detection
+- enhance cloud configuration and error handling
+
+### Fix
+
+- remove temporary 'NEW PARAMETER' comment
+- include Vertex AI credentials in retry calls for llm_invoke
+
 ## v0.0.92 (2025-12-25)
 
 ### Feat
