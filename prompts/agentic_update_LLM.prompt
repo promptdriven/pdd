@@ -56,6 +56,6 @@
 
 Write the updated prompt directly to: {prompt_path}
 
-If you create new shared include files, write them to the `context/` or equivalent directory. If maybe different for different projects so you might need to explore the project to find the correct directory.
+If you create new shared include files, write them to the `context/` or equivalent directory. It may be different for different projects so you might need to explore the project to find the correct directory.
 
 If the prompt is already optimal, you may leave it unchanged.
