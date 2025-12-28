@@ -383,12 +383,12 @@ def test_agent_failure_but_file_changed(tmp_path: Path, mock_deps: Tuple[MagicMo
     The function should report success based on file modification.
     """
     _, _, mock_run, _ = mock_deps
-    
+
     prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "code.py"
     prompt_file.touch()
     code_file.touch()
-    
+
     old_time = time.time() - 100
     os.utime(prompt_file, (old_time, old_time))
 
@@ -402,3 +402,38 @@ def test_agent_failure_but_file_changed(tmp_path: Path, mock_deps: Tuple[MagicMo
 
     assert success is True
     assert "Underlying agent reported failure" in msg
+
+
+def test_discover_test_files_finds_sibling_tests_dir(tmp_path: Path) -> None:
+    """Test that tests in ../tests/ relative to code are discovered.
+
+    This tests the common project structure where code is in src/ and tests
+    are in a sibling tests/ directory:
+
+        project/
+        ├── src/
+        │   └── hello.py
+        └── tests/
+            └── test_hello.py
+    """
+    from pdd.agentic_update import _discover_test_files
+
+    # Setup: examples/hello/src/hello.py and examples/hello/tests/test_hello.py
+    src_dir = tmp_path / "examples" / "hello" / "src"
+    tests_dir = tmp_path / "examples" / "hello" / "tests"
+    src_dir.mkdir(parents=True)
+    tests_dir.mkdir(parents=True)
+
+    code_file = src_dir / "hello.py"
+    test_file = tests_dir / "test_hello.py"
+    code_file.write_text("def hello(): print('hello')")
+    test_file.write_text("def test_hello(): pass")
+
+    # Act
+    discovered = _discover_test_files(code_file)
+
+    # Assert
+    assert test_file.resolve() in [p.resolve() for p in discovered], (
+        f"Expected {test_file.resolve()} to be discovered, "
+        f"but only found: {[p.resolve() for p in discovered]}"
+    )

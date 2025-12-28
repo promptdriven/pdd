@@ -114,7 +114,8 @@ def _discover_test_files(code_path: Path) -> List[Path]:
     Uses pattern: ``test_{code_stem}*{code_suffix}`` and searches in:
       1. ``tests/`` relative to the code file directory
       2. The same directory as the code file
-      3. Project root ``tests/``
+      3. Sibling ``tests/`` directory (../tests/)
+      4. Project root ``tests/``
 
     Args:
         code_path: Path to the main code file.
@@ -130,6 +131,7 @@ def _discover_test_files(code_path: Path) -> List[Path]:
     search_dirs: List[Path] = [
         code_path.parent / "tests",
         code_path.parent,
+        code_path.parent.parent / "tests",  # Sibling tests dir (../tests/)
         PROJECT_ROOT / "tests",
     ]
 
