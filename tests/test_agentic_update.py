@@ -437,3 +437,32 @@ def test_discover_test_files_finds_sibling_tests_dir(tmp_path: Path) -> None:
         f"Expected {test_file.resolve()} to be discovered, "
         f"but only found: {[p.resolve() for p in discovered]}"
     )
+
+
+def test_discover_test_files_uses_pddrc_tests_dir(tmp_path: Path) -> None:
+    """Test that tests_dir from .pddrc config is searched first.
+
+    When a project has a custom test directory configured via .pddrc,
+    that directory should be searched for test files.
+    """
+    from pdd.agentic_update import _discover_test_files
+
+    # Setup: code in src/, test in custom location (from .pddrc test_output_path)
+    src_dir = tmp_path / "src"
+    custom_tests_dir = tmp_path / "custom_tests"
+    src_dir.mkdir()
+    custom_tests_dir.mkdir()
+
+    code_file = src_dir / "foo.py"
+    test_file = custom_tests_dir / "test_foo.py"
+    code_file.write_text("def foo(): pass")
+    test_file.write_text("def test_foo(): pass")
+
+    # Act - pass tests_dir from config
+    discovered = _discover_test_files(code_file, tests_dir=custom_tests_dir)
+
+    # Assert
+    assert test_file.resolve() in [p.resolve() for p in discovered], (
+        f"Expected {test_file.resolve()} to be discovered when tests_dir is provided, "
+        f"but only found: {[p.resolve() for p in discovered]}"
+    )

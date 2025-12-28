@@ -151,6 +151,47 @@ def _resolve_config_hierarchy(
     return resolved
 
 
+def get_tests_dir_from_config(start_path: Optional[Path] = None) -> Optional[Path]:
+    """
+    Get the tests directory from .pddrc configuration.
+
+    Searches for .pddrc, detects the appropriate context, and returns the
+    configured test_output_path as a Path object.
+
+    Args:
+        start_path: Starting directory for .pddrc search. Defaults to CWD.
+
+    Returns:
+        Path to tests directory if configured, None otherwise.
+    """
+    if start_path is None:
+        start_path = Path.cwd()
+
+    # Find and load .pddrc
+    pddrc_path = _find_pddrc_file(start_path)
+    if not pddrc_path:
+        return None
+
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except ValueError:
+        return None
+
+    # Detect context and get its config
+    context_name = _detect_context(start_path, config)
+    context_config = _get_context_config(config, context_name)
+
+    # Check context config first, then env var
+    test_output_path = context_config.get('test_output_path')
+    if not test_output_path:
+        test_output_path = os.environ.get('PDD_TEST_OUTPUT_PATH')
+
+    if test_output_path:
+        return Path(test_output_path)
+
+    return None
+
+
 def _read_file(path: Path) -> str:
     """Read a text file safely and return its contents."""
     try:

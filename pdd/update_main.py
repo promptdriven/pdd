@@ -16,7 +16,7 @@ from rich.progress import (
 from rich.table import Table
 from rich.theme import Theme
 
-from .construct_paths import construct_paths
+from .construct_paths import construct_paths, get_tests_dir_from_config
 from .get_language import get_language
 from .update_prompt import update_prompt
 from .git_update import git_update
@@ -156,10 +156,12 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
         use_agentic = not simple and get_available_agents()
 
         if use_agentic:
+            tests_dir = get_tests_dir_from_config()
             success, message, agentic_cost, provider, changed_files = run_agentic_update(
                 prompt_file=prompt_file,
                 code_file=code_file,
                 test_files=None,
+                tests_dir=tests_dir,
                 verbose=verbose,
                 quiet=quiet,
             )
@@ -399,10 +401,12 @@ def update_main(
                 # Ensure prompt file exists for agentic
                 Path(prompt_path).touch(exist_ok=True)
 
+                tests_dir = get_tests_dir_from_config()
                 success, message, agentic_cost, provider, changed_files = run_agentic_update(
                     prompt_file=prompt_path,
                     code_file=modified_code_file,
                     test_files=None,
+                    tests_dir=tests_dir,
                     verbose=verbose,
                     quiet=quiet,
                 )
@@ -460,10 +464,12 @@ def update_main(
             use_agentic = not simple and get_available_agents()
 
             if use_agentic:
+                tests_dir = get_tests_dir_from_config()
                 success, message, agentic_cost, provider, changed_files = run_agentic_update(
                     prompt_file=actual_input_prompt_file,
                     code_file=modified_code_file,
                     test_files=None,
+                    tests_dir=tests_dir,
                     verbose=verbose,
                     quiet=quiet,
                 )
