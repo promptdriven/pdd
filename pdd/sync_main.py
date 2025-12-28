@@ -134,9 +134,10 @@ def sync_main(
     local = ctx.obj.get("local", False)
     context_override = ctx.obj.get("context", None)
 
-    # Default values for max_attempts and budget when not specified via CLI or .pddrc
+    # Default values for max_attempts, budget, target_coverage when not specified via CLI or .pddrc
     DEFAULT_MAX_ATTEMPTS = 3
     DEFAULT_BUDGET = 20.0
+    DEFAULT_TARGET_COVERAGE = 90.0
 
     # 2. Validate inputs (basename only - budget/max_attempts validated after config resolution)
     _validate_basename(basename)
@@ -290,10 +291,15 @@ def sync_main(
             # Priority: CLI value > .pddrc value > hardcoded default
             final_strength = resolved_config.get("strength", strength)
             final_temp = resolved_config.get("temperature", temperature)
-            final_target_coverage = resolved_config.get("target_coverage", target_coverage)
 
-            # For max_attempts and budget: CLI > .pddrc > hardcoded default
+            # For target_coverage, max_attempts and budget: CLI > .pddrc > hardcoded default
             # If CLI value is provided (not None), use it. Otherwise, use .pddrc or default.
+            # Issue #194: target_coverage was not being handled consistently with the others
+            if target_coverage is not None:
+                final_target_coverage = target_coverage
+            else:
+                final_target_coverage = resolved_config.get("target_coverage") or DEFAULT_TARGET_COVERAGE
+
             if max_attempts is not None:
                 final_max_attempts = max_attempts
             else:

@@ -909,6 +909,14 @@ def sync_orchestration(
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
     """
+    # Handle None values from CLI (Issue #194) - defense in depth
+    if target_coverage is None:
+        target_coverage = 90.0
+    if budget is None:
+        budget = 10.0
+    if max_attempts is None:
+        max_attempts = 3
+
     # Import get_extension at function scope
     from .sync_determine_operation import get_extension
     
