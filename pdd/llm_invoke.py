@@ -933,7 +933,7 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
             formatted_prompt = prompt.format(**input_data)
             return [{"role": "user", "content": formatted_prompt}]
     except KeyError as e:
-        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt template.") from e
+        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt string.") from e
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
 
