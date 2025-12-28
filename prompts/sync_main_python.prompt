@@ -1,213 +1,100 @@
 # sync_main_python.prompt
 
-% You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function will handle the interface logic (e.g. grabbing environment variables, parameter validation, path construction) and then call the sync_orchestration function to perform the actual sync workflow.
+% You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function handles interface logic (environment variables, parameter validation, path construction) and calls sync_orchestration to perform the actual sync workflow.
 
 <include>context/python_preamble.prompt</include>
 
 % Standard ctx.obj parameters (see included file for details):
 <include>context/ctx_obj_params.prompt</include>
 
-% Here are the inputs and outputs of the function:
+% Inputs and Outputs:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object containing CLI options and parameters from ctx.obj (see above).
-            Additional ctx.obj keys used by sync_main:
+        - `ctx` (`click.Context`): Click context with CLI options from ctx.obj:
             - output_cost (Optional[str]): Path to CSV file for cost tracking
             - review_examples (bool): Whether to review few-shot examples
-            - local (bool): Whether to run commands locally instead of in cloud
-        - `basename` (str): The base name for the prompt file (e.g., "factorial_calculator" for "factorial_calculator_python.prompt")
-        - `max_attempts` (int): Maximum number of fix attempts in any iterative loop (default is 3)
-        - `budget` (float): Maximum total cost allowed for the entire sync process (default is $10.0)
-        - `skip_verify` (bool): Skip the functional verification step
-        - `skip_tests` (bool): Skip unit test generation and fixing
-        - `target_coverage` (float): Desired code coverage percentage (default is 90.0)
-        - `dry_run` (bool): If True, analyze sync state without executing operations (direct function parameter, not from ctx.obj)
+            - local (bool): Whether to run locally instead of cloud
+        - `basename` (str): Base name for prompt file (e.g., "factorial_calculator" or "core/cloud" for subdirectories)
+        - `max_attempts` (Optional[int]): Maximum fix attempts. None = use .pddrc or default (3). 0 = skip LLM loop, go straight to agentic mode.
+        - `budget` (Optional[float]): Maximum cost allowed. None = use .pddrc or default (20.0)
+        - `skip_verify` (bool): Skip functional verification
+        - `skip_tests` (bool): Skip unit test generation
+        - `target_coverage` (Optional[float]): Code coverage percentage. None = use .pddrc or default (90.0)
+        - `dry_run` (bool): Analyze sync state without executing operations
 
     Outputs:
-        - Returns a tuple containing:
-            - `Dict[str, Any]`: Comprehensive results dictionary from sync_orchestration
-            - `float`: Total cost of the sync operation
-            - `str`: Primary model name used during sync
+        - Tuple of (Dict[str, Any] results, float total_cost, str model_name)
 
-% Important Implementation Notes:
+% Key Implementation Details:
 
-1. **Parameter Retrieval**:
-    - Use `ctx.obj.get(key, default)` pattern for all ctx.obj parameters (see sync_main_example.py for the full pattern)
-    - Import DEFAULT_STRENGTH, DEFAULT_TIME from package root: `from . import DEFAULT_STRENGTH, DEFAULT_TIME`
-    - Name the context variable `context_override` to avoid shadowing the built-in
-    - Name the time variable `time_param` to avoid shadowing the built-in
+1. **Parameter Resolution**:
+    - Use `ctx.obj.get(key, default)` pattern for ctx.obj parameters
+    - Import DEFAULT_STRENGTH, DEFAULT_TIME from package root
+    - Name context variable `context_override`, time variable `time_param` to avoid shadowing builtins
+    - Configuration hierarchy: CLI value (if not None) > .pddrc value > hardcoded default
 
 2. **Dry-Run Mode**:
-    - If `dry_run` is True, the function should display the sync analysis for the given basename and then exit.
-    - It should iterate through each detected language, print a header, and call `sync_orchestration` with `dry_run=True`.
-    - In dry-run mode, pass directory parameters (prompts_dir, code_dir, examples_dir, tests_dir), verbose, quiet, and context_override to sync_orchestration.
-    - Use `force=True` when calling construct_paths in dry-run mode to avoid interactive prompts.
-    - No other processing, such as budgeting or result aggregation, should occur in this mode.
-    - Return `({}, 0.0, "")` after processing all languages in dry-run mode.
+    - Display sync analysis for basename, then exit
+    - Iterate through each detected language, print header, call sync_orchestration with `dry_run=True`
+    - Pass directory parameters, verbose, quiet, context_override to sync_orchestration
+    - Use `force=True` in construct_paths to avoid interactive prompts
+    - Return `({}, 0.0, "")` after processing all languages
 
-3. **Configuration and Path Handling**:
-    - The `construct_paths` function handles `.pddrc` configuration files and context-aware settings
-    - Pass `context_override=context_override` parameter to `construct_paths` when `--context` CLI option is used
-    - `construct_paths` returns a 4-tuple: `(resolved_config, _, _, resolved_language)` where the second and third elements are unused placeholders
-    - `construct_paths` automatically handles:
-        * Loading `.pddrc` configuration with upward directory search
-        * Context detection based on current working directory paths
-        * Configuration hierarchy: CLI options > .pddrc context > environment variables > defaults
-        * Path resolution for generate_output_path, test_output_path, example_output_path
-        * Extracting context-specific settings like default_language, target_coverage, strength, temperature, budget, max_attempts
-    - After calling `construct_paths`, extract resolved configuration settings and override CLI parameters if context provides them
-    - Apply configuration hierarchy: prefer CLI-provided values, then context values, then original defaults
-    - Update `ctx.obj` with resolved strength and temperature values so sub-commands inherit them:
-        ```python
-        ctx.obj["strength"] = final_strength
-        ctx.obj["temperature"] = final_temp
-        ```
+3. **Path and Configuration**:
+    - `construct_paths` handles .pddrc configuration, context detection, and path resolution
+    - Returns 4-tuple: `(resolved_config, _, _, resolved_language)` - second/third elements unused
+    - Extract settings from resolved_config: strength, temperature, target_coverage, max_attempts, budget
+    - Update ctx.obj with resolved strength/temperature for sub-commands
 
-4. **Language Detection and Filtering**:
-    - Scan for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory
-    - Filter to include only development languages (python, javascript, typescript, java, cpp, etc.)
-    - Exclude runtime languages (LLM) as they cannot form valid development units:
-        * Files ending in `_llm.prompt` are used for internal processing only
-        * They don't have associated code, examples, or tests required for sync workflows
-        * Including them in sync would always fail since they cannot be executed or tested
-    - **Language sorting priority**: Python is prioritized first (if present), then remaining languages sorted alphabetically
-        * Example: If found languages are ["javascript", "python", "typescript"], return ["python", "javascript", "typescript"]
-        * This ensures Python (the most common development language in PDD projects) is processed first
-    - If no valid development prompt files found, raise `click.UsageError` with helpful message
-    - For each found development prompt file, run the complete sync workflow (calling sync_orchestration)
-    - Each sync_orchestration call will use construct_paths normally with that specific prompt file
+4. **Language Detection**:
+    - Scan for prompt files matching `{basename}_{language}.prompt` in prompts directory
+    - Support subdirectory basenames (e.g., "core/cloud" searches prompts/core/ for cloud_*.prompt)
+    - Exclude runtime languages (LLM) - they cannot form valid development units
+    - Python prioritized first, then remaining languages sorted alphabetically
+    - Raise `click.UsageError` if no valid development prompt files found
 
-5. **File Path Validation**:
-    - Validate that required prompt files exist for the given basename
-    - Ensure output directories are accessible  
-    - `construct_paths` handles directory creation and path resolution automatically
+5. **Basename Validation**:
+    - Regex: `^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$` (alphanumeric, underscore, hyphen, forward slash for subdirs)
+    - Reject empty, path traversal (..), absolute paths, trailing slashes, double slashes
+    - Raise `click.UsageError` for invalid basenames
 
-6. **Error Handling Requirements**:
-    - Validate basename parameter:
-        * Raise `click.UsageError` if basename is empty or contains invalid characters
-        * Use regex pattern `^[a-zA-Z0-9_-]+$` to validate basename (only alphanumeric, underscore, hyphen allowed)
-        * Check that at least one prompt file exists for the basename
-    - Handle budget and attempts validation:
-        * Ensure budget > 0 and max_attempts > 0 (raise `click.BadParameter` if not)
-        * Warn if budget < 1.0 (considered low for typical sync operations): `Warning: Budget of $X.XX is low`
-    - Handle configuration errors:
-        * Catch `.pddrc` YAML syntax errors and provide helpful messages
-        * Validate unknown context names when using `--context`
-        * Handle missing or inaccessible configuration files gracefully
-    - Use `try/except` blocks for file operations
-    - Provide formatted error messages using `rich.print` (rprint)
-    - Exit with `raise click.Abort()` on critical path initialization failures
+6. **Budget/Attempts Validation**:
+    - Budget must be > 0, max_attempts must be >= 0 (raise `click.BadParameter` if not)
+    - Warn if budget < 1.0: `Warning: Budget of $X.XX is low`
+    - max_attempts=0 is valid (skips LLM loop, goes straight to agentic mode)
 
-7. **User Feedback**:
-    - Use `rich.print` for formatted output (unless `quiet` is True)
-    - Show sync progress summary before starting, including:
-        * Detected context (if using .pddrc)
-        * Languages being processed
-        * Configuration settings being applied
-    - Display final results including:
-        * Total operations completed
-        * Total cost and time elapsed
-        * Files created/updated
-        * Any errors or warnings
-    - Provide helpful suggestions for common issues
+7. **Multi-Language Processing**:
+    - Process each detected language separately via sync_orchestration
+    - Track remaining_budget across languages (reduce after each language's cost)
+    - Skip subsequent languages if budget exhausted
+    - Aggregate results and costs from all language syncs
 
-8. **Integration with sync_orchestration**:
-    - Import and call `sync_orchestration` function from the sync orchestration module
-    - Pass all parameters properly mapped to sync_orchestration's interface, ensuring directory parameters match the expected names (prompts_dir, code_dir, examples_dir, tests_dir)
-    - Handle return values and format them for CLI output
+8. **User Feedback** (unless quiet=True):
+    - Show sync progress summary before starting (detected context, languages, settings)
+    - Display final results table (language, status, cost, details)
+    - Total time elapsed, total cost, overall status
 
 <examples>
-   % Here are examples of how to use internal modules:
-   <internal_example_modules>
-      - Here is a complete example of sync_main usage showing ctx.obj setup and function invocation:
-      <sync_main_example>
-      <include>context/sync_main_example.py</include>
-      </sync_main_example>
+   <sync_main_example>
+   <include>context/sync_main_example.py</include>
+   </sync_main_example>
 
-      - Here is an example of how to use the `construct_paths` function:
-      <construct_paths_example>
-      <include>context/construct_paths_example.py</include>
-      </construct_paths_example>
+   <construct_paths_example>
+   <include>context/construct_paths_example.py</include>
+   </construct_paths_example>
 
-      - Here is how to use the `sync_orchestration` function:
-      <sync_orchestration_example>
-        <include>context/sync_orchestration_example.py</include>
-      </sync_orchestration_example>
-
-      - Here is an example of language detection for sync using existing PDD functions, excluding runtime languages:
-      <language_detection_example>
-      ```python
-      from pathlib import Path
-      from pdd.construct_paths import _is_known_language
-
-      def detect_languages_for_basename(basename: str, prompts_dir: str = "prompts") -> list:
-          """Detect development languages that have prompt files for a given basename, excluding runtime languages"""
-          prompts_path = Path(prompts_dir)
-          pattern = f"{basename}_*.prompt"
-
-          prompt_files = list(prompts_path.glob(pattern))
-          development_languages = []
-
-          for prompt_file in prompt_files:
-              # Extract language from filename: basename_language.prompt
-              stem = prompt_file.stem  # removes .prompt
-              # Ensure the file starts with the exact basename followed by an underscore
-              if stem.startswith(f"{basename}_"):
-                  potential_language = stem[len(basename) + 1:]  # Get everything after basename_
-                  try:
-                      # Validate using existing PDD function
-                      if _is_known_language(potential_language):
-                          # Exclude runtime languages (LLM) as they cannot form valid development units
-                          if potential_language.lower() != 'llm':
-                              development_languages.append(potential_language)
-                  except ValueError:
-                      # PDD_PATH not set (likely during testing) - assume language is valid
-                      # if it matches common language patterns
-                      common_languages = {"python", "javascript", "java", "cpp", "c", "go", "rust", "typescript"}
-                      if potential_language.lower() in common_languages:
-                          development_languages.append(potential_language)
-
-          # Return only development languages, with Python prioritized first, then sorted alphabetically
-          if 'python' in development_languages:
-              other_languages = sorted([lang for lang in development_languages if lang != 'python'])
-              return ['python'] + other_languages
-          else:
-              return sorted(development_languages)
-      ```
-      </language_detection_example>
-   </internal_example_modules>
+   <sync_orchestration_example>
+   <include>context/sync_orchestration_example.py</include>
+   </sync_orchestration_example>
 </examples>
 
-% Here is the PDD README for the 'sync' command that describes how it should work:
+% CLI command documentation:
 <cli_command_readme>
    <include>README.md</include>
 </cli_command_readme>
 
-% Implementation Requirements:
-
-1. **Main Function Structure**:
-   - Follow the same pattern as other PDD main functions (like fix_main)
-   - Handle all CLI interface logic in sync_main
-   - Delegate actual sync workflow to sync_orchestration
-   - Return appropriate tuple for CLI result callback
-
-2. **Multiple Language Support**:
-   - If multiple language prompt files exist for the same basename, process all of them
-   - Run sync_orchestration separately for each detected language
-   - Combine results and costs from all language syncs
-
-3. **Path Management**:
-   - Use `construct_paths` function for all file path construction and configuration resolution
-   - `construct_paths` handles environment variables, .pddrc configuration, and directory creation
-   - Focus on parameter validation and configuration hierarchy rather than path manipulation
-
-4. **Progress Reporting**:
-   - Show which language(s) are being processed
-   - Display progress for each major step
-   - Provide clear success/failure indicators
-
-5. **State Management**:
-   - Let sync_orchestration handle git integration and state tracking
-   - Don't duplicate state management logic in sync_main
-   - Pass through all necessary parameters for state handling
-
-The sync_main function should act as a clean interface layer that handles CLI parameter extraction and validation while delegating path construction to `construct_paths` and the actual sync workflow intelligence to sync_orchestration. Cost tracking is automatically handled by the `@track_cost` decorator at the CLI level.
+% Implementation Pattern:
+- Follow same pattern as other PDD main functions (like fix_main)
+- Handle CLI interface logic in sync_main, delegate workflow to sync_orchestration
+- Use `construct_paths` for all path construction and configuration resolution
+- Let sync_orchestration handle git integration and state tracking
+- Cost tracking handled by `@track_cost` decorator at CLI level

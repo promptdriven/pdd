@@ -118,6 +118,8 @@ from .sync_determine_operation import (
     SyncLock,
     read_run_report,
     calculate_sha256,
+    calculate_current_hashes,
+    _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -129,12 +131,13 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
+from .pytest_output import extract_failing_files_from_output
 from . import DEFAULT_STRENGTH
 ```
 
 ### Function-Scope Imports
 
-- `calculate_current_hashes`, `Fingerprint` - in `_save_operation_fingerprint()`
+- `Fingerprint` - in `_save_operation_fingerprint()`
 - `datetime, timezone` from datetime - in `_save_operation_fingerprint()`
 - `get_extension` - at the start of `sync_orchestration()`
 - `get_test_command_for_file` from `.get_test_command` - in `_execute_tests_and_create_run_report()` and fix operation
@@ -146,10 +149,10 @@ from . import DEFAULT_STRENGTH
 ### Standard Library
 
 ```python
-import threading, time, json, datetime, subprocess, re, os, sys, logging
+import threading, time, json, datetime, subprocess, re, os, sys, logging, tempfile
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 import click
 ```
 
@@ -163,8 +166,9 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 4. **crash**: Fix runtime errors to make code executable
 5. **verify**: Verify against prompt intent (unless `--skip-verify`)
 6. **test**: Generate unit tests (unless `--skip-tests`)
-7. **fix**: Resolve test failures
-8. **update**: Back-propagate learnings to prompt
+7. **test_extend**: Extend existing tests to improve coverage toward target
+8. **fix**: Resolve test failures
+9. **update**: Back-propagate learnings to prompt
 
 Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`, `analyze_conflict`
 
@@ -184,29 +188,53 @@ When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language}_sy
 6. After `app.run()` completes, check `app.worker_exception` for worker thread crashes; print error and traceback to stderr
 7. If `app.run()` returns None, return error dict indicating sync was interrupted
 
+### Headless Mode
+
+Detect headless environments (no TTY, CI environment variable, or `quiet=True`) and run worker logic directly without TUI:
+- Set `PDD_FORCE=1` to skip API key prompts
+- Run `sync_worker_logic()` directly instead of via SyncApp
+- Skip exit animation in headless mode
+
 ### State Persistence
 
-After each successful operation:
-- Save a `Fingerprint` to disk with current file hashes
-- This advances the state machine for subsequent `sync_determine_operation` calls
+Use `AtomicStateUpdate` context manager for consistent state writes:
+- Ensures run_report and fingerprint are both written or neither is written
+- Uses temp file + atomic rename pattern for crash safety
+- After each successful operation, save a `Fingerprint` to disk with current file hashes
 
 ### Skip Handling
 
 When `skip_verify` or `skip_tests` is set:
 - Log that the operation was skipped
-- Save fingerprint to advance state machine (prevents infinite loops)
+- Save fingerprint with 'skip:' prefix (e.g., 'skip:verify') to distinguish from actual execution
 - Cascading: `skip_tests` also skips `verify` and `crash`
+- For crash skip: create synthetic run_report with exit_code=0 to prevent infinite loop
 
 ### Post-Operation Validation
 
 - After **generate**: Delete stale run_report to force re-validation
 - After **crash**: Re-run example to verify fix, update run report
 - After **fix**: Re-run tests to update run report
-- After **test**: Execute tests to create initial run report
+- After **test** and **test_extend**: Execute tests to create/update run report
 
 ### Multi-Language Test Support
 
-For non-Python languages, use `get_test_command_for_file()` to determine the appropriate test runner command (see `get_test_command_example` in dependencies). The `_parse_test_output()` helper parses output from pytest, Jest/Vitest/Mocha, go test, and cargo test.
+For non-Python languages, use `get_test_command_for_file()` to determine the appropriate test runner command. The `_parse_test_output()` helper parses output from pytest, Jest/Vitest/Mocha, go test, and cargo test.
+
+### Multiple Test Files Support
+
+Support running multiple test files (e.g., `test_module.py`, `test_module_1.py`):
+- Accept `test_files` list parameter in `_execute_tests_and_create_run_report()`
+- Run pytest on all matching test files
+- Store test file hashes in `test_file_hashes` dict in RunReport
+- Use `extract_failing_files_from_output()` to identify which test file to pass to fix_main
+
+### Example Error Detection
+
+Implement helpers for running examples with error detection:
+- `_detect_example_errors(output)`: Detect Python tracebacks and ERROR log messages
+- `_run_example_with_error_detection()`: Run example with timeout, handle server-style examples that block
+- `_try_auto_fix_import_error()`: Attempt auto-fix for common import errors before expensive agentic calls
 
 ## Helper Functions
 
@@ -217,12 +245,12 @@ Implement these helpers for state management:
 - `update_sync_log_entry(entry, result, duration)` - Add execution results to log entry
 - `append_sync_log(basename, language, entry)` - Append entry to log file
 - `log_sync_event(basename, language, event, details)` - Log system events (lock_acquired, budget_warning, etc.)
-- `save_run_report(report, basename, language)` - Save RunReport dict to enable state progression
-- `_save_operation_fingerprint(basename, language, operation, paths, cost, model)` - Save fingerprint after success
+- `save_run_report(report, basename, language, atomic_state=None)` - Save RunReport dict, optionally via AtomicStateUpdate
+- `_save_operation_fingerprint(basename, language, operation, paths, cost, model, atomic_state=None)` - Save fingerprint after success
 - `_display_sync_log(basename, language, verbose)` - Format and display sync log
 - `_create_mock_context(**kwargs)` - Create Click context for command execution
-- `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage); supports Python (pytest), JavaScript/TypeScript (Jest/Vitest/Mocha), Go, and Rust (cargo test)
-- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None)` - Run tests with coverage using language-appropriate test command and parse results
+- `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage)
+- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)` - Run tests with coverage
 - `_python_cov_target_for_code_file(code_file)` - Determine dotted module path for pytest-cov
 - `_python_cov_target_for_test_and_code(test_file, code_file, fallback)` - Analyze test imports to pick best `--cov` target
 
@@ -238,10 +266,12 @@ Use `get_pdd_file_paths()` to resolve file paths. Handle errors gracefully:
 
 Detect and break infinite loops with these limits:
 - Auto-deps: 2+ occurrences in last 3 operations → force advance to generate
-- Crash-verify alternation: Break after 2 cycles
-- Test-fix alternation: Break after 2 cycles
+- Crash-verify alternation: Break after 2 cycles (4 operations pattern)
+- Test-fix alternation: Break after 2 cycles (4 operations pattern)
 - Consecutive fix operations: Break after 5
 - Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
+- Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)
+- Test_extend attempts: Accept current coverage after `MAX_TEST_EXTEND_ATTEMPTS` (2)
 
 ### Budget and Lock Management
 
@@ -264,13 +294,18 @@ Handle command results in multiple formats:
 - Tuple: Cost is second-to-last element, model is last element
 - Save fingerprint after successful operations regardless of format
 
+### Non-Python Language Handling
+
+For non-Python languages, set `max_attempts=0` to skip iterative loops and go directly to agentic fallback in crash, verify, and fix operations.
+
 ## Constants
 
 ```python
 # Module level
 MAX_CONSECUTIVE_TESTS = 3  # Break after this many consecutive test operations
+MAX_TEST_EXTEND_ATTEMPTS = 2  # Accept coverage after this many test_extend attempts
+MAX_CONSECUTIVE_CRASHES = 3  # Break after this many consecutive crash operations
 
 # Inside sync_worker_logic()
 MAX_CYCLE_REPEATS = 2  # Break crash-verify and test-fix cycles after this many repetitions
 ```
-
