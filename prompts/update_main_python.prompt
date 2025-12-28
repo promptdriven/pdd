@@ -5,18 +5,13 @@
 Write `pdd/update_main.py` with an `update_main` function - the CLI wrapper for updating prompts.
 
 % Role & Scope
-CLI wrapper for updating prompts based on modified code. Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter.
+CLI wrapper for updating prompts based on modified code. Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability.
 
 % Requirements
 1. Function: `update_main(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git, repo, extensions, strength, temperature, simple: bool = False) -> Optional[Tuple[str, float, str]]`
 2. Return (prompt, cost, model) on success, None on error
-3. Agentic routing (when `simple=False` and `get_available_agents()` returns non-empty):
-   - Get tests_dir via `get_tests_dir_from_config()`
-   - Call `run_agentic_update(prompt_file, code_file, test_files=None, tests_dir=tests_dir, verbose=verbose, quiet=quiet)`
-   - Returns 5-tuple: (success, message, cost, model, changed_files)
-   - On success: READ the prompt file to get updated content, return (file_content, cost, model)
-   - On failure: fall through to legacy path
-4. Auto-fallback: if agentic unavailable or fails, use legacy `update_prompt()` path
+3. Agentic routing (when `simple=False` and agents available): try agentic first, fall back to legacy on failure
+4. Read updated prompt file content after successful agentic update (agentic writes directly)
 5. Retrieve verbose/quiet/time from ctx.obj; pass to update functions
 6. Validate prompt is non-empty before writing
 7. Without --output, overwrite input_prompt_file in place
@@ -24,7 +19,7 @@ CLI wrapper for updating prompts based on modified code. Supports three modes: t
 
 % Modes
 1. **True update**: input_prompt_file + modified_code_file + (use_git OR input_code_file). Empty prompt triggers generation mode.
-2. **Regeneration**: Only modified_code_file provided. Derive prompt path via `resolve_prompt_code_pair`. Detect directory vs file for --output.
+2. **Regeneration**: Only modified_code_file provided. Derive prompt path via helper. Detect directory vs file for --output.
 3. **Repo mode** (repo=True): Scan repo, create missing prompts, update all pairs with progress bar and summary table.
 
 % Repo Mode Behavior
@@ -32,7 +27,7 @@ CLI wrapper for updating prompts based on modified code. Supports three modes: t
 - Exclude files: *.prompt, test_*, *_example
 - Only process files where `get_language()` returns non-None
 - Filter by extensions if provided
-- Update strategy: untracked/empty prompt → update_prompt, else → git_update
+- Update strategy: untracked/empty prompt -> update_prompt, else -> git_update
 - Return: ("Repository update complete.", total_cost, "models") or None if no files
 
 % Error Handling
