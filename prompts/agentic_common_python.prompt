@@ -30,14 +30,17 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 % Requirements
 1. Export `AGENT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"]`
 2. Provide logging utilities that accept `verbose: bool` and `quiet: bool` as function parameters (callers pass these from their context)
-3. Check agent availability by verifying BOTH: CLI command exists (use `shutil.which`) AND API key is configured (via `_load_model_data()` from llm_invoke)
+3. Check agent availability:
+   - CLI command must exist (use `shutil.which`)
+   - API key must be configured (via `_load_model_data()` from llm_invoke)
+   - Exception: Anthropic is available if Claude CLI exists, even without API key (supports subscription auth)
 4. Run agents in **headless mode** with JSON output for structured response parsing and real cost tracking. Each provider requires specific flags for auto-approval of file operations.
 5. Write prompt to unique temp file (`.agentic_prompt_<random>.txt`), invoke CLI with agentic instruction, clean up
-6. Sanitize environment for non-interactive subprocess execution (TERM=dumb, NO_COLOR=1, CI=1)
+6. Sanitize environment for non-interactive subprocess execution (TERM=dumb, NO_COLOR=1, CI=1). For Anthropic, remove ANTHROPIC_API_KEY from env to force subscription auth.
 7. Parse JSON output to extract actual cost:
-   - Anthropic: `result["total_cost_usd"]` (USD directly)
-   - Google: Calculate from `result["stats"]["models"][model]["tokens"]` fields (prompt, candidates, cached)
-   - OpenAI: Calculate from `result["usage"]` fields (input_tokens, output_tokens, cached_input_tokens)
+   - Anthropic: `data["total_cost_usd"]` (USD directly); extract response from `data["result"]` or `data["response"]`
+   - Google: Calculate from `data["stats"]["models"][model]["tokens"]` fields (prompt, candidates, cached)
+   - OpenAI: Calculate from `data["usage"]` fields (input_tokens, output_tokens, cached_input_tokens)
 
 % Function Signatures
 
