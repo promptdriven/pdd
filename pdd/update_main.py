@@ -16,7 +16,7 @@ from rich.progress import (
 from rich.table import Table
 from rich.theme import Theme
 
-from .construct_paths import construct_paths, get_tests_dir_from_config
+from .construct_paths import construct_paths, get_tests_dir_from_config, detect_context_for_file
 from .get_language import get_language
 from .update_prompt import update_prompt
 from .git_update import git_update
@@ -70,8 +70,13 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
             # If not a git repo, use the directory containing the code file
             pass
 
-        # Use the default prompts directory at repo root
-        prompts_dir = os.path.join(repo_root, "prompts")
+        # Use context-aware prompts_dir from .pddrc if available
+        context_name, context_config = detect_context_for_file(code_file_path, repo_root)
+        prompts_dir_config = context_config.get("prompts_dir", "prompts")
+        if os.path.isabs(prompts_dir_config):
+            prompts_dir = prompts_dir_config
+        else:
+            prompts_dir = os.path.join(repo_root, prompts_dir_config)
 
     # Construct the prompt filename in the determined directory
     prompt_filename = f"{base_name}_{language}.prompt"

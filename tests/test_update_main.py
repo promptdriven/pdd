@@ -433,3 +433,73 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, temp_git_rep
     
     assert result is not None
     assert result[0] == "Repository update complete."
+
+
+# --- Tests for .pddrc prompts_dir configuration (GitHub Issue #86) ---
+
+def test_update_regeneration_mode_respects_pddrc_prompts_dir(tmp_path, monkeypatch):
+    """
+    Test that pdd update in regeneration mode uses prompts_dir from .pddrc context config.
+    This is a regression test for GitHub issue #86.
+    """
+    from pdd.update_main import update_main
+
+    # Setup: Create a temp directory structure with .pddrc
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+
+    # Create .pddrc with context-specific prompts_dir
+    pddrc_content = '''
+contexts:
+  backend:
+    paths:
+      - "backend/**"
+    defaults:
+      prompts_dir: "prompts/backend"
+'''
+    (repo_path / ".pddrc").write_text(pddrc_content)
+
+    # Create the backend directory and code file
+    backend_dir = repo_path / "backend"
+    backend_dir.mkdir()
+    code_file = backend_dir / "some_module.py"
+    code_file.write_text("def example(): pass")
+
+    # Create prompts/backend directory
+    prompts_backend = repo_path / "prompts" / "backend"
+    prompts_backend.mkdir(parents=True)
+
+    # Change to repo directory
+    monkeypatch.chdir(repo_path)
+
+    # Initialize git repo
+    git.Repo.init(repo_path)
+
+    # Mock update_prompt to avoid actual LLM calls
+    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
+         patch("pdd.update_main.get_available_agents") as mock_agents:
+        mock_update_prompt.return_value = ("generated prompt", 0.01, "mock-model")
+        mock_agents.return_value = []
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
+
+        # Act: Call update_main in regeneration mode (only code file provided)
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,  # Regeneration mode
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False
+        )
+
+    # Assert: Prompt should be saved to prompts/backend/, not prompts/
+    expected_prompt_path = repo_path / "prompts" / "backend" / "some_module_python.prompt"
+    wrong_prompt_path = repo_path / "prompts" / "some_module_python.prompt"
+
+    assert expected_prompt_path.exists(), \
+        f"Expected prompt at {expected_prompt_path}, but it was not created there. " \
+        f"Wrong path exists: {wrong_prompt_path.exists()}"
+    assert not wrong_prompt_path.exists(), \
+        f"Prompt was created at wrong path {wrong_prompt_path} instead of {expected_prompt_path}"
