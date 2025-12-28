@@ -739,6 +739,70 @@ def test_has_invalid_python_code_ignores_non_code_strings():
     assert not _has_invalid_python_code(obj)
 
 
+def test_has_invalid_python_code_ignores_prose_fields():
+    """Prose fields with Python keywords should NOT trigger validation.
+
+    This reproduces issue #193: PromptAnalysis.reasoning contains
+    'return statement' which triggers false positive validation.
+    """
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class PromptAnalysis(BaseModel):
+        reasoning: str
+        is_finished: bool
+
+    # This prose mentions "return" - should NOT be validated as Python code
+    obj = PromptAnalysis(
+        reasoning="Python code parses; ends on a complete return statement.",
+        is_finished=True
+    )
+    # BUG: Currently returns True (false positive), should return False
+    assert not _has_invalid_python_code(obj)
+
+
+def test_is_prose_field_name():
+    """Test prose field name detection."""
+    from pdd.llm_invoke import _is_prose_field_name
+
+    # Prose fields (should be skipped)
+    assert _is_prose_field_name("reasoning")
+    assert _is_prose_field_name("explanation")
+    assert _is_prose_field_name("analysis")
+    assert _is_prose_field_name("change_instructions")
+    assert _is_prose_field_name("REASONING")  # Case insensitive
+
+    # Code fields (should NOT be skipped)
+    assert not _is_prose_field_name("fixed_code")
+    assert not _is_prose_field_name("extracted_code")
+    assert not _is_prose_field_name("trimmed_continued_generation")
+    assert not _is_prose_field_name("code_block")
+
+
+def test_has_invalid_python_code_validates_non_prose_code_fields():
+    """Ensure code fields (including non-obvious ones) still get validated."""
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class TrimResultsOutput(BaseModel):
+        explanation: str
+        trimmed_continued_generation: str  # This IS code, not prose!
+
+    # Valid code
+    valid = TrimResultsOutput(
+        explanation="Good code with return statement",
+        trimmed_continued_generation="def f():\n    return 1"
+    )
+    assert not _has_invalid_python_code(valid)
+
+    # Invalid code in trimmed_continued_generation should be detected
+    invalid = TrimResultsOutput(
+        explanation="Broken with import issues",
+        trimmed_continued_generation="def broken(:\n    pass"
+    )
+    assert _has_invalid_python_code(invalid)
+
+
 def test_llm_invoke_retries_on_invalid_python_code(mock_load_models, mock_set_llm_cache, caplog):
     """Test that llm_invoke retries with cache bypass when Python code is invalid after repair."""
     model_key_name = "OPENAI_API_KEY"

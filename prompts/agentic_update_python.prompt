@@ -7,11 +7,11 @@ Write `pdd/agentic_update.py` module.
 Agentic prompt update using Claude Code, Gemini, or Codex CLI. Invokes AI agents that read files, understand the prompting guide, consider tests, and produce compact, high-quality prompts.
 
 % Requirements
-1. Function: `run_agentic_update(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_update(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, tests_dir: Optional[Path] = None, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, message, cost, model_used, changed_files)
 3. If no agents available, return `(False, "No agentic CLI available", 0.0, "", [])`
 4. Auto-discover test files if `test_files` is None using pattern `test_{code_stem}*{code_suffix}`
-5. Search for tests in: `tests/` relative to code, same directory, project root `tests/`
+5. Search for tests in order: `tests_dir` (if provided), `tests/` relative to code, same directory, sibling `../tests/`, project root `tests/`
 6. Load `agentic_update_LLM` template via `load_prompt_template()`, format with prompt_path, code_path, test_paths
 7. Use `run_agentic_task()` from agentic_common to execute
 8. Detect changed files by comparing mtimes before/after agent run

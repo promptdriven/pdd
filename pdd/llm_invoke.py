@@ -996,6 +996,30 @@ def _looks_like_python_code(s: str) -> bool:
     return any(indicator in s for indicator in code_indicators)
 
 
+# Field names known to contain prose text, not Python code
+# These are skipped during syntax validation to avoid false positives
+_PROSE_FIELD_NAMES = frozenset({
+    'reasoning',           # PromptAnalysis - completeness reasoning
+    'explanation',         # TrimResultsOutput, FixerOutput - prose explanations
+    'analysis',            # DiffAnalysis, CodePatchResult - analysis text
+    'change_instructions', # ChangeInstruction, ConflictChange - instructions
+    'change_description',  # DiffAnalysis - description of changes
+    'planned_modifications', # CodePatchResult - modification plans
+    'details',             # VerificationOutput - issue details
+    'description',         # General prose descriptions
+    'focus',               # Focus descriptions
+})
+
+
+def _is_prose_field_name(field_name: str) -> bool:
+    """Check if a field name indicates it contains prose, not code.
+
+    Used to skip syntax validation on prose fields that may contain
+    Python keywords (like 'return' or 'import') but are not actual code.
+    """
+    return field_name.lower() in _PROSE_FIELD_NAMES
+
+
 def _repair_python_syntax(code: str) -> str:
     """
     Validate Python code syntax and attempt repairs if invalid.
@@ -1262,15 +1286,19 @@ def _unescape_code_newlines(obj: Any) -> Any:
     return obj
 
 
-def _has_invalid_python_code(obj: Any) -> bool:
+def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
     """
     Check if any code-like string fields have invalid Python syntax.
 
     This is used after _unescape_code_newlines to detect if repair failed
     and we should retry with cache disabled.
 
+    Skips fields in _PROSE_FIELD_NAMES to avoid false positives on prose
+    text that mentions code patterns (e.g., "ends on a return statement").
+
     Args:
         obj: A Pydantic model, dict, list, or primitive value
+        field_name: The name of the field being validated (used to skip prose)
 
     Returns:
         True if there are invalid code fields that couldn't be repaired
@@ -1281,6 +1309,9 @@ def _has_invalid_python_code(obj: Any) -> bool:
         return False
 
     if isinstance(obj, str):
+        # Skip validation for known prose fields
+        if _is_prose_field_name(field_name):
+            return False
         if _looks_like_python_code(obj):
             try:
                 ast.parse(obj)
@@ -1290,21 +1321,22 @@ def _has_invalid_python_code(obj: Any) -> bool:
         return False
 
     if isinstance(obj, BaseModel):
-        for field_name in obj.model_fields:
-            value = getattr(obj, field_name)
-            if _has_invalid_python_code(value):
+        for name in obj.model_fields:
+            value = getattr(obj, name)
+            if _has_invalid_python_code(value, field_name=name):
                 return True
         return False
 
     if isinstance(obj, dict):
-        for value in obj.values():
-            if _has_invalid_python_code(value):
+        for key, value in obj.items():
+            fname = key if isinstance(key, str) else ""
+            if _has_invalid_python_code(value, field_name=fname):
                 return True
         return False
 
     if isinstance(obj, list):
         for item in obj:
-            if _has_invalid_python_code(item):
+            if _has_invalid_python_code(item, field_name=field_name):
                 return True
         return False
 

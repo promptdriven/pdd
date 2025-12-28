@@ -59,7 +59,18 @@ def preprocess_wheel(wheel_path):
                 # Add special flags for auto_include_LLM.prompt
                 if prompt_file.name == 'auto_include_LLM.prompt':
                     cmd.extend(['--double', '--exclude', "['input_prompt','available_include']"])
-                
+
+                # Add special flags for agentic_update_LLM.prompt
+                # The prompting guide contains code examples with curly braces that
+                # would break Python's str.format() without escaping
+                if prompt_file.name == 'agentic_update_LLM.prompt':
+                    cmd.extend([
+                        '--double',
+                        '--exclude', 'prompt_path',
+                        '--exclude', 'code_path',
+                        '--exclude', 'test_paths'
+                    ])
+
                 cmd.append(str(prompt_file))
                 
                 # Run pdd preprocess
