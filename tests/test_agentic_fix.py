@@ -11,6 +11,7 @@ from pdd.agentic_fix import (
     _verify_and_log,
     _is_suspicious_path,
     _extract_files_from_output,
+    _apply_file_map,
 )
 
 
@@ -688,3 +689,122 @@ class TestExtractFilesFromOutputWithSuspiciousPathRejection:
         assert "hello.py" in result
         assert "test_file.py" in result
         assert len(result) == 2
+
+
+class TestBugReplication:
+    """Integration tests that replicate the exact bug scenario.
+
+    Bug: When LLM produces malformed output with single-letter file markers like
+    <<<BEGIN_FILE:C>>><<<END_FILE:C>>>, the regex captures 'C' as a filename
+    and writes a 0-byte file to disk.
+
+    These tests verify the fix prevents this by checking actual file creation.
+    """
+
+    def test_suspicious_paths_not_written_to_disk(self, tmp_path):
+        """
+        INTEGRATION TEST: Verify C, E, T files are NOT created on disk.
+
+        This replicates the exact bug scenario where malformed LLM output
+        would result in empty files being created in the working directory.
+        """
+        # Create a legitimate code file that _apply_file_map expects
+        code_file = tmp_path / "hello.py"
+        code_file.write_text("# original\n")
+
+        # Simulate the file_map that would be created from malformed LLM output
+        # The content is empty string (0 bytes) when markers are on same line:
+        # <<<BEGIN_FILE:C>>><<<END_FILE:C>>>
+        file_map = {
+            "C": "",                              # Would create 0-byte file
+            "E": "",                              # Would create 0-byte file
+            "T": "",                              # Would create 0-byte file
+            "hello.py": "def hello():\n    print('hello')\n",  # Legitimate file
+        }
+
+        # Apply the file map (this is where the bug would manifest)
+        # Signature: _apply_file_map(file_map, project_root, primary_code_path, allow_new)
+        _apply_file_map(file_map, tmp_path, code_file, allow_new=True)
+
+        # CRITICAL ASSERTIONS: These files should NOT exist
+        assert not (tmp_path / "C").exists(), "Bug: C file was created on disk"
+        assert not (tmp_path / "E").exists(), "Bug: E file was created on disk"
+        assert not (tmp_path / "T").exists(), "Bug: T file was created on disk"
+
+        # Legitimate file SHOULD be updated
+        assert (tmp_path / "hello.py").exists()
+        assert "def hello():" in (tmp_path / "hello.py").read_text()
+
+    def test_template_variables_not_written_to_disk(self, tmp_path):
+        """
+        INTEGRATION TEST: Verify {path} template files are NOT created.
+
+        Bug scenario: LLM outputs code containing f-string templates like
+        <<<BEGIN_FILE:{path}>>> which gets captured as a filename.
+        """
+        code_file = tmp_path / "hello.py"
+        code_file.write_text("# original\n")
+
+        file_map = {
+            "{path}": "def _end_marker(path): return f'<<<END_FILE:{path}>>>'",
+            "{code_abs}": "some garbage",
+            "hello.py": "def hello(): print('hello')\n",
+        }
+
+        # Signature: _apply_file_map(file_map, project_root, primary_code_path, allow_new)
+        _apply_file_map(file_map, tmp_path, code_file, allow_new=True)
+
+        # These template variable files should NOT exist
+        assert not (tmp_path / "{path}").exists(), "Bug: {path} file was created"
+        assert not (tmp_path / "{code_abs}").exists(), "Bug: {code_abs} file was created"
+
+        # Legitimate file SHOULD exist
+        assert (tmp_path / "hello.py").exists()
+
+    def test_full_extraction_to_disk_pipeline(self, tmp_path):
+        """
+        END-TO-END TEST: Full pipeline from malformed LLM output to disk.
+
+        Simulates the complete bug scenario:
+        1. LLM produces malformed output with C, E, T markers
+        2. Regex extracts these as file paths
+        3. _apply_file_map attempts to write files
+        4. Validation prevents suspicious files from being created
+        """
+        code_file = tmp_path / "hello.py"
+        code_file.write_text("# original\n")
+
+        # Simulate exact malformed LLM output that caused the bug
+        malformed_llm_output = """
+Here's the fix for the code:
+
+<<<BEGIN_FILE:C>>><<<END_FILE:C>>>
+<<<BEGIN_FILE:E>>><<<END_FILE:E>>>
+<<<BEGIN_FILE:T>>><<<END_FILE:T>>>
+
+And here's the actual fix:
+<<<BEGIN_FILE:hello.py>>>
+def hello():
+    print("hello, world!")
+<<<END_FILE:hello.py>>>
+"""
+
+        # Step 1: Extract files from output (this includes suspicious path filtering)
+        file_map = _extract_files_from_output(malformed_llm_output)
+
+        # Verify extraction filtering worked
+        assert "C" not in file_map
+        assert "E" not in file_map
+        assert "T" not in file_map
+        assert "hello.py" in file_map
+
+        # Step 2: Apply to disk
+        # Signature: _apply_file_map(file_map, project_root, primary_code_path, allow_new)
+        _apply_file_map(file_map, tmp_path, code_file, allow_new=True)
+
+        # Step 3: Verify disk state
+        assert not (tmp_path / "C").exists(), "C file should not exist on disk"
+        assert not (tmp_path / "E").exists(), "E file should not exist on disk"
+        assert not (tmp_path / "T").exists(), "T file should not exist on disk"
+        assert (tmp_path / "hello.py").exists()
+        assert "hello, world!" in (tmp_path / "hello.py").read_text()
