@@ -3,145 +3,140 @@
 <include>context/python_preamble.prompt</include>
 
 % Dependencies:
-    - This function requires the `python-dotenv` library for managing environment variables from a `.env` file.
+    - `python-dotenv` for managing environment variables from a `.env` file.
+    - `litellm` for LLM provider abstraction.
+    - `pandas` for reading the model CSV.
+    - `pydantic` for structured output validation.
 
 % Startup Behavior:
-    - Upon initialization or first call, the function should attempt to load environment variables from a `.env` file located at the project root.
-    - Project root detection and CSV resolution:
-        * Determine project root by: (1) checking `$PDD_PATH` and using it if it points to a real project directory (not the installed package path); (2) otherwise, search upwards from the current working directory (cwd) for project markers (like `.git`, `pyproject.toml`, `data/`, `.env`); (3) if no markers are found, default to the cwd.
-        * Resolve `llm_model.csv` in this priority order: (a) `~/.pdd/llm_model.csv` if present; (b) `<PROJECT_ROOT>/.pdd/llm_model.csv` when `$PDD_PATH` points to a real project (not the installed package path); (c) `<cwd>/.pdd/llm_model.csv`; (d) otherwise use the packaged `pdd/data/llm_model.csv`.
+    - Load environment variables from a `.env` file located at the project root.
+    - Project root detection: (1) `$PDD_PATH` if pointing to a real project (not the installed package path); (2) otherwise search upward from CWD for markers (.git, pyproject.toml, data/, .env); (3) fallback to CWD.
+    - Resolve `llm_model.csv` in priority order: (a) `~/.pdd/llm_model.csv`; (b) `<PROJECT_ROOT>/.pdd/llm_model.csv` if `$PDD_PATH` points to a real project; (c) `<cwd>/.pdd/llm_model.csv`; (d) packaged `pdd/data/llm_model.csv`.
 
 % Logging Configuration:
-    - Use Python's standard logging module with a hierarchical logger structure.
-    - Create a primary logger named "pdd.llm_invoke" for the module.
-    - Configure a separate logger for LiteLLM's logs named "litellm".
-    - Control logging verbosity through environment variables:
-        * PDD_LOG_LEVEL: Controls the module's default logging level (default: "INFO")
-        * LITELLM_LOG_LEVEL: Controls the LiteLLM logger's level (default: "WARNING" in production)
-        * PDD_ENVIRONMENT: When set to "production", automatically reduces logging to WARNING level
-        * PDD_VERBOSE_LOGGING: When set to "1", enables DEBUG level regardless of other settings
-    - Provide helper functions:
-        * setup_file_logging(): Configure rotating file handlers with size limits (10MB) and backups (5)
-        * set_verbose_logging(): Toggle DEBUG level based on the verbose flag or environment variable
-    - Replace all print/rprint statements with appropriate logger calls (logger.debug, logger.info, logger.warning, logger.error)
-    - In production environments, use WARNING level by default to reduce log output
-    - For development, use more verbose INFO level by default
-    - Drop unsupported provider params: set `litellm.drop_params` based on environment variable `LITELLM_DROP_PARAMS` (default: true) to gracefully ignore provider-unsupported parameters (e.g., `reasoning_effort`).
+    - Use Python's standard logging module with a hierarchical logger named "pdd.llm_invoke".
+    - Configure a separate logger for LiteLLM named "litellm".
+    - Environment variables: PDD_LOG_LEVEL (default: "INFO"), LITELLM_LOG_LEVEL (default: "WARNING" in production), PDD_ENVIRONMENT ("production" reduces to WARNING), PDD_VERBOSE_LOGGING=1 enables DEBUG.
+    - Provide `setup_file_logging()` for rotating file handlers (10MB, 5 backups) and `set_verbose_logging()` to toggle DEBUG level.
+    - Set `litellm.drop_params` based on `LITELLM_DROP_PARAMS` env var (default: true) to ignore unsupported provider parameters.
 
-% Here are the inputs and outputs of the function:
-    Input:
-        'prompt' - String with the prompt template to be used for the LLM model.
-        'input_json' - JSON object with the input variables OR **a list of JSON objects** if `use_batch_mode` is True.
-        'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
-        'temperature' - Floating point number indicating the temperature of the LLM.
-        'verbose' - Boolean indicating whether to print extra information.
-        'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
-        'output_schema' - Optional. Raw JSON schema dictionary as an alternative to output_pydantic. Validated via jsonschema if available.
-        'time' - Optional. Floating point number between 0 and 1 representing the relative amount of thinking effort requested. Default is 0.25. How this is interpreted depends on the selected model's 'reasoning_type' specified in the CSV.
-        'use_batch_mode' - Optional. Boolean indicating whether to use batch processing if supported by the model/provider via LiteLLM (default: False).
-        'language' - Optional. Language hint (e.g., "python", "javascript"). When not "python" or None, skip Python-specific code validation/repair to avoid false positives.
-    Output (dictionary):
-        'result' - Output from the LLM model (string or Pydantic object) OR **a list of outputs** if `use_batch_mode` was True.
-        'cost' - Total cost of the invoke run, calculated via a LiteLLM callback and the `litellm.completion_cost` function.
-        'model_name' - Name of the selected model used by LiteLLM.
-        'thinking_output' - Optional. The reasoning or thinking process output from the model, if available in the LiteLLM response.
+% Function Signature:
+    llm_invoke(
+        prompt: Optional[str] = None,
+        input_json: Optional[Union[Dict, List[Dict]]] = None,
+        strength: float = 0.5,
+        temperature: float = 0.1,
+        verbose: bool = False,
+        output_pydantic: Optional[Type[BaseModel]] = None,
+        output_schema: Optional[Dict] = None,
+        time: float = 0.25,
+        use_batch_mode: bool = False,
+        messages: Optional[Union[List[Dict], List[List[Dict]]]] = None,
+        language: Optional[str] = None,
+    ) -> Dict[str, Any]
 
-% Function Logic Flow:
-    1. **Configure Logging:** Initialize loggers with appropriate levels based on environment variables and verbose flag.
-    2. **Load Environment:** Load `.env` file using `dotenv.load_dotenv()`.
-    3. **Input Handling:** Determine if using provided `messages` or generating from `prompt` + `input_json`.
-    4. **Model Selection:** Based on `strength`, filter models from CSV, calculate target cost/ELO, sort candidates, and select top candidate.
-    5. **API Key Check & Acquisition:**
-        a. Get the required API key environment variable *name* from the `api_key` column in CSV.
-        b. Check if `os.getenv(key_name)` returns a value.
-        c. **If the key is MISSING:**
-            i. If `PDD_FORCE` env var is set, skip interactive prompt and return False (skip model).
-            ii. Otherwise prompt the user interactively using `input()`.
-            iii. Set the environment variable for the current process.
-            iv. **Update `.env` file:** Replace existing key in-place (no comment + append); remove old commented versions of the same key to prevent accumulation.
-            v. **Security Warning:** Log a warning about key saved to .env file.
-            vi. **Mark key as newly acquired** for retry logic.
-        d. **If the key EXISTS:** Proceed silently.
-    5.X. **Process `time` parameter for Reasoning:**
-        a. Retrieve the `reasoning_type` and `max_reasoning_tokens` for the selected model from CSV.
-        b. If `reasoning_type` is 'budget': Calculate `budget_tokens = int(time * max_reasoning_tokens)`, pass provider-specific thinking parameters.
-        c. If `reasoning_type` is 'effort': Map `time` to "low"/"medium"/"high", pass appropriate reasoning parameters.
-        d. If `reasoning_type` is 'none': No reasoning parameters added.
-    6. **LLM Invocation:**
-        - For OpenAI gpt-5* models, call the OpenAI Responses API (not LiteLLM completion) to support reasoning parameters.
-        - Otherwise, call `litellm.completion` or `litellm.batch_completion`.
-    7. **Retry Logic:**
-        a. **On Authentication Error with newly acquired key:** Re-prompt for same key and retry.
-        b. **On Schema Validation Failure:** Raise `SchemaValidationError` to trigger model fallback to next candidate.
-        c. **Other Errors:** Proceed to try the next candidate model.
-        d. **Preserve provider credentials in retries:** When retrying (for None content, malformed JSON, or invalid Python code), pass provider-specific credentials (vertex_credentials, vertex_project, vertex_location) from the original call.
-    8. **Response Handling:** Process the LiteLLM response, extract results, cost, tokens, thinking output.
-    9. **Return Output:** Return the standard output dictionary.
+% Inputs:
+    - 'prompt': String prompt template with {variable} placeholders.
+    - 'input_json': Dict or list of dicts for template variables. List triggers batch mode.
+    - 'strength': 0=cheapest model, 0.5=base model, 1=highest ELO.
+    - 'temperature': LLM temperature.
+    - 'verbose': Enable detailed logging.
+    - 'output_pydantic': Pydantic model class for structured output.
+    - 'output_schema': Raw JSON schema dict (alternative to output_pydantic).
+    - 'time': Thinking effort (0-1, default 0.25). Interpreted per model's reasoning_type in CSV.
+    - 'use_batch_mode': Use litellm.batch_completion if True.
+    - 'messages': Pre-formatted messages (ignores prompt/input_json if provided).
+    - 'language': Language hint (e.g., "python", "javascript"). Skip Python-specific validation when not "python" or None.
 
-% Error Handling and Model Fallback:
-    - Define a `SchemaValidationError` exception class that triggers model fallback when Pydantic/JSON schema validation fails.
-    - Validate inputs and handle prompt template formatting errors with clear messages.
-    - If `messages` is provided, use it directly. Ignore `prompt` and `input_json`.
-    - If `messages` is NOT provided, validate that `prompt` is a non-null string and `input_json` is a non-null dictionary/list.
-    - Handle prompt template formatting errors separately from model invocation errors.
+% Output (dictionary):
+    - 'result': String or Pydantic object (or list if batch mode).
+    - 'cost': Total cost via LiteLLM callback and litellm.completion_cost, with CSV rate fallback.
+    - 'model_name': Name of the selected model.
+    - 'thinking_output': Reasoning output if available.
 
-% Here is an example (but not actual values) of the llm_model.csv: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
-% Here is how to use LiteLLM thinking: <litellm_thinking_example><web>https://docs.litellm.ai/docs/reasoning_content</web></litellm_thinking_example>
-% Here is how to use LiteLLM JSON mode: <litellm_json_mode_example><web>https://docs.litellm.ai/docs/completion/json_mode</web></litellm_json_mode_example>
-% Here is how to use LiteLLM batch mode: <litellm_batch_mode_example><web>https://docs.litellm.ai/docs/completion/batching</web></litellm_batch_mode_example>
-% Here is how to use LiteLLM exception mapping: <litellm_exception_mapping_example><web>https://docs.litellm.ai/docs/exception_mapping</web></litellm_exception_mapping_example>
-% Here is how to use LiteLLM token usage and cost: <litellm_token_usage_example><web>https://docs.litellm.ai/docs/completion/token_usage</web></litellm_token_usage_example>
-% Here is how to use LiteLLM callbacks: <litellm_callbacks_example><web>https://docs.litellm.ai/docs/observability/callbacks</web></litellm_callbacks_example>
-% Here is how to use LiteLLM provider specific parameters: <litellm_provider_params_example><web>https://docs.litellm.ai/docs/completion/provider_specific_params</web></litellm_provider_params_example>
+% Model Selection:
+    - Base model: `$PDD_MODEL_DEFAULT` or `DEFAULT_LLM_MODEL` constant from `pdd/__init__.py`.
+    - CSV columns: model, provider, input/output costs ($/M tokens), coding_arena_elo, api_key, structured_output, reasoning_type, max_reasoning_tokens, optional 'location' for Vertex AI override.
+    - Filter by api_key presence. Skip interactive check if api_key is empty or "EXISTING_KEY".
+    - strength < 0.5: Interpolate by cost from base down to cheapest.
+    - strength > 0.5: Interpolate by ELO from base up to highest.
+    - strength = 0.5: Use base model, fallback to next highest ELO on failure.
+    - Soft fallback: If base model not in CSV, use first available model as surrogate and log warning.
 
-% The code must use LiteLLM's `litellm.completion()` function to handle invocation across various LLM providers. Configure LiteLLM caching:
-    - Prefer S3-compatible cache targeting GCS using HMAC keys when `GCS_HMAC_ACCESS_KEY_ID`, `GCS_HMAC_SECRET_ACCESS_KEY`, `GCS_BUCKET_NAME` are set.
-    - Fall back to disk-based SQLite cache at `<PROJECT_ROOT>/litellm_cache.sqlite` if S3/GCS configuration fails.
-    - Respect `LITELLM_CACHE_DISABLE=1` to disable caching entirely.
+% API Key Management:
+    - Check `os.getenv(key_name)` for the required API key.
+    - If missing and `PDD_FORCE` env var is set, skip model (non-interactive mode).
+    - Otherwise, prompt user via `input()`, sanitize key, set env var, save to .env file.
+    - Replace existing key in-place (no comment + append); remove old commented versions.
+    - Log security warning about key saved to .env file.
+    - Mark key as newly acquired for retry logic on auth errors.
 
-% Model Selection Rules:
-    - If `$PDD_MODEL_DEFAULT` is set, use that as the base model name.
-    - Otherwise, the base model name is defined by the `DEFAULT_LLM_MODEL` constant from `pdd/__init__.py`.
-    - Read `llm_model.csv` following the priority order specified in Startup Behavior.
-    - The CSV contains: LiteLLM model identifier, input/output costs ($/Million tokens), ELO, provider, API key env var name, `reasoning_type`, `max_reasoning_tokens`, structured_output flag, optional `location` column for Vertex AI per-model location overrides.
-    - Filter models by availability of api_key in CSV. If `api_key` is empty or exactly `"EXISTING_KEY"`, skip the interactive check/acquisition process.
-    - When strength < 0.5: Interpolate by cost from base model down to cheapest.
-    - When strength > 0.5: Interpolate by ELO from base model up to highest.
-    - When strength = 0.5: Use base model, fallback to next highest ELO on failure.
-    - If base model not in CSV, apply soft fallback: choose first available model as surrogate base and log warning.
+% Reasoning Parameters:
+    - CSV columns: reasoning_type ('budget', 'effort', 'none'), max_reasoning_tokens.
+    - 'budget': Calculate budget_tokens = int(time * max_reasoning_tokens), pass provider-specific thinking parameters (e.g., Anthropic 'thinking' param).
+    - 'effort': Map time to "low"/"medium"/"high", pass reasoning_effort or provider-specific params.
+    - 'none': No reasoning parameters.
 
-% Pass necessary parameters to `litellm.completion()`:
-    - `model`, `messages`, `temperature`, `num_retries`: 2
-    - **Do not set `max_tokens`/`max_completion_tokens`.** Rely on provider defaults.
-    - **Thinking/Reasoning (`time` parameter)**: Use CSV `reasoning_type` and `max_reasoning_tokens` columns.
-    - **Structured Output**: If `output_pydantic` or `output_schema` is provided, check `structured_output` flag from CSV. Use LiteLLM's `response_format` mechanism. Handle fallback parsing for models that don't natively support structured output.
-    - **Provider-specific handling**: For LM Studio, use `extra_body` to bypass `drop_params` stripping the schema. For Groq, use simple `json_object` mode with schema instruction in the system prompt.
-    - **Batch Mode**: If `use_batch_mode` is True, use `litellm.batch_completion`.
+% LLM Invocation:
+    - For OpenAI gpt-5* models: Call litellm.responses() API to support 'reasoning' parameter. Build text.format block for structured output.
+    - For other models: Call litellm.completion() or litellm.batch_completion().
+    - Pass: model, messages, temperature, num_retries=2.
+    - Do NOT set max_tokens/max_completion_tokens; rely on provider defaults.
+    - Anthropic with thinking enabled: Force temperature=1.
+
+% Structured Output:
+    - Check 'structured_output' CSV flag.
+    - Use response_format with type='json_object' and response_schema for Pydantic models.
+    - LM Studio: Use extra_body to bypass drop_params stripping the schema.
+    - Groq: Use simple json_object mode with schema instruction in system prompt.
+    - If model doesn't support structured output, parse response as JSON and validate.
 
 % Response Processing:
-    - Extract result content from response, handling None content by retrying with cache bypass.
-    - Detect and handle malformed JSON responses (excessive trailing newlines causing truncation).
-    - Unescape double-escaped newlines in code fields (`_unescape_code_newlines`).
-    - Repair common Python syntax errors (trailing quotes, etc.) via `_repair_python_syntax`.
-    - Skip Python validation for known prose field names (reasoning, explanation, analysis, etc.) to avoid false positives.
-    - When `language` is not "python" or None, skip Python-specific validation entirely.
-    - If code still has invalid Python syntax after repair, retry with cache bypass.
-    - Extract thinking output from `response._hidden_params['thinking']` or `response.choices[0].message.reasoning_content`.
+    - Extract result from response.choices[0].message.content.
+    - Handle None content: Retry with cache bypass (modify prompt slightly).
+    - Handle malformed JSON (excessive trailing newlines causing truncation): Retry with cache bypass.
+    - Parse JSON strings: Try fenced ```json blocks first, then balanced JSON object extraction, then fence cleaning.
+    - Repair truncated JSON by attempting various closures.
+    - Unescape double-escaped newlines in code fields (_smart_unescape_code preserves \n inside string literals).
+    - Repair Python syntax errors (trailing quotes, etc.) via _repair_python_syntax.
+    - Skip known prose field names (reasoning, explanation, analysis, etc.) during Python validation.
+    - If invalid Python code remains after repair and language is "python" or None, retry with cache bypass.
+    - Extract thinking output from response._hidden_params['thinking'] or response.choices[0].message.reasoning_content.
+
+% Retry and Fallback:
+    - Define SchemaValidationError exception that triggers model fallback.
+    - On auth error with newly acquired key: Re-prompt for same key and retry.
+    - On schema validation failure: Raise SchemaValidationError to trigger fallback to next model.
+    - Preserve provider credentials in retries: Pass vertex_credentials, vertex_project, vertex_location, api_key, base_url from original call.
+    - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry.
+    - After exhausting all candidates: Raise RuntimeError.
+
+% Vertex AI Support:
+    - Detect Vertex AI models by provider or model name prefix.
+    - Load credentials from VERTEX_CREDENTIALS file path, VERTEX_PROJECT, VERTEX_LOCATION env vars.
+    - Per-model location override from CSV 'location' column.
+    - Pass vertex_credentials (as JSON string), vertex_project, vertex_location to litellm.
+
+% LiteLLM Caching:
+    - Prefer S3-compatible cache targeting GCS using HMAC keys (GCS_HMAC_ACCESS_KEY_ID, GCS_HMAC_SECRET_ACCESS_KEY, GCS_BUCKET_NAME).
+    - Fall back to disk-based SQLite cache at <PROJECT_ROOT>/litellm_cache.sqlite.
+    - Respect LITELLM_CACHE_DISABLE=1 to disable caching entirely.
+    - Restore cache state after retries.
+
+% LiteLLM Callback:
+    - Register a success callback with litellm.success_callback.
+    - Extract token usage and finish reason.
+    - Calculate cost using litellm.completion_cost(); fall back to CSV rates (_MODEL_RATE_MAP) if LiteLLM fails.
+    - Store in module-level _LAST_CALLBACK_DATA.
 
 % WSL Diagnostics:
-    - Detect WSL environment via `/proc/version` or `WSL_DISTRO_NAME` env var.
+    - Detect WSL via /proc/version or WSL_DISTRO_NAME env var.
     - Sanitize API keys by trimming whitespace and control characters.
-    - On authentication errors in WSL, warn about carriage returns in API keys.
+    - On auth errors in WSL, warn about carriage returns in API keys.
 
-% LiteLLM Callback for Cost:
-    - Register a success callback with `litellm.success_callback`.
-    - Extract token usage and finish reason from response.
-    - Calculate cost using `litellm.completion_cost()`; fall back to CSV rates if LiteLLM calculation fails.
-
-% Verbose Output:
-    - Log ordered list of candidate models with strength.
-    - Log selected model, per-token costs, token counts, total cost.
-    - Log strength, temperature, time, any derived reasoning parameters.
-    - Log input JSON and optional Pydantic output format.
-    - Indicate provider default max completion tokens.
-    - Log thinking output if available.
+% CSV Example: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
+% LiteLLM References:
+    <litellm_thinking_example><web>https://docs.litellm.ai/docs/reasoning_content</web></litellm_thinking_example>
+    <litellm_json_mode_example><web>https://docs.litellm.ai/docs/completion/json_mode</web></litellm_json_mode_example>
+    <litellm_batch_mode_example><web>https://docs.litellm.ai/docs/completion/batching</web></litellm_batch_mode_example>
+    <litellm_exception_mapping_example><web>https://docs.litellm.ai/docs/exception_mapping</web></litellm_exception_mapping_example>
