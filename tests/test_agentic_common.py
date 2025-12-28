@@ -230,6 +230,35 @@ def test_run_agentic_task_anthropic_success(mock_cwd, mock_env, mock_load_model_
     temp_files = list(mock_cwd.glob(".agentic_prompt_*.txt"))
     assert len(temp_files) == 0 # Should be cleaned up
 
+def test_run_agentic_task_anthropic_result_key(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Test Anthropic parsing with 'result' key (actual Claude Code output format).
+
+    Claude Code outputs JSON with 'result' key, not 'response' key.
+    This test verifies we correctly extract the human-readable message.
+    """
+    # Setup availability
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    # Mock subprocess output using actual Claude Code format
+    mock_output = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": "Task completed via result key.",
+        "total_cost_usd": 0.10,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert msg == "Task completed via result key."  # Should extract 'result', not raw JSON
+    assert cost == 0.10
+    assert provider == "anthropic"
+
 def test_run_agentic_task_gemini_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test successful execution with Google (Gemini) and cost calculation."""
     # Setup availability: Anthropic missing, Google present

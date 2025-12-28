@@ -11,7 +11,8 @@ CLI wrapper for updating prompts based on modified code. Supports three modes: t
 1. Function: `update_main(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git, repo, extensions, strength, temperature, simple: bool = False) -> Optional[Tuple[str, float, str]]`
 2. Return (prompt, cost, model) on success, None on error
 3. Agentic routing (when `simple=False` and `get_available_agents()` returns non-empty):
-   - Call `run_agentic_update(prompt_file, code_file, test_files=None, verbose=verbose, quiet=quiet)`
+   - Get tests_dir via `get_tests_dir_from_config()`
+   - Call `run_agentic_update(prompt_file, code_file, test_files=None, tests_dir=tests_dir, verbose=verbose, quiet=quiet)`
    - Returns 5-tuple: (success, message, cost, model, changed_files)
    - On success: READ the prompt file to get updated content, return (file_content, cost, model)
    - On failure: fall through to legacy path
