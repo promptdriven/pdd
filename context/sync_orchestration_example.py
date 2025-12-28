@@ -75,17 +75,21 @@ if __name__ == "__main__":
         print(f"\n❌ Sync failed. Errors: {sync_result.get('errors')}")
 
 
-    # --- 2. View the sync log ---
-    # This simulates the `pdd sync --log calculator` command.
-    # It reads the log file created by the previous run and displays its contents.
-    print("\n--- Example 2: Viewing the sync log ---")
-    log_result = sync_orchestration(
+    # --- 2. View the sync state (dry-run mode) ---
+    # This simulates the `pdd sync --dry-run calculator` command.
+    # It displays the current sync state without executing any operations.
+    print("\n--- Example 2: Viewing the sync state (dry-run) ---")
+    dry_run_result = sync_orchestration(
         basename="calculator",
         language="python",
-        log=True, # This flag changes the function's behavior to display logs
-        verbose=False # Set to True for more detailed log output
+        prompts_dir=str(output_directory / "prompts"),
+        code_dir=str(output_directory / "src"),
+        examples_dir=str(output_directory / "examples"),
+        tests_dir=str(output_directory / "tests"),
+        dry_run=True,  # This flag changes the function's behavior to analyze without executing
+        verbose=False  # Set to True for more detailed output
     )
 
-    print("\n--- Log Display Finished ---")
-    # The result dictionary contains the log entries that were displayed.
-    print(json.dumps(log_result, indent=2, default=str))
+    print("\n--- Dry-Run Analysis Finished ---")
+    # The result dictionary contains the analysis of what would be done.
+    print(json.dumps(dry_run_result, indent=2, default=str))
