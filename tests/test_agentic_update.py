@@ -383,12 +383,12 @@ def test_agent_failure_but_file_changed(tmp_path: Path, mock_deps: Tuple[MagicMo
     The function should report success based on file modification.
     """
     _, _, mock_run, _ = mock_deps
-    
+
     prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "code.py"
     prompt_file.touch()
     code_file.touch()
-    
+
     old_time = time.time() - 100
     os.utime(prompt_file, (old_time, old_time))
 
@@ -402,3 +402,105 @@ def test_agent_failure_but_file_changed(tmp_path: Path, mock_deps: Tuple[MagicMo
 
     assert success is True
     assert "Underlying agent reported failure" in msg
+
+
+def test_discover_test_files_finds_sibling_tests_dir(tmp_path: Path) -> None:
+    """Test that tests in ../tests/ relative to code are discovered.
+
+    This tests the common project structure where code is in src/ and tests
+    are in a sibling tests/ directory:
+
+        project/
+        ├── src/
+        │   └── hello.py
+        └── tests/
+            └── test_hello.py
+    """
+    from pdd.agentic_update import _discover_test_files
+
+    # Setup: examples/hello/src/hello.py and examples/hello/tests/test_hello.py
+    src_dir = tmp_path / "examples" / "hello" / "src"
+    tests_dir = tmp_path / "examples" / "hello" / "tests"
+    src_dir.mkdir(parents=True)
+    tests_dir.mkdir(parents=True)
+
+    code_file = src_dir / "hello.py"
+    test_file = tests_dir / "test_hello.py"
+    code_file.write_text("def hello(): print('hello')")
+    test_file.write_text("def test_hello(): pass")
+
+    # Act
+    discovered = _discover_test_files(code_file)
+
+    # Assert
+    assert test_file.resolve() in [p.resolve() for p in discovered], (
+        f"Expected {test_file.resolve()} to be discovered, "
+        f"but only found: {[p.resolve() for p in discovered]}"
+    )
+
+
+def test_discover_test_files_uses_pddrc_tests_dir(tmp_path: Path) -> None:
+    """Test that tests_dir from .pddrc config is searched first.
+
+    When a project has a custom test directory configured via .pddrc,
+    that directory should be searched for test files.
+    """
+    from pdd.agentic_update import _discover_test_files
+
+    # Setup: code in src/, test in custom location (from .pddrc test_output_path)
+    src_dir = tmp_path / "src"
+    custom_tests_dir = tmp_path / "custom_tests"
+    src_dir.mkdir()
+    custom_tests_dir.mkdir()
+
+    code_file = src_dir / "foo.py"
+    test_file = custom_tests_dir / "test_foo.py"
+    code_file.write_text("def foo(): pass")
+    test_file.write_text("def test_foo(): pass")
+
+    # Act - pass tests_dir from config
+    discovered = _discover_test_files(code_file, tests_dir=custom_tests_dir)
+
+    # Assert
+    assert test_file.resolve() in [p.resolve() for p in discovered], (
+        f"Expected {test_file.resolve()} to be discovered when tests_dir is provided, "
+        f"but only found: {[p.resolve() for p in discovered]}"
+    )
+
+
+def test_successful_update_renders_markdown(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test that successful update renders agent output with Markdown formatting.
+
+    This verifies that when an agent returns markdown-formatted output,
+    it is rendered using Rich's Markdown class rather than displayed as plain text.
+    """
+    from rich.markdown import Markdown  # Import for isinstance check
+
+    _, _, mock_run, mock_console = mock_deps
+
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    old_time = time.time() - 100
+    os.utime(prompt_file, (old_time, old_time))
+
+    markdown_output = "## Summary\n**Bold text** and `code`"
+
+    def simulate_agent_modification(*args, **kwargs):
+        prompt_file.touch()
+        return True, markdown_output, 0.05, "claude"
+
+    mock_run.side_effect = simulate_agent_modification
+
+    # Don't pass quiet=True so printing code executes
+    run_agentic_update(str(prompt_file), str(code_file))
+
+    # Check if any console.print call received a Markdown object
+    call_args = mock_console.print.call_args_list
+    found_markdown = any(
+        call.args and isinstance(call.args[0], Markdown)
+        for call in call_args
+    )
+    assert found_markdown, "Expected agent output to be rendered with Markdown"

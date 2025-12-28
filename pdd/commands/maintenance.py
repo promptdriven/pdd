@@ -39,8 +39,9 @@ from ..core.utils import _run_setup_utility
 )
 @click.option(
     "--target-coverage",
+    type=float,
     default=None,
-    help="Desired code coverage percentage. Default: 10.0 or .pddrc value.",
+    help="Desired code coverage percentage. Default: 90.0 or .pddrc value.",
 )
 @click.option(
     "--dry-run",
@@ -64,7 +65,7 @@ def sync(
     budget: Optional[float],
     skip_verify: bool,
     skip_tests: bool,
-    target_coverage: float,
+    target_coverage: Optional[float],
     dry_run: bool,
     log: bool,
 ) -> Optional[Tuple[str, float, str]]:
