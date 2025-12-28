@@ -1,17 +1,27 @@
+## v0.0.94 (2025-12-27)
+
 ## v0.0.93 (2025-12-27)
 
 ### Feat
 
-- enhance prompt functions with language support and output schema
-- add update command to Makefile for prompt updates based on code changes
-- add language parameter to various functions for improved language handling
-- implement .env file key management and improve project root detection
-- enhance cloud configuration and error handling
+- **Non-Python Agentic Fallback (Issue #189):** For non-Python languages that lack verification commands (Java without Maven/Gradle, etc.), fix loops now directly trigger agentic fallback instead of raising an error. `sync_orchestration` sets `max_attempts=0` for non-Python languages to skip iterative loops and go straight to agentic fallback. Affects `fix_code_loop`, `fix_error_loop`, and `fix_verification_errors_loop`.
+
+- **Language Parameter Propagation:** Added `language` parameter to `llm_invoke()`, `code_generator()`, and related functions for improved language-specific handling and output schema support.
+
+- **Makefile Update Command:** Added `make update [MODULE=name]` target for updating prompts based on code changes using git diff.
+
+- **.env File Key Management (Issue #183):** Improved `_save_key_to_env_file()` to replace existing keys in-place (no comment + append accumulation), remove old commented versions of the same key, and use CWD-based project root when `PDD_PATH` points to a package directory.
 
 ### Fix
 
-- remove temporary 'NEW PARAMETER' comment
-- include Vertex AI credentials in retry calls for llm_invoke
+- **Vertex AI Credentials in Retry (Issue #185):** Fixed retry calls in `llm_invoke()` to include `vertex_credentials`, `vertex_project`, and `vertex_location` parameters. Previously retries would fail because LiteLLM defaulted to `us-central1` when these were missing.
+
+- Remove temporary 'NEW PARAMETER' comment.
+
+### Tests
+
+- Added 286 lines of tests in `tests/test_llm_invoke_vertex_retry.py` covering Vertex AI credential propagation in retry code paths (None content, malformed JSON, invalid Python).
+- Added 440 lines of tests in `tests/test_sync_orchestration.py` for non-Python agentic fallback behavior, verifying `max_attempts=0` is passed for crash, verify, and fix operations.
 
 ## v0.0.92 (2025-12-25)
 
