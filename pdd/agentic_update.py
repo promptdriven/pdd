@@ -16,6 +16,7 @@ import os
 import traceback
 
 from rich.console import Console
+from rich.markdown import Markdown
 
 from .agentic_common import get_available_agents, run_agentic_task
 from .load_prompt_template import load_prompt_template
@@ -374,7 +375,10 @@ def run_agentic_update(
 
     if not quiet:
         if success:
-            console.print(f"[green]{base_msg}[/green]")
+            console.print("[green]Prompt file updated successfully.[/green]")
+            if output_message:
+                console.print("\n[bold]Agent output:[/bold]")
+                console.print(Markdown(output_message))
         else:
             console.print(f"[yellow]{base_msg}[/yellow]")
 

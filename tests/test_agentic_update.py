@@ -466,3 +466,41 @@ def test_discover_test_files_uses_pddrc_tests_dir(tmp_path: Path) -> None:
         f"Expected {test_file.resolve()} to be discovered when tests_dir is provided, "
         f"but only found: {[p.resolve() for p in discovered]}"
     )
+
+
+def test_successful_update_renders_markdown(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test that successful update renders agent output with Markdown formatting.
+
+    This verifies that when an agent returns markdown-formatted output,
+    it is rendered using Rich's Markdown class rather than displayed as plain text.
+    """
+    from rich.markdown import Markdown  # Import for isinstance check
+
+    _, _, mock_run, mock_console = mock_deps
+
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    old_time = time.time() - 100
+    os.utime(prompt_file, (old_time, old_time))
+
+    markdown_output = "## Summary\n**Bold text** and `code`"
+
+    def simulate_agent_modification(*args, **kwargs):
+        prompt_file.touch()
+        return True, markdown_output, 0.05, "claude"
+
+    mock_run.side_effect = simulate_agent_modification
+
+    # Don't pass quiet=True so printing code executes
+    run_agentic_update(str(prompt_file), str(code_file))
+
+    # Check if any console.print call received a Markdown object
+    call_args = mock_console.print.call_args_list
+    found_markdown = any(
+        call.args and isinstance(call.args[0], Markdown)
+        for call in call_args
+    )
+    assert found_markdown, "Expected agent output to be rendered with Markdown"
