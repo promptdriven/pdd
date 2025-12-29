@@ -1,4 +1,56 @@
+## v0.0.95 (2025-12-28)
+
+### Feat
+
+- Enhance repository-wide update functionality
+- Enhance agentic update and test discovery features
+
+### Fix
+
+- Update error message terminology from 'prompt template' to 'prompt string'
+- reject suspicious LLM-generated paths in agentic fix
+- sync only files from triggering commit, not all differences
+
+### Refactor
+
+- Update onboarding documentation for prompt-driven development workflow
+- Streamline LLM invocation prompt documentation
+
 ## v0.0.94 (2025-12-27)
+
+### Feat
+
+- **Custom prompts_dir Support in Update Command (Issue #86):** Fixed `resolve_prompt_code_pair()` to use context-aware `prompts_dir` from `.pddrc` instead of hardcoding `prompts/` at repo root. Added shared `_match_path_to_contexts()` helper function in `construct_paths.py` that provides core pattern matching logic for both `_detect_context()` and `detect_context_for_file()`.
+
+- **Enhanced Test File Discovery:** Added `tests_dir` parameter support from `.pddrc` configuration in `_discover_test_files()`. Now searches in this priority order: configured tests_dir → tests/ relative to code → same directory → sibling tests/ (../tests/) → project root tests/.
+
+- **Target Coverage Defaults:** Changed default `--target-coverage` from 0.0 to 90.0 in `sync_main` and `sync_orchestration`. Improved CLI option handling in maintenance commands to correctly pass `None` when no coverage target specified.
+
+- **Anthropic Result Parsing Update:** Updated `_parse_anthropic_result()` to prioritize `result` key for Claude Code output format while maintaining `response` for backward compatibility.
+
+- **Agent Output Markdown Rendering:** Updated `run_agentic_update()` to display agent output with Markdown formatting when updates succeed, improving readability of agent responses.
+
+- **Prose Field Detection in LLM Invoke:** Added `_PROSE_FIELD_NAMES` constant and `_is_prose_field_name()` helper to skip Python syntax validation on known prose fields (reasoning, explanation, analysis, etc.) that may mention code patterns but aren't actual code.
+
+- **Prompting Guide in Agentic Update:** Added `<include>docs/prompting_guide.md</include>` to `agentic_update_LLM.prompt` so agents follow PDD best practices when updating prompts. Also improved test file discovery instructions to search sibling directories.
+
+### Fix
+
+- **Wheel Packaging for Agentic Update Prompt:** Added special curly brace escaping in `preprocess_wheel.py` for `agentic_update_LLM.prompt` to handle code examples in the included prompting guide that would otherwise break Python's `str.format()`.
+
+- Remove Python syntax warnings across codebase.
+
+### Data
+
+- Added 'global' tag to Google models in `data/llm_model.csv` for fixing the missing model by location issues.
+
+### Tests
+
+- Added regression test for Issue #86 (prompts_dir configuration).
+- Added tests for custom tests_dir discovery in `test_agentic_update.py`.
+- Added tests for target coverage CLI handling in `test_commands_maintenance.py`.
+- Added tests for Anthropic result parsing with 'result' key in `test_agentic_common.py`.
+- Added tests for Markdown rendering of agent output.
 
 ## v0.0.93 (2025-12-27)
 
