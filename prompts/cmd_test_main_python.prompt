@@ -5,69 +5,81 @@
 % Standard ctx.obj parameters (see include for details):
 <include>./context/ctx_obj_params.prompt</include>
 
-% Here are the inputs and outputs of the function:
+% Inputs and Outputs:
     Inputs:
-        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt above for available keys).
-        - `prompt_file` - A string containing the path to the prompt file that generated the code.
-        - `code_file` - A string containing the path to the code file to be tested.
-        - `output` - An optional string containing the path where to save the generated test file. If None, use the resolved path from `construct_paths`.
-        - `language` - An optional string specifying the programming language. If None, deduce via `construct_paths`.
-        - `coverage_report` - An optional string path to a coverage report. When provided, 'existing_tests' is required and `increase_tests` is used.
-        - `existing_tests` - An optional string path to an existing test file. Required when using 'coverage_report'. If `merge` is True, output is written to this path.
-        - `target_coverage` - An optional float indicating desired coverage. Accepted but not used by the current implementation.
-        - `merge` - An optional boolean. If True and 'existing_tests' is provided, write output to 'existing_tests'.
-        - `strength` - An optional float (default None). If provided, overrides the 'strength' value from `ctx.obj`. Used by orchestrators to pass explicit values.
-        - `temperature` - An optional float (default None). If provided, overrides the 'temperature' value from `ctx.obj`. Used by orchestrators to pass explicit values.
+        - `ctx` (`click.Context`): The Click context object.
+        - `prompt_file` - Path to the prompt file.
+        - `code_file` - Path to the code file to be tested.
+        - `output` - Optional output path. If None, use resolved path from `construct_paths`.
+        - `language` - Optional language string. If None, deduce via `construct_paths`.
+        - `coverage_report` - Optional path to coverage report. When provided, 'existing_tests' is required and `increase_tests` is used.
+        - `existing_tests` - Optional list of paths to existing test files (`list[str] | None`). When multiple files provided, concatenate their content. Required when using 'coverage_report'. If `merge` is True, output is written to the first path.
+        - `target_coverage` - Optional float for desired coverage (accepted but not used).
+        - `merge` - Optional boolean. If True and 'existing_tests' provided, write output to first existing_tests path.
+        - `strength` - Optional float. If provided, overrides ctx.obj value.
+        - `temperature` - Optional float. If provided, overrides ctx.obj value.
     Outputs:
-        - Returns a tuple containing (`str`, `float`, `str`):
-            - `str`: The generated unit test code.
-            - `float`: The total cost of the operation.
-            - `str`: The name of the model used.
+        - Returns tuple (`str`, `float`, `str`): generated test code, cost, model name.
 
 % Behavior:
-%  - Resolve `strength` and `temperature` using the pattern described in ctx_obj_params.prompt.
-%  - Build input and output paths, and determine language using `construct_paths`, passing:
-%      input_file_paths: {prompt_file, code_file, and optionally coverage_report, existing_tests}
+%  - Use `resolve_effective_config` (from `.config_resolution`) after `construct_paths` to resolve strength, temperature, and time with proper CLI > pddrc > defaults priority.
+%  - Build paths and determine language using `construct_paths`, passing:
+%      input_file_paths: {prompt_file, code_file, and optionally coverage_report, existing_tests[0]}
 %      command_options: {output, language, merge, target_coverage}
-%      along with ctx.obj['force'], ctx.obj['quiet'], and command="test".
-%      When calling `construct_paths`, include `context_override=ctx.obj.get('context')` so a global `--context` is honored.
-%      Also pass `confirm_callback=ctx.obj.get('confirm_callback')` for TUI confirmation support.
-%  - If 'coverage_report' is NOT provided: call `generate_test(prompt, code, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name)`.
-%      The additional parameters are computed as:
-%      • `source_file_path = str(Path(code_file).expanduser().resolve())`
-%      • `test_file_path = str(Path(output_file).expanduser().resolve())` where `output_file` is the resolved output path
-%      • `module_name = Path(source_file_path).stem`
-%  - If 'coverage_report' IS provided: require 'existing_tests'; otherwise print a Rich error and return an error result. If provided, call
-%    `increase_tests(existing_unit_tests, coverage_report, code, prompt_that_generated_code, language, strength, temperature, time, verbose)`.
-%  - Use `ctx.obj.get('time')` to retrieve the time parameter; `time` is a float in [0.0–1.0] representing relative thinking time (or None if not set).
-%  - Validate generated content is non-empty after stripping; on empty, print diagnostics and return an error result.
-%  - Resolve output path:
-%      * If `output` is None, or is a directory path or ends with '/', write to the resolved file from `construct_paths`.
-%      * If `merge` is True and `existing_tests` is provided, write to `existing_tests`.
-%      * Ensure parent directories exist and write with UTF-8 encoding.
-%  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}")` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
+%      along with ctx.obj['force'], ctx.obj['quiet'], command="test", context_override=ctx.obj.get('context'), confirm_callback=ctx.obj.get('confirm_callback').
+%  - When existing_tests has multiple files, read and concatenate all file contents.
+%  - If 'coverage_report' is NOT provided: use Cloud vs Local Execution Strategy (see below) to generate tests.
+%      For local execution, call `generate_test(prompt, code, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name)`.
+%      Compute: source_file_path from code_file, test_file_path from resolved output, module_name from source stem.
+%  - If 'coverage_report' IS provided: require 'existing_tests'; otherwise print Rich error and return error result.
+%      Use Cloud vs Local Execution Strategy to augment tests.
+%      For local execution, call `increase_tests(existing_unit_tests, coverage_report, code, prompt_that_generated_code, language, strength, temperature, time, verbose)`.
+%  - Validate generated content is non-empty; on empty, print diagnostics and return error result.
+%  - Resolve output path: use resolved file from construct_paths, or first existing_tests path if merge is True.
+%  - Ensure parent directories exist and write with UTF-8 encoding.
+%  - On any error, print Rich-formatted error and return tuple `("", 0.0, f"Error: {exception}")`. Re-raise `click.Abort` to handle user cancellations.
 
 <examples>
-   % Here are examples of how to use internal modules:
+   % Examples of internal module usage:
    <internal_example_modules>
-      - Here is an example of how to use the `construct_paths` function:
       <construct_paths_example>
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
 
-      - Here is an example of how to use the `generate_test` function (note: `time` is a float in [0–1]):
       <generate_test_example>
       <include>context/generate_test_example.py</include>
       </generate_test_example>
 
-      - Here is how to increase coverage for the `test --coverage-report` sub-command using the `increase_tests` function (note: `time` is a float in [0–1]).
-        <increase_tests_example>
-        <include>context/increase_tests_example.py</include>
-        </increase_tests_example>
+      <increase_tests_example>
+      <include>context/increase_tests_example.py</include>
+      </increase_tests_example>
+
+      <get_jwt_token_example>
+      <include>context/get_jwt_token_example.py</include>
+      </get_jwt_token_example>
+      % The `get_jwt_token` function is async and must be run with `asyncio.run`.
+      % Expects environment variables `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID`.
+
+      <cloud_function_call_example>
+      <include>context/cloud_function_call.py</include>
+      </cloud_function_call_example>
    </internal_example_modules>
 </examples>
 
-% Here is the README for the cli command that has details of how the 'test' command works. Be sure to support the global options from ctx.obj when calling `generate_test` and `increase_tests`. Also pass `force` and `quiet` to `construct_paths`.
-   <cli_command_readme>
-   <include>./README.md</include>
-   </cli_command_readme>
+<cli_command_readme>
+<include>./README.md</include>
+</cli_command_readme>
+
+% Cloud vs Local Execution Strategy:
+%  1. If `ctx.obj.get('local')` is True, use local execution directly.
+%  2. Otherwise, attempt cloud execution first:
+%     - Obtain JWT via `get_jwt_token` using `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID`.
+%     - Use request timeout of 400 seconds.
+%     - For test generation: POST to `https://us-central1-prompt-driven-development.cloudfunctions.net/generateTest`
+%       with JSON payload: `{ "promptContent": <prompt>, "codeContent": <code>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`
+%     - For coverage augmentation: include additional fields `existingTests` and `coverageReport` in the payload.
+%     - Expected response fields: `generatedCode`, `totalCost`, `modelName`.
+%  3. If cloud fails (auth/network/HTTP errors, timeout, or missing code):
+%     - Log warning and automatically fall back to local execution.
+%  4. For local execution, call `generate_test` or `increase_tests` as appropriate.
+%  5. If verbose is True, print execution info using Rich panels.
