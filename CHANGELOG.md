@@ -1,3 +1,21 @@
+## v0.0.95 (2025-12-28)
+
+### Feat
+
+- Enhance repository-wide update functionality
+- Enhance agentic update and test discovery features
+
+### Fix
+
+- Update error message terminology from 'prompt template' to 'prompt string'
+- reject suspicious LLM-generated paths in agentic fix
+- sync only files from triggering commit, not all differences
+
+### Refactor
+
+- Update onboarding documentation for prompt-driven development workflow
+- Streamline LLM invocation prompt documentation
+
 ## v0.0.94 (2025-12-27)
 
 ### Feat
