@@ -192,9 +192,9 @@ def example(
     help="Specify where to save the generated test file (file or directory).",
 )
 @click.option(
-    "--language", 
-    type=str, 
-    default=None, 
+    "--language",
+    type=str,
+    default=None,
     help="Specify the programming language."
 )
 @click.option(
@@ -234,21 +234,49 @@ def test(
     target_coverage: Optional[float],
     merge: bool,
 ) -> Optional[Tuple[str, float, str]]:
-    """Generate unit tests for a given prompt and implementation."""
+    """Generate unit tests for a given prompt and implementation.
+
+    CODE_FILE can be either:
+    - An implementation file (e.g., calculator.py)
+    - An example usage file ending with _example (e.g., calculator_example.py)
+
+    Files ending with _example are automatically treated as example files for TDD-style test generation.
+    """
     try:
+        from pathlib import Path
+        code_path = Path(code_file)
+        is_example = code_path.stem.endswith("_example")
+
         # Convert empty tuple to None for cmd_test_main compatibility
         existing_tests_list = list(existing_tests) if existing_tests else None
-        test_code, total_cost, model_name = cmd_test_main(
-            ctx=ctx,
-            prompt_file=prompt_file,
-            code_file=code_file,
-            output=output,
-            language=language,
-            coverage_report=coverage_report,
-            existing_tests=existing_tests_list,
-            target_coverage=target_coverage,
-            merge=merge,
-        )
+
+        # Pass to cmd_test_main with appropriate parameter
+        if is_example:
+            test_code, total_cost, model_name = cmd_test_main(
+                ctx=ctx,
+                prompt_file=prompt_file,
+                code_file=None,
+                example_file=code_file,
+                output=output,
+                language=language,
+                coverage_report=coverage_report,
+                existing_tests=existing_tests_list,
+                target_coverage=target_coverage,
+                merge=merge,
+            )
+        else:
+            test_code, total_cost, model_name = cmd_test_main(
+                ctx=ctx,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                example_file=None,
+                output=output,
+                language=language,
+                coverage_report=coverage_report,
+                existing_tests=existing_tests_list,
+                target_coverage=target_coverage,
+                merge=merge,
+            )
         return test_code, total_cost, model_name
     except click.Abort:
         raise
