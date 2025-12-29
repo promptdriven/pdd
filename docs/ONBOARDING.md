@@ -254,7 +254,7 @@ If you're contributing to the PDD project, follow these additional setup steps t
 **Create and activate the pdd conda environment:**
 ```bash
 # Create a new conda environment named 'pdd' with Python 3.11+
-conda create -n pdd python=3.11
+conda create -n pdd python=3.12
 conda activate pdd
 ```
 
