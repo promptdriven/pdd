@@ -130,7 +130,7 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
     code_files = [
         f for f in all_files
         if (
-            get_language(f) is not None and
+            get_language(os.path.splitext(f)[1]) and  # Pass extension, not full path
             not f.endswith('.prompt') and
             not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
             not os.path.splitext(os.path.basename(f))[0].endswith('_example')
@@ -267,6 +267,7 @@ def update_main(
     use_git: bool = False,
     repo: bool = False,
     extensions: Optional[str] = None,
+    directory: Optional[str] = None,
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
     simple: bool = False,
@@ -283,6 +284,7 @@ def update_main(
     :param use_git: Use Git history to retrieve the original code if True.
     :param repo: If True, run in repository-wide mode.
     :param extensions: Comma-separated string of file extensions to filter by in repo mode.
+    :param directory: Optional directory to scan in repo mode (defaults to repo root).
     :param strength: Optional strength parameter (overrides ctx.obj if provided).
     :param temperature: Optional temperature parameter (overrides ctx.obj if provided).
     :return: Tuple containing the updated prompt, total cost, and model name.
@@ -304,7 +306,12 @@ def update_main(
             # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
             return None
 
-        pairs = find_and_resolve_all_pairs(repo_root, quiet, extensions, output)
+        # Use specified directory if provided, otherwise scan from repo root
+        if directory:
+            scan_dir = os.path.abspath(directory)
+        else:
+            scan_dir = repo_root
+        pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
         
         if not pairs:
             rprint("[info]No scannable code files found in the repository.[/info]")
