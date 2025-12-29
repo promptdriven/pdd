@@ -422,7 +422,7 @@ ifdef MODULE
 	conda run -n pdd --no-capture-output pdd --verbose update --git $(PY_PROMPT) $(PY_FILE)
 else
 	@echo "Running repository-wide prompt update"
-	conda run -n pdd --no-capture-output pdd --verbose update
+	conda run -n pdd --no-capture-output pdd --verbose update --directory pdd --extensions py
 endif
 
 # Generate requirements.txt
