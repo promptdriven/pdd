@@ -250,52 +250,98 @@ For adding features or maintaining modules, follow this workflow from the team d
 
 ```mermaid
 flowchart TD
-    A[Feature request] --> B[Update prompt with new requirements]
-    B --> C[pdd update module_name]
-    C --> D[pdd test module_name]
-    D --> E{Coverage >= 75%?}
+    A[Feature request] --> B[Identify all affected modules]
+    B --> C[pdd update on ALL modules]
+    C --> D[pdd test until coverage >= 80%]
+    D --> E{Coverage >= 80%?}
 
-    E -->|No| D
-    E -->|Yes| F[pdd sync module_name]
+    E -->|No, keep trying| D
+    E -->|No, unreachable| E2[Document justification + get approval]
+    E2 --> F
+    E -->|Yes| F[pdd fix --auto-submit for grounding]
 
-    F --> G[Run tests]
-    G --> H{Tests pass?}
+    F --> G[Sync related docs: API, architecture]
+    G --> H[Update prompts with new requirements]
+    H --> I[pdd sync on all modules]
 
-    H -->|No| I[pdd fix module_name]
-    I --> F
+    I --> J[Run tests]
+    J --> K{Tests pass?}
 
-    H -->|Yes| J[Write new tests for feature]
-    J --> K[Manual verification]
-    K --> L[Create PR]
+    K -->|No| L[pdd fix module_name]
+    L --> I
+
+    K -->|Yes| M[Write new tests for feature]
+    M --> N[Manual verification]
+    N --> O[Create PR]
 ```
+
+#### Why This Order Matters
+
+The preparation phase ensures:
+- **Grounding**: Uploading existing code to PDD cloud means regenerations are grounded in proven patterns, not random
+- **Prompt sync**: Prompts often drift from code; syncing first prevents conflicts
+- **Test coverage**: Higher coverage = more reliable regeneration (the mold has more walls)
+- **Document sync**: API docs define interfaces; including them in prompts ensures consistency across CLI and cloud
+
+> **Critical**: Never update prompts with new requirements before syncing existing prompts to current code. Prompts that are out of sync with code produce unreliable regenerations.
 
 #### Steps
 
-1. **Update the prompt** with new requirements:
+1. **Identify affected modules** - List all modules that will change for this feature:
+   - Check `docs/python_architecture.csv` for module dependencies
+   - Search for imports of the modules you're changing
+   - Look at which tests exercise the feature area
+
+2. **Sync existing prompts** to current code state:
    ```bash
+   # For EACH affected module
    infisical run -- pdd update module_name
    ```
 
-2. **Increase test coverage** to at least 75%:
+3. **Increase test coverage** to at least 80%:
    ```bash
    infisical run -- pdd test module_name
-
-   # Check current coverage
    infisical run -- make coverage
    ```
+   > High coverage = more mold walls = more reliable regeneration.
 
-3. **Regenerate the module**:
+   **If 80% is unreachable:** Document why in the PR (e.g., external APIs, integration code) and get explicit approval before proceeding. Consider refactoring to improve testability.
+
+4. **Upload to PDD cloud** for grounding:
    ```bash
-   # Sync regenerates code and updates the few-shot database
+   # --auto-submit uploads to vector database when tests pass
+   infisical run -- pdd fix module_name --auto-submit
+   ```
+   > This ensures regeneration is grounded in proven patterns, not random.
+
+5. **Sync related documents** (API docs, architecture files):
+   - Update `docs/api.md` if interfaces change (required for CLI/cloud consistency)
+   - Update `docs/python_architecture.csv` if module structure changes
+   - Consider adding `<include>` tags in prompts to reference API docs
+
+6. **Update prompts with new requirements**:
+   ```bash
+   # Edit prompts directly OR use pdd update interactively
+   # Spend quality time here - prompts are the source of truth
+   ```
+
+7. **Regenerate all affected modules**:
+   ```bash
    infisical run -- pdd sync module_name
    ```
 
-4. **Fix any failures** and iterate:
+8. **Fix any failures** and iterate:
    ```bash
    infisical run -- pdd fix module_name
    ```
 
-> **Note**: If coverage is below 50%, prioritize increasing it before regeneration. Low coverage leads to unreliable regeneration.
+9. **Write new tests** for the feature (using Claude Code or manually)
+
+10. **Manual verification** - Touch grass, verify end-to-end
+
+11. **Create PR** with test, prompt changes, and regenerated code
+
+> **Note**: Modules with <50% coverage produce unreliable regenerations. Target 80% for reliable generation.
 
 ---
 
@@ -319,7 +365,7 @@ Before merging a PR, ensure it contains:
 |---------|---------|-------------|
 | `pdd fix` | Fix code to pass failing tests | Bug fixes, feature iteration |
 | `pdd update` | Check if prompt needs changes | After fix, before PR |
-| `pdd test` | Generate tests to increase coverage | Before regeneration (target: 75%+) |
+| `pdd test` | Generate tests to increase coverage | Before regeneration (target: 80%) |
 | `pdd sync` | Regenerate code, example & update few-shot DB | After fixes succeed |
 
 > **Note**: `pdd bug` doesn't work reliably yet. Write tests manually or with Claude Code.
@@ -331,4 +377,4 @@ Before merging a PR, ensure it contains:
 - **Touch grass**: Always manually verify the fix actually works end-to-end
 - **Parallel debugging**: Create GitHub issues so multiple bugs can be debugged simultaneously
 - **Few-shot learning**: Each successful sync updates the few-shot database, improving future generations
-- **Coverage matters**: Modules with <50% coverage produce unreliable regenerations
+- **Coverage matters**: Modules with <50% coverage produce unreliable regenerations; target 80% for reliable generation
