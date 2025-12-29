@@ -84,7 +84,6 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any, Type, Union, Tuple
 from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
-from langchain_core.prompts import PromptTemplate
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 # Import the default model constant
@@ -918,7 +917,6 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[str, Any]]], use_batch_mode: bool) -> Union[List[Dict[str, str]], List[List[Dict[str, str]]]]:
     """Formats prompt and input into LiteLLM message format."""
     try:
-        prompt_template = PromptTemplate.from_template(prompt)
         if use_batch_mode:
             if not isinstance(input_data, list):
                 raise ValueError("input_json must be a list of dictionaries when use_batch_mode is True.")
@@ -926,16 +924,16 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
             for item in input_data:
                 if not isinstance(item, dict):
                      raise ValueError("Each item in input_json list must be a dictionary for batch mode.")
-                formatted_prompt = prompt_template.format(**item)
+                formatted_prompt = prompt.format(**item)
                 all_messages.append([{"role": "user", "content": formatted_prompt}])
             return all_messages
         else:
             if not isinstance(input_data, dict):
                 raise ValueError("input_json must be a dictionary when use_batch_mode is False.")
-            formatted_prompt = prompt_template.format(**input_data)
+            formatted_prompt = prompt.format(**input_data)
             return [{"role": "user", "content": formatted_prompt}]
     except KeyError as e:
-        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt template.") from e
+        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt string.") from e
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
 
