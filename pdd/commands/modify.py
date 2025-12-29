@@ -153,6 +153,12 @@ def change(
     help="Comma-separated list of file extensions to update in repo mode (e.g., 'py,js,ts').",
 )
 @click.option(
+    "--directory",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    default=None,
+    help="Directory to scan in repo mode (defaults to repo root).",
+)
+@click.option(
     "--simple",
     is_flag=True,
     default=False,
@@ -168,6 +174,7 @@ def update(
     output: Optional[str],
     use_git: bool,
     extensions: Optional[str],
+    directory: Optional[str],
     simple: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
@@ -208,8 +215,11 @@ def update(
                 raise click.UsageError(
                     "Cannot use file-specific arguments or flags like --git or --input-code in repository-wide mode (when no files are provided)."
                 )
-        elif extensions:
-            raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")
+        else:
+            if extensions:
+                raise click.UsageError("--extensions can only be used in repository-wide mode (when no files are provided).")
+            if directory:
+                raise click.UsageError("--directory can only be used in repository-wide mode (when no files are provided).")
 
         result, total_cost, model_name = update_main(
             ctx=ctx,
@@ -220,6 +230,7 @@ def update(
             use_git=use_git,
             repo=is_repo_mode,
             extensions=extensions,
+            directory=directory,
             simple=simple,
         )
         return result, total_cost, model_name

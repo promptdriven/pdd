@@ -7,10 +7,13 @@ Write `pdd/commands/modify.py`.
 This module contains Click commands that modify prompts: `split`, `change`, and `update`.
 
 % Requirements
-1. **split**: Call `split_main` per README.md spec
-2. **change**: Validate csv-vs-file mode, then call `change_main`
-3. **update**: Support repo-wide mode (no args) and single-file mode (with args). When one arg provided, treat as code file. Call `update_main` with `repo=is_repo_mode`
-4. **update --simple flag**: Add `--simple` boolean flag (default False) to use legacy 2-stage LLM update instead of agentic mode. Pass `simple=simple` to `update_main()`
+1. **split**: Call `split_main` with arguments: input_prompt, input_code, example_code, output_sub, output_modified
+2. **change**: Validate csv-vs-file mode, then call `change_main`. Options: `--budget` (float, default 5.0), `--output`, `--csv` flag
+3. **update**: Two modes determined by presence of file arguments:
+   - Repo-wide mode (no args): Scan entire repo, options `--extensions` (comma-separated) and `--directory` available
+   - Single-file mode: When one arg provided, treat as code file. Options `--git` and `--output` available
+   - Pass `repo=is_repo_mode` to `update_main`
+4. **update --simple flag**: Boolean flag (default False) to use legacy 2-stage LLM update instead of agentic mode
 
 % Error Handling
 - Apply `@track_cost` decorator to each command function
