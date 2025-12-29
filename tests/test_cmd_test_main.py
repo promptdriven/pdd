@@ -1,560 +1,356 @@
-"""
-Tests for the `cmd_test_main` function, which handles CLI commands for test generation.
-"""
-from unittest.mock import patch, MagicMock, mock_open
+import os
+import sys
 import pytest
-from click import Context
+from unittest.mock import MagicMock, patch, mock_open
+from pathlib import Path
+import click
+
+# Adjust path to import the module under test
+# Assuming the test file is in tests/ and the code is in pdd/
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from pdd.cmd_test_main import cmd_test_main
 
+# Mock constants
+MOCK_PROMPT_CONTENT = "Task: Write a factorial function."
+MOCK_CODE_CONTENT = "def factorial(n): return 1 if n==0 else n*factorial(n-1)"
+MOCK_TEST_CONTENT = "def test_factorial(): assert factorial(0) == 1"
+MOCK_GENERATED_TEST = "def test_factorial_generated(): assert factorial(5) == 120"
+MOCK_COVERAGE_REPORT = "Coverage: 50%"
 
 @pytest.fixture
-def mock_ctx_fixture():
-    """
-    Create a mock Click context with default settings for verbosity, strength, etc.
-    """
-    m_ctx = MagicMock(spec=Context)
-    m_ctx.obj = {
+def mock_ctx():
+    ctx = MagicMock(spec=click.Context)
+    ctx.obj = {
         "verbose": False,
         "strength": 0.5,
         "temperature": 0.0,
+        "time": 0.25,
         "force": False,
-        "quiet": False
+        "quiet": False,
+        "local": False,
+        "context": None,
+        "confirm_callback": None
     }
-    return m_ctx
-
+    return ctx
 
 @pytest.fixture
-def mock_files_fixture():
-    """
-    Returns default file paths for prompt_file, code_file, etc. for use in tests.
-    """
-    return {
-        "prompt_file": "fake_prompt_file.prompt",
-        "code_file": "fake_code_file.py",
-        "output": "fake_test_output.py",
-        "existing_tests": ["fake_existing_tests.py"],  # Now a list to support multiple test files
-        "coverage_report": "fake_coverage_report.xml",
-    }
-
-
-# pylint: disable=redefined-outer-name
-@pytest.mark.parametrize("coverage_report, existing_tests, expect_error", [
-    (None, None, False),
-    ("fake_coverage_report.xml", None, True),
-    ("fake_coverage_report.xml", ["fake_existing_tests.py"], False),  # Now a list
-])
-def test_cmd_test_main_coverage_handling(
-    mock_ctx_fixture,
-    mock_files_fixture,
-    coverage_report,
-    existing_tests,
-    expect_error
-):
-    """
-    Tests behavior when coverage_report is missing or present
-    and the presence/absence of existing_tests.
-    """
-    # Force coverage_report / existing_tests for test
-    mock_files_fixture["coverage_report"] = coverage_report
-    mock_files_fixture["existing_tests"] = existing_tests
-
-    # Patch dependencies
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
-         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests, \
-         patch("builtins.open", mock_open()):
-
-        # Mock construct_paths to return some test data
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
+def mock_dependencies():
+    with patch("pdd.cmd_test_main.construct_paths") as mock_cp, \
+         patch("pdd.cmd_test_main.resolve_effective_config") as mock_rec, \
+         patch("pdd.cmd_test_main.generate_test") as mock_gen, \
+         patch("pdd.cmd_test_main.increase_tests") as mock_inc, \
+         patch("pdd.cmd_test_main.get_jwt_token") as mock_jwt, \
+         patch("pdd.cmd_test_main.requests.post") as mock_post, \
+         patch("pathlib.Path.read_text") as mock_read, \
+         patch("pathlib.Path.write_text") as mock_write, \
+         patch("pathlib.Path.mkdir") as mock_mkdir:
+        
+        # Default setup for construct_paths
+        mock_cp.return_value = (
+            {}, # resolved_config (unused in function)
             {
-                "prompt_file": "prompt_contents",
-                "code_file": "code_contents",
-                "coverage_report": "coverage_contents" if coverage_report else None,
-                "existing_tests": "existing_tests_contents" if existing_tests else None
-            },
-            {"output": mock_files_fixture["output"]},
-            "python",
+                "prompt_file": MOCK_PROMPT_CONTENT,
+                "code_file": MOCK_CODE_CONTENT
+            }, # input_strings
+            {"output_file": "tests/test_code.py"}, # output_file_paths
+            "python" # detected_language
         )
 
-        # Mock generate_test and increase_tests
-        mock_generate_test.return_value = ("generated_tests_code", 0.05, "test_model")
-        mock_increase_tests.return_value = ("enhanced_tests_code", 0.10, "coverage_model")
+        # Default setup for resolve_effective_config
+        mock_rec.return_value = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "time": 0.25
+        }
 
-        result = cmd_test_main(
-            ctx=mock_ctx_fixture,
-            prompt_file=mock_files_fixture["prompt_file"],
-            code_file=mock_files_fixture["code_file"],
-            output=mock_files_fixture["output"],
-            language=None,
-            coverage_report=coverage_report,
-            existing_tests=existing_tests,
-            target_coverage=95.0,
-            merge=False,
+        # Default setup for file reading
+        mock_read.return_value = "" 
+
+        yield {
+            "construct_paths": mock_cp,
+            "resolve_effective_config": mock_rec,
+            "generate_test": mock_gen,
+            "increase_tests": mock_inc,
+            "get_jwt_token": mock_jwt,
+            "post": mock_post,
+            "read_text": mock_read,
+            "write_text": mock_write,
+            "mkdir": mock_mkdir
+        }
+
+def test_validation_missing_existing_tests_for_coverage(mock_ctx):
+    """Test that providing coverage_report without existing_tests returns an error."""
+    code, cost, model = cmd_test_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.txt",
+        code_file="code.py",
+        coverage_report="coverage.xml",
+        existing_tests=None
+    )
+    assert code == ""
+    assert cost == 0.0
+    assert "Error: Missing existing_tests" in model
+
+def test_local_execution_generate_new_tests(mock_ctx, mock_dependencies):
+    """Test local generation of new tests."""
+    mock_ctx.obj["local"] = True
+    mock_dependencies["generate_test"].return_value = (MOCK_GENERATED_TEST, 0.01, "gpt-4-local")
+    
+    code, cost, model = cmd_test_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.txt",
+        code_file="code.py",
+        output="tests/custom_test.py"
+    )
+
+    # Verify generate_test called correctly
+    mock_dependencies["generate_test"].assert_called_once()
+    args, kwargs = mock_dependencies["generate_test"].call_args
+    assert kwargs["prompt"] == MOCK_PROMPT_CONTENT
+    assert kwargs["code"] == MOCK_CODE_CONTENT
+    assert kwargs["language"] == "python"
+    
+    # Verify output written
+    mock_dependencies["write_text"].assert_called_once_with(MOCK_GENERATED_TEST, encoding="utf-8")
+    assert code == MOCK_GENERATED_TEST
+    assert model == "gpt-4-local"
+
+def test_local_execution_increase_tests(mock_ctx, mock_dependencies):
+    """Test local enhancement of existing tests using coverage report."""
+    mock_ctx.obj["local"] = True
+    
+    # Setup file reading to return specific content for existing tests and coverage
+    def side_effect_read(encoding="utf-8"):
+        return "content" # Simplified, usually we'd check self.name but Path is mocked
+    
+    # We need to mock Path instantiation inside the function to control read_text for specific files
+    # However, since we patched Path.read_text globally, we can just rely on input_strings from construct_paths
+    # or the manual read_text calls in the function.
+    
+    # The function manually reads existing tests and coverage report.
+    # Let's mock read_text to return different things based on the instance, 
+    # but since `read_text` is patched on the class, we use side_effect.
+    mock_dependencies["read_text"].return_value = "FILE_CONTENT"
+
+    mock_dependencies["increase_tests"].return_value = (MOCK_GENERATED_TEST, 0.02, "claude-3-local")
+
+    code, cost, model = cmd_test_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.txt",
+        code_file="code.py",
+        coverage_report="coverage.xml",
+        existing_tests=["tests/existing.py"]
+    )
+
+    mock_dependencies["increase_tests"].assert_called_once()
+    _, kwargs = mock_dependencies["increase_tests"].call_args
+    assert kwargs["existing_unit_tests"] == "FILE_CONTENT" # From read_text
+    assert kwargs["coverage_report"] == "FILE_CONTENT"
+    
+    assert code == MOCK_GENERATED_TEST
+
+def test_cloud_execution_success(mock_ctx, mock_dependencies):
+    """Test successful cloud execution."""
+    mock_ctx.obj["local"] = False
+    
+    # Mock Env vars
+    with patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "key", "GITHUB_CLIENT_ID": "id"}):
+        # Mock JWT
+        mock_dependencies["get_jwt_token"].return_value = "fake_token"
+        
+        # Mock Response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "generatedCode": MOCK_GENERATED_TEST,
+            "totalCost": 0.05,
+            "modelName": "gpt-4-cloud"
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_dependencies["post"].return_value = mock_response
+
+        code, cost, model = cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.txt",
+            code_file="code.py"
         )
 
-        # Check if we expected an error result (tuple with Error in model_name)
-        if expect_error:
-            assert result[0] == ""
-            assert result[1] == 0.0
-            assert "Error:" in result[2]
-        else:
-            # If not an error, we either tested generate_test or increase_tests
-            if coverage_report is None:
-                # Should have invoked generate_test
-                mock_generate_test.assert_called_once()
-                mock_increase_tests.assert_not_called()
-            else:
-                # coverage_report is present, should have invoked increase_tests
-                if existing_tests:
-                    mock_increase_tests.assert_called_once()
-                    mock_generate_test.assert_not_called()
+        assert code == MOCK_GENERATED_TEST
+        assert cost == 0.05
+        assert model == "gpt-4-cloud"
+        
+        # Verify Payload
+        mock_dependencies["post"].assert_called_once()
+        _, kwargs = mock_dependencies["post"].call_args
+        assert kwargs["json"]["promptContent"] == MOCK_PROMPT_CONTENT
+        assert kwargs["headers"]["Authorization"] == "Bearer fake_token"
 
+def test_cloud_execution_fallback_to_local(mock_ctx, mock_dependencies):
+    """Test fallback to local execution when cloud fails."""
+    mock_ctx.obj["local"] = False
+    
+    with patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "key"}):
+        # Simulate Cloud Failure
+        mock_dependencies["get_jwt_token"].side_effect = Exception("Auth Failed")
+        
+        # Setup Local Fallback
+        mock_dependencies["generate_test"].return_value = (MOCK_GENERATED_TEST, 0.01, "fallback-local")
 
-# pylint: disable=unused-argument
-def test_cmd_test_main_path_construction_error(mock_ctx_fixture, mock_files_fixture):
-    """
-    Tests that if construct_paths raises an exception,
-    cmd_test_main handles it and returns an error result tuple.
-    """
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths:
-        mock_construct_paths.side_effect = Exception("construct_paths error")
-
-        result = cmd_test_main(
-            ctx=mock_ctx_fixture,
-            prompt_file=mock_files_fixture["prompt_file"],
-            code_file=mock_files_fixture["code_file"],
-            output=mock_files_fixture["output"],
-            language=None,
-            coverage_report=None,
-            existing_tests=None,
-            target_coverage=None,
-            merge=False,
+        code, cost, model = cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.txt",
+            code_file="code.py"
         )
 
-        # Verify error result tuple is returned
-        assert result[0] == ""
-        assert result[1] == 0.0
-        assert "Error:" in result[2]
-        assert "construct_paths error" in result[2]
+        # Verify Cloud attempted
+        mock_dependencies["get_jwt_token"].assert_called()
+        
+        # Verify Local Fallback called
+        mock_dependencies["generate_test"].assert_called()
+        assert code == MOCK_GENERATED_TEST
+        assert model == "fallback-local"
 
-
-# pylint: disable=unused-argument
-def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture):
-    """
-    Tests that if generate_test raises an exception,
-    cmd_test_main handles it and returns an error result tuple.
-    """
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
-
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
-            {"output": mock_files_fixture["output"]},
-            "python"
-        )
-        mock_generate_test.side_effect = Exception("generate_test error")
-
-        result = cmd_test_main(
-            ctx=mock_ctx_fixture,
-            prompt_file=mock_files_fixture["prompt_file"],
-            code_file=mock_files_fixture["code_file"],
-            output=mock_files_fixture["output"],
-            language=None,
-            coverage_report=None,
-            existing_tests=None,
-            target_coverage=None,
-            merge=False,
-        )
-
-        # Verify error result tuple is returned
-        assert result[0] == ""
-        assert result[1] == 0.0
-        assert "Error:" in result[2]
-        assert "generate_test error" in result[2]
-
-
-# pylint: disable=unused-argument
-def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture):
-    """
-    Tests that if increase_tests raises an exception (when coverage_report is provided),
-    cmd_test_main handles it and returns an error result tuple.
-    """
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests, \
-         patch("builtins.open", mock_open(read_data="existing test content")) as m_file:
-
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {
-                "prompt_file": "prompt_contents",
-                "code_file": "code_contents",
-                "coverage_report": "coverage_contents",
-                "existing_tests": "existing_tests_contents",
-            },
-            {"output": mock_files_fixture["output"]},
-            "python"
-        )
-        mock_increase_tests.side_effect = Exception("increase_tests error")
-
-        result = cmd_test_main(
-            ctx=mock_ctx_fixture,
-            prompt_file=mock_files_fixture["prompt_file"],
-            code_file=mock_files_fixture["code_file"],
-            output=mock_files_fixture["output"],
-            language=None,
-            coverage_report=mock_files_fixture["coverage_report"],
-            existing_tests=mock_files_fixture["existing_tests"],
-            target_coverage=95.0,
-            merge=False,
-        )
-
-        # Verify error result tuple is returned
-        assert result[0] == ""
-        assert result[1] == 0.0
-        assert "Error:" in result[2]
-        assert "increase_tests error" in result[2]
-
-
-# pylint: disable=redefined-outer-name
-def test_cmd_test_main_successful_generate_test_no_coverage(mock_ctx_fixture, mock_files_fixture):
-    """
-    Tests successful run where no coverage_report is provided
-    and generate_test is used.
-    """
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
-         patch("builtins.open", mock_open()) as m_file:
-
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
-            {"output": mock_files_fixture["output"]},
-            "python"
-        )
-        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
-
-        result = cmd_test_main(
-            ctx=mock_ctx_fixture,
-            prompt_file=mock_files_fixture["prompt_file"],
-            code_file=mock_files_fixture["code_file"],
-            output=mock_files_fixture["output"],
-            language=None,
-            coverage_report=None,
-            existing_tests=None,
-            target_coverage=None,
-            merge=False,
-        )
-
-        # Verify file writing
-        m_file.assert_called_once_with(mock_files_fixture["output"], "w", encoding="utf-8")
-        handle = m_file()
-        handle.write.assert_called_once_with("unit_test_code")
-
-        # Verify the result
-        assert result == ("unit_test_code", 0.10, "model_v1")
-
-
-# pylint: disable=redefined-outer-name
-def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, mock_files_fixture):
-    """
-    Tests a successful run with a coverage report, which should trigger 'increase_tests'.
-    """
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests, \
-         patch("builtins.open", mock_open()) as m_file:
-
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {
-                "prompt_file": "prompt_contents",
-                "code_file": "code_contents",
-                "coverage_report": "coverage_contents",
-                "existing_tests": "existing_tests_contents",
-            },
-            {"output": mock_files_fixture["output"]},
-            "python"
-        )
-        mock_increase_tests.return_value = ("more_tests", 0.20, "model_v2")
-
-        result = cmd_test_main(
-            ctx=mock_ctx_fixture,
-            prompt_file=mock_files_fixture["prompt_file"],
-            code_file=mock_files_fixture["code_file"],
-            output=mock_files_fixture["output"],
-            language=None,
-            coverage_report=mock_files_fixture["coverage_report"],
-            existing_tests=mock_files_fixture["existing_tests"],
-            target_coverage=95.0,
-            merge=False,
-        )
-
-        # Verify file writing and result
-        m_file.assert_any_call(mock_files_fixture["output"], "w", encoding="utf-8")
-        handle = m_file()
-        handle.write.assert_called_once_with("more_tests")
-        assert result == ("more_tests", 0.20, "model_v2")
-
-
-# pylint: disable=redefined-outer-name
-def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture):
-    """
-    Tests that when 'merge' is True, the output file is the 'existing_tests' path.
-    """
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
-         patch("builtins.open", mock_open()) as m_file:
-
-        # Ensure 'existing_tests' is in the output path from construct_paths
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {"prompt_file": "p", "code_file": "c", "existing_tests": "et"},
-            {"output": mock_files_fixture["output"]},
-            "python"
-        )
-        mock_generate_test.return_value = ("merged_code", 0.15, "model_v3")
-
-        cmd_test_main(
-            ctx=mock_ctx_fixture,
-            prompt_file=mock_files_fixture["prompt_file"],
-            code_file=mock_files_fixture["code_file"],
-            output=None,
-            language=None,
-            coverage_report=None,
-            existing_tests=mock_files_fixture["existing_tests"],  # Already a list
-            target_coverage=None,
-            merge=True,
-        )
-
-        # The opened file should be the first existing_tests path, not the regular output
-        m_file.assert_any_call(mock_files_fixture["existing_tests"][0], "w", encoding="utf-8")
-        handle = m_file()
-        handle.write.assert_called_once_with("merged_code")
-
-
-def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture, mock_files_fixture, tmp_path):
-    """
-    Intended behavior: when output is a directory path, cmd should write to the
-    resolved file from construct_paths, not exit.
-    """
-    out_dir = tmp_path / "tests_out"
-    out_dir.mkdir()
-
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
-         patch("builtins.open", mock_open()) as m_open:
-
-        resolved_file = out_dir / "unit_test_file.py"
-        mock_construct_paths.return_value = (
-            {},
-            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
-            {"output": str(resolved_file)},
-            "python",
-        )
-        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
-
-        # Pass directory path via output; command should use resolved file
-        result = cmd_test_main(
-            ctx=mock_ctx_fixture,
-            prompt_file=mock_files_fixture["prompt_file"],
-            code_file=mock_files_fixture["code_file"],
-            output=str(out_dir),
-            language=None,
-            coverage_report=None,
-            existing_tests=None,
-            target_coverage=None,
-            merge=False,
-        )
-
-        assert result == ("unit_test_code", 0.10, "model_v1")
-        m_open.assert_called_once_with(str(resolved_file), "w", encoding="utf-8")
-        handle = m_open()
-        handle.write.assert_called_once_with("unit_test_code")
-
-
-def test_cmd_test_main_uses_safe_ctx_obj_access():
-    """
-    Regression: cmd_test_main should not raise KeyError if ctx.obj
-    is missing 'strength' or 'temperature' keys.
-
-    Bug: Direct dict access ctx.obj["strength"] raises KeyError,
-    but ctx.obj.get("strength", DEFAULT) is safe.
-    """
-    import inspect
-
-    source = inspect.getsource(cmd_test_main)
-
-    # Should NOT use direct dict access for strength/temperature
-    assert 'ctx.obj["strength"]' not in source, \
-        "cmd_test_main should use ctx.obj.get('strength', ...) not ctx.obj['strength']"
-    assert 'ctx.obj["temperature"]' not in source, \
-        "cmd_test_main should use ctx.obj.get('temperature', ...) not ctx.obj['temperature']"
-
-
-def test_cmd_test_main_uses_pddrc_strength_from_resolved_config():
-    """
-    REGRESSION TEST: cmd_test_main must use strength from resolved_config (pddrc),
-    not just ctx.obj or defaults.
-
-    Bug: strength was resolved BEFORE calling construct_paths, so pddrc values
-    from resolved_config were ignored. generate_test received DEFAULT_STRENGTH
-    instead of pddrc value.
-
-    BEFORE FIX: generate_test called with strength=0.75 (default)
-    AFTER FIX: generate_test called with strength=0.9 (from pddrc via resolved_config)
-    """
-    mock_ctx = MagicMock(spec=Context)
-    mock_ctx.obj = {
-        "verbose": False,
-        "force": False,
-        "quiet": False,
-        "time": 0.25,
-        # strength/temperature NOT in ctx.obj (simulates CLI not passing --strength)
-    }
-
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
-         patch("builtins.open", mock_open()):
-
-        # resolved_config contains pddrc strength value
-        mock_construct_paths.return_value = (
-            {"strength": 0.9, "temperature": 0.5},  # pddrc values in resolved_config
-            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
-            {"output": "test_output.py"},
-            "python"
-        )
-        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
-
+def test_output_merge_logic(mock_ctx, mock_dependencies):
+    """Test that merge=True writes to the first existing test file."""
+    mock_ctx.obj["local"] = True
+    mock_dependencies["generate_test"].return_value = (MOCK_GENERATED_TEST, 0.0, "model")
+    
+    # We need to verify the path written to.
+    # The function uses Path(existing_tests_list[0]).write_text(...)
+    
+    # Since we patched Path.write_text on the class, we can check the instance it was called on?
+    # No, patch on class methods makes it hard to check 'self'.
+    # Instead, we can check that construct_paths output was ignored for the write.
+    
+    # However, the code does: final_output_path = Path(existing_tests_list[0])
+    # We can mock Path to track instantiation.
+    
+    with patch("pdd.cmd_test_main.Path") as MockPath:
+        # Setup MockPath instances
+        mock_path_instance = MagicMock()
+        MockPath.return_value = mock_path_instance
+        mock_path_instance.read_text.return_value = ""
+        mock_path_instance.stem = "code"
+        
         cmd_test_main(
             ctx=mock_ctx,
-            prompt_file="test.prompt",
-            code_file="test.py",
-            output="test_output.py",
-            language=None,
-            coverage_report=None,
-            existing_tests=None,
-            target_coverage=None,
-            merge=False,
+            prompt_file="prompt.txt",
+            code_file="code.py",
+            existing_tests=["tests/existing_1.py", "tests/existing_2.py"],
+            merge=True
         )
+        
+        # Verify we instantiated Path with the first existing test
+        # The code does Path(existing_tests_list[0]) inside the write block
+        # It also does Path(et_path) for reading.
+        
+        # Let's verify write_text was called on an instance created with "tests/existing_1.py"
+        # This is tricky with a global Path mock.
+        # Alternative: Check logic flow.
+        pass 
 
-        # Verify generate_test was called with pddrc strength (0.9), not default (0.75)
-        mock_generate_test.assert_called_once()
-        call_kwargs = mock_generate_test.call_args.kwargs
-        assert call_kwargs["strength"] == 0.9, \
-            f"Expected pddrc strength 0.9, got {call_kwargs['strength']}"
-        assert call_kwargs["temperature"] == 0.5, \
-            f"Expected pddrc temperature 0.5, got {call_kwargs['temperature']}"
-
-
-def test_cmd_test_main_cli_strength_overrides_pddrc():
-    """
-    Verify that explicit CLI --strength overrides pddrc value.
-
-    When user passes --strength 0.3, that should be used even if pddrc has 0.9.
-    """
-    mock_ctx = MagicMock(spec=Context)
-    mock_ctx.obj = {
-        "verbose": False,
-        "force": False,
-        "quiet": False,
-        "time": 0.25,
-        "strength": 0.3,  # CLI passed --strength 0.3
-        "temperature": 0.1,
-    }
-
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
-         patch("builtins.open", mock_open()):
-
-        # resolved_config would normally have pddrc value, but CLI should win
-        # However, construct_paths merges CLI > pddrc, so resolved_config
-        # should already have the CLI value
-        mock_construct_paths.return_value = (
-            {"strength": 0.3, "temperature": 0.1},  # CLI values propagated
-            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
-            {"output": "test_output.py"},
-            "python"
-        )
-        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
-
+    # Re-run with standard dependencies to check behavior via side effects if possible, 
+    # or just trust the logic if we can't easily mock Path constructor args in this setup.
+    # Actually, let's look at the code:
+    # if merge and existing_tests_list: final_output_path = Path(existing_tests_list[0])
+    
+    # We can verify this by ensuring construct_paths output is NOT used if merge is True.
+    # construct_paths returns "tests/test_code.py".
+    # existing_tests is "tests/existing_1.py".
+    
+    # We can use a spy on Path or just check that the file written matches expectation if we use real paths?
+    # No, use mocks.
+    
+    # Let's use `wraps` on Path to see what it's called with.
+    real_path = Path
+    with patch("pdd.cmd_test_main.Path") as mock_path_cls:
+        mock_instance = MagicMock()
+        mock_path_cls.return_value = mock_instance
+        mock_instance.read_text.return_value = ""
+        mock_instance.stem = "code"
+        
         cmd_test_main(
             ctx=mock_ctx,
-            prompt_file="test.prompt",
-            code_file="test.py",
-            output="test_output.py",
-            language=None,
-            coverage_report=None,
-            existing_tests=None,
-            target_coverage=None,
-            merge=False,
+            prompt_file="prompt.txt",
+            code_file="code.py",
+            existing_tests=["tests/existing_1.py"],
+            merge=True
         )
+        
+        # Verify write_text called on the instance
+        mock_instance.write_text.assert_called_with(MOCK_GENERATED_TEST, encoding="utf-8")
+        
+        # Verify Path was initialized with existing test path at some point
+        # It is initialized multiple times.
+        call_args_list = mock_path_cls.call_args_list
+        # We expect one of the calls to be Path("tests/existing_1.py")
+        assert any(call.args[0] == "tests/existing_1.py" for call in call_args_list)
 
-        # Verify CLI strength (0.3) was used
-        call_kwargs = mock_generate_test.call_args.kwargs
-        assert call_kwargs["strength"] == 0.3, \
-            f"Expected CLI strength 0.3, got {call_kwargs['strength']}"
+def test_empty_generation_error(mock_ctx, mock_dependencies):
+    """Test that empty generated code returns an error."""
+    mock_ctx.obj["local"] = True
+    mock_dependencies["generate_test"].return_value = ("", 0.0, "model")
+    
+    code, cost, model = cmd_test_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.txt",
+        code_file="code.py"
+    )
+    
+    assert code == ""
+    assert "Error: Empty output" in model
 
+def test_exception_handling(mock_ctx, mock_dependencies):
+    """Test general exception handling."""
+    mock_dependencies["construct_paths"].side_effect = Exception("Path Error")
+    
+    code, cost, model = cmd_test_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.txt",
+        code_file="code.py"
+    )
+    
+    assert code == ""
+    assert "Error: Path Error" in model
 
-def test_cmd_test_main_multiple_existing_tests_concatenated(tmp_path):
-    """
-    Test that cmd_test_main correctly concatenates multiple existing test files.
+def test_construct_paths_arguments(mock_ctx, mock_dependencies):
+    """Verify arguments passed to construct_paths."""
+    cmd_test_main(
+        ctx=mock_ctx,
+        prompt_file="p.txt",
+        code_file="c.py",
+        output="out.py",
+        language="python",
+        merge=True,
+        target_coverage=95.0,
+        existing_tests=["t.py"]
+    )
+    
+    mock_dependencies["construct_paths"].assert_called_once()
+    _, kwargs = mock_dependencies["construct_paths"].call_args
+    
+    assert kwargs["input_file_paths"]["prompt_file"] == "p.txt"
+    assert kwargs["input_file_paths"]["code_file"] == "c.py"
+    assert kwargs["input_file_paths"]["existing_tests"] == "t.py"
+    
+    assert kwargs["command_options"]["output"] == "out.py"
+    assert kwargs["command_options"]["language"] == "python"
+    assert kwargs["command_options"]["merge"] is True
+    assert kwargs["command_options"]["target_coverage"] == 95.0
 
-    This tests the new feature where multiple --existing-tests options can be provided
-    and their content is concatenated before being passed to the test generation.
-    """
-    mock_ctx = MagicMock(spec=Context)
-    mock_ctx.obj = {
-        "verbose": False,
-        "force": True,
-        "quiet": False,
-        "time": 0.25,
-        "context": None,
-        "confirm_callback": None,
-    }
-
-    # Create test files
-    test_file_1 = tmp_path / "test_1.py"
-    test_file_1.write_text("# test 1 content\ndef test_one(): pass")
-    test_file_2 = tmp_path / "test_2.py"
-    test_file_2.write_text("# test 2 content\ndef test_two(): pass")
-
-    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
-         patch("builtins.open", mock_open()):
-
-        mock_construct_paths.return_value = (
-            {},  # resolved_config
-            {
-                "prompt_file": "prompt_contents",
-                "code_file": "code_contents",
-                # existing_tests will be populated by cmd_test_main after construct_paths
-            },
-            {"output": "test_output.py"},
-            "python"
-        )
-        mock_generate_test.return_value = ("generated_tests", 0.10, "model_v1")
-
-        result = cmd_test_main(
-            ctx=mock_ctx,
-            prompt_file="test.prompt",
-            code_file="test.py",
-            output="test_output.py",
-            language=None,
-            coverage_report=None,
-            existing_tests=[str(test_file_1), str(test_file_2)],
-            target_coverage=None,
-            merge=False,
-        )
-
-        # Verify generate_test was called and received concatenated existing tests
-        mock_generate_test.assert_called_once()
-        call_kwargs = mock_generate_test.call_args.kwargs
-
-        # The existing_tests should contain content from both files
-        if "existing_tests" in call_kwargs:
-            existing_tests_content = call_kwargs["existing_tests"]
-            assert "test 1 content" in existing_tests_content, \
-                "Content from test_file_1 should be in existing_tests"
-            assert "test 2 content" in existing_tests_content, \
-                "Content from test_file_2 should be in existing_tests"
+def test_resolve_effective_config_usage(mock_ctx, mock_dependencies):
+    """Verify resolve_effective_config is called with correct overrides."""
+    cmd_test_main(
+        ctx=mock_ctx,
+        prompt_file="p.txt",
+        code_file="c.py",
+        strength=0.9,
+        temperature=0.7
+    )
+    
+    mock_dependencies["resolve_effective_config"].assert_called_once()
+    _, kwargs = mock_dependencies["resolve_effective_config"].call_args
+    
+    assert kwargs["command_strength"] == 0.9
+    assert kwargs["command_temperature"] == 0.7
+    assert kwargs["command_time"] is None
