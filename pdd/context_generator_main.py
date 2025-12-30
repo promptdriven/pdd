@@ -1,193 +1,147 @@
-import sys
+from __future__ import annotations
 import ast
-from typing import Tuple, Optional
+import asyncio
+import json
+import os
+import sys
 from pathlib import Path
+from typing import Optional, Tuple, Dict, Any
 import click
-from rich import print as rprint
-
+import httpx
+from rich.console import Console
+from rich.panel import Panel
 from .construct_paths import construct_paths
 from .context_generator import context_generator
+from .core.cloud import CloudConfig
+# get_jwt_token imports removed - using CloudConfig.get_jwt_token() instead
+from .preprocess import preprocess
+from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE
 
+console = Console()
+CLOUD_TIMEOUT_SECONDS = 400.0
 
-def _validate_python_syntax(code: str) -> Tuple[bool, Optional[str]]:
-    """
-    Validate that the code is valid Python syntax.
-
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
+def _validate_and_fix_python_syntax(code: str, quiet: bool) -> str:
     try:
         ast.parse(code)
-        return True, None
-    except SyntaxError as e:
-        return False, f"SyntaxError at line {e.lineno}: {e.msg}"
-
-
-def _try_fix_json_garbage(code: str) -> Optional[str]:
-    """
-    Attempt to fix code that has JSON metadata garbage appended at the end.
-    This is a common LLM extraction failure pattern.
-
-    Returns:
-        Fixed code if successful, None if not fixable.
-    """
-    lines = code.split('\n')
-
-    # Look for JSON-like patterns at the end
-    json_patterns = ['"explanation":', '"focus":', '"description":', '"code":']
-
+        return code
+    except SyntaxError:
+        if not quiet:
+            console.print("[yellow]Warning: Generated code has syntax errors. Attempting to fix...[/yellow]")
+    lines = code.splitlines()
+    json_markers = ['"explanation":', '"focus":', '"description":', '"code":', '"filename":']
+    cut_index = -1
     for i in range(len(lines) - 1, -1, -1):
         line = lines[i].strip()
-
-        # If we find a line that's clearly JSON garbage
-        if any(pattern in line for pattern in json_patterns):
-            # Go back and find where valid Python ends
-            for j in range(i - 1, -1, -1):
-                candidate = '\n'.join(lines[:j + 1])
-                is_valid, _ = _validate_python_syntax(candidate)
-                if is_valid:
-                    return candidate
-            break
-
-        # If line is just "}" or "]", likely JSON ending
-        if line in ['}', ']', '},', '],']:
+        if any(marker in line for marker in json_markers) or line == "}" or line == "},":
+            cut_index = i
+    if cut_index != -1:
+        candidate = "\n".join(lines[:cut_index])
+        try:
+            ast.parse(candidate)
+            if not quiet:
+                console.print("[green]Fix successful: Removed trailing metadata.[/green]")
+            return candidate
+        except SyntaxError:
+            pass
+    low = 0
+    high = cut_index if cut_index != -1 else len(lines)
+    valid_len = 0
+    while low < high:
+        mid = (low + high + 1) // 2
+        candidate = "\n".join(lines[:mid])
+        try:
+            ast.parse(candidate)
+            valid_len = mid
+            low = mid
+        except SyntaxError:
+            high = mid - 1
+    for i in range(len(lines), max(0, len(lines) - 50), -1):
+        candidate = "\n".join(lines[:i])
+        try:
+            ast.parse(candidate)
+            if not quiet:
+                console.print("[green]Fix successful: Truncated invalid tail content.[/green]")
+            return candidate
+        except SyntaxError:
             continue
+    if not quiet:
+        console.print("[red]Fix failed: Could not automatically repair syntax.[/red]")
+    return code
 
-        # If line ends with '",  (JSON string end)
-        if line.endswith('",') or line.endswith('"'):
-            # Check if this looks like inside a JSON object
-            if any(pattern in lines[i] if i < len(lines) else '' for pattern in json_patterns):
-                continue
-
-    return None
+async def _run_cloud_generation(prompt_content: str, code_content: str, language: str, strength: float, temperature: float, verbose: bool, pdd_env: str) -> Tuple[Optional[str], float, str]:
+    try:
+        processed_prompt = preprocess(prompt_content, recursive=True, double_curly_brackets=False)
+    except Exception as e:
+        return None, 0.0, f"Preprocessing failed: {e}"
+    # Use CloudConfig.get_jwt_token() which checks PDD_JWT_TOKEN first
+    token = CloudConfig.get_jwt_token(verbose=verbose)
+    if not token:
+        return None, 0.0, "Failed to obtain JWT token."
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {"promptContent": processed_prompt, "codeContent": code_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
+    async with httpx.AsyncClient(timeout=CLOUD_TIMEOUT_SECONDS) as client:
+        try:
+            cloud_url = CloudConfig.get_endpoint_url("generateExample")
+            response = await client.post(cloud_url, json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            generated_code = data.get("generatedExample", "")
+            total_cost = float(data.get("totalCost", 0.0))
+            model_name = data.get("modelName", "cloud-model")
+            if not generated_code:
+                return None, 0.0, "Cloud function returned empty code."
+            return generated_code, total_cost, model_name
+        except Exception as e:
+            return None, 0.0, f"Cloud error: {e}"
 
 def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str]) -> Tuple[str, float, str]:
-    """
-    Main function to generate example code from a prompt file and an existing code file.
-
-    :param ctx: Click context containing command-line parameters.
-    :param prompt_file: Path to the prompt file that generated the code.
-    :param code_file: Path to the existing code file.
-    :param output: Optional path to save the generated example code.
-    :return: A tuple containing the generated example code, total cost, and model name used.
-    """
     try:
-        # Construct file paths
-        input_file_paths = {
-            "prompt_file": prompt_file,
-            "code_file": code_file
-        }
-        command_options = {
-            "output": output
-        }
-        resolved_config, input_strings, output_file_paths, language = construct_paths(
-            input_file_paths=input_file_paths,
-            force=ctx.obj.get('force', False),
-            quiet=ctx.obj.get('quiet', False),
-            command="example",
-            command_options=command_options,
-            context_override=ctx.obj.get('context'),
-            confirm_callback=ctx.obj.get('confirm_callback')
-        )
-
-        # Load input files
-        prompt_content = input_strings["prompt_file"]
-        code_content = input_strings["code_file"]
-
-        # Get resolved output path for file path information
-        resolved_output = output_file_paths["output"]
-        
-        # Determine file path information for correct imports
-        from pathlib import Path
-        source_file_path = str(Path(code_file).resolve())
-        example_file_path = str(Path(resolved_output).resolve()) if resolved_output else ""
-        
-        # Extract module name from the code file
-        module_name = Path(code_file).stem
-
-        # Generate example code
-        strength = ctx.obj.get('strength', 0.5)
-        temperature = ctx.obj.get('temperature', 0)
-        time = ctx.obj.get('time')
-        example_code, total_cost, model_name = context_generator(
-            language=language,
-            code_module=code_content,
-            prompt=prompt_content,
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=ctx.obj.get('verbose', False),
-            source_file_path=source_file_path,
-            example_file_path=example_file_path,
-            module_name=module_name
-        )
-
-        # Save results - if output is a directory, use resolved file path from construct_paths
-        if output is None:
-            final_output_path = resolved_output
+        input_file_paths = {"prompt_file": prompt_file, "code_file": code_file}
+        command_options = {"output": output}
+        resolved_config, input_strings, output_file_paths, language = construct_paths(input_file_paths=input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="example", command_options=command_options, context_override=ctx.obj.get('context'), confirm_callback=ctx.obj.get('confirm_callback'))
+        prompt_content = input_strings.get("prompt_file", "")
+        code_content = input_strings.get("code_file", "")
+        if output and not output.endswith("/") and not Path(output).is_dir():
+            resolved_output = output
         else:
+            resolved_output = output_file_paths.get("output")
+        is_local = ctx.obj.get("local", False)
+        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
+        temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)
+        verbose = ctx.obj.get('verbose', False)
+        quiet = ctx.obj.get('quiet', False)
+        pdd_env = os.environ.get("PDD_ENV", "local")
+        generated_code = None
+        total_cost = 0.0
+        model_name = ""
+        if not is_local:
             try:
-                is_dir_hint = output.endswith('/')
+                generated_code, total_cost, model_name = asyncio.run(_run_cloud_generation(prompt_content, code_content, language, strength, temperature, verbose, pdd_env))
             except Exception:
-                is_dir_hint = False
-            if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
-                final_output_path = resolved_output
-            else:
-                final_output_path = output
-        if final_output_path and example_code is not None:
-            # Validate Python syntax before saving
-            if language == "python":
-                is_valid, error_msg = _validate_python_syntax(example_code)
-                if not is_valid:
-                    if not ctx.obj.get('quiet', False):
-                        rprint(f"[yellow]Warning: Generated code has syntax error: {error_msg}[/yellow]")
-                        rprint("[yellow]Attempting to fix JSON garbage pattern...[/yellow]")
-
-                    # Try to fix JSON garbage at end of file
-                    fixed_code = _try_fix_json_garbage(example_code)
-                    if fixed_code:
-                        is_valid_fixed, _ = _validate_python_syntax(fixed_code)
-                        if is_valid_fixed:
-                            if not ctx.obj.get('quiet', False):
-                                rprint("[green]Successfully removed garbage and fixed syntax.[/green]")
-                            example_code = fixed_code
-                        else:
-                            rprint("[red]Could not fix syntax error. Saving as-is.[/red]")
-                    else:
-                        rprint("[red]Could not detect fixable pattern. Saving as-is.[/red]")
-
-            with open(final_output_path, 'w') as f:
-                f.write(example_code)
-        elif final_output_path and example_code is None:
-            # Raise error instead of just warning
+                generated_code = None
+            if generated_code is None:
+                if not quiet:
+                    console.print("[yellow]Cloud execution failed. Falling back to local.[/yellow]")
+                is_local = True
+        if is_local:
+            source_file_path = str(Path(code_file).resolve())
+            example_file_path = str(Path(resolved_output).resolve()) if resolved_output else ""
+            module_name = Path(code_file).stem
+            generated_code, total_cost, model_name = context_generator(code_module=code_content, prompt=prompt_content, language=language, strength=strength, temperature=temperature, verbose=not quiet, source_file_path=source_file_path, example_file_path=example_file_path, module_name=module_name, time=ctx.obj.get('time'))
+        if not generated_code:
             raise click.UsageError("Example generation failed, no code produced.")
-
-        # Provide user feedback
-        if not ctx.obj.get('quiet', False):
-            if example_code is not None:
-                rprint("[bold green]Example code generated successfully.[/bold green]")
-                rprint(f"[bold]Model used:[/bold] {model_name}")
-                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-                if final_output_path and example_code is not None:
-                    rprint(f"[bold]Example code saved to:[/bold] {final_output_path}")
-            else:
-                rprint("[bold red]Example code generation failed.[/bold red]")
-                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-
-        # Always print example code, even in quiet mode (if it exists)
-        if example_code is not None:
-            rprint("[bold]Generated Example Code:[/bold]")
-            rprint(example_code)
-        else:
-            rprint("[bold red]No example code generated due to errors.[/bold red]")
-
-        return example_code, total_cost, model_name
-
-    except click.Abort:
-        # User cancelled - re-raise to stop the sync loop
-        raise
+        if language and language.lower() == "python":
+            generated_code = _validate_and_fix_python_syntax(generated_code, quiet)
+        if resolved_output:
+            out_path = Path(resolved_output)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(generated_code, encoding="utf-8")
+        if not quiet:
+            console.print("[bold green]Example generation completed successfully.[/bold green]")
+            console.print(f"[bold]Model used:[/bold] {model_name}")
+            console.print(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+        return generated_code, total_cost, model_name
     except Exception as e:
         if not ctx.obj.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
-        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
-        return "", 0.0, f"Error: {e}"
+            console.print(f"[bold red]Error:[/bold red] {str(e)}")
+        raise e
