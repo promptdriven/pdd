@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import difflib
 import tempfile
 from pathlib import Path
@@ -55,6 +56,68 @@ def _verbose(msg: str) -> None:
     """Verbose-only print (print only when _IS_VERBOSE is True)."""
     if _IS_VERBOSE:
         console.print(msg)
+
+
+def _detect_suspicious_files(cwd: Path, context: str = "") -> List[Path]:
+    """
+    Detect suspicious single-character files (like C, E, T) in a directory.
+
+    This is a diagnostic function to help identify when/where these files are created.
+    Issue #186: Empty files named C, E, T (first letters of Code, Example, Test)
+    have been appearing during agentic operations.
+
+    Args:
+        cwd: Directory to scan
+        context: Description of what operation just ran (for logging)
+
+    Returns:
+        List of suspicious file paths found
+    """
+    suspicious: List[Path] = []
+    try:
+        for f in cwd.iterdir():
+            if f.is_file() and len(f.name) <= 2 and not f.name.startswith('.'):
+                suspicious.append(f)
+
+        if suspicious:
+            import datetime
+            timestamp = datetime.datetime.now().isoformat()
+            _always(f"[bold red]⚠️  SUSPICIOUS FILES DETECTED (Issue #186)[/bold red]")
+            _always(f"[red]Timestamp: {timestamp}[/red]")
+            _always(f"[red]Context: {context}[/red]")
+            _always(f"[red]Directory: {cwd}[/red]")
+            for sf in suspicious:
+                try:
+                    size = sf.stat().st_size
+                    _always(f"[red]  - {sf.name} (size: {size} bytes)[/red]")
+                except Exception:
+                    _always(f"[red]  - {sf.name} (could not stat)[/red]")
+
+            # Also log to a file for persistence
+            log_file = Path.home() / ".pdd" / "suspicious_files.log"
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_file, "a") as lf:
+                lf.write(f"\n{'='*60}\n")
+                lf.write(f"Timestamp: {timestamp}\n")
+                lf.write(f"Context: {context}\n")
+                lf.write(f"Directory: {cwd}\n")
+                lf.write(f"CWD at detection: {Path.cwd()}\n")
+                for sf in suspicious:
+                    try:
+                        size = sf.stat().st_size
+                        lf.write(f"  - {sf.name} (size: {size} bytes)\n")
+                    except Exception as e:
+                        lf.write(f"  - {sf.name} (error: {e})\n")
+                # Log stack trace to help identify caller
+                import traceback
+                lf.write("Stack trace:\n")
+                lf.write(traceback.format_stack()[-10:][0] if traceback.format_stack() else "N/A")
+                lf.write("\n")
+    except Exception as e:
+        _verbose(f"[yellow]Could not scan for suspicious files: {e}[/yellow]")
+
+    return suspicious
+
 
 def _begin_marker(path: Path) -> str:
     """Marker that must wrap the BEGIN of a corrected file block emitted by the agent."""
@@ -435,6 +498,12 @@ def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, lab
         return last
     finally:
         prompt_file.unlink(missing_ok=True)
+        # Issue #186: Scan for suspicious files after Anthropic agent runs
+        _detect_suspicious_files(cwd, f"After _run_anthropic_variants ({label})")
+        # Also scan project root in case agent created files there
+        project_root = Path.cwd()
+        if project_root != cwd:
+            _detect_suspicious_files(project_root, f"After _run_anthropic_variants ({label}) - project root")
 
 def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     """Subprocess runner for Google commands with common sanitized env."""
@@ -494,6 +563,12 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         return last
     finally:
         prompt_file.unlink(missing_ok=True)
+        # Issue #186: Scan for suspicious files after Google agent runs
+        _detect_suspicious_files(cwd, f"After _run_google_variants ({label})")
+        # Also scan project root in case agent created files there
+        project_root = Path.cwd()
+        if project_root != cwd:
+            _detect_suspicious_files(project_root, f"After _run_google_variants ({label}) - project root")
 
 def _run_testcmd(cmd: str, cwd: Path) -> bool:
     """
@@ -532,7 +607,7 @@ def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str]
         return _run_testcmd(run_cmd, cwd)
     # Fallback: try running with Python if no run command found
     verify = subprocess.run(
-        [os.sys.executable, str(Path(unit_test_file).resolve())],
+        [sys.executable, str(Path(unit_test_file).resolve())],
         capture_output=True,
         text=True,
         check=False,
@@ -800,7 +875,7 @@ def _try_harvest_then_verify(
                 newest = code_path.read_text(encoding="utf-8")
                 _print_diff(code_snapshot, newest, code_path)
                 ok = _post_apply_verify_or_testcmd(
-                    provider, unit_test_file, working_dir,
+                    provider, unit_test_file, cwd,
                     verify_cmd=verify_cmd, verify_enabled=verify_enabled,
                     stdout=res.stdout or "", stderr=res.stderr or ""
                 )
@@ -992,7 +1067,7 @@ def run_agentic_fix(
                     else:
                         # Fallback: run directly with Python interpreter
                         pre = subprocess.run(
-                            [os.sys.executable, str(Path(unit_test_file).resolve())],
+                            [sys.executable, str(Path(unit_test_file).resolve())],
                             capture_output=True,
                             text=True,
                             check=False,
