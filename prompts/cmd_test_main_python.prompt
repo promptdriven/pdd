@@ -46,6 +46,10 @@
       <include>context/construct_paths_example.py</include>
       </construct_paths_example>
 
+      <resolve_effective_config_example>
+      <include>context/resolve_effective_config_example.py</include>
+      </resolve_effective_config_example>
+
       <generate_test_example>
       <include>context/generate_test_example.py</include>
       </generate_test_example>
