@@ -1,7 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'context_generator_main', that will be the CLI wrapper for generating example code from a prompt file and an existing code file. This function will use 'construct_paths' to resolve and read the prompt and code file contents and to compute output locations; it will then invoke 'context_generator' and handle saving the result.
 
-<include>./context/python_preamble.prompt</include>
-<include>./context/ctx_obj_params.prompt</include>
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+<context.ctx_obj_params><include>context/ctx_obj_params.prompt</include></context.ctx_obj_params>
 
 % Here are the inputs and outputs of the function:
     Inputs:
@@ -11,24 +11,33 @@
         - `output` - An optional string containing the path where to save the generated example code. If None, uses default naming convention.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`):
-            - `str`: The generated example code (may be empty string on error).
-            - `float`: The total cost of the operation (0.0 on error).
-            - `str`: The name of the model used (or error message on failure).
+            - `str`: The generated example code.
+            - `float`: The total cost of the operation.
+            - `str`: The name of the model used.
 
 <examples>
    % Here are examples of how to use internal modules and this main wrapper:
    <internal_example_modules>
       - Here is an example of how to use the `construct_paths` function:
       <construct_paths_example>
-      <include>context/construct_paths_example.py</include>
+      <context.construct_paths><include>context/construct_paths_example.py</include></context.construct_paths>
       </construct_paths_example>
 
       - Here is an example of how to use the `context_generator` function. Note that `context_generator` is expected to accept a `time` parameter (e.g., for setting a timeout or duration). The example should reflect this:
       <context_generator_example>
-      <include>context/context_generator_example.py</include>
+      <context.context_generator><include>context/context_generator_example.py</include></context.context_generator>
       </context_generator_example>
+
+      - Here is an example of a similar main wrapper function:
+      <code_generator_main_example>
+      <context.generate.7.code_generator_main><include>context/generate/7/code_generator_main.py</include></context.generate.7.code_generator_main>
+      </code_generator_main_example>
    </internal_example_modules>
 
+   % Here is how to call the cloud version of the example generator when not using the `--local` flag.
+   <cloud_example_generator_example>
+      <docs.api_documentation><include>../docs/api-documentation.md</include></docs.api_documentation>
+   </cloud_example_generator_example>
 </examples>
 
 % Implementation details that must be reflected in the wrapper:
@@ -48,15 +57,31 @@
         * If `output` is `None`, write to `output_file_paths["output"]`.
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.
         * Otherwise, write to the explicit `output` path provided by the user.
-        * Only write the file if example generation returned non-None content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
+        * Only write the file if example generation returned non-empty content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
+    - Python syntax validation (for Python language only):
+        * Before saving, validate that the generated code is valid Python syntax using `ast.parse`.
+        * If syntax is invalid, attempt to fix a common LLM failure pattern: JSON metadata garbage appended at the end of the file (e.g., lines containing `"explanation":`, `"focus":`, `"description":`, `"code":`, `"filename":`).
+        * The fix strategy: scan backwards from the end, find where JSON garbage starts, then binary search backwards to find the last valid Python code.
+        * Print warnings about syntax errors and fix attempts (respecting quiet mode).
     - Printing behavior:
-        * When not quiet: print success/failure status, model name, total cost, and the save path if applicable.
-        * Regardless of quiet: print a "Generated Example Code:" header and the example code if it exists; otherwise print a message indicating no example code was produced.
+        * When not quiet: print success/failure status, model name, total cost (formatted as `${cost:.6f}`).
     - Error handling:
-        * Handle `click.Abort` separately by re-raising it to allow user cancellation to propagate (e.g., when user declines overwrite confirmation).
-        * For other exceptions, print an error message (respecting `quiet` for status messages) and return an error tuple `("", 0.0, f"Error: {e}")` instead of calling `sys.exit(1)`. This allows orchestrators (like the sync command) to handle errors gracefully.
+        * On exception, print an error message (respecting `quiet`) and re-raise the exception. This allows callers to handle errors appropriately.
 
 % Here is the README for the cli command that has details of how the 'example' command works. Be sure to support the necessary global options like verbose, strength, temperature, and time (retrieved as `ctx.obj.get('time')`) for the context_generator function.
    <cli_command_readme>
-   <include>./README.md</include>
+   <context.change.15.README><include>context/change/15/README.md</include></context.change.15.README>
    </cli_command_readme>
+
+% Cloud vs Local Execution Strategy:
+   1. If the `--local` flag is explicitly provided (via `ctx.obj.get("local")`), use local execution directly.
+   2. Otherwise, attempt cloud execution first:
+      - Preprocess the prompt content to expand includes: call `preprocess(prompt_text, recursive=True, double_curly_brackets=False)`.
+      - Obtain a JWT via `CloudConfig.get_jwt_token(verbose=verbose)`. This method checks `PDD_JWT_TOKEN` environment variable first before attempting OAuth flow.
+      - Use a request timeout of 400 seconds.
+      - Send JSON payload with fields: `{ "promptContent": <processed_prompt>, "codeContent": <code_content>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`.
+      - Cloud endpoint: Use `CloudConfig.get_endpoint_url("generateExample")` from `pdd.core.cloud` to get the endpoint URL.
+      - Expected response fields: `generatedExample`, `totalCost`, `modelName`.
+   3. If cloud execution fails (auth/network/HTTP/JSON errors, timeout, or missing/empty code):
+      - Log a warning (if not quiet) and automatically fall back to local execution.
+   4. For local execution, call the local context_generator function with the appropriate parameters.
