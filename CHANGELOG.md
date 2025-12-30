@@ -1,20 +1,36 @@
+## v0.0.96 (2025-12-29)
+
+### Feat
+
+- Enhance update command and improve path validation
+
 ## v0.0.95 (2025-12-28)
 
 ### Feat
 
-- Enhance repository-wide update functionality
-- Enhance agentic update and test discovery features
+- **`--directory` Option for Update Command:** Added `--directory` flag to the `update` command, allowing users to specify a subdirectory to scan in repository-wide mode instead of scanning from the repo root.
 
 ### Fix
 
-- Update error message terminology from 'prompt template' to 'prompt string'
-- reject suspicious LLM-generated paths in agentic fix
-- sync only files from triggering commit, not all differences
+- **Reject Suspicious LLM-Generated Paths (Issue #187):** Added `_is_suspicious_path()` function to `agentic_fix.py` that rejects single/double-character filenames (e.g., 'C', 'E', 'T'), template variables (e.g., '{path}', '{code_abs}'), and dot-only paths. This prevents LLM artifacts from being written to disk when agents produce malformed output markers.
+
+- **Sync Only Files from Triggering Commit:** Fixed the `sync-from-public.yml` workflow to sync only files changed in the specific triggering commit, not all differences from `public/main`. This prevents inadvertently reverting private-only changes. Added conflict detection and warnings for files with local modifications.
+
+- **Fix `get_language()` Call in Update:** Corrected `find_and_resolve_all_pairs()` to pass file extension to `get_language()` instead of the full path.
 
 ### Refactor
 
-- Update onboarding documentation for prompt-driven development workflow
-- Streamline LLM invocation prompt documentation
+- **Remove langchain_core Dependency:** Removed `langchain_core` from dependencies. Replaced `PromptTemplate.from_template()` with native Python `str.format()` in `llm_invoke.py`, updating error messages from 'prompt template' to 'prompt string'.
+
+- **LLM Invocation Prompt Reorganization:** Streamlined `prompts/llm_invoke_python.prompt` documentation for clarity.
+
+### Docs
+
+- **PDD Doctrine - Context Window Advantage:** Expanded `docs/prompt-driven-development-doctrine.md` with ~100 lines explaining how PDD's batch architecture eliminates agentic overhead, allowing 100% of the context window to be used for generation vs. competing with tool definitions and chat history.
+
+### Tests
+
+- Added 230+ lines of tests in `tests/test_agentic_fix.py` covering suspicious path detection, template variable rejection, and integration tests verifying files like 'C', 'E', 'T' are not written to disk.
 
 ## v0.0.94 (2025-12-27)
 
