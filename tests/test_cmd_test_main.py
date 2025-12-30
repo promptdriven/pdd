@@ -53,7 +53,7 @@ def mock_dependencies():
                 "prompt_file": MOCK_PROMPT_CONTENT,
                 "code_file": MOCK_CODE_CONTENT
             }, # input_strings
-            {"output_file": "tests/test_code.py"}, # output_file_paths
+            {"output": "tests/test_code.py"}, # output_file_paths (key is "output" not "output_file")
             "python" # detected_language
         )
 
@@ -347,10 +347,11 @@ def test_resolve_effective_config_usage(mock_ctx, mock_dependencies):
         strength=0.9,
         temperature=0.7
     )
-    
+
     mock_dependencies["resolve_effective_config"].assert_called_once()
     _, kwargs = mock_dependencies["resolve_effective_config"].call_args
-    
-    assert kwargs["command_strength"] == 0.9
-    assert kwargs["command_temperature"] == 0.7
-    assert kwargs["command_time"] is None
+
+    # Verify correct API: ctx, resolved_config, param_overrides
+    assert kwargs["ctx"] == mock_ctx
+    assert kwargs["resolved_config"] == {}  # Empty dict from mock_dependencies fixture
+    assert kwargs["param_overrides"] == {"strength": 0.9, "temperature": 0.7}

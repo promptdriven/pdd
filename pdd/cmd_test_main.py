@@ -93,10 +93,9 @@ def cmd_test_main(
         # 3. Resolve Configuration (Moved after construct_paths)
         # Resolve strength, temperature, and time using CLI > pddrc > defaults priority
         config = resolve_effective_config(
-            ctx_obj=ctx.obj,
-            command_strength=strength,
-            command_temperature=temperature,
-            command_time=None  # Time not explicitly passed as arg to this cmd wrapper, falls back to ctx
+            ctx=ctx,
+            resolved_config=resolved_config,
+            param_overrides={"strength": strength, "temperature": temperature}
         )
         
         eff_strength = config["strength"]
@@ -261,8 +260,8 @@ def cmd_test_main(
         if merge and existing_tests_list:
             final_output_path = Path(existing_tests_list[0])
         # Otherwise use the path resolved by construct_paths
-        elif "output_file" in output_file_paths:
-            final_output_path = Path(output_file_paths["output_file"])
+        elif "output" in output_file_paths:
+            final_output_path = Path(output_file_paths["output"])
         
         if final_output_path:
             # Ensure directory exists
