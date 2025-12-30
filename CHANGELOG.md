@@ -1,3 +1,9 @@
+## v0.0.96 (2025-12-29)
+
+### Feat
+
+- Enhance update command and improve path validation
+
 ## v0.0.95 (2025-12-28)
 
 ### Feat
