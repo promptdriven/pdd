@@ -18,7 +18,7 @@ Optional Arguments:
   - --output: Path to save the newly generated or enhanced test file. Defaults to an auto-generated path if omitted.
   - --language: Programming language override if you want to force tests in a certain language.
   - --coverage-report: Path to an existing coverage report. If provided, requires --existing-tests to enhance tests.
-  - --existing-tests: Path to an existing test file to merge or enhance. Can be used multiple times.
+  - --existing-tests: Path to an existing test file to merge or enhance.
   - --target-coverage: Desired test coverage percentage (float). Only used if --coverage-report is set.
   - --merge: Flag to merge new tests into the existing tests specified by --existing-tests.
 
@@ -60,8 +60,8 @@ def cli(ctx, verbose, strength, temperature, force, quiet):
 @click.option("--language", type=str, default=None, help="Override detected programming language.")
 @click.option("--coverage-report", type=click.Path(exists=True), default=None,
               help="Path to a coverage report for enhancing tests.")
-@click.option("--existing-tests", type=click.Path(exists=True), multiple=True, default=None,
-              help="Existing test file(s) to merge or build upon.")
+@click.option("--existing-tests", type=click.Path(exists=True), default=None,
+              help="Existing test file to merge or build upon.")
 @click.option("--target-coverage", type=float, default=None, help="Desired coverage percentage.")
 @click.option("--merge", is_flag=True, default=False, help="Merge new tests into existing tests.")
 def test(
