@@ -1,51 +1,52 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'preprocess', that will preprocess the prompt from a prompt string for a LLM. This will use regular expressions to preprocess specific XML-like tags, if any, in the prompt.
+% You are an expert Python engineer. Write a 'preprocess' function that preprocesses prompts for LLMs by resolving XML-like tags and optionally escaping curly braces.
 
 <include>./context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-        'prompt' - A string that is the prompt to preprocess
-        'recursive' - A boolean that is True if the program needs to recursively process the includes in the prompt and False if it does not need to recursively process the prompt. Default is False.
-        'double_curly_brackets' - A boolean that is True if the curly brackets need to be doubled and False if they do not need to be doubled. Default is True.
-        'exclude_keys' - An optional list of strings that are excluded from the curly bracket doubling.
-    Outputs:
-        - Returns a string that is the preprocessed prompt. To preserve significant whitespace, the function should NOT trim leading or trailing whitespace.
+% Function Signature
+    def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None) -> str
 
-% Processing order and tag behavior
-    Process tags in this order: 'pdd' → 'include' (and 'include-many') → 'shell' → 'web'. After tag processing completes, optionally apply curly‑brace doubling according to 'double_curly_brackets'.
-    Implementation note: Backtick includes MAY be resolved in a pre‑pass before XML‑tag processing, and include processing MAY iterate until no further changes (to support nested includes), as long as the final semantics remain the same (e.g., content inside <pdd> is removed in the final output).
+% Inputs/Outputs
+    - prompt: The prompt string to preprocess
+    - recursive: When True, resolve includes but defer <shell> and <web> execution (for later variable expansion)
+    - double_curly_brackets: When True, escape single curly braces as double braces (for PromptTemplate compatibility)
+    - exclude_keys: Variable names to exclude from brace doubling
+    - Returns: The preprocessed prompt (preserve leading/trailing whitespace)
 
-% Here are the XML-like tags to preprocess, other tags will remain unmodified:
-    'include' - Include the content of the file indicated; replace the tag with the file contents, without wrapping in a new tag. If the path points to an image (.png, .jpg, .jpeg, .gif, .webp, .heic), embed the image as a base64 data URL. Enforce a maximum dimension (e.g., 1024px) while preserving aspect ratio. Convert GIF to a static first‑frame PNG and HEIC to JPEG for compatibility. On failure, insert a bracketed error.
-    'include-many' - Include multiple files; the inner text is a comma- or newline‑separated list of paths. Read each file in order, concatenating contents with newlines. On missing file, insert `[File not found: path]`.
-    'pdd' - Human‑only comment; delete the entire block including tags.
-    'shell' - Execute in a subshell and include stdout in place of the tag; on nonzero exit, insert a bracketed error with the exit code. Remove the tag.
-    'web' - Use Firecrawl to fetch markdown and include it; on failure, insert a bracketed error. Remove the tag.
+% Processing Order
+    Process tags in order: pdd → include/include-many → shell → web. Apply curly-brace doubling last (only to top-level prompt).
 
-% Here is how to use the Firecrawl API to scrape the web page:
+% Tag Behaviors
+    <pdd>...</pdd> - Human-only comment; delete entire block including tags
+    <include>path</include> - Replace with file contents. For images (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px, convert GIF→PNG (first frame), HEIC→JPEG, return as base64 data URL
+    <include-many>paths</include-many> - Comma/newline-separated paths; concatenate contents with newlines
+    <shell>cmd</shell> - Execute command, replace with stdout. On error, insert bracketed error message
+    <web>url</web> - Fetch via Firecrawl (requires FIRECRAWL_API_KEY), replace with markdown content
+
+    Backtick includes: ```<path>``` → ```{file contents}```
+
+% Recursive Pass Behavior
+    When recursive=True:
+    - Resolve includes recursively (preprocess included content with recursive=True, double_curly_brackets=False)
+    - Defer shell and web execution (leave tags intact)
+    - On missing file, leave tag unchanged for later variable expansion
+    When recursive=False:
+    - Execute shell/web tags
+    - On missing file, insert [File not found: path]
+
+% Curly Brace Handling (when double_curly_brackets=True)
+    - Double single braces: {var} → {{var}}
+    - Preserve already-doubled: {{var}} stays {{var}}
+    - Skip excluded keys: {key} in exclude_keys stays {key}
+    - Handle ${IDENT} placeholders: convert to ${{IDENT}} to prevent PromptTemplate errors
+    - Process code blocks (json, js, ts, python, py) with idempotence
+
+% File Path Resolution
+    Implement get_file_path(file_name) that:
+    1. First tries CWD: ./file_name
+    2. Falls back to package directory if not found in CWD
+    3. Returns CWD path as default (for consistent error behavior)
+
+% Firecrawl Usage
 <firecrawl_example>
     <include>./context/firecrawl_example.py</include>
 </firecrawl_example>
-
-% Includes can be nested. When `recursive=True`, resolve static includes but defer unresolved, variable‑driven includes so they can be resolved after variable expansion. Implementations MAY iterate include replacement until no further matches remain.
-    Two include forms:
-    1. Backtick includes: ```<path>``` → replace entire fenced segment with ```{file contents}```; if missing, leave unchanged during the first pass and replace with ```[File not found: path]``` during the non‑recursive pass. Implementations MAY resolve backtick includes in a pre‑pass.
-    2. XML 'include' and 'include-many' as above (during the first recursive pass, tags may be left intact if variable expansion is expected to materialize the path list).
-
-% Include error handling specifics
-    - For XML <include> and <include-many> tags, if a file cannot be found or read, insert a bracketed error like: [File not found: ./path/to/file]. During the first (recursive) pass, leave the tag unchanged so variables can be expanded; emit the error on the non‑recursive pass if still missing.
-
-% If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude_keys list, it will check to see if the curly brackets are already doubled before doubling the curly brackets. Apply curly-brace doubling only to the top-level prompt (not to content introduced via includes during recursive processing). The curly brackets may be on different lines and may have nested curly brackets. Special handling is needed for several cases:
-    1. Handle already doubled brackets to prevent doubling them again
-    2. Properly handle nested curly brackets using case-by-case pattern matching
-    3. Special handling for code blocks (languages: json, javascript, typescript, js, ts, python, py). Aim for idempotence: preserve already‑doubled braces and only double when necessary within these code blocks.
-    4. Apply special handling for multiline variables with curly brackets
-    5. Do not alter or double the braces of `${IDENT}` tokens (match `${[A-Za-z_][A-Za-z0-9_]*}`); preserve them exactly so unknown placeholders remain unchanged for later substitution. Implementations MAY, when necessary to avoid downstream templating collisions, transform these as `${{IDENT}}`; this is optional and should be used only when required by the templating layer.
-
-% The program should resolve file paths using the current directory as the base path. Implement a function 'get_file_path' that takes a file name and returns the full path using './' as the base path.
-
-% Web scraping requirements and error handling
-    - Requires the 'firecrawl' package and a FIRECRAWL_API_KEY environment variable. If either is missing or scraping fails, insert a bracketed error note. If no markdown content is returned, insert a bracketed note indicating no content is available.
-
-% Pass‑sensitive behavior
-    - When `recursive=True`, defer execution of `<shell>` and `<web>` blocks (leave tags intact). Execute them only when `recursive=False` so that variable expansion can occur first.
