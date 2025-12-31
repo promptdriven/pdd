@@ -1,3 +1,15 @@
+## v0.0.97 (2025-12-30)
+
+### Feat
+
+- Enhance CLI Python prompt to display examples used for grounding
+- Add diagnostic logging for Issue #186 (C, E, T files)
+- Enhance cloud execution and syntax validation
+
+### Refactor
+
+- Update prompts to support existing test files as lists
+
 ## v0.0.96 (2025-12-29)
 
 ### Feat
