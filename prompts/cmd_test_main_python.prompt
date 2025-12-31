@@ -82,7 +82,7 @@
 %     - For test generation: POST to `https://us-central1-prompt-driven-development.cloudfunctions.net/generateTest`
 %       with JSON payload: `{ "promptContent": <prompt>, "codeContent": <code>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`
 %     - For coverage augmentation: include additional fields `existingTests` and `coverageReport` in the payload.
-%     - Expected response fields: `generatedCode`, `totalCost`, `modelName`.
+%     - Expected response fields: `generatedTest`, `totalCost`, `modelName`.
 %  3. If cloud fails (auth/network/HTTP errors, timeout, or missing code):
 %     - Log warning and automatically fall back to local execution.
 %  4. For local execution, call `generate_test` or `increase_tests` as appropriate.

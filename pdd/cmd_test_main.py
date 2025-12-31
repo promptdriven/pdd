@@ -2,15 +2,34 @@
 Main entry point for the 'test' command.
 """
 from __future__ import annotations
+import json
+import os
 import click
+import requests
 from pathlib import Path
 # pylint: disable=redefined-builtin
 from rich import print
+from rich.console import Console
+from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
+from .core.cloud import CloudConfig
 from .generate_test import generate_test
 from .increase_tests import increase_tests
+
+# Cloud request timeout
+CLOUD_REQUEST_TIMEOUT = 400  # seconds
+
+console = Console()
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an env var is set to a truthy value."""
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 # pylint: disable=too-many-arguments, too-many-locals, too-many-return-statements, too-many-branches, too-many-statements, broad-except
@@ -143,55 +162,196 @@ def cmd_test_main(
     test_file_path_for_prompt = str(Path(output_file).expanduser().resolve())
     module_name_for_prompt = Path(source_file_path_for_prompt).stem if source_file_path_for_prompt else ""
 
+    # Determine cloud vs local execution preference
+    is_local_execution_preferred = ctx.obj.get('local', False)
+    cloud_only = _env_flag_enabled("PDD_CLOUD_ONLY") or _env_flag_enabled("PDD_NO_LOCAL_FALLBACK")
+    current_execution_is_local = is_local_execution_preferred and not cloud_only
+
     # Generate or enhance unit tests
     if not coverage_report:
-        try:
-            unit_test, total_cost, model_name = generate_test(
-                input_strings["prompt_file"],
-                input_strings["code_file"],
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                language=language,
-                verbose=verbose,
-                source_file_path=source_file_path_for_prompt,
-                test_file_path=test_file_path_for_prompt,
-                module_name=module_name_for_prompt,
-            )
-        except Exception as exception:
-            # A general exception is caught to handle various errors that can occur
-            # during the test generation process, which involves external model
-            # interactions and complex logic.
-            print(f"[bold red]Error generating tests: {exception}[/bold red]")
-            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
-            return "", 0.0, f"Error: {exception}"
+        # Validation for increase mode requirements
+        pass  # No additional validation needed for generate mode
     else:
         if not existing_tests:
             print(
                 "[bold red]Error: --existing-tests is required "
                 "when using --coverage-report[/bold red]"
             )
-            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
             return "", 0.0, "Error: --existing-tests is required when using --coverage-report"
-        try:
-            unit_test, total_cost, model_name = increase_tests(
-                existing_unit_tests=input_strings["existing_tests"],
-                coverage_report=input_strings["coverage_report"],
-                code=input_strings["code_file"],
-                prompt_that_generated_code=input_strings["prompt_file"],
-                language=language,
-                strength=strength,
-                temperature=temperature,
-                time=time,
-                verbose=verbose,
-            )
-        except Exception as exception:
-            # This broad exception is used to catch any issue that might arise
-            # while increasing test coverage, including problems with parsing
-            # reports or interacting with the language model.
-            print(f"[bold red]Error increasing test coverage: {exception}[/bold red]")
-            # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
-            return "", 0.0, f"Error: {exception}"
+
+    # Determine mode for cloud request
+    mode = "increase" if coverage_report else "generate"
+
+    # Try cloud execution first if not preferring local
+    if not current_execution_is_local:
+        if verbose:
+            console.print(Panel("Attempting cloud test generation...", title="[blue]Mode[/blue]", expand=False))
+
+        jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+
+        if not jwt_token:
+            if cloud_only:
+                console.print("[red]Cloud authentication failed.[/red]")
+                raise click.UsageError("Cloud authentication failed")
+            console.print("[yellow]Cloud authentication failed. Falling back to local execution.[/yellow]")
+            current_execution_is_local = True
+
+        if jwt_token and not current_execution_is_local:
+            # Build cloud payload
+            payload = {
+                "promptContent": input_strings["prompt_file"],
+                "codeContent": input_strings["code_file"],
+                "language": language,
+                "strength": strength,
+                "temperature": temperature,
+                "time": time,
+                "verbose": verbose,
+                "sourceFilePath": source_file_path_for_prompt,
+                "testFilePath": test_file_path_for_prompt,
+                "moduleName": module_name_for_prompt,
+                "mode": mode,
+            }
+
+            # Add increase mode specific fields
+            if mode == "increase":
+                payload["existingTests"] = input_strings.get("existing_tests", "")
+                payload["coverageReport"] = input_strings.get("coverage_report", "")
+
+            headers = {
+                "Authorization": f"Bearer {jwt_token}",
+                "Content-Type": "application/json"
+            }
+            cloud_url = CloudConfig.get_endpoint_url("generateTest")
+
+            try:
+                response = requests.post(
+                    cloud_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=CLOUD_REQUEST_TIMEOUT
+                )
+                response.raise_for_status()
+
+                response_data = response.json()
+                unit_test = response_data.get("generatedTest")
+                total_cost = float(response_data.get("totalCost", 0.0))
+                model_name = response_data.get("modelName", "cloud_model")
+
+                if not unit_test:
+                    if cloud_only:
+                        console.print("[red]Cloud execution returned no test code.[/red]")
+                        raise click.UsageError("Cloud execution returned no test code")
+                    console.print("[yellow]Cloud execution returned no test code. Falling back to local.[/yellow]")
+                    current_execution_is_local = True
+                elif verbose:
+                    console.print(Panel(
+                        f"Cloud test generation successful. Model: {model_name}, Cost: ${total_cost:.6f}",
+                        title="[green]Cloud Success[/green]",
+                        expand=False
+                    ))
+
+            except requests.exceptions.Timeout:
+                if cloud_only:
+                    console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                    raise click.UsageError("Cloud execution timed out")
+                console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
+                current_execution_is_local = True
+
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code if e.response else 0
+                err_content = e.response.text[:200] if e.response else "No response content"
+
+                # Non-recoverable errors: do NOT fall back to local
+                if status_code == 402:  # Insufficient credits
+                    try:
+                        error_data = e.response.json()
+                        current_balance = error_data.get("currentBalance", "unknown")
+                        estimated_cost = error_data.get("estimatedCost", "unknown")
+                        console.print(f"[red]Insufficient credits. Current balance: {current_balance}, estimated cost: {estimated_cost}[/red]")
+                    except Exception:
+                        console.print(f"[red]Insufficient credits: {err_content}[/red]")
+                    raise click.UsageError("Insufficient credits for cloud test generation")
+                elif status_code == 401:  # Authentication error
+                    console.print(f"[red]Authentication failed: {err_content}[/red]")
+                    raise click.UsageError("Cloud authentication failed")
+                elif status_code == 403:  # Authorization error (not approved)
+                    console.print(f"[red]Access denied: {err_content}[/red]")
+                    raise click.UsageError("Access denied - user not approved")
+                elif status_code == 400:  # Validation error
+                    console.print(f"[red]Invalid request: {err_content}[/red]")
+                    raise click.UsageError(f"Invalid request: {err_content}")
+                else:
+                    # Recoverable errors (5xx, unexpected errors): fall back to local
+                    if cloud_only:
+                        console.print(f"[red]Cloud HTTP error ({status_code}): {err_content}[/red]")
+                        raise click.UsageError(f"Cloud HTTP error ({status_code}): {err_content}")
+                    console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
+                    current_execution_is_local = True
+
+            except requests.exceptions.RequestException as e:
+                if cloud_only:
+                    console.print(f"[red]Cloud network error: {e}[/red]")
+                    raise click.UsageError(f"Cloud network error: {e}")
+                console.print(f"[yellow]Cloud network error: {e}. Falling back to local.[/yellow]")
+                current_execution_is_local = True
+
+            except json.JSONDecodeError:
+                if cloud_only:
+                    console.print("[red]Cloud returned invalid JSON.[/red]")
+                    raise click.UsageError("Cloud returned invalid JSON")
+                console.print("[yellow]Cloud returned invalid JSON. Falling back to local.[/yellow]")
+                current_execution_is_local = True
+
+    # Local execution path
+    if current_execution_is_local:
+        if verbose:
+            console.print(Panel("Performing local test generation...", title="[blue]Mode[/blue]", expand=False))
+
+        if not coverage_report:
+            try:
+                unit_test, total_cost, model_name = generate_test(
+                    input_strings["prompt_file"],
+                    input_strings["code_file"],
+                    strength=strength,
+                    temperature=temperature,
+                    time=time,
+                    language=language,
+                    verbose=verbose,
+                    source_file_path=source_file_path_for_prompt,
+                    test_file_path=test_file_path_for_prompt,
+                    module_name=module_name_for_prompt,
+                )
+                if verbose:
+                    console.print(Panel(
+                        f"Local test generation successful. Model: {model_name}, Cost: ${total_cost:.6f}",
+                        title="[green]Local Success[/green]",
+                        expand=False
+                    ))
+            except Exception as exception:
+                print(f"[bold red]Error generating tests: {exception}[/bold red]")
+                return "", 0.0, f"Error: {exception}"
+        else:
+            try:
+                unit_test, total_cost, model_name = increase_tests(
+                    existing_unit_tests=input_strings["existing_tests"],
+                    coverage_report=input_strings["coverage_report"],
+                    code=input_strings["code_file"],
+                    prompt_that_generated_code=input_strings["prompt_file"],
+                    language=language,
+                    strength=strength,
+                    temperature=temperature,
+                    time=time,
+                    verbose=verbose,
+                )
+                if verbose:
+                    console.print(Panel(
+                        f"Local test generation (increase) successful. Model: {model_name}, Cost: ${total_cost:.6f}",
+                        title="[green]Local Success[/green]",
+                        expand=False
+                    ))
+            except Exception as exception:
+                print(f"[bold red]Error increasing test coverage: {exception}[/bold red]")
+                return "", 0.0, f"Error: {exception}"
 
     # Handle output - always use resolved file path since construct_paths handles numbering
     resolved_output = output_file_paths["output"]
