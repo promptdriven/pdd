@@ -1,5 +1,6 @@
 import sys
 import os
+import asyncio
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
@@ -191,6 +192,78 @@ def test_local_flag_read_from_ctx_obj_not_params(mock_ctx, mock_construct_paths,
         assert result_code == "# Local Example"
         # Verify no cloud auth was attempted - this would fail if local flag was misread from ctx.params
         mock_get_jwt_token.assert_not_called()
+
+def test_jwt_token_obtained_before_async_context(mock_ctx, mock_construct_paths, mock_get_jwt_token, mock_httpx_client, mock_preprocess, tmp_path):
+    """Regression test: JWT token must be obtained BEFORE entering asyncio.run().
+
+    This prevents the nested asyncio.run() bug where:
+    1. context_generator_main calls asyncio.run(_run_cloud_generation(...))
+    2. _run_cloud_generation calls CloudConfig.get_jwt_token()
+    3. get_jwt_token internally calls asyncio.run(device_flow_get_token(...))
+    4. This causes RuntimeError: "asyncio.run() cannot be called from a running event loop"
+
+    The fix is to call get_jwt_token() BEFORE asyncio.run() and pass the token as a parameter.
+    """
+    with patch.dict(os.environ, {"NEXT_PUBLIC_FIREBASE_API_KEY": "fake_key", "GITHUB_CLIENT_ID": "fake_id"}):
+        mock_ctx.obj['local'] = False
+        prompt_file = tmp_path / "test.prompt"
+        code_file = tmp_path / "test.py"
+        output_file = tmp_path / "test_example.py"
+        prompt_file.write_text("Prompt content")
+        code_file.write_text("def foo(): pass")
+        mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt content", "code_file": "def foo(): pass"}, {"output": str(output_file)}, "python")
+
+        # Track when get_jwt_token is called relative to asyncio.run
+        call_order = []
+
+        def track_jwt_call(*args, **kwargs):
+            call_order.append('get_jwt_token')
+            return "fake_jwt_token"
+
+        mock_get_jwt_token.side_effect = track_jwt_call
+
+        # Mock the httpx response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"generatedExample": "# Cloud Code", "totalCost": 0.05, "modelName": "test-model"}
+        mock_client_instance = AsyncMock()
+        mock_client_instance.post.return_value = mock_response
+        mock_httpx_client.return_value.__aenter__.return_value = mock_client_instance
+
+        # Patch asyncio.run to track when it's called
+        original_asyncio_run = asyncio.run
+        def tracked_asyncio_run(coro, **kwargs):
+            call_order.append('asyncio_run')
+            return original_asyncio_run(coro, **kwargs)
+
+        with patch('pdd.context_generator_main.asyncio.run', side_effect=tracked_asyncio_run):
+            result_code, cost, model = context_generator_main(mock_ctx, str(prompt_file), str(code_file), None)
+
+        # Verify get_jwt_token was called BEFORE asyncio.run
+        assert 'get_jwt_token' in call_order, "get_jwt_token should be called"
+        assert 'asyncio_run' in call_order, "asyncio.run should be called for cloud execution"
+        jwt_index = call_order.index('get_jwt_token')
+        asyncio_index = call_order.index('asyncio_run')
+        assert jwt_index < asyncio_index, (
+            f"get_jwt_token must be called BEFORE asyncio.run to avoid nested event loop. "
+            f"Call order was: {call_order}"
+        )
+        assert result_code == "# Cloud Code"
+
+
+def test_cloud_generation_receives_token_parameter(mock_ctx, mock_construct_paths, mock_get_jwt_token, mock_preprocess, tmp_path):
+    """Verify that _run_cloud_generation receives token as a parameter, not acquiring it internally."""
+    import inspect
+    from pdd.context_generator_main import _run_cloud_generation
+
+    # Check function signature includes 'token' parameter
+    sig = inspect.signature(_run_cloud_generation)
+    param_names = list(sig.parameters.keys())
+    assert 'token' in param_names, (
+        f"_run_cloud_generation must accept 'token' as a parameter to avoid nested asyncio.run(). "
+        f"Current parameters: {param_names}"
+    )
+
 
 def test_z3_syntax_fixer_logic():
     try:
