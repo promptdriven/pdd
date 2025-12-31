@@ -156,6 +156,33 @@ def _filter_self_references(dependencies: str, module_name: Optional[str]) -> st
     return re.sub(pattern, '', dependencies)
 
 
+def _fix_malformed_includes(dependencies: str) -> str:
+    """Fix malformed [File: ...] patterns to proper <include>...</include> format.
+
+    The LLM sometimes outputs [File: path] instead of <include>path</include>.
+    This function corrects that error.
+
+    Args:
+        dependencies: The dependencies string containing potential malformed includes.
+
+    Returns:
+        The dependencies string with [File:] patterns converted to <include> tags.
+    """
+    # Pattern: <tag>[File: path]</tag> or <tag>\n[File: path]\n</tag>
+    pattern = r'(<[^>]+>)\s*\[File:\s*([^\]]+)\]\s*(</[^>]+>)'
+
+    def replacer(match: re.Match) -> str:
+        opening_tag = match.group(1)
+        path = match.group(2).strip()  # Strip whitespace from captured path
+        closing_tag = match.group(3)
+        return f'{opening_tag}<include>{path}</include>{closing_tag}'
+
+    fixed = re.sub(pattern, replacer, dependencies)
+    if fixed != dependencies:
+        console.print("[yellow]Warning: Fixed malformed [File:] patterns in dependencies[/yellow]")
+    return fixed
+
+
 def auto_include(
     input_prompt: str,
     directory_path: str,
@@ -225,6 +252,9 @@ def auto_include(
         # Filter out self-referential includes (module's own example file)
         module_name = _extract_module_name(prompt_filename)
         dependencies = _filter_self_references(dependencies, module_name)
+
+        # Fix any malformed [File:] patterns from LLM output
+        dependencies = _fix_malformed_includes(dependencies)
 
         total_cost = summary_cost + llm_cost
         model_name = llm_model_name or summary_model

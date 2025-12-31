@@ -12,14 +12,16 @@ from rich import print as rprint
 # Relative imports from the pdd package
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import (
-    _is_known_language, 
+    _is_known_language,
     construct_paths,
     _find_pddrc_file,
     _load_pddrc_config,
     _detect_context,
-    _get_context_config
+    _get_context_config,
+    get_extension
 )
 from .sync_orchestration import sync_orchestration
+from .template_expander import expand_template
 
 # Regex for basename validation supporting subdirectory paths (e.g., 'core/cloud')
 # Allows: alphanumeric, underscore, hyphen, and forward slash for subdirectory paths
@@ -40,6 +42,153 @@ def _validate_basename(basename: str) -> None:
             f"Basename '{basename}' contains invalid characters. "
             "Only alphanumeric, underscore, hyphen, and forward slash (for subdirectories) are allowed."
         )
+
+
+def _get_extension_safe(language: str) -> str:
+    """Get file extension with fallback for when PDD_PATH is not set."""
+    try:
+        return get_extension(language)
+    except (ValueError, FileNotFoundError):
+        # Fallback to built-in mapping
+        builtin_ext_map = {
+            'python': 'py', 'javascript': 'js', 'typescript': 'ts', 'java': 'java',
+            'typescriptreact': 'tsx', 'javascriptreact': 'jsx',
+            'cpp': 'cpp', 'c': 'c', 'go': 'go', 'ruby': 'rb', 'rust': 'rs',
+        }
+        return builtin_ext_map.get(language.lower(), '')
+
+
+def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
+    """
+    Search for a prompt file across all contexts using outputs.prompt.path templates.
+
+    This enables finding prompts when the basename alone doesn't match context path patterns.
+    For example, 'credit_helpers' can find 'prompts/backend/utils/credit_helpers_python.prompt'
+    if the backend-utils context has outputs.prompt.path configured.
+
+    Args:
+        basename: The base name for the prompt file (e.g., 'credit_helpers')
+
+    Returns:
+        Tuple of (context_name, prompt_path, language) if found, None otherwise
+    """
+    pddrc_path = _find_pddrc_file()
+    if not pddrc_path:
+        return None
+
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except Exception:
+        return None
+
+    # Resolve paths relative to .pddrc location, not CWD
+    pddrc_parent = pddrc_path.parent
+
+    contexts = config.get('contexts', {})
+
+    # Extract just the name part for template expansion
+    if '/' in basename:
+        dir_prefix = basename.rsplit('/', 1)[0] + '/'
+        name_part = basename.rsplit('/', 1)[1]
+    else:
+        dir_prefix = ''
+        name_part = basename
+
+    # Common languages to try
+    languages_to_try = ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']
+
+    for context_name, context_config in contexts.items():
+        if context_name == 'default':
+            continue
+
+        defaults = context_config.get('defaults', {})
+        outputs = defaults.get('outputs', {})
+        prompt_config = outputs.get('prompt', {})
+        prompt_template = prompt_config.get('path')
+
+        if not prompt_template:
+            continue
+
+        # Try each language
+        for lang in languages_to_try:
+            ext = _get_extension_safe(lang)
+            template_context = {
+                'name': name_part,
+                'category': '',
+                'dir_prefix': dir_prefix,
+                'ext': ext,
+                'language': lang,
+            }
+
+            expanded_path = expand_template(prompt_template, template_context)
+            # Resolve relative to .pddrc location, not CWD
+            prompt_path = pddrc_parent / expanded_path
+
+            if prompt_path.exists():
+                return (context_name, prompt_path, lang)
+
+    return None
+
+
+def _detect_languages_with_context(basename: str, prompts_dir: Path, context_name: Optional[str] = None) -> List[str]:
+    """
+    Detects all available languages for a given basename, optionally using context config.
+
+    If context_name is provided and has outputs.prompt.path configured, uses template-based
+    discovery. Otherwise falls back to directory scanning.
+    """
+    if context_name:
+        pddrc_path = _find_pddrc_file()
+        if pddrc_path:
+            try:
+                config = _load_pddrc_config(pddrc_path)
+                # Resolve paths relative to .pddrc location, not CWD
+                pddrc_parent = pddrc_path.parent
+                contexts = config.get('contexts', {})
+                context_config = contexts.get(context_name, {})
+                defaults = context_config.get('defaults', {})
+                outputs = defaults.get('outputs', {})
+                prompt_config = outputs.get('prompt', {})
+                prompt_template = prompt_config.get('path')
+
+                if prompt_template:
+                    # Extract name part
+                    if '/' in basename:
+                        dir_prefix = basename.rsplit('/', 1)[0] + '/'
+                        name_part = basename.rsplit('/', 1)[1]
+                    else:
+                        dir_prefix = ''
+                        name_part = basename
+
+                    # Try all known languages
+                    languages_to_try = ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']
+                    found_languages = []
+
+                    for lang in languages_to_try:
+                        ext = _get_extension_safe(lang)
+                        template_context = {
+                            'name': name_part,
+                            'category': '',
+                            'dir_prefix': dir_prefix,
+                            'ext': ext,
+                            'language': lang,
+                        }
+                        expanded_path = expand_template(prompt_template, template_context)
+                        # Resolve relative to .pddrc location, not CWD
+                        if (pddrc_parent / expanded_path).exists():
+                            found_languages.append(lang)
+
+                    if found_languages:
+                        # Return with Python first if present
+                        if 'python' in found_languages:
+                            other = sorted([l for l in found_languages if l != 'python'])
+                            return ['python'] + other
+                        return sorted(found_languages)
+            except Exception:
+                pass
+
+    # Fallback to original directory scanning
+    return _detect_languages(basename, prompts_dir)
 
 
 def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
@@ -149,23 +298,37 @@ def sync_main(
     if max_attempts is not None and max_attempts < 0:
         raise click.BadParameter("Max attempts must be a non-negative integer.", param_hint="--max-attempts")
 
-    # 3. Use construct_paths in 'discovery' mode to find the prompts directory.
-    try:
-        initial_config, _, _, _ = construct_paths(
-            input_file_paths={},
-            force=False,
-            quiet=True,
-            command="sync",
-            command_options={"basename": basename},
-            context_override=context_override,
-        )
-        prompts_dir = Path(initial_config.get("prompts_dir", "prompts"))
-    except Exception as e:
-        rprint(f"[bold red]Error initializing PDD paths:[/bold red] {e}")
-        raise click.Abort()
+    # 3. Try template-based prompt discovery first (uses outputs.prompt.path from .pddrc)
+    template_result = _find_prompt_in_contexts(basename)
+    discovered_context = None
 
-    # 4. Detect all languages for the given basename
-    languages = _detect_languages(basename, prompts_dir)
+    if template_result:
+        discovered_context, discovered_prompt_path, first_lang = template_result
+        prompts_dir = discovered_prompt_path.parent
+        # Use context override if not already set
+        if not context_override:
+            context_override = discovered_context
+        if not quiet:
+            rprint(f"[dim]Found prompt via template in context: {discovered_context}[/dim]")
+
+    # 4. Fallback: Use construct_paths in 'discovery' mode to find the prompts directory.
+    if not template_result:
+        try:
+            initial_config, _, _, _ = construct_paths(
+                input_file_paths={},
+                force=False,
+                quiet=True,
+                command="sync",
+                command_options={"basename": basename},
+                context_override=context_override,
+            )
+            prompts_dir = Path(initial_config.get("prompts_dir", "prompts"))
+        except Exception as e:
+            rprint(f"[bold red]Error initializing PDD paths:[/bold red] {e}")
+            raise click.Abort()
+
+    # 5. Detect all languages for the given basename
+    languages = _detect_languages_with_context(basename, prompts_dir, context_name=discovered_context)
     if not languages:
         raise click.UsageError(
             f"No prompt files found for basename '{basename}' in directory '{prompts_dir}'.\n"

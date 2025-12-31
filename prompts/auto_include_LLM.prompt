@@ -34,6 +34,24 @@ You are a prompt expert that helps select the necessary subset of "includes" (li
         replacing '/' with '.' (e.g. core/change_handler.py -> core.change_handler).
 </tag_naming_rules_for_step_4>
 
+<common_mistakes>
+    CRITICAL: The available_includes list uses "File: path" format for INPUT only.
+    You must TRANSFORM this into proper <include> syntax for OUTPUT.
+
+    These output formats are WRONG (never output these):
+    - [File: path/to/file.py]
+    - File: path/to/file.py
+    - {path/to/file.py}
+    - path/to/file.py (without include tags)
+
+    This output format is CORRECT:
+    - <include>path/to/file.py</include>
+
+    Example transformation:
+    INPUT (available_includes):  File: context/auth_helpers_example.py
+    OUTPUT (Step 4):             <utils.auth_helpers><include>context/auth_helpers_example.py</include></utils.auth_helpers>
+</common_mistakes>
+
 <context>
     Here is the input_prompt to find the includes for: <input_prompt>{input_prompt}</input_prompt>
     Here is the available_includes: <available_includes>{available_includes}</available_includes>
@@ -224,4 +242,8 @@ Here are some examples of how to do this:
         Step 2. Explain why an include might or might not be necessary for the prompt.
         Step 3. Determine the minimum set of includes required to achieve the goal of the input_prompt.
         Step 4. Generate the string_of_includes based on Step 3, following <tag_naming_rules_for_step_4>.
+
+    IMPORTANT for Step 4: Transform each file path from available_includes (format: "File: PATH")
+    into proper include syntax: <CANONICAL_MODULE><include>PATH</include></CANONICAL_MODULE>
+    Do NOT echo the "File:" format - always use <include>...</include> tags.
 </instructions>
