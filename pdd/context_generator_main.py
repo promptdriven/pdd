@@ -10,6 +10,7 @@ import click
 import httpx
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 from .construct_paths import construct_paths
 from .context_generator import context_generator
 from .core.cloud import CloudConfig
@@ -68,15 +69,18 @@ def _validate_and_fix_python_syntax(code: str, quiet: bool) -> str:
         console.print("[red]Fix failed: Could not automatically repair syntax.[/red]")
     return code
 
-async def _run_cloud_generation(prompt_content: str, code_content: str, language: str, strength: float, temperature: float, verbose: bool, pdd_env: str) -> Tuple[Optional[str], float, str]:
+async def _run_cloud_generation(prompt_content: str, code_content: str, language: str, strength: float, temperature: float, verbose: bool, pdd_env: str, token: str) -> Tuple[Optional[str], float, str]:
+    """Run cloud generation with the provided JWT token.
+
+    Note: JWT token must be obtained BEFORE calling this async function to avoid
+    nested asyncio.run() calls (CloudConfig.get_jwt_token() uses asyncio.run internally).
+    """
     try:
         processed_prompt = preprocess(prompt_content, recursive=True, double_curly_brackets=False)
     except Exception as e:
         return None, 0.0, f"Preprocessing failed: {e}"
-    # Use CloudConfig.get_jwt_token() which checks PDD_JWT_TOKEN first
-    token = CloudConfig.get_jwt_token(verbose=verbose)
-    if not token:
-        return None, 0.0, "Failed to obtain JWT token."
+    if verbose:
+        console.print(Panel(Text(processed_prompt[:500] + "..." if len(processed_prompt) > 500 else processed_prompt, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"promptContent": processed_prompt, "codeContent": code_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
     async with httpx.AsyncClient(timeout=CLOUD_TIMEOUT_SECONDS) as client:
@@ -115,14 +119,52 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         total_cost = 0.0
         model_name = ""
         if not is_local:
-            try:
-                generated_code, total_cost, model_name = asyncio.run(_run_cloud_generation(prompt_content, code_content, language, strength, temperature, verbose, pdd_env))
-            except Exception:
-                generated_code = None
-            if generated_code is None:
+            if verbose:
+                console.print("Attempting cloud example generation...")
+
+            # Get JWT token BEFORE entering async context to avoid nested asyncio.run() calls
+            # (CloudConfig.get_jwt_token() uses asyncio.run internally for device flow auth)
+            jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+            if not jwt_token:
                 if not quiet:
-                    console.print("[yellow]Cloud execution failed. Falling back to local.[/yellow]")
+                    console.print("[yellow]Cloud authentication failed. Falling back to local.[/yellow]")
                 is_local = True
+            else:
+                try:
+                    generated_code, total_cost, model_name = asyncio.run(_run_cloud_generation(prompt_content, code_content, language, strength, temperature, verbose, pdd_env, jwt_token))
+                    if generated_code:
+                        if verbose:
+                            console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
+                except httpx.TimeoutException:
+                    if not quiet:
+                        console.print(f"[yellow]Cloud execution timed out ({CLOUD_TIMEOUT_SECONDS}s). Falling back to local.[/yellow]")
+                    generated_code = None
+                except httpx.HTTPStatusError as e:
+                    status_code = e.response.status_code
+                    response_text = e.response.text or ""
+                    err_content = response_text[:200] if response_text else "No response content"
+                    if status_code == 402:
+                        console.print(f"[red]Insufficient credits: {err_content}[/red]")
+                        raise click.UsageError("Insufficient credits for cloud example generation")
+                    elif status_code == 401:
+                        console.print(f"[red]Authentication failed: {err_content}[/red]")
+                        raise click.UsageError("Cloud authentication failed")
+                    elif status_code == 403:
+                        console.print(f"[red]Access denied: {err_content}[/red]")
+                        raise click.UsageError("Access denied - user not approved")
+                    else:
+                        if not quiet:
+                            console.print(f"[yellow]Cloud HTTP error ({status_code}): {err_content}. Falling back to local.[/yellow]")
+                        generated_code = None
+                except Exception as e:
+                    if verbose:
+                        console.print(f"[yellow]Cloud error: {e}. Falling back to local.[/yellow]")
+                    generated_code = None
+
+                if generated_code is None:
+                    if not quiet:
+                        console.print("[yellow]Cloud execution failed. Falling back to local.[/yellow]")
+                    is_local = True
         if is_local:
             source_file_path = str(Path(code_file).resolve())
             example_file_path = str(Path(resolved_output).resolve()) if resolved_output else ""
