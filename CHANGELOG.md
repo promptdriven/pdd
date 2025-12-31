@@ -1,3 +1,40 @@
+## v0.0.97 (2025-12-30)
+
+### Feat
+
+- **CLI Examples Display:** After each command step, the CLI now displays examples used for grounding (slug and title), helping users know what to use in `<pin>` or `<exclude>` tags.
+
+- **Suspicious Files Diagnostic Logging (Issue #186):** Added `_detect_suspicious_files()` in `agentic_fix.py` to detect and log when single-character files (C, E, T) are created during agentic operations. Logs include timestamp, context, directory, file sizes, and stack trace. Persistent log saved to `~/.pdd/suspicious_files.log`.
+
+- **Cloud Example Generation:** Added cloud execution support to `context_generator_main` via async `_run_cloud_generation()` function. Uses JWT authentication with automatic local fallback on cloud failure.
+
+- **Improved Syntax Repair:** Rewrote `_validate_and_fix_python_syntax()` with a binary search algorithm to find the longest valid Python prefix when LLM output contains trailing JSON garbage (e.g., `"explanation":` metadata).
+
+### Fix
+
+- **Nested asyncio.run() Bug (PR #204):** Fixed `pdd example` command failing to make cloud calls due to nested asyncio.run() error. The issue occurred because `CloudConfig.get_jwt_token()` uses asyncio.run() internally, causing conflicts when called from within an async context. Fixed by acquiring JWT token before entering the async context. (Thanks Jiamin Cai!)
+
+- **HTTPStatusError Response Text:** Fixed error handling to check for empty `.text` instead of checking if response exists (response is always present on HTTPStatusError).
+
+- **Test Overwrite Bug:** Fixed sync bug that would overwrite existing tests. Now uses append mode when merging with existing tests via the `--merge` flag.
+
+- **CLI Test Fixture:** Fixed test fixture checking for "install_completion" instead of "install-completion" (Click converts underscores to hyphens in command names).
+
+### Refactor
+
+- **Existing Tests as Lists:** Changed `existing_tests` parameter from string path to list of paths in prompts, enabling multiple test files to be concatenated for context.
+
+- **Test File Organization:** Moved `tests/test_core_cli.py` to `tests/core/test_cli.py` for better module organization.
+
+### Docs
+
+- Clarified `existing_tests` parameter behavior in `cmd_test_main_python.prompt`, documenting that it accepts a list of test file paths.
+
+### Tests
+
+- Added regression tests for nested asyncio.run() bug in `test_context_generator_main.py`.
+- Updated `test_cmd_test_main.py` with coverage for test file append mode and existing_tests list handling.
+
 ## v0.0.96 (2025-12-29)
 
 ### Feat
