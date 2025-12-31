@@ -76,12 +76,26 @@
 % Cloud vs Local Execution Strategy:
    1. If the `--local` flag is explicitly provided (via `ctx.obj.get("local")`), use local execution directly.
    2. Otherwise, attempt cloud execution first:
-      - Preprocess the prompt content to expand includes: call `preprocess(prompt_text, recursive=True, double_curly_brackets=False)`.
-      - Obtain a JWT via `CloudConfig.get_jwt_token(verbose=verbose)`. This method checks `PDD_JWT_TOKEN` environment variable first before attempting OAuth flow.
-      - Use a request timeout of 400 seconds.
-      - Send JSON payload with fields: `{ "promptContent": <processed_prompt>, "codeContent": <code_content>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`.
-      - Cloud endpoint: Use `CloudConfig.get_endpoint_url("generateExample")` from `pdd.core.cloud` to get the endpoint URL.
-      - Expected response fields: `generatedExample`, `totalCost`, `modelName`.
+      - CRITICAL: Obtain the JWT token BEFORE entering the async context (before calling asyncio.run()).
+        This is because `CloudConfig.get_jwt_token()` internally uses `asyncio.run()` for device flow auth,
+        and calling `asyncio.run()` from inside an already-running event loop causes a RuntimeError:
+        "asyncio.run() cannot be called from a running event loop".
+      - Call `CloudConfig.get_jwt_token(verbose=verbose)` synchronously BEFORE asyncio.run().
+      - If token acquisition fails, fall back to local execution.
+      - Pass the token as a parameter to the async cloud generation function.
+      - Inside the async function:
+        * Preprocess the prompt content to expand includes: call `preprocess(prompt_text, recursive=True, double_curly_brackets=False)`.
+        * Use a request timeout of 400 seconds.
+        * Send JSON payload with fields: `{ "promptContent": <processed_prompt>, "codeContent": <code_content>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`.
+        * Cloud endpoint: Use `CloudConfig.get_endpoint_url("generateExample")` from `pdd.core.cloud` to get the endpoint URL.
+        * Expected response fields: `generatedExample`, `totalCost`, `modelName`.
    3. If cloud execution fails (auth/network/HTTP/JSON errors, timeout, or missing/empty code):
       - Log a warning (if not quiet) and automatically fall back to local execution.
+      - Handle specific HTTP error codes: 401 (auth failed), 402 (insufficient credits), 403 (access denied) should raise UsageError.
    4. For local execution, call the local context_generator function with the appropriate parameters.
+
+% Verbose Logging (when verbose=True):
+   - Print "Attempting cloud example generation..." before cloud call.
+   - Display preprocessed prompt in a Panel with title "Preprocessed Prompt for Cloud".
+   - On success, display a Panel with title "Cloud Success" showing model name and cost.
+   - On errors, display appropriate warning/error messages.
