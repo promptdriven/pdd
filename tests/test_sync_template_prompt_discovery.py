@@ -418,6 +418,54 @@ contexts:
         finally:
             os.chdir(original_cwd)
 
+    def test_paths_correct_when_prompt_exists(self, pddrc_with_outputs):
+        """
+        BUG FIX: When prompt file EXISTS, outputs config should still be used.
+
+        The bug was that get_pdd_file_paths only checks outputs config when
+        prompt doesn't exist. When prompt EXISTS, it falls back to legacy paths.
+
+        This test uses prompts_dir that makes the prompt file EXIST to trigger
+        the bug.
+        """
+        from pdd.sync_main import _find_prompt_in_contexts
+        from pdd.sync_determine_operation import get_pdd_file_paths
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(pddrc_with_outputs)
+
+            # First, find the prompt and get the context
+            result = _find_prompt_in_contexts('credit_helpers')
+            assert result is not None, "Should find prompt"
+
+            context_name, prompt_path, language = result
+
+            # Use prompts_dir that makes prompt file EXIST
+            # This is what sync_main does: prompts_dir = discovered_prompt_path.parent
+            actual_prompts_dir = str(prompt_path.parent)
+
+            paths = get_pdd_file_paths(
+                basename='credit_helpers',
+                language='python',
+                prompts_dir=actual_prompts_dir,  # Makes prompt file EXIST
+                context_override=context_name
+            )
+
+            # Should use backend-utils context output paths even when prompt EXISTS
+            code_path = str(paths.get('code', ''))
+            example_path = str(paths.get('example', ''))
+            test_path = str(paths.get('test', ''))
+
+            assert 'backend/functions/utils/credit_helpers.py' in code_path, \
+                f"Code should go to backend/functions/utils/, got {code_path}"
+            assert 'context/backend/credit_helpers_example.py' in example_path, \
+                f"Example should go to context/backend/, got {example_path}"
+            assert 'backend/tests/test_credit_helpers.py' in test_path, \
+                f"Test should go to backend/tests/, got {test_path}"
+        finally:
+            os.chdir(original_cwd)
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
