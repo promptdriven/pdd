@@ -448,7 +448,25 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             command_options={"basename": basename, "language": language},
             context_override=context_override
         )
-        
+
+        # Issue #237: Check for 'outputs' config for template-based path generation
+        # This must be checked even when prompt EXISTS (not just when it doesn't exist)
+        outputs_config = resolved_config.get('outputs')
+        if outputs_config:
+            extension = get_extension(language)
+            logger.info(f"Using template-based paths from outputs config (prompt exists)")
+            result = _generate_paths_from_templates(
+                basename=basename,
+                language=language,
+                extension=extension,
+                outputs_config=outputs_config,
+                prompt_path=prompt_path
+            )
+            # Add _matched_context for debugging (Issue #237)
+            result['_matched_context'] = resolved_config.get('_matched_context', 'unknown')
+            logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
+            return result
+
         # For sync command, output_file_paths contains the configured paths
         # Extract the code path from output_file_paths
         code_path = output_file_paths.get('generate_output_path', '')
