@@ -443,7 +443,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                     console.print(f"  [error]Step {i+1} ({command_name}):[/error] Command failed.")
         # Check if the result is the expected tuple structure from @track_cost or preprocess success
         elif isinstance(result_tuple, tuple) and len(result_tuple) == 3:
-            _result_data, cost, model_name = result_tuple
+            result_data, cost, model_name = result_tuple
             total_cost += cost
             if not ctx.obj.get("quiet"):
                 # Special handling for preprocess success message (check actual command name)
@@ -453,6 +453,25 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                 else:
                     # Generic output using potentially "Unknown Command" name
                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_name}")
+                
+                # Display examples used for grounding
+                if isinstance(result_data, dict) and result_data.get("examplesUsed"):
+                    console.print("    Examples used:")
+                    for ex in result_data["examplesUsed"]:
+                        slug = ex.get("slug", "unknown")
+                        title = ex.get("title", "Untitled")
+                        console.print(f"      - {slug} (\"{title}\")")
+
+        # Handle dicts with examplesUsed (e.g. from commands not using track_cost but returning metadata)
+        elif isinstance(result_tuple, dict) and result_tuple.get("examplesUsed"):
+            if not ctx.obj.get("quiet"):
+                console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
+                console.print("    Examples used:")
+                for ex in result_tuple["examplesUsed"]:
+                    slug = ex.get("slug", "unknown")
+                    title = ex.get("title", "Untitled")
+                    console.print(f"      - {slug} (\"{title}\")")
+
         else:
             # Handle unexpected return types if necessary
             if not ctx.obj.get("quiet"):
