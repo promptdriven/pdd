@@ -1311,7 +1311,7 @@ pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_FILE
 
 Arguments:
 - `PROMPT_FILE`: The filename of the prompt file that generated the code.
-- `CODE_FILE`: The filename of the code file to be tested.
+- `CODE_FILE`: The filename of the code file to be tested. If the filename ends with `_example` (e.g., `calculator_example.py`), it will be treated as an example usage file rather than implementation code. In this case, tests will be generated based on the prompt intent and example usage pattern.
 
 Options:
 - `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_1.py`) will be created instead of overwriting.
@@ -1346,12 +1346,17 @@ could influence the output of the `pdd test` command when run in the same direct
 pdd [GLOBAL OPTIONS] test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
-2. Generate additional tests to improve coverage (with multiple existing test files):
+2. Generate tests from an example usage file (using `_example` pattern):
+```
+pdd [GLOBAL OPTIONS] test --output tests/test_calculator.py calculator_python.prompt examples/calculator_example.py
+```
+
+3. Generate additional tests to improve coverage (with multiple existing test files):
 ```
 pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --existing-tests tests/test_calculator_edge_cases.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
 ```
 
-3. Improve coverage and merge with existing tests:
+4. Improve coverage and merge with existing tests:
 ```
 pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --merge --target-coverage 95.0 calculator_python.prompt src/calculator.py
 ```

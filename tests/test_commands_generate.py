@@ -207,3 +207,117 @@ def add(a, b):
         print(f"Successfully generated code at {output_path}")
     except Exception as e:
         pytest.fail(f"Real generation test failed: {e}")
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.cmd_test_main')
+def test_cli_test_with_example_file_pattern(mock_test_main, mock_auto_update, runner, create_dummy_files):
+    """Test that files ending with _example are auto-detected as example files."""
+    files = create_dummy_files("test.prompt", "calculator_example.py")
+    mock_test_main.return_value = ('test_code', 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        ["test", str(files["test.prompt"]), str(files["calculator_example.py"])]
+    )
+
+    assert result.exit_code == 0
+    mock_test_main.assert_called_once()
+    call_kwargs = mock_test_main.call_args.kwargs
+
+    # Should be treated as example_file, not code_file
+    assert call_kwargs["example_file"] == str(files["calculator_example.py"])
+    assert call_kwargs["code_file"] is None
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.cmd_test_main')
+def test_cli_test_with_regular_code_file(mock_test_main, mock_auto_update, runner, create_dummy_files):
+    """Test that regular files (not ending with _example) are treated as code files."""
+    files = create_dummy_files("test.prompt", "calculator.py")
+    mock_test_main.return_value = ('test_code', 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        ["test", str(files["test.prompt"]), str(files["calculator.py"])]
+    )
+
+    assert result.exit_code == 0
+    mock_test_main.assert_called_once()
+    call_kwargs = mock_test_main.call_args.kwargs
+
+    # Should be treated as code_file, not example_file
+    assert call_kwargs["code_file"] == str(files["calculator.py"])
+    assert call_kwargs["example_file"] is None
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.cmd_test_main')
+def test_cli_test_example_pattern_with_different_extensions(mock_test_main, mock_auto_update, runner, create_dummy_files):
+    """Test that _example pattern works with different file extensions."""
+    test_files = [
+        ("test.prompt", "app_example.js"),
+        ("test.prompt", "server_example.ts"),
+        ("test.prompt", "Main_example.java"),
+    ]
+
+    for prompt_file, code_file in test_files:
+        files = create_dummy_files(prompt_file, code_file)
+        mock_test_main.reset_mock()
+        mock_test_main.return_value = ('test_code', 0.0, 'model')
+
+        result = runner.invoke(
+            cli.cli,
+            ["test", str(files[prompt_file]), str(files[code_file])]
+        )
+
+        assert result.exit_code == 0
+        call_kwargs = mock_test_main.call_args.kwargs
+        assert call_kwargs["example_file"] == str(files[code_file])
+        assert call_kwargs["code_file"] is None
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.cmd_test_main')
+def test_cli_test_with_output_option(mock_test_main, mock_auto_update, runner, create_dummy_files):
+    """Test that additional options are properly passed through."""
+    files = create_dummy_files("test.prompt", "calculator_example.py")
+    mock_test_main.return_value = ('test_code', 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "test",
+            str(files["test.prompt"]),
+            str(files["calculator_example.py"]),
+            "--output", "test_output.py",
+            "--language", "python"
+        ]
+    )
+
+    assert result.exit_code == 0
+    call_kwargs = mock_test_main.call_args.kwargs
+    assert call_kwargs["output"] == "test_output.py"
+    assert call_kwargs["language"] == "python"
+    assert call_kwargs["example_file"] == str(files["calculator_example.py"])
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.cmd_test_main')
+def test_cli_test_edge_case_example_in_middle_of_name(mock_test_main, mock_auto_update, runner, create_dummy_files):
+    """Test that _example must be at the end of the stem to be detected."""
+    # File with "example" in the middle but not at end of stem
+    files = create_dummy_files("test.prompt", "example_calculator.py")
+    mock_test_main.return_value = ('test_code', 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        ["test", str(files["test.prompt"]), str(files["example_calculator.py"])]
+    )
+
+    assert result.exit_code == 0
+    call_kwargs = mock_test_main.call_args.kwargs
+
+    # Should NOT be treated as example since it doesn't end with _example
+    assert call_kwargs["code_file"] == str(files["example_calculator.py"])
+    assert call_kwargs["example_file"] is None
