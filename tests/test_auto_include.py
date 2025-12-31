@@ -240,3 +240,111 @@ def test_auto_include_filters_self_referential_example(
 
     # The self-referential include should be filtered out
     assert "agentic_fix_example.py" not in deps
+
+
+def test_auto_include_fixes_malformed_file_brackets(
+    mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
+):
+    """
+    Test that auto_include fixes malformed [File: ...] patterns to proper <include> format.
+
+    This is a regression test for GitHub issue #238 where the LLM outputs
+    [File: path] instead of <include>path</include>.
+    """
+    mock_load_prompt_template.side_effect = lambda name: f"{name} content"
+
+    mock_summarize_directory.return_value = (
+        "full_path,file_summary,date\n"
+        "context/python_preamble.prompt,Python preamble,2023-02-02",
+        0.25,
+        "mock-summary-model",
+    )
+
+    # Mock LLM returning the MALFORMED format (the bug)
+    mock_llm_invoke.side_effect = [
+        {
+            "result": "Step 4: dependencies",
+            "cost": 0.5,
+            "model_name": "mock-model-1",
+        },
+        {
+            "result": MagicMock(
+                string_of_includes=(
+                    "<context.python_preamble>\n"
+                    "[File: context/python_preamble.prompt]\n"
+                    "</context.python_preamble>"
+                )
+            ),
+            "cost": 0.75,
+            "model_name": "mock-model-2",
+        },
+    ]
+
+    deps, _, _, _ = auto_include(
+        input_prompt="Write a Python module...",
+        directory_path="context/*.py",
+        csv_file=None,
+        strength=0.7,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    # The malformed [File: ...] should be fixed to <include>...</include>
+    assert "[File:" not in deps
+    assert "<include>context/python_preamble.prompt</include>" in deps
+
+
+def test_auto_include_fixes_multiple_malformed_file_brackets(
+    mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
+):
+    """
+    Test that auto_include fixes multiple malformed [File: ...] patterns.
+
+    Ensures the regex replacement handles multiple occurrences.
+    """
+    mock_load_prompt_template.side_effect = lambda name: f"{name} content"
+
+    mock_summarize_directory.return_value = (
+        "full_path,file_summary,date\n"
+        "context/python_preamble.prompt,Python preamble,2023-02-02\n"
+        "context/database-schema.md,Database schema,2023-02-02",
+        0.25,
+        "mock-summary-model",
+    )
+
+    # Mock LLM returning MULTIPLE malformed patterns
+    mock_llm_invoke.side_effect = [
+        {
+            "result": "Step 4: dependencies",
+            "cost": 0.5,
+            "model_name": "mock-model-1",
+        },
+        {
+            "result": MagicMock(
+                string_of_includes=(
+                    "<context.python_preamble>\n"
+                    "[File: context/python_preamble.prompt]\n"
+                    "</context.python_preamble>\n"
+                    "<database_schema>\n"
+                    "[File: context/database-schema.md]\n"
+                    "</database_schema>"
+                )
+            ),
+            "cost": 0.75,
+            "model_name": "mock-model-2",
+        },
+    ]
+
+    deps, _, _, _ = auto_include(
+        input_prompt="Write a Python module...",
+        directory_path="context/*.py",
+        csv_file=None,
+        strength=0.7,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    # Both malformed patterns should be fixed
+    assert "[File:" not in deps
+    assert "<include>context/python_preamble.prompt</include>" in deps
+    assert "<include>context/database-schema.md</include>" in deps
