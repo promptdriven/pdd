@@ -82,7 +82,8 @@ def bug_main(
         )
 
         # Save results if output path is provided
-        if output_file_paths.get("output"):
+        # Check if the key exists, not just if the value is truthy
+        if "output" in output_file_paths:
             output_path = output_file_paths["output"]
             # Additional check to ensure the path is not empty
             if not output_path or output_path.strip() == '':
@@ -106,7 +107,8 @@ def bug_main(
             rprint("[bold green]Unit test generated successfully.[/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-            if output:
+            # Check if the key exists in output_file_paths, not just if output parameter was provided
+            if "output" in output_file_paths:
                 rprint(f"[bold]Unit test saved to:[/bold] {output_file_paths['output']}")
 
         # Always print unit test, even in quiet mode
