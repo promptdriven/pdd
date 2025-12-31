@@ -38,12 +38,23 @@
      - Decorated with `@cli.result_callback()`.
      - Normalize results: handle None, lists, single 3-tuples, or other return types.
      - Get `invoked_subcommands` from Click context or fall back to `ctx.obj` (except during pytest).
-     - Iterate through results (tuples of `(result, cost, model_name)`).
+     - Iterate through results (tuples of `(result, cost, model_name)` or dicts with `examplesUsed`).
      - Print a summary of executed steps with appropriate status messages:
        - `install_completion` returning None: treat as success.
        - `preprocess` with cost=0.0 and model="local": show "Command completed (local)".
        - Other None results: show as failed.
        - Unexpected result formats: show warning with type info.
+     - **Display examples used for grounding** (if `examplesUsed` is present in result):
+       - After each step in the summary, show "Examples used:" section.
+       - For each example, display: `  - {slug} ("{title}")`.
+       - Example output:
+         ```
+         Examples used:
+           - my-example-module-x7k ("My Example Module")
+         ```
+       - Extract `examplesUsed` from result dict if available.
+       - The `examplesUsed` array contains `{slug, title, id, command}` for each example.
+       - Displaying slugs helps users know what to use in `<pin>` or `<exclude>` tags.
      - Print total estimated cost (only if at least one command contributed cost).
      - Collect and restore terminal output if `--core-dump` was enabled.
      - Write core dump via `_write_core_dump` with captured terminal output.
@@ -56,6 +67,10 @@
   <track_cost_example>
   <include>context/track_cost_example.py</include>
   </track_cost_example>
+  <pdd.core.cli><include>context/core/cli_example.py</include></pdd.core.cli>
+<pdd.core.dump><include>context/core/dump_example.py</include></pdd.core.dump>
+<pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
+<pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
 
 % Instructions
   - Import `os`, `sys`, `io`, `re`, `click` from standard library.
