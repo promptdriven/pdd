@@ -13,7 +13,7 @@
         - `output` - An optional string containing the path where to save the generated test file. If None, use the resolved path from `construct_paths`.
         - `language` - An optional string specifying the programming language. If None, deduce via `construct_paths`.
         - `coverage_report` - An optional string path to a coverage report. When provided, 'existing_tests' is required and `increase_tests` is used.
-        - `existing_tests` - An optional list of string paths to existing test files (`list[str] | None`). Required when using 'coverage_report'. If `merge` is True, output is written to the first path. When provided, all files are read and their contents concatenated.
+        - `existing_tests` - An optional list of string paths to existing test files (`list[str] | None`). Required when using 'coverage_report'. If `merge` is True, output is written to the first path. When provided, all files are read in order and their contents concatenated with `"\n"` as the delimiter.
         - `target_coverage` - An optional float indicating desired coverage. Accepted but not used by the current implementation.
         - `merge` - An optional boolean. If True and 'existing_tests' is provided, write output to first 'existing_tests' path.
         - `strength` - An optional float (default None). If provided, overrides the 'strength' value from `ctx.obj`. Used by orchestrators to pass explicit values.
