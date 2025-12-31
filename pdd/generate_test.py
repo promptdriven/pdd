@@ -14,7 +14,7 @@ console = Console()
 
 def generate_test(
     prompt: str,
-    code: Optional[str] = None,
+    code: str,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
@@ -23,14 +23,14 @@ def generate_test(
     source_file_path: Optional[str] = None,
     test_file_path: Optional[str] = None,
     module_name: Optional[str] = None,
-    example: Optional[str] = None,
+    existing_tests: Optional[str] = None
 ) -> Tuple[str, float, str]:
     """
-    Generate a unit test from a code file or example file using LLM.
+    Generate a unit test from a code file using LLM.
 
     Args:
         prompt (str): The prompt that generated the code file.
-        code (Optional[str]): The code to generate a unit test from. Mutually exclusive with example.
+        code (str): The code to generate a unit test from.
         strength (float): The strength of the LLM model (0-1).
         temperature (float): The temperature of the LLM model.
         language (str): The programming language for the unit test.
@@ -39,54 +39,37 @@ def generate_test(
         source_file_path (Optional[str]): Absolute or relative path to the code under test.
         test_file_path (Optional[str]): Destination path for the generated test file.
         module_name (Optional[str]): Module name (without extension) for proper imports.
-        example (Optional[str]): Generate tests from prompt + example instead of prompt + code.
+        existing_tests (Optional[str]): Content of existing tests to append to (for merge mode).
 
     Returns:
         Tuple[str, float, str]: (unit_test, total_cost, model_name)
     """
     total_cost = 0.0
     model_name = ""
-    use_example_mode = example is not None
 
     try:
-        if use_example_mode:
-            template = load_prompt_template("generate_test_from_example_LLM")
-            if not template:
-                raise ValueError("Failed to load generate_test_from_example_LLM prompt template")
-        else:
-            template = load_prompt_template("generate_test_LLM")
-            if not template:
-                raise ValueError("Failed to load generate_test_LLM prompt template")
+        # Step 1: Load prompt template
+        template = load_prompt_template("generate_test_LLM")
+        if not template:
+            raise ValueError("Failed to load generate_test_LLM prompt template")
 
         # Step 2: Preprocess template
         processed_template = preprocess(template, recursive=False, double_curly_brackets=False)
         processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         # Step 3: Run through LLM
-        if use_example_mode:
-            input_json = {
-                "prompt_that_generated_code": processed_prompt,
-                "example": example,
-                "language": language,
-                "example_file_path": source_file_path or "",
-                "test_file_path": test_file_path or "",
-                "module_name": module_name or ""
-            }
-        else:
-            input_json = {
-                "prompt_that_generated_code": processed_prompt,
-                "code": code,
-                "language": language,
-                "source_file_path": source_file_path or "",
-                "test_file_path": test_file_path or "",
-                "module_name": module_name or ""
-            }
+        input_json = {
+            "prompt_that_generated_code": processed_prompt,
+            "code": code,
+            "language": language,
+            "source_file_path": source_file_path or "",
+            "test_file_path": test_file_path or "",
+            "module_name": module_name or "",
+            "existing_tests": existing_tests or "",
+        }
 
         if verbose:
-            if use_example_mode:
-                console.print("[bold blue]Generating unit test from prompt + example...[/bold blue]")
-            else:
-                console.print("[bold blue]Generating unit test...[/bold blue]")
+            console.print("[bold blue]Generating unit test...[/bold blue]")
 
         response = llm_invoke(
             prompt=processed_template,
