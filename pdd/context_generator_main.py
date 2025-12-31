@@ -141,7 +141,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                     generated_code = None
                 except httpx.HTTPStatusError as e:
                     status_code = e.response.status_code
-                    err_content = e.response.text[:200] if e.response else "No response content"
+                    response_text = e.response.text or ""
+                    err_content = response_text[:200] if response_text else "No response content"
                     if status_code == 402:
                         console.print(f"[red]Insufficient credits: {err_content}[/red]")
                         raise click.UsageError("Insufficient credits for cloud example generation")
