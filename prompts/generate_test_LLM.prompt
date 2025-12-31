@@ -9,6 +9,16 @@
  - The example file will be saved at: <test_file_path>{test_file_path}</test_file_path>
  - The module name (without extension) is: <module_name>{module_name}</module_name>
 
+% EXISTING TESTS (if provided - your output will be APPENDED to this file):
+<existing_tests>{existing_tests}</existing_tests>
+
+% If existing tests are provided above:
+    - Generate ONLY NEW test functions (your output will be appended to the existing file)
+    - Do NOT include import statements (they already exist in the file)
+    - Do NOT duplicate any existing test function names
+    - Maintain consistent style with existing tests (fixtures, naming conventions)
+    - Focus on testing functionality NOT already covered by existing tests
+
 % Follow these rules:
     - CRITICAL: You MUST analyze the actual code provided in code_under_test and generate tests for the EXACT functions defined in that code
     - CRITICAL: Import statements must use the ACTUAL module name from the code file path, not generic names. Include the necessary code/path info to import the code under test.

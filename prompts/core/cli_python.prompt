@@ -67,6 +67,10 @@
   <track_cost_example>
   <include>context/track_cost_example.py</include>
   </track_cost_example>
+  <pdd.core.cli><include>context/core/cli_example.py</include></pdd.core.cli>
+<pdd.core.dump><include>context/core/dump_example.py</include></pdd.core.dump>
+<pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
+<pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
 
 % Instructions
   - Import `os`, `sys`, `io`, `re`, `click` from standard library.
