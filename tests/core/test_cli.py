@@ -28,20 +28,21 @@ def setup_cli_environment():
         original_commands = cli_command.commands.copy()
         
         # Register dummy commands if missing
+        # Note: Click converts underscores to hyphens in command names
         if "generate" not in cli_command.commands:
             @cli_command.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
             def generate(ctx): pass
-            
+
         if "fix" not in cli_command.commands:
             @cli_command.command()
             def fix(): pass
-            
+
         if "example" not in cli_command.commands:
             @cli_command.command()
             def example(): pass
-            
-        if "install_completion" not in cli_command.commands:
-            @cli_command.command()
+
+        if "install-completion" not in cli_command.commands:
+            @cli_command.command("install-completion")
             def install_completion(): pass
             
         yield
