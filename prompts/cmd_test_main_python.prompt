@@ -13,9 +13,9 @@
         - `output` - An optional string containing the path where to save the generated test file. If None, use the resolved path from `construct_paths`.
         - `language` - An optional string specifying the programming language. If None, deduce via `construct_paths`.
         - `coverage_report` - An optional string path to a coverage report. When provided, 'existing_tests' is required and `increase_tests` is used.
-        - `existing_tests` - An optional string path to an existing test file. Required when using 'coverage_report'. If `merge` is True, output is written to this path.
+        - `existing_tests` - An optional list of string paths to existing test files (`list[str] | None`). Required when using 'coverage_report'. If `merge` is True, output is written to the first path. When provided, all files are read and their contents concatenated.
         - `target_coverage` - An optional float indicating desired coverage. Accepted but not used by the current implementation.
-        - `merge` - An optional boolean. If True and 'existing_tests' is provided, write output to 'existing_tests'.
+        - `merge` - An optional boolean. If True and 'existing_tests' is provided, write output to first 'existing_tests' path.
         - `strength` - An optional float (default None). If provided, overrides the 'strength' value from `ctx.obj`. Used by orchestrators to pass explicit values.
         - `temperature` - An optional float (default None). If provided, overrides the 'temperature' value from `ctx.obj`. Used by orchestrators to pass explicit values.
     Outputs:
@@ -25,25 +25,27 @@
             - `str`: The name of the model used.
 
 % Behavior:
-%  - Resolve `strength` and `temperature` using the pattern described in ctx_obj_params.prompt.
+%  - Use `resolve_effective_config(ctx, resolved_config, param_overrides={...})` to resolve strength, temperature, and time after `construct_paths` returns.
 %  - Build input and output paths, and determine language using `construct_paths`, passing:
-%      input_file_paths: {prompt_file, code_file, and optionally coverage_report, existing_tests}
+%      input_file_paths: {prompt_file, code_file, and optionally coverage_report, existing_tests[0]}
 %      command_options: {output, language, merge, target_coverage}
 %      along with ctx.obj['force'], ctx.obj['quiet'], and command="test".
 %      When calling `construct_paths`, include `context_override=ctx.obj.get('context')` so a global `--context` is honored.
 %      Also pass `confirm_callback=ctx.obj.get('confirm_callback')` for TUI confirmation support.
-%  - If 'coverage_report' is NOT provided: call `generate_test(prompt, code, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name)`.
+%  - When `existing_tests` is provided, read all files and concatenate their content into `input_strings["existing_tests"]`.
+%  - If 'coverage_report' is NOT provided: call `generate_test(prompt, code, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name, existing_tests)`.
 %      The additional parameters are computed as:
 %      • `source_file_path = str(Path(code_file).expanduser().resolve())`
 %      • `test_file_path = str(Path(output_file).expanduser().resolve())` where `output_file` is the resolved output path
 %      • `module_name = Path(source_file_path).stem`
+%      • `existing_tests = input_strings.get("existing_tests")` (the concatenated content or None)
 %  - If 'coverage_report' IS provided: require 'existing_tests'; otherwise print a Rich error and return an error result. If provided, call
 %    `increase_tests(existing_unit_tests, coverage_report, code, prompt_that_generated_code, language, strength, temperature, time, verbose)`.
 %  - Use `ctx.obj.get('time')` to retrieve the time parameter; `time` is a float in [0.0–1.0] representing relative thinking time (or None if not set).
 %  - Validate generated content is non-empty after stripping; on empty, print diagnostics and return an error result.
 %  - Resolve output path:
 %      * If `output` is None, or is a directory path or ends with '/', write to the resolved file from `construct_paths`.
-%      * If `merge` is True and `existing_tests` is provided, write to `existing_tests`.
+%      * If `merge` is True and `existing_tests` is provided, write to `existing_tests[0]`.
 %      * Ensure parent directories exist and write with UTF-8 encoding.
 %  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}")` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
 

@@ -3,7 +3,7 @@
 <include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'prompt' - A string containing the prompt that generated the code file to be processed.
         'code' - A string containing the code to generate a unit test from.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
@@ -11,7 +11,11 @@
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'language' - A string that is the language of the unit test to be generated. Default is 'python'.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
-    Outputs as a tuple: 
+        'source_file_path' - Optional string. Absolute or relative path to the code under test. Default is None.
+        'test_file_path' - Optional string. Destination path for the generated test file. Default is None.
+        'module_name' - Optional string. Module name (without extension) for proper imports. Default is None.
+        'existing_tests' - Optional string. Content of existing tests to append to (for merge mode). Default is None.
+    Outputs as a tuple:
         'unit_test'- A string that is the generated unit test code.
         'total_cost' - A float that is the total cost to generate the unit test code.
         'model_name' - A string that is the name of the selected LLM model.
@@ -57,6 +61,10 @@
             - 'prompt_that_generated_code': preprocess the original prompt using the preprocess function without recursion or doubling of the curly brackets.
             - 'code'
             - 'language'
+            - 'source_file_path': use empty string if None
+            - 'test_file_path': use empty string if None
+            - 'module_name': use empty string if None
+            - 'existing_tests': use empty string if None
         3b. Forward 'strength', 'temperature', and 'time' to llm_invoke as provided.
         3c. If verbose is True, print a short message that generation is running and the estimated cost (include token counts if available).
     Step 4. If verbose is True, pretty print the markdown formatting that is present in the Step 3 result via the rich Markdown function. Also print the initial cost (include token counts if available).
