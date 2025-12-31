@@ -1,8 +1,30 @@
+## v0.0.97 (2025-12-30)
+
+### Feat
+
+- Enhance CLI Python prompt to display examples used for grounding
+- Add diagnostic logging for Issue #186 (C, E, T files)
+- Enhance cloud execution and syntax validation
+
+### Refactor
+
+- Update prompts to support existing test files as lists
+
 ## v0.0.96 (2025-12-29)
 
 ### Feat
 
-- Enhance update command and improve path validation
+- **Cloud Example Generation:** Added cloud execution support to `context_generator_main` via new async `_run_cloud_generation()` function. Uses `CloudConfig.get_jwt_token()` for authentication and automatically falls back to local execution on cloud failure. Supports `--local` flag to bypass cloud.
+
+- **Improved Syntax Repair:** Rewrote `_validate_and_fix_python_syntax()` with a binary search algorithm to find the longest valid Python prefix when LLM output contains trailing JSON garbage (e.g., `"explanation":`, `"filename":` metadata). Provides user feedback on repair success/failure.
+
+### Refactor
+
+- **Prompt Include Tag Updates:** Standardized `<include>` tags in `context_generator_main_python.prompt` and `preprocess_python.prompt` to use consistent naming conventions (e.g., `<context.module_name>` wrappers).
+
+### Tests
+
+- Updated `tests/test_context_generator_main.py` with coverage for cloud execution, local fallback, and syntax repair scenarios.
 
 ## v0.0.95 (2025-12-28)
 
