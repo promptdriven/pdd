@@ -4,7 +4,7 @@
 Write the `pdd/agentic_bug.py` module.
 
 % Role & Scope
-CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 7-step investigation process.
+CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 8-step investigation process.
 
 % Requirements
 1. Function: `run_agentic_bug(issue_url: str, *, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
@@ -18,7 +18,7 @@ CLI entry point for the agentic bug investigation workflow. Fetches a GitHub iss
 6. Extract from issue: title, body, labels, state, comments_url
 7. Fetch comments via `gh api {comments_url}` to get full context
 8. Clone/checkout the repository to a temp directory if not already in it
-9. Call orchestrator: `run_agentic_bug_orchestrator(issue_content, repo_owner, repo_name, issue_number, ...)`
+9. Call orchestrator: `run_agentic_bug_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, ...)`
 10. Return aggregated results from orchestrator
 
 % Manual Mode (legacy)
