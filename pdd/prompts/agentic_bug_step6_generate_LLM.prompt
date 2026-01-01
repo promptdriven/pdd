@@ -68,11 +68,11 @@ Your comment should follow this format:
 ## Step 6: Generated Test
 
 ### Test File
-`{test_file_path}`
+`{{test_file_path}}`
 
 ### Test Code
 ```python
-{generated_test_code}
+{{generated_test_code}}
 ```
 
 ### What This Test Verifies
@@ -80,7 +80,7 @@ Your comment should follow this format:
 
 ### Running the Test
 ```bash
-pytest {test_file_path}::{test_name} -v
+pytest {{test_file_path}}::{{test_name}} -v
 ```
 
 ---

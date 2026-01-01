@@ -72,7 +72,7 @@ Your comment should follow this format:
 
 ### Test Execution
 ```
-{test_output}
+{{test_output}}
 ```
 
 ### Verification Status
@@ -82,18 +82,18 @@ Your comment should follow this format:
 
 | Step | Result |
 |------|--------|
-| Duplicate Check | {step1_status} |
-| Documentation | {step2_status} |
-| Reproduction | {step3_status} |
-| Root Cause | {step4_status} |
-| Test Plan | {step5_status} |
-| Test Generation | {step6_status} |
-| Verification | {step7_status} |
+| Duplicate Check | {{step1_status}} |
+| Documentation | {{step2_status}} |
+| Reproduction | {{step3_status}} |
+| Root Cause | {{step4_status}} |
+| Test Plan | {{step5_status}} |
+| Test Generation | {{step6_status}} |
+| Verification | {{step7_status}} |
 
 ### Bug Details
-- **Location:** `{file_path}:{line_number}`
-- **Root Cause:** {one_line_summary}
-- **Test File:** `{test_file_path}`
+- **Location:** `{{file_path}}:{{line_number}}`
+- **Root Cause:** {{one_line_summary}}
+- **Test File:** `{{test_file_path}}`
 
 ### Next Steps
 1. Fix the bug at the identified location
