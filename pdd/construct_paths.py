@@ -728,11 +728,12 @@ def construct_paths(
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
 
             # Determine examples_dir for auto-deps scanning
-            # First try old-style example_output_path from generate_output_paths
-            example_path_str = output_paths_str.get("example_output_path")
+            # Priority: outputs.example.path template > example_output_path > "examples" fallback
+            example_path_str = None
 
-            # If not found, check for new-style outputs.example.path in context config
-            if not example_path_str and original_context_config:
+            # First check for new-style outputs.example.path in context config (Issue #237)
+            # This takes priority over generate_output_paths result for template-based contexts
+            if original_context_config:
                 outputs_config = original_context_config.get('outputs', {})
                 example_config = outputs_config.get('example', {})
                 example_template = example_config.get('path')
@@ -740,6 +741,10 @@ def construct_paths(
                     # Extract directory from template path
                     # e.g., "context/backend/{name}_example.py" → "context/backend"
                     example_path_str = str(Path(example_template).parent)
+
+            # Fallback to old-style example_output_path from generate_output_paths
+            if not example_path_str:
+                example_path_str = output_paths_str.get("example_output_path")
 
             # Final fallback to "examples"
             if not example_path_str:
@@ -1063,11 +1068,12 @@ def construct_paths(
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
 
     # Determine examples_dir for auto-deps scanning
-    # First try old-style example_output_path from resolved_config
-    example_path_str = resolved_config.get("example_output_path")
+    # Priority: outputs.example.path template > example_output_path > "examples" fallback
+    example_path_str = None
 
-    # If not found, check for new-style outputs.example.path in context config
-    if not example_path_str and original_context_config:
+    # First check for new-style outputs.example.path in context config (Issue #237)
+    # This takes priority over generate_output_paths result for template-based contexts
+    if original_context_config:
         outputs_config = original_context_config.get('outputs', {})
         example_config = outputs_config.get('example', {})
         example_template = example_config.get('path')
@@ -1075,6 +1081,10 @@ def construct_paths(
             # Extract directory from template path
             # e.g., "context/backend/{name}_example.py" → "context/backend"
             example_path_str = str(Path(example_template).parent)
+
+    # Fallback to old-style example_output_path from resolved_config
+    if not example_path_str:
+        example_path_str = resolved_config.get("example_output_path")
 
     # Final fallback to "examples"
     if not example_path_str:
