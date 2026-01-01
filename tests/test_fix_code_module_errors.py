@@ -208,3 +208,36 @@ def test_fix_code_module_errors_validation_error():
                     errors=VALID_ERRORS,
                     strength=VALID_STRENGTH
                 )
+
+
+def test_fix_code_module_errors_includes_file_paths_in_llm_input(
+    mock_load_prompt_template_success, mock_llm_invoke_success
+):
+    """
+    Verify that program_path and code_path are passed to the LLM.
+
+    This is critical for fixing path calculation errors - the LLM needs to know
+    where files are located to generate correct relative path logic.
+
+    Bug context: When an example file is at context/backend/example.py, the LLM
+    needs to know this to generate correct path calculations (e.g., going up 2
+    levels instead of 1 to reach project root).
+    """
+    fix_code_module_errors(
+        program=VALID_PROGRAM,
+        prompt=VALID_PROMPT,
+        code=VALID_CODE,
+        errors=VALID_ERRORS,
+        strength=VALID_STRENGTH,
+        program_path="context/backend/example.py",
+        code_path="backend/functions/utils/module.py",
+    )
+
+    # Verify the first LLM call includes file paths
+    first_call_args = mock_llm_invoke_success.call_args_list[0]
+    input_json = first_call_args.kwargs.get('input_json') or first_call_args[1].get('input_json')
+
+    assert 'program_path' in input_json, "program_path must be passed to LLM"
+    assert 'code_path' in input_json, "code_path must be passed to LLM"
+    assert input_json['program_path'] == "context/backend/example.py"
+    assert input_json['code_path'] == "backend/functions/utils/module.py"
