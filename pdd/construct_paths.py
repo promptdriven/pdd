@@ -738,9 +738,12 @@ def construct_paths(
                 example_config = outputs_config.get('example', {})
                 example_template = example_config.get('path')
                 if example_template:
-                    # Extract directory from template path
-                    # e.g., "context/backend/{name}_example.py" → "context/backend"
-                    example_path_str = str(Path(example_template).parent)
+                    # Extract ROOT directory from template path (first path component)
+                    # e.g., "context/backend/{name}_example.py" → "context"
+                    # This ensures auto-deps scans all examples, not just a subdirectory
+                    template_parts = Path(example_template).parts
+                    if template_parts:
+                        example_path_str = template_parts[0]
 
             # Fallback to old-style example_output_path from generate_output_paths
             if not example_path_str:
@@ -1078,9 +1081,12 @@ def construct_paths(
         example_config = outputs_config.get('example', {})
         example_template = example_config.get('path')
         if example_template:
-            # Extract directory from template path
-            # e.g., "context/backend/{name}_example.py" → "context/backend"
-            example_path_str = str(Path(example_template).parent)
+            # Extract ROOT directory from template path (first path component)
+            # e.g., "context/backend/{name}_example.py" → "context"
+            # This ensures auto-deps scans all examples, not just a subdirectory
+            template_parts = Path(example_template).parts
+            if template_parts:
+                example_path_str = template_parts[0]
 
     # Fallback to old-style example_output_path from resolved_config
     if not example_path_str:
