@@ -360,8 +360,6 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         outputs_config=outputs_config,
                         prompt_path=prompt_path
                     )
-                    # Add _matched_context for debugging (Issue #237)
-                    result['_matched_context'] = resolved_config.get('_matched_context', 'unknown')
                     logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
                     return result
 
@@ -462,8 +460,6 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 outputs_config=outputs_config,
                 prompt_path=prompt_path
             )
-            # Add _matched_context for debugging (Issue #237)
-            result['_matched_context'] = resolved_config.get('_matched_context', 'unknown')
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
             return result
 

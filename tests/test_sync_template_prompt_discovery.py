@@ -466,6 +466,41 @@ contexts:
         finally:
             os.chdir(original_cwd)
 
+    def test_get_pdd_file_paths_returns_only_path_objects(self, pddrc_with_outputs):
+        """
+        BUG FIX: get_pdd_file_paths should only return Path objects, not strings.
+
+        The function signature is -> Dict[str, Path]. Adding _matched_context (a string)
+        violates this contract and breaks sync_orchestration.py:1599 which calls
+        .exists() on all values.
+        """
+        from pdd.sync_main import _find_prompt_in_contexts
+        from pdd.sync_determine_operation import get_pdd_file_paths
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(pddrc_with_outputs)
+
+            result = _find_prompt_in_contexts('credit_helpers')
+            context_name, prompt_path, language = result
+            actual_prompts_dir = str(prompt_path.parent)
+
+            paths = get_pdd_file_paths(
+                basename='credit_helpers',
+                language='python',
+                prompts_dir=actual_prompts_dir,
+                context_override=context_name
+            )
+
+            # All values (except test_files which is a list) should be Path objects
+            for key, value in paths.items():
+                if key == 'test_files':
+                    continue
+                assert isinstance(value, Path), \
+                    f"pdd_files['{key}'] should be Path, got {type(value).__name__}: {value}"
+        finally:
+            os.chdir(original_cwd)
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

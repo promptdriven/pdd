@@ -873,6 +873,99 @@ def test_construct_paths_sync_discovery_examples_dir_from_directory_path(tmpdir)
         f"Expected 'context' but got '{resolved_config['examples_dir']}'"
 
 
+def test_construct_paths_sync_uses_outputs_example_path_for_examples_dir(tmpdir):
+    """
+    Test that construct_paths reads outputs.example.path from context config
+    to determine examples_dir when example_output_path is not present.
+
+    Regression test for sync failing with 'auto-deps failed' when context
+    uses new-style outputs.example.path instead of old-style example_output_path.
+    """
+    input_file_paths = {}  # No inputs for sync discovery mode
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {'basename': 'credit_helpers', 'language': 'python'}
+
+    # Mock output paths WITHOUT example_output_path (simulates new config format)
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "backend" / "functions" / "utils" / "credit_helpers.py"),
+        "test_output_path": str(tmpdir / "backend" / "tests" / "test_credit_helpers.py"),
+        # NOTE: example_output_path intentionally MISSING to simulate new config format
+    }
+
+    # Mock context config with new-style outputs.example.path
+    mock_context_config = {
+        "outputs": {
+            "prompt": {"path": "prompts/backend/utils/{name}_{language}.prompt"},
+            "code": {"path": "backend/functions/utils/{name}.py"},
+            "example": {"path": "context/backend/{name}_example.py"},
+        }
+    }
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path(str(tmpdir / '.pddrc'))), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'backend-utils': {'defaults': mock_context_config}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='backend-utils'), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config):
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # examples_dir should be extracted from outputs.example.path, NOT default to "examples"
+    assert resolved_config["examples_dir"] == "context/backend", \
+        f"Expected 'context/backend' but got '{resolved_config['examples_dir']}'"
+
+
+def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples_dir(tmpdir):
+    """
+    Test that construct_paths reads outputs.example.path from context config
+    to determine examples_dir when a prompt file is provided (not discovery mode).
+
+    This tests the regular mode path (when input_file_paths is not empty).
+    """
+    # Create a temporary prompt file
+    prompt_file = tmpdir / "credit_helpers_python.prompt"
+    prompt_file.write("% Example prompt content")
+
+    input_file_paths = {"prompt_file": str(prompt_file)}
+    force = True
+    quiet = True
+    command = 'sync'
+    command_options = {'basename': 'credit_helpers', 'language': 'python'}
+
+    # Mock output paths WITHOUT example_output_path (simulates new config format)
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "backend" / "functions" / "utils" / "credit_helpers.py"),
+        "test_output_path": str(tmpdir / "backend" / "tests" / "test_credit_helpers.py"),
+        # NOTE: example_output_path intentionally MISSING to simulate new config format
+    }
+
+    # Mock context config with new-style outputs.example.path
+    mock_context_config = {
+        "outputs": {
+            "prompt": {"path": "prompts/backend/utils/{name}_{language}.prompt"},
+            "code": {"path": "backend/functions/utils/{name}.py"},
+            "example": {"path": "context/backend/{name}_example.py"},
+        }
+    }
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path(str(tmpdir / '.pddrc'))), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'backend-utils': {'defaults': mock_context_config}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='backend-utils'), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config):
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # examples_dir should be extracted from outputs.example.path, NOT default to "examples"
+    assert resolved_config["examples_dir"] == "context/backend", \
+        f"Expected 'context/backend' but got '{resolved_config['examples_dir']}'"
+
+
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
     """
     Test that the sync discovery mode correctly calculates prompts_dir path
