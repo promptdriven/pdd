@@ -502,5 +502,165 @@ contexts:
             os.chdir(original_cwd)
 
 
+class TestExamplesDirFromOutputsTemplate:
+    """Test that examples_dir is correctly extracted from outputs.example.path template."""
+
+    @pytest.fixture
+    def pddrc_with_outputs(self, tmp_path):
+        """Create a .pddrc with outputs configuration for all paths."""
+        pddrc_content = """
+version: "1.0"
+contexts:
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      default_language: "python"
+      outputs:
+        prompt:
+          path: "prompts/backend/utils/{name}_{language}.prompt"
+        code:
+          path: "backend/functions/utils/{name}.py"
+        test:
+          path: "backend/tests/test_{name}.py"
+        example:
+          path: "context/backend/{name}_example.py"
+
+  default:
+    defaults:
+      default_language: "python"
+"""
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(pddrc_content)
+
+        # Create the prompt file in the configured location
+        prompts_dir = tmp_path / "prompts" / "backend" / "utils"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        prompt_file = prompts_dir / "credit_helpers_python.prompt"
+        prompt_file.write_text("# Test prompt for credit_helpers")
+
+        # Create example file at template-based location
+        examples_dir = tmp_path / "context" / "backend"
+        examples_dir.mkdir(parents=True, exist_ok=True)
+        (examples_dir / "credit_helpers_example.py").write_text(
+            "# Example file for credit_helpers\nprint('hello')\n"
+        )
+
+        return tmp_path
+
+    def test_construct_paths_sets_examples_dir_from_template(self, pddrc_with_outputs):
+        """
+        BUG FIX: construct_paths should set examples_dir from outputs.example.path template.
+
+        For backend-utils context with outputs.example.path = "context/backend/{name}_example.py",
+        the examples_dir should be "context/backend", not the default "examples".
+
+        This is critical for auto-deps to scan the correct directory.
+        """
+        from pdd.sync_main import _find_prompt_in_contexts
+        from pdd.construct_paths import construct_paths
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(pddrc_with_outputs)
+
+            # First find the prompt to get the context
+            result = _find_prompt_in_contexts('credit_helpers')
+            assert result is not None, "Should find prompt via template"
+            context_name, prompt_path, language = result
+
+            # Call construct_paths with sync command (same as sync_main.py does)
+            resolved_config, _, _, _ = construct_paths(
+                input_file_paths={"prompt_file": str(prompt_path)},
+                force=True,
+                quiet=True,
+                command="sync",
+                command_options={"basename": "credit_helpers", "language": "python"},
+                context_override=context_name,
+            )
+
+            # The examples_dir should be extracted from outputs.example.path template
+            examples_dir = resolved_config.get("examples_dir", "examples")
+            assert examples_dir == "context/backend", \
+                f"examples_dir should be 'context/backend' from template, got '{examples_dir}'"
+
+        finally:
+            os.chdir(original_cwd)
+
+    def test_examples_dir_points_to_existing_directory(self, pddrc_with_outputs):
+        """
+        Verify the examples_dir from outputs template points to a real directory.
+
+        This ensures auto-deps will find files in the correct location.
+        """
+        from pdd.sync_main import _find_prompt_in_contexts
+        from pdd.construct_paths import construct_paths
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(pddrc_with_outputs)
+
+            result = _find_prompt_in_contexts('credit_helpers')
+            assert result is not None
+            context_name, prompt_path, language = result
+
+            resolved_config, _, _, _ = construct_paths(
+                input_file_paths={"prompt_file": str(prompt_path)},
+                force=True,
+                quiet=True,
+                command="sync",
+                command_options={"basename": "credit_helpers", "language": "python"},
+                context_override=context_name,
+            )
+
+            examples_dir = resolved_config.get("examples_dir", "examples")
+            examples_path = Path(examples_dir)
+
+            assert examples_path.exists(), \
+                f"examples_dir '{examples_dir}' should exist"
+            assert examples_path.is_dir(), \
+                f"examples_dir '{examples_dir}' should be a directory"
+
+        finally:
+            os.chdir(original_cwd)
+
+    def test_outputs_config_in_resolved_config(self, pddrc_with_outputs):
+        """
+        Verify that 'outputs' config is passed through to resolved_config.
+
+        This is required for get_pdd_file_paths to use template-based paths.
+        """
+        from pdd.sync_main import _find_prompt_in_contexts
+        from pdd.construct_paths import construct_paths
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(pddrc_with_outputs)
+
+            result = _find_prompt_in_contexts('credit_helpers')
+            assert result is not None
+            context_name, prompt_path, language = result
+
+            resolved_config, _, _, _ = construct_paths(
+                input_file_paths={"prompt_file": str(prompt_path)},
+                force=True,
+                quiet=True,
+                command="sync",
+                command_options={"basename": "credit_helpers", "language": "python"},
+                context_override=context_name,
+            )
+
+            outputs = resolved_config.get("outputs")
+            assert outputs is not None, \
+                "resolved_config should have 'outputs' from context config"
+            assert "example" in outputs, \
+                "outputs should have 'example' key"
+            assert outputs["example"].get("path") == "context/backend/{name}_example.py", \
+                f"outputs.example.path should match .pddrc, got {outputs.get('example')}"
+
+        finally:
+            os.chdir(original_cwd)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
