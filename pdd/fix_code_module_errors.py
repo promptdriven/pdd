@@ -38,7 +38,9 @@ def fix_code_module_errors(
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0,
     time: float = DEFAULT_TIME,
-    verbose: bool = False
+    verbose: bool = False,
+    program_path: str = "",
+    code_path: str = "",
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix errors in a code module that caused a program to crash and/or have errors.
@@ -62,7 +64,9 @@ def fix_code_module_errors(
             "program": program,
             "prompt": prompt,
             "code": code,
-            "errors": errors
+            "errors": errors,
+            "program_path": program_path,
+            "code_path": code_path,
         }
 
         if verbose:
