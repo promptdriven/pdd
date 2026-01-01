@@ -41,7 +41,7 @@ You are a prompt expert that helps select the necessary subset of "includes" (li
     These output formats are WRONG (never output these):
     - [File: path/to/file.py]
     - File: path/to/file.py
-    - {path/to/file.py}
+    - {{path/to/file.py}}
     - path/to/file.py (without include tags)
 
     This output format is CORRECT:
