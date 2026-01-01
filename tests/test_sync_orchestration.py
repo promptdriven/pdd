@@ -3078,3 +3078,443 @@ class TestPathResolutionInSyncOperations:
                 f"code_file should be absolute: {code_file_arg}"
             assert output_arg.startswith('/'), \
                 f"output should be absolute: {output_arg}"
+
+
+# --- Non-Python Agentic Fallback Tests ---
+# These tests verify that non-Python languages skip iterative fix loops and go directly
+# to agentic fallback by setting max_attempts=0.
+
+class TestNonPythonAgenticFallback:
+    """Test suite for non-Python agentic fallback behavior."""
+
+    @pytest.fixture
+    def non_python_fixture(self, tmp_path):
+        """Sets up a temporary project directory for non-Python language tests."""
+        # Create directories
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+        # Change CWD to the temp path
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.chdir(tmp_path)
+
+        return tmp_path
+
+    def _setup_sync_app_mock(self, mock_sync_app_class):
+        """Configure SyncApp mock to run worker synchronously."""
+        def mock_sync_app_run(instance):
+            try:
+                return instance.worker_func()
+            except Exception as e:
+                return {
+                    "success": False,
+                    "total_cost": 0.0,
+                    "model_name": "",
+                    "error": str(e),
+                    "operations_completed": [],
+                    "errors": [f"{type(e).__name__}: {e}"]
+                }
+
+        def store_worker_func(*args, **kwargs):
+            instance = MagicMock()
+            instance.worker_func = kwargs.get('worker_func', lambda: {"success": True})
+            instance.run = lambda: mock_sync_app_run(instance)
+            return instance
+
+        mock_sync_app_class.side_effect = store_worker_func
+
+    def test_non_python_crash_uses_max_attempts_zero(self, non_python_fixture):
+        """
+        Test that for non-Python languages (e.g., Java), crash_main is called
+        with max_attempts=0, which triggers immediate agentic fallback.
+        """
+        tmp_path = non_python_fixture
+        # Create Java files
+        (tmp_path / "prompts" / "calculator_java.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.java").write_text("// Java code")
+        (tmp_path / "examples" / "calculator_example.java").write_text("// Example")
+        (tmp_path / "tests" / "test_calculator.java").write_text("// Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.crash_main') as mock_crash, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
+             patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='crash', reason='Example failed'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_java.prompt',
+                'code': tmp_path / 'src' / 'calculator.java',
+                'example': tmp_path / 'examples' / 'calculator_example.java',
+                'test': tmp_path / 'tests' / 'test_calculator.java',
+            }
+
+            mock_crash.return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+            sync_orchestration(basename="calculator", language="java", max_attempts=5)
+
+            # Verify crash_main was called with max_attempts=0 (not 5)
+            assert mock_crash.called, "crash_main should have been called"
+            call_kwargs = mock_crash.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 0, \
+                    f"Expected max_attempts=0 for non-Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_python_crash_uses_default_max_attempts(self, non_python_fixture):
+        """
+        Test that for Python language, crash_main is called with the default
+        max_attempts value (not 0), using the iterative fix approach.
+        This ensures backward compatibility for Python users.
+        """
+        tmp_path = non_python_fixture
+        # Create Python files
+        (tmp_path / "prompts" / "calculator_python.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.py").write_text("# Python code")
+        (tmp_path / "examples" / "calculator_example.py").write_text("# Example")
+        (tmp_path / "tests" / "test_calculator.py").write_text("# Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.crash_main') as mock_crash, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
+             patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='crash', reason='Example failed'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+                'code': tmp_path / 'src' / 'calculator.py',
+                'example': tmp_path / 'examples' / 'calculator_example.py',
+                'test': tmp_path / 'tests' / 'test_calculator.py',
+            }
+
+            mock_crash.return_value = (True, "", "", 1, 0.05, "mock-model")
+
+            sync_orchestration(basename="calculator", language="python", max_attempts=5)
+
+            # Verify crash_main was called with max_attempts=5 (not 0)
+            if mock_crash.called:
+                call_kwargs = mock_crash.call_args
+                if call_kwargs.kwargs:
+                    assert call_kwargs.kwargs.get('max_attempts') == 5, \
+                        f"Expected max_attempts=5 for Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_python_verify_uses_default_max_attempts(self, non_python_fixture):
+        """
+        Test that for Python language, fix_verification_main is called with
+        the default max_attempts value. Ensures backward compatibility.
+        """
+        tmp_path = non_python_fixture
+        # Create Python files
+        (tmp_path / "prompts" / "calculator_python.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.py").write_text("# Python code")
+        (tmp_path / "examples" / "calculator_example.py").write_text("# Example")
+        (tmp_path / "tests" / "test_calculator.py").write_text("# Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.fix_verification_main') as mock_verify, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='verify', reason='Need verification'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+                'code': tmp_path / 'src' / 'calculator.py',
+                'example': tmp_path / 'examples' / 'calculator_example.py',
+                'test': tmp_path / 'tests' / 'test_calculator.py',
+            }
+
+            mock_verify.return_value = (True, "", "", 1, 0.05, "mock-model")
+
+            sync_orchestration(basename="calculator", language="python", max_attempts=5)
+
+            # Verify fix_verification_main was called with max_attempts=5 (not 0)
+            assert mock_verify.called, "fix_verification_main should have been called"
+            call_kwargs = mock_verify.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 5, \
+                    f"Expected max_attempts=5 for Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_python_fix_uses_default_max_attempts(self, non_python_fixture):
+        """
+        Test that for Python language, fix_main is called with the default
+        max_attempts value. Ensures backward compatibility.
+        """
+        tmp_path = non_python_fixture
+        # Create Python files
+        (tmp_path / "prompts" / "calculator_python.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.py").write_text("# Python code")
+        (tmp_path / "examples" / "calculator_example.py").write_text("# Example")
+        (tmp_path / "tests" / "test_calculator.py").write_text("# Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.fix_main') as mock_fix, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.get_test_command.get_test_command_for_file', return_value="pytest"), \
+             patch('pdd.sync_orchestration.subprocess.run') as mock_subprocess, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='fix', reason='Tests failing'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_python.prompt',
+                'code': tmp_path / 'src' / 'calculator.py',
+                'example': tmp_path / 'examples' / 'calculator_example.py',
+                'test': tmp_path / 'tests' / 'test_calculator.py',
+            }
+
+            mock_subprocess.return_value = MagicMock(
+                returncode=1,
+                stdout="FAILED",
+                stderr="test failed"
+            )
+
+            mock_fix.return_value = (True, "", "", 1, 0.05, "mock-model")
+
+            sync_orchestration(basename="calculator", language="python", max_attempts=5)
+
+            # Verify fix_main was called with max_attempts=5 (not 0)
+            assert mock_fix.called, "fix_main should have been called"
+            call_kwargs = mock_fix.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 5, \
+                    f"Expected max_attempts=5 for Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_non_python_verify_uses_max_attempts_zero(self, non_python_fixture):
+        """
+        Test that for non-Python languages, fix_verification_main is called
+        with max_attempts=0 for immediate agentic fallback.
+        """
+        tmp_path = non_python_fixture
+        # Create JavaScript files
+        (tmp_path / "prompts" / "calculator_javascript.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.js").write_text("// JS code")
+        (tmp_path / "examples" / "calculator_example.js").write_text("// Example")
+        (tmp_path / "tests" / "test_calculator.js").write_text("// Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.fix_verification_main') as mock_verify, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='verify', reason='Need verification'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_javascript.prompt',
+                'code': tmp_path / 'src' / 'calculator.js',
+                'example': tmp_path / 'examples' / 'calculator_example.js',
+                'test': tmp_path / 'tests' / 'test_calculator.js',
+            }
+
+            mock_verify.return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+            sync_orchestration(basename="calculator", language="javascript", max_attempts=5)
+
+            # Verify fix_verification_main was called with max_attempts=0
+            assert mock_verify.called, "fix_verification_main should have been called"
+            call_kwargs = mock_verify.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 0, \
+                    f"Expected max_attempts=0 for non-Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_non_python_fix_uses_max_attempts_zero(self, non_python_fixture):
+        """
+        Test that for non-Python languages, fix_main is called
+        with max_attempts=0 for immediate agentic fallback.
+        """
+        tmp_path = non_python_fixture
+        # Create Go files
+        (tmp_path / "prompts" / "calculator_go.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.go").write_text("// Go code")
+        (tmp_path / "examples" / "calculator_example.go").write_text("// Example")
+        (tmp_path / "tests" / "test_calculator.go").write_text("// Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.fix_main') as mock_fix, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.get_test_command.get_test_command_for_file', return_value="go test"), \
+             patch('pdd.sync_orchestration.subprocess.run') as mock_subprocess, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='fix', reason='Tests failing'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_go.prompt',
+                'code': tmp_path / 'src' / 'calculator.go',
+                'example': tmp_path / 'examples' / 'calculator_example.go',
+                'test': tmp_path / 'tests' / 'test_calculator.go',
+            }
+
+            mock_subprocess.return_value = MagicMock(
+                returncode=1,
+                stdout="FAIL",
+                stderr="test failed"
+            )
+
+            mock_fix.return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+            sync_orchestration(basename="calculator", language="go", max_attempts=5)
+
+            # Verify fix_main was called with max_attempts=0
+            assert mock_fix.called, "fix_main should have been called"
+            call_kwargs = mock_fix.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 0, \
+                    f"Expected max_attempts=0 for non-Python, got {call_kwargs.kwargs.get('max_attempts')}"
+
+    def test_typescript_uses_max_attempts_zero(self, non_python_fixture):
+        """
+        Test that TypeScript (a common non-Python language) also uses max_attempts=0.
+        """
+        tmp_path = non_python_fixture
+        # Create TypeScript files
+        (tmp_path / "prompts" / "calculator_typescript.prompt").write_text("Create a calculator.")
+        (tmp_path / "src" / "calculator.ts").write_text("// TS code")
+        (tmp_path / "examples" / "calculator_example.ts").write_text("// Example")
+        (tmp_path / "tests" / "test_calculator.ts").write_text("// Test")
+
+        env_without_ci = {k: v for k, v in os.environ.items() if k != 'CI'}
+
+        with patch.dict(os.environ, env_without_ci, clear=True), \
+             patch('pdd.sync_orchestration.sync_determine_operation') as mock_determine, \
+             patch('pdd.sync_orchestration.SyncLock') as mock_lock, \
+             patch('pdd.sync_orchestration.SyncApp') as mock_sync_app_class, \
+             patch('pdd.sync_orchestration.crash_main') as mock_crash, \
+             patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
+             patch('pdd.sync_orchestration.save_run_report'), \
+             patch('pdd.sync_orchestration._display_sync_log'), \
+             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
+             patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            self._setup_sync_app_mock(mock_sync_app_class)
+
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            mock_determine.side_effect = [
+                SyncDecision(operation='crash', reason='Example failed'),
+                SyncDecision(operation='all_synced', reason='Done'),
+            ]
+
+            mock_get_paths.return_value = {
+                'prompt': tmp_path / 'prompts' / 'calculator_typescript.prompt',
+                'code': tmp_path / 'src' / 'calculator.ts',
+                'example': tmp_path / 'examples' / 'calculator_example.ts',
+                'test': tmp_path / 'tests' / 'test_calculator.ts',
+            }
+
+            mock_crash.return_value = (True, "", "", 1, 0.05, "agentic-cli")
+
+            sync_orchestration(basename="calculator", language="typescript", max_attempts=5)
+
+            # Verify crash_main was called with max_attempts=0
+            assert mock_crash.called, "crash_main should have been called"
+            call_kwargs = mock_crash.call_args
+            if call_kwargs.kwargs:
+                assert call_kwargs.kwargs.get('max_attempts') == 0, \
+                    f"Expected max_attempts=0 for TypeScript, got {call_kwargs.kwargs.get('max_attempts')}"

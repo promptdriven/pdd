@@ -95,6 +95,65 @@ def log_debug(message: str, *, verbose: bool, quiet: bool, label: str = "") -> N
     console.log(f"{prefix}{message}")
 
 
+def _detect_suspicious_files(cwd: Path, context: str, *, verbose: bool, quiet: bool, label: str = "") -> None:
+    """
+    Detect suspicious single-character files (like C, E, T) in a directory.
+
+    Issue #186: Empty files named C, E, T (first letters of Code, Example, Test)
+    have been appearing during agentic operations. This logs them for diagnosis.
+    """
+    import datetime
+    import traceback
+
+    suspicious: List[Path] = []
+    try:
+        for f in cwd.iterdir():
+            if f.is_file() and len(f.name) <= 2 and not f.name.startswith('.'):
+                suspicious.append(f)
+    except Exception:
+        return
+
+    if not suspicious:
+        return
+
+    timestamp = datetime.datetime.now().isoformat()
+    prefix = _format_label(label)
+    console.print(f"[bold red]{prefix}⚠️  SUSPICIOUS FILES DETECTED (Issue #186)[/bold red]")
+    console.print(f"[red]{prefix}Timestamp: {timestamp}[/red]")
+    console.print(f"[red]{prefix}Context: {context}[/red]")
+    console.print(f"[red]{prefix}Directory: {cwd}[/red]")
+    for sf in suspicious:
+        try:
+            size = sf.stat().st_size
+            console.print(f"[red]{prefix}  - {sf.name} (size: {size} bytes)[/red]")
+        except Exception:
+            console.print(f"[red]{prefix}  - {sf.name} (could not stat)[/red]")
+
+    # Also log to a file for persistence
+    log_file = Path.home() / ".pdd" / "suspicious_files.log"
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a") as lf:
+            lf.write(f"\n{'='*60}\n")
+            lf.write(f"Timestamp: {timestamp}\n")
+            lf.write(f"Context: {context}\n")
+            lf.write(f"Directory: {cwd}\n")
+            lf.write(f"CWD at detection: {Path.cwd()}\n")
+            lf.write(f"Label: {label}\n")
+            for sf in suspicious:
+                try:
+                    size = sf.stat().st_size
+                    lf.write(f"  - {sf.name} (size: {size} bytes)\n")
+                except Exception as e:
+                    lf.write(f"  - {sf.name} (error: {e})\n")
+            lf.write("Stack trace:\n")
+            for line in traceback.format_stack()[-10:]:
+                lf.write(line)
+            lf.write("\n")
+    except Exception:
+        pass  # Best-effort logging
+
+
 def log_error(message: str, *, verbose: bool, quiet: bool, label: str = "") -> None:
     """
     Log an error message.
@@ -418,7 +477,8 @@ def _parse_anthropic_result(data: Mapping[str, Any]) -> Tuple[bool, str, float]:
     Parse Claude Code (Anthropic) JSON result.
 
     Expected:
-      - data["response"]: main content
+      - data["result"]: main content (Claude Code output format)
+      - data["response"]: fallback for backwards compatibility
       - data["error"]: optional error block
       - data["total_cost_usd"]: total cost in USD (if available)
     """
@@ -432,7 +492,7 @@ def _parse_anthropic_result(data: Mapping[str, Any]) -> Tuple[bool, str, float]:
     else:
         error_msg = ""
 
-    response_text = str(data.get("response") or "")
+    response_text = str(data.get("result") or data.get("response") or "")
     if not response_text and error_msg:
         response_text = error_msg
 
@@ -861,3 +921,22 @@ def run_agentic_task(
         except OSError:
             # Best-effort cleanup; ignore errors.
             pass
+
+        # Issue #186: Scan for suspicious files after agentic task
+        _detect_suspicious_files(
+            cwd,
+            f"After run_agentic_task",
+            verbose=verbose,
+            quiet=quiet,
+            label=label,
+        )
+        # Also scan project root if different from cwd
+        project_root = Path.cwd()
+        if project_root != cwd:
+            _detect_suspicious_files(
+                project_root,
+                f"After run_agentic_task - project root",
+                verbose=verbose,
+                quiet=quiet,
+                label=label,
+            )

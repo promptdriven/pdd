@@ -84,7 +84,6 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any, Type, Union, Tuple
 from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
-from langchain_core.prompts import PromptTemplate
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 # Import the default model constant
@@ -230,7 +229,8 @@ if PROJECT_ROOT is None: # Fallback to CWD if no method succeeded
     warnings.warn(f"Could not determine project root automatically. Using current working directory: {PROJECT_ROOT}. Ensure this is the intended root or set the PDD_PATH environment variable.")
 
 
-ENV_PATH = PROJECT_ROOT / ".env"
+# ENV_PATH is set after _is_env_path_package_dir is defined (see below)
+
 # --- Determine LLM_MODEL_CSV_PATH ---
 # Prioritize ~/.pdd/llm_model.csv, then a project .pdd from the current CWD,
 # then PROJECT_ROOT (which may be set from PDD_PATH), else fall back to package.
@@ -289,6 +289,14 @@ def _is_env_path_package_dir(env_path: Path) -> bool:
         return env_path == pkg_path or str(env_path).startswith(str(pkg_path))
     except Exception:
         return False
+
+# ENV_PATH: Use CWD-based project root when PDD_PATH points to package directory
+# This ensures .env is written to the user's project, not the installed package location
+if _is_env_path_package_dir(PROJECT_ROOT):
+    ENV_PATH = project_root_from_cwd / ".env"
+    logger.debug(f"PDD_PATH points to package; using ENV_PATH from CWD: {ENV_PATH}")
+else:
+    ENV_PATH = PROJECT_ROOT / ".env"
 
 # Selection order
 if user_model_csv_path.is_file():
@@ -805,6 +813,45 @@ def _sanitize_api_key(key_value: str) -> str:
     return sanitized
 
 
+def _save_key_to_env_file(key_name: str, value: str, env_path: Path) -> None:
+    """Save or update a key in the .env file.
+
+    - Replaces existing key in-place (no comment + append)
+    - Removes old commented versions of the same key (Issue #183)
+    - Preserves all other content
+    """
+    lines = []
+    if env_path.exists():
+        with open(env_path, 'r') as f:
+            lines = f.readlines()
+
+    new_lines = []
+    key_replaced = False
+    prefix = f"{key_name}="
+    prefix_spaced = f"{key_name} ="
+
+    for line in lines:
+        stripped = line.strip()
+        # Skip old commented versions of this key (cleanup accumulation)
+        if stripped.startswith(f"# {prefix}") or stripped.startswith(f"# {prefix_spaced}"):
+            continue
+        elif stripped.startswith(prefix) or stripped.startswith(prefix_spaced):
+            # Replace in-place
+            new_lines.append(f'{key_name}="{value}"\n')
+            key_replaced = True
+        else:
+            new_lines.append(line)
+
+    # Add key if not found
+    if not key_replaced:
+        if new_lines and not new_lines[-1].endswith('\n'):
+            new_lines.append('\n')
+        new_lines.append(f'{key_name}="{value}"\n')
+
+    with open(env_path, 'w') as f:
+        f.writelines(new_lines)
+
+
 def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, bool], verbose: bool) -> bool:
     """Checks for API key in env, prompts user if missing, and updates .env."""
     key_name = model_info.get('api_key')
@@ -848,39 +895,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
             # Update .env file
             try:
-                lines = []
-                if ENV_PATH.exists():
-                    with open(ENV_PATH, 'r') as f:
-                        lines = f.readlines()
-
-                new_lines = []
-                # key_updated = False
-                prefix = f"{key_name}="
-                prefix_spaced = f"{key_name} =" # Handle potential spaces
-
-                for line in lines:
-                    stripped_line = line.strip()
-                    if stripped_line.startswith(prefix) or stripped_line.startswith(prefix_spaced):
-                        # Comment out the old key
-                        new_lines.append(f"# {line}")
-                        # key_updated = True # Indicates we found an old line to comment
-                    elif stripped_line.startswith(f"# {prefix}") or stripped_line.startswith(f"# {prefix_spaced}"):
-                         # Keep already commented lines as they are
-                         new_lines.append(line)
-                    else:
-                        new_lines.append(line)
-
-                # Append the new key, ensuring quotes for robustness
-                new_key_line = f'{key_name}="{user_provided_key}"\n'
-                # Add newline before if file not empty and doesn't end with newline
-                if new_lines and not new_lines[-1].endswith('\n'):
-                     new_lines.append('\n')
-                new_lines.append(new_key_line)
-
-
-                with open(ENV_PATH, 'w') as f:
-                    f.writelines(new_lines)
-
+                _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
                 logger.info(f"API key '{key_name}' saved to {ENV_PATH}.")
                 logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
                        "Ensure this file is kept secure and is included in your .gitignore.")
@@ -902,7 +917,6 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[str, Any]]], use_batch_mode: bool) -> Union[List[Dict[str, str]], List[List[Dict[str, str]]]]:
     """Formats prompt and input into LiteLLM message format."""
     try:
-        prompt_template = PromptTemplate.from_template(prompt)
         if use_batch_mode:
             if not isinstance(input_data, list):
                 raise ValueError("input_json must be a list of dictionaries when use_batch_mode is True.")
@@ -910,16 +924,16 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
             for item in input_data:
                 if not isinstance(item, dict):
                      raise ValueError("Each item in input_json list must be a dictionary for batch mode.")
-                formatted_prompt = prompt_template.format(**item)
+                formatted_prompt = prompt.format(**item)
                 all_messages.append([{"role": "user", "content": formatted_prompt}])
             return all_messages
         else:
             if not isinstance(input_data, dict):
                 raise ValueError("input_json must be a dictionary when use_batch_mode is False.")
-            formatted_prompt = prompt_template.format(**input_data)
+            formatted_prompt = prompt.format(**input_data)
             return [{"role": "user", "content": formatted_prompt}]
     except KeyError as e:
-        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt template.") from e
+        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt string.") from e
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
 
@@ -978,6 +992,30 @@ def _looks_like_python_code(s: str) -> bool:
     # Check for common Python patterns
     code_indicators = ('def ', 'class ', 'import ', 'from ', 'if __name__', 'return ', 'print(')
     return any(indicator in s for indicator in code_indicators)
+
+
+# Field names known to contain prose text, not Python code
+# These are skipped during syntax validation to avoid false positives
+_PROSE_FIELD_NAMES = frozenset({
+    'reasoning',           # PromptAnalysis - completeness reasoning
+    'explanation',         # TrimResultsOutput, FixerOutput - prose explanations
+    'analysis',            # DiffAnalysis, CodePatchResult - analysis text
+    'change_instructions', # ChangeInstruction, ConflictChange - instructions
+    'change_description',  # DiffAnalysis - description of changes
+    'planned_modifications', # CodePatchResult - modification plans
+    'details',             # VerificationOutput - issue details
+    'description',         # General prose descriptions
+    'focus',               # Focus descriptions
+})
+
+
+def _is_prose_field_name(field_name: str) -> bool:
+    """Check if a field name indicates it contains prose, not code.
+
+    Used to skip syntax validation on prose fields that may contain
+    Python keywords (like 'return' or 'import') but are not actual code.
+    """
+    return field_name.lower() in _PROSE_FIELD_NAMES
 
 
 def _repair_python_syntax(code: str) -> str:
@@ -1246,15 +1284,19 @@ def _unescape_code_newlines(obj: Any) -> Any:
     return obj
 
 
-def _has_invalid_python_code(obj: Any) -> bool:
+def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
     """
     Check if any code-like string fields have invalid Python syntax.
 
     This is used after _unescape_code_newlines to detect if repair failed
     and we should retry with cache disabled.
 
+    Skips fields in _PROSE_FIELD_NAMES to avoid false positives on prose
+    text that mentions code patterns (e.g., "ends on a return statement").
+
     Args:
         obj: A Pydantic model, dict, list, or primitive value
+        field_name: The name of the field being validated (used to skip prose)
 
     Returns:
         True if there are invalid code fields that couldn't be repaired
@@ -1265,6 +1307,9 @@ def _has_invalid_python_code(obj: Any) -> bool:
         return False
 
     if isinstance(obj, str):
+        # Skip validation for known prose fields
+        if _is_prose_field_name(field_name):
+            return False
         if _looks_like_python_code(obj):
             try:
                 ast.parse(obj)
@@ -1274,21 +1319,22 @@ def _has_invalid_python_code(obj: Any) -> bool:
         return False
 
     if isinstance(obj, BaseModel):
-        for field_name in obj.model_fields:
-            value = getattr(obj, field_name)
-            if _has_invalid_python_code(value):
+        for name in obj.model_fields:
+            value = getattr(obj, name)
+            if _has_invalid_python_code(value, field_name=name):
                 return True
         return False
 
     if isinstance(obj, dict):
-        for value in obj.values():
-            if _has_invalid_python_code(value):
+        for key, value in obj.items():
+            fname = key if isinstance(key, str) else ""
+            if _has_invalid_python_code(value, field_name=fname):
                 return True
         return False
 
     if isinstance(obj, list):
         for item in obj:
-            if _has_invalid_python_code(item):
+            if _has_invalid_python_code(item, field_name=field_name):
                 return True
         return False
 
@@ -1308,6 +1354,7 @@ def llm_invoke(
     time: float = 0.25,
     use_batch_mode: bool = False,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
+    language: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -1967,6 +2014,12 @@ def llm_invoke(
                 if verbose:
                     logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
 
+                # Build retry kwargs with provider credentials from litellm_kwargs
+                # Issue #185: Retry calls were missing vertex_location, vertex_project, etc.
+                retry_provider_kwargs = {k: v for k, v in litellm_kwargs.items()
+                                         if k in ('vertex_credentials', 'vertex_project', 'vertex_location',
+                                                  'api_key', 'base_url', 'api_base')}
+
                 # --- 7. Process Response ---
                 results = []
                 thinking_outputs = []
@@ -2017,7 +2070,8 @@ def llm_invoke(
                                         messages=retry_messages,
                                         temperature=current_temperature,
                                         response_format=response_format,
-                                        **time_kwargs
+                                        **time_kwargs,
+                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                     )
                                     # Re-enable cache - restore original configured cache (restore to original state, even if None)
                                     litellm.cache = configured_cache
@@ -2056,7 +2110,8 @@ def llm_invoke(
                                         messages=retry_messages,
                                         temperature=current_temperature,
                                         response_format=response_format,
-                                        **time_kwargs
+                                        **time_kwargs,
+                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                     )
                                     # Re-enable cache
                                     litellm.cache = original_cache
@@ -2277,7 +2332,8 @@ def llm_invoke(
 
                             # Check if code fields still have invalid Python syntax after repair
                             # If so, retry without cache to get a fresh response
-                            if _has_invalid_python_code(parsed_result):
+                            # Skip validation for non-Python languages to avoid false positives
+                            if language in (None, "python") and _has_invalid_python_code(parsed_result):
                                 logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
                                 if not use_batch_mode and prompt and input_json is not None:
                                     # Add a small variation to bypass cache
@@ -2292,7 +2348,8 @@ def llm_invoke(
                                             messages=retry_messages,
                                             temperature=current_temperature,
                                             response_format=response_format,
-                                            **time_kwargs
+                                            **time_kwargs,
+                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
                                         )
                                         # Re-enable cache
                                         litellm.cache = original_cache

@@ -1,9 +1,12 @@
 {
-  "pdd_version": "0.0.88",
-  "timestamp": "2025-12-22T08:35:27.733455+00:00",
-  "command": "test",
+  "pdd_version": "0.0.95",
+  "timestamp": "2025-12-30T07:46:57.479280+00:00",
+  "command": "fix",
   "prompt_hash": "f8df355ee1c6e73a393a00c18232048a83fde694b33c472771246631a3724bf6",
-  "code_hash": "29aa57b99745c5b05294fd6a6d1824c48f5aa98ede79f1749dc095f347c8953c",
-  "example_hash": "81ef141e1fdd1e87c85f288e5be103edba9f404b7bfc7e0320d42c8aa4af3235",
-  "test_hash": "194b2eb564e82c016b45813ee19df84149c3e539becb487e2bc805f2e244ef2f"
+  "code_hash": "9f092bfa8d9669f930a04cca8c2414b67d527c11aa3504007d6ab7af7ce0d9c8",
+  "example_hash": "ac01060e585e528f9a70a995ca387d03228fb6d4e129f822553ed9575c9bfb1f",
+  "test_hash": "f167046c1f6b2e9d5792be539a2c9a87b75ef7316b52891cb1e175d202519e72",
+  "test_files": {
+    "test_hello.py": "f167046c1f6b2e9d5792be539a2c9a87b75ef7316b52891cb1e175d202519e72"
+  }
 }

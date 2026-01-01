@@ -16,7 +16,7 @@ from rich.progress import (
 from rich.table import Table
 from rich.theme import Theme
 
-from .construct_paths import construct_paths
+from .construct_paths import construct_paths, get_tests_dir_from_config, detect_context_for_file
 from .get_language import get_language
 from .update_prompt import update_prompt
 from .git_update import git_update
@@ -70,8 +70,13 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
             # If not a git repo, use the directory containing the code file
             pass
 
-        # Use the default prompts directory at repo root
-        prompts_dir = os.path.join(repo_root, "prompts")
+        # Use context-aware prompts_dir from .pddrc if available
+        context_name, context_config = detect_context_for_file(code_file_path, repo_root)
+        prompts_dir_config = context_config.get("prompts_dir", "prompts")
+        if os.path.isabs(prompts_dir_config):
+            prompts_dir = prompts_dir_config
+        else:
+            prompts_dir = os.path.join(repo_root, prompts_dir_config)
 
     # Construct the prompt filename in the determined directory
     prompt_filename = f"{base_name}_{language}.prompt"
@@ -125,7 +130,7 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
     code_files = [
         f for f in all_files
         if (
-            get_language(f) is not None and
+            get_language(os.path.splitext(f)[1]) and  # Pass extension, not full path
             not f.endswith('.prompt') and
             not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
             not os.path.splitext(os.path.basename(f))[0].endswith('_example')
@@ -156,10 +161,12 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
         use_agentic = not simple and get_available_agents()
 
         if use_agentic:
+            tests_dir = get_tests_dir_from_config()
             success, message, agentic_cost, provider, changed_files = run_agentic_update(
                 prompt_file=prompt_file,
                 code_file=code_file,
                 test_files=None,
+                tests_dir=tests_dir,
                 verbose=verbose,
                 quiet=quiet,
             )
@@ -260,6 +267,7 @@ def update_main(
     use_git: bool = False,
     repo: bool = False,
     extensions: Optional[str] = None,
+    directory: Optional[str] = None,
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
     simple: bool = False,
@@ -276,6 +284,7 @@ def update_main(
     :param use_git: Use Git history to retrieve the original code if True.
     :param repo: If True, run in repository-wide mode.
     :param extensions: Comma-separated string of file extensions to filter by in repo mode.
+    :param directory: Optional directory to scan in repo mode (defaults to repo root).
     :param strength: Optional strength parameter (overrides ctx.obj if provided).
     :param temperature: Optional temperature parameter (overrides ctx.obj if provided).
     :return: Tuple containing the updated prompt, total cost, and model name.
@@ -297,7 +306,12 @@ def update_main(
             # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
             return None
 
-        pairs = find_and_resolve_all_pairs(repo_root, quiet, extensions, output)
+        # Use specified directory if provided, otherwise scan from repo root
+        if directory:
+            scan_dir = os.path.abspath(directory)
+        else:
+            scan_dir = repo_root
+        pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
         
         if not pairs:
             rprint("[info]No scannable code files found in the repository.[/info]")
@@ -399,10 +413,12 @@ def update_main(
                 # Ensure prompt file exists for agentic
                 Path(prompt_path).touch(exist_ok=True)
 
+                tests_dir = get_tests_dir_from_config()
                 success, message, agentic_cost, provider, changed_files = run_agentic_update(
                     prompt_file=prompt_path,
                     code_file=modified_code_file,
                     test_files=None,
+                    tests_dir=tests_dir,
                     verbose=verbose,
                     quiet=quiet,
                 )
@@ -460,10 +476,12 @@ def update_main(
             use_agentic = not simple and get_available_agents()
 
             if use_agentic:
+                tests_dir = get_tests_dir_from_config()
                 success, message, agentic_cost, provider, changed_files = run_agentic_update(
                     prompt_file=actual_input_prompt_file,
                     code_file=modified_code_file,
                     test_files=None,
+                    tests_dir=tests_dir,
                     verbose=verbose,
                     quiet=quiet,
                 )

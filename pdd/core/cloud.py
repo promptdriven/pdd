@@ -36,6 +36,8 @@ DEFAULT_BASE_URL = "https://us-central1-prompt-driven-development.cloudfunctions
 # Endpoint paths (can be extended as more endpoints are added)
 CLOUD_ENDPOINTS = {
     "generateCode": "/generateCode",
+    "generateExample": "/generateExample",
+    "generateTest": "/generateTest",
     "syncState": "/syncState",
     "trackUsage": "/trackUsage",
     "getCreditBalance": "/getCreditBalance",

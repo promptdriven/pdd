@@ -37,6 +37,7 @@ help:
 	@echo "  make public-diff ITEM=path   - Show diff between public clone file and local file (uses same ITEM rules)"
 	@echo "  make sync-public             - Fetch public remote and list commits missing locally"
 	@echo "Fixing & Maintenance:"
+	@echo "  make update [MODULE=name]    - Update prompt based on code changes (uses git)"
 	@echo "  make fix [MODULE=name]       - Fix prompts command"
 	@echo "  make crash MODULE=name       - Fix crashes in code"
 	@echo "  make detect CHANGE_FILE=path  - Detect which prompts need changes based on a description file"
@@ -99,7 +100,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -401,6 +402,29 @@ else
 	done
 endif
 
+# Update prompt based on code changes
+update:
+ifdef MODULE
+	@echo "Updating prompt for module: $(MODULE)"
+	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
+	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
+
+	@if [ ! -f "$(PY_FILE)" ]; then \
+		echo "Error: Code file $(PY_FILE) not found."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(PY_PROMPT)" ]; then \
+		echo "Error: Prompt file $(PY_PROMPT) not found."; \
+		exit 1; \
+	fi
+
+	@echo "Updating $(PY_PROMPT) based on changes in $(PY_FILE)"
+	conda run -n pdd --no-capture-output pdd --verbose update --git $(PY_PROMPT) $(PY_FILE)
+else
+	@echo "Running repository-wide prompt update"
+	conda run -n pdd --no-capture-output pdd --verbose update --directory pdd --extensions py
+endif
+
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
@@ -561,7 +585,33 @@ publish:
 check-deps:
 	@python scripts/check_deps.py
 
-release: check-deps
+# Issue #186: Detect suspicious single-letter files (C, E, T)
+# These files sometimes appear during release operations
+# Files are logged but NOT removed so we can debug when it happens
+.PHONY: check-suspicious-files
+check-suspicious-files:
+	@echo "Checking for suspicious single-letter files (Issue #186)..."
+	@SUSPICIOUS=$$(find . -maxdepth 1 -type f \( -name 'C' -o -name 'E' -o -name 'T' -o -name '?' -o -name '??' \) ! -name '.*' 2>/dev/null); \
+	if [ -n "$$SUSPICIOUS" ]; then \
+		echo "⚠️  SUSPICIOUS FILES DETECTED:"; \
+		echo "$$SUSPICIOUS"; \
+		echo "Logging to ~/.pdd/suspicious_files.log"; \
+		mkdir -p ~/.pdd; \
+		echo "" >> ~/.pdd/suspicious_files.log; \
+		echo "============================================================" >> ~/.pdd/suspicious_files.log; \
+		echo "Timestamp: $$(date -Iseconds)" >> ~/.pdd/suspicious_files.log; \
+		echo "Context: make check-suspicious-files" >> ~/.pdd/suspicious_files.log; \
+		echo "Directory: $$(pwd)" >> ~/.pdd/suspicious_files.log; \
+		echo "Files: $$SUSPICIOUS" >> ~/.pdd/suspicious_files.log; \
+		for f in $$SUSPICIOUS; do \
+			echo "  File: $$f, Size: $$(stat -f%z "$$f" 2>/dev/null || stat -c%s "$$f" 2>/dev/null) bytes, Modified: $$(stat -f%Sm "$$f" 2>/dev/null || stat -c%y "$$f" 2>/dev/null)" >> ~/.pdd/suspicious_files.log; \
+		done; \
+		echo "Files left in place for debugging."; \
+	else \
+		echo "No suspicious files found."; \
+	fi
+
+release: check-deps check-suspicious-files
 	@echo "Preparing release"
 	@CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
 	CURRENT_TAG="v$$CURRENT_VERSION"; \
@@ -576,6 +626,8 @@ release: check-deps
 		echo "Publishing new version"; \
 		$(MAKE) publish; \
 	fi
+	@# Post-release cleanup check (Issue #186)
+	@$(MAKE) check-suspicious-files
 
 analysis:
 	@echo "Running regression analysis"

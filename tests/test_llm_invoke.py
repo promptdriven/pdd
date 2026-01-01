@@ -739,6 +739,70 @@ def test_has_invalid_python_code_ignores_non_code_strings():
     assert not _has_invalid_python_code(obj)
 
 
+def test_has_invalid_python_code_ignores_prose_fields():
+    """Prose fields with Python keywords should NOT trigger validation.
+
+    This reproduces issue #193: PromptAnalysis.reasoning contains
+    'return statement' which triggers false positive validation.
+    """
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class PromptAnalysis(BaseModel):
+        reasoning: str
+        is_finished: bool
+
+    # This prose mentions "return" - should NOT be validated as Python code
+    obj = PromptAnalysis(
+        reasoning="Python code parses; ends on a complete return statement.",
+        is_finished=True
+    )
+    # BUG: Currently returns True (false positive), should return False
+    assert not _has_invalid_python_code(obj)
+
+
+def test_is_prose_field_name():
+    """Test prose field name detection."""
+    from pdd.llm_invoke import _is_prose_field_name
+
+    # Prose fields (should be skipped)
+    assert _is_prose_field_name("reasoning")
+    assert _is_prose_field_name("explanation")
+    assert _is_prose_field_name("analysis")
+    assert _is_prose_field_name("change_instructions")
+    assert _is_prose_field_name("REASONING")  # Case insensitive
+
+    # Code fields (should NOT be skipped)
+    assert not _is_prose_field_name("fixed_code")
+    assert not _is_prose_field_name("extracted_code")
+    assert not _is_prose_field_name("trimmed_continued_generation")
+    assert not _is_prose_field_name("code_block")
+
+
+def test_has_invalid_python_code_validates_non_prose_code_fields():
+    """Ensure code fields (including non-obvious ones) still get validated."""
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class TrimResultsOutput(BaseModel):
+        explanation: str
+        trimmed_continued_generation: str  # This IS code, not prose!
+
+    # Valid code
+    valid = TrimResultsOutput(
+        explanation="Good code with return statement",
+        trimmed_continued_generation="def f():\n    return 1"
+    )
+    assert not _has_invalid_python_code(valid)
+
+    # Invalid code in trimmed_continued_generation should be detected
+    invalid = TrimResultsOutput(
+        explanation="Broken with import issues",
+        trimmed_continued_generation="def broken(:\n    pass"
+    )
+    assert _has_invalid_python_code(invalid)
+
+
 def test_llm_invoke_retries_on_invalid_python_code(mock_load_models, mock_set_llm_cache, caplog):
     """Test that llm_invoke retries with cache bypass when Python code is invalid after repair."""
     model_key_name = "OPENAI_API_KEY"
@@ -1584,3 +1648,129 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
                     f"Expected type 'json_object', got '{response_format.get('type')}'"
                 assert 'response_schema' in response_format, \
                     "response_format should contain response_schema"
+
+
+# ==============================================================================
+# Issue #183: Tests for .env file handling bugs
+# ==============================================================================
+
+from pdd.llm_invoke import _save_key_to_env_file, _is_env_path_package_dir, _detect_project_root_from_cwd
+
+
+class TestSaveKeyToEnvFile:
+    """Tests for Bug 1: .env key accumulation fix (Issue #183)."""
+
+    def test_replaces_key_in_place(self, tmp_path):
+        """Key should replace in-place, not comment + append."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('OPENAI_API_KEY="old_key"\n')
+
+        _save_key_to_env_file('OPENAI_API_KEY', 'new_key', env_file)
+
+        content = env_file.read_text()
+        assert content == 'OPENAI_API_KEY="new_key"\n'
+        assert '# ' not in content  # No commented lines
+
+    def test_removes_old_commented_keys(self, tmp_path):
+        """Updating a key should remove old commented versions."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('''# OPENAI_API_KEY="very_old"
+# OPENAI_API_KEY="old"
+OPENAI_API_KEY="current"
+OTHER_KEY="keep"
+''')
+
+        _save_key_to_env_file('OPENAI_API_KEY', 'new_key', env_file)
+
+        content = env_file.read_text()
+        assert content.count('OPENAI_API_KEY') == 1
+        assert '# OPENAI_API_KEY' not in content
+        assert 'OTHER_KEY="keep"' in content
+
+    def test_adds_key_to_empty_file(self, tmp_path):
+        """Should add key to empty/new .env file."""
+        env_file = tmp_path / ".env"
+
+        _save_key_to_env_file('NEW_KEY', 'value', env_file)
+
+        content = env_file.read_text()
+        assert content == 'NEW_KEY="value"\n'
+
+    def test_preserves_other_keys(self, tmp_path):
+        """Should preserve unrelated keys."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('OTHER_KEY="keep"\nANOTHER="also_keep"\n')
+
+        _save_key_to_env_file('NEW_KEY', 'value', env_file)
+
+        content = env_file.read_text()
+        assert 'OTHER_KEY="keep"' in content
+        assert 'ANOTHER="also_keep"' in content
+        assert 'NEW_KEY="value"' in content
+
+
+class TestEnvPathLocation:
+    """Tests for Bug 2: .env location when PDD_PATH is package dir (Issue #183)."""
+
+    def test_is_env_path_package_dir_detects_package(self):
+        """_is_env_path_package_dir should return True for package path."""
+        import importlib.resources
+        pkg_path = Path(str(importlib.resources.files('pdd')))
+
+        assert _is_env_path_package_dir(pkg_path) is True
+
+    def test_is_env_path_package_dir_false_for_user_project(self, tmp_path):
+        """_is_env_path_package_dir should return False for user project."""
+        user_project = tmp_path / "my_project"
+        user_project.mkdir()
+
+        assert _is_env_path_package_dir(user_project) is False
+
+    def test_detect_project_root_finds_git_marker(self, tmp_path, monkeypatch):
+        """_detect_project_root_from_cwd should find .git marker."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".git").mkdir()
+        subdir = project / "src"
+        subdir.mkdir()
+
+        monkeypatch.chdir(subdir)
+
+        result = _detect_project_root_from_cwd()
+        assert result == project
+
+
+# --- Tests for Language-Aware Python Validation (Issue: JavaScript false positives) ---
+
+def test_javascript_code_does_not_trigger_python_validation(mock_load_models, mock_set_llm_cache, caplog):
+    """Test that JavaScript code with 'return' does not trigger Python syntax validation.
+
+    JavaScript code containing 'return ' matches _looks_like_python_code() pattern,
+    causing ast.parse() to fail and log "Invalid Python syntax" warnings.
+    When language="javascript" is passed, validation should be skipped.
+    """
+    import logging
+    caplog.set_level(logging.WARNING)
+
+    model_key_name = "OPENAI_API_KEY"
+
+    # Valid JavaScript that contains 'return' (matches _looks_like_python_code pattern)
+    js_code = 'function isPalindrome(str) { return str === str.split("").reverse().join(""); }'
+
+    response_json = json.dumps({"explanation": "JavaScript function", "code": js_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response(response_json, model_name='gpt-5-nano')
+            mock_completion.return_value = mock_response
+
+            result = llm_invoke(
+                prompt="Write JavaScript",
+                input_json={},
+                output_pydantic=CodeOutputModel,
+                language="javascript",  # Skip Python validation
+            )
+
+    # Should NOT log Python syntax warning for JavaScript
+    assert "invalid python syntax" not in caplog.text.lower(), \
+        f"JavaScript should not trigger Python validation. Logs: {caplog.text}"

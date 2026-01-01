@@ -88,6 +88,28 @@ Tests define the **negative space**—what the generated code *cannot* violate:
 
 Each test is a wall. Each bug discovered adds a wall. The more walls, the more constrained the shape, the more consistent regenerations become. This connects to the principle of **Test Accumulation**.
 
+**The Precision Trade‑off: 3D Printing vs Injection Molding**
+
+Consider two manufacturing approaches:
+
+| Approach | How It Works | Precision Required |
+|----------|--------------|-------------------|
+| **3D Printing** | Deposits material precisely, layer by layer, with no mold | Extremely high—every point must be specified |
+| **Injection Molding** | Injects material into a pre‑existing mold | Lower—material flows until it hits walls |
+
+This maps directly to PDD:
+
+| PDD Scenario | Equivalent | Prompt Precision Needed |
+|--------------|------------|------------------------|
+| Few tests | 3D printing | High—prompt must specify every behavior |
+| Many tests | Injection molding | Lower—tests constrain the output |
+
+The inverse relationship is fundamental: **as test coverage increases, prompt precision requirements decrease**. Each test you add is a wall the generated code cannot violate. With enough walls, the prompt only needs to specify intent—the tests handle the rest.
+
+This is why test accumulation matters: it's not just about catching regressions, it's about making prompts simpler and regeneration more reliable over time.
+
+> More tests, less prompt. The mold does the precision work.
+
 **2. Prompt Capital: The Injection Point**
 
 The prompt directs **what fills the mold**—the intent, contracts, and requirements:
@@ -352,6 +374,89 @@ For reference, here's the full mapping between injection molding and PDD:
 
 The prompt encodes intent. The tests preserve behavior. Regeneration sustains integrity. Together, they convert maintenance from an endless patchwork into a compounding system of leverage.
 
+## The Context Window Advantage
+
+Modern LLMs operate within a fixed context window—a bounded "working memory" that holds everything the model can attend to during generation. How this window is allocated fundamentally affects generation quality.
+
+### The Agentic Overhead Problem
+
+Interactive agentic tools (Claude Code, Cursor, etc.) must dedicate significant context to operational overhead:
+
+| Overhead Type | Purpose | Typical Cost |
+|---------------|---------|--------------|
+| System prompts | Agent behavior, safety, persona | 2,000–5,000 tokens |
+| Tool definitions | Bash, Read, Edit, Write, etc. | 3,000–8,000 tokens |
+| MCP server configs | External integrations | 1,000–5,000 tokens |
+| Chat history | Conversation continuity | Grows unbounded |
+| Agentic loop instructions | Planning, reflection, error recovery | 1,000–3,000 tokens |
+
+This overhead competes directly with developer-provided context. As the conversation progresses and history accumulates, less of the window remains for the actual task.
+
+### Attention Degradation
+
+LLMs exhibit measurable attention degradation as context grows:
+- **"Lost in the middle"** effects where mid-context information is underweighted
+- **Reduced coherence** as the model tracks more threads
+- **Increased hallucination** as relevant context gets pushed further from attention
+
+The result: **The more you use an agentic tool in a session, the less effective each subsequent generation becomes.**
+
+### PDD: Full Context for Generation
+
+PDD's batch architecture eliminates operational overhead entirely:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    CONTEXT WINDOW                           │
+├─────────────────────────────────────────────────────────────┤
+│  AGENTIC TOOL ALLOCATION                                    │
+│  ┌──────────┬──────────┬──────────┬────────────────────┐   │
+│  │ System   │ Tools    │ MCP      │ Chat History       │   │
+│  │ Prompts  │ Defs     │ Configs  │ (grows over time)  │   │
+│  └──────────┴──────────┴──────────┴────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │         Developer's Actual Task (what remains)      │   │
+│  └─────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────┤
+│  PDD ALLOCATION                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                                                     │   │
+│  │   Prompt  │  Grounding  │  Tests  │  Dependencies  │   │
+│  │                                                     │   │
+│  │            100% for Generation Task                 │   │
+│  │                                                     │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Every token in the PDD context window serves generation:
+- **Prompt**: Requirements, constraints, intent
+- **Grounding**: Proven implementation patterns (few‑shot)
+- **Tests**: Behavioral constraints (the mold walls)
+- **Dependencies**: Interface definitions
+
+No tokens are wasted on tool definitions, chat history, or agent orchestration.
+
+### Why This Matters for Hard Problems
+
+Simple tasks tolerate context inefficiency. Hard problems don't.
+
+When tackling complex generation—intricate algorithms, multi-system integrations, nuanced business logic—you need:
+- Comprehensive requirements
+- Extensive grounding examples
+- Thorough test constraints
+- Precise interface definitions
+
+If 30–50% of your context window is consumed by agentic overhead, these hard problems become intractable. PDD's full-context architecture makes them accessible.
+
+### The Mold Metaphor Extended
+
+In injection molding, the press applies its full force to the material—none is wasted operating the machine. The machine's complexity exists, but it operates *outside* the molding process itself.
+
+Similarly, PDD's batch architecture keeps operational complexity outside the context window. The model receives a clean, focused specification and produces code. The "machine" (PDD tooling, cloud grounding, test discovery) operates externally, not within the precious context.
+
+> When every token serves your intent, generation quality scales with problem complexity rather than degrading against operational overhead.
+
 ## Core Principles
 - **Prompts As Source of Truth:** Versioned prompts define behavior and constraints. Code, examples, tests, infra, and docs are generated artifacts.
 - **Regenerate, Don’t Patch:** Change the prompt, then regenerate affected surfaces. Avoid local edits that drift intent from implementation.
@@ -359,7 +464,7 @@ The prompt encodes intent. The tests preserve behavior. Regeneration sustains in
 - **Test Accumulation:** Never discard passing tests after regeneration. Grow a regression net that preserves behavior as the system evolves.
 - **Modular Prompt Graph:** Model systems as composable prompt modules linked via minimal usage examples that act as clear interfaces.
 - **Intent First:** Capture goals (e.g., “Black Friday scale,” “HIPAA”), not just resource settings. Generation maps intent → implementation.
-- **Batch‑First Workflow:** Prefer deterministic, scriptable batch generation over interactive patching. Optimize for reproducibility and cost.
+- **Batch‑First Workflow:** Prefer deterministic, scriptable batch generation over interactive patching. Optimize for reproducibility and cost. (This also maximizes context available for generation—see "The Context Window Advantage.")
 - **Sharp Knives, Safe Defaults:** Provide powerful generation flows with sensible conventions (naming, structure, tests) to prevent foot‑guns.
 - **Conceptual Compression:** Consolidate requirements, rationale, and constraints inside prompts to reduce scattered context across tickets and docs.
 - **Progress Over Stasis:** Evolve prompts and regenerate even if code diffs are large. Preserve behavior with tests, not line‑level inertia.

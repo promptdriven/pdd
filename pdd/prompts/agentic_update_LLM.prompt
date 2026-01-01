@@ -1,7 +1,9 @@
 % You are an expert PDD (Prompt-Driven Development) engineer. Your task is to update a prompt file to reflect code changes while making it as compact as possible.
 
 % Prompting Guide (follow these best practices):
+<pdd_prompting_guide>
 <include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
 
 % Files to Read
 
@@ -11,8 +13,11 @@
 2. **Code file (modified)**: {code_path}
    - This contains the user's modifications that the prompt needs to capture
 
-3. **Test files** (if any exist): {test_paths}
-   - Read ALL test files listed above
+3. **Test files**: {test_paths}
+   - If tests are listed above, read ALL of them
+   - If "No tests were found", search for test files yourself:
+     - Look for files named `test_<module>*.py` in sibling `tests/` directory (../tests/)
+     - Check common locations: `tests/`, `__tests__/`, `test/`
    - Behaviors verified by tests DON'T need to be explicitly specified in the prompt
    - Tests accumulate across numbered files (test_module.py, test_module_1.py, etc.)
 
@@ -51,6 +56,6 @@
 
 Write the updated prompt directly to: {prompt_path}
 
-If you create new shared include files, write them to the `context/` directory.
+If you create new shared include files, write them to the `context/` or equivalent directory. It may be different for different projects so you might need to explore the project to find the correct directory.
 
 If the prompt is already optimal, you may leave it unchanged.

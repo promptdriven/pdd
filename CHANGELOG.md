@@ -1,30 +1,183 @@
+## v0.0.98 (2025-12-31)
+
+### Feat
+
+- Add check for suspicious single-letter files during release process
+- Add cloud execution support for pdd test command
+
+## v0.0.97 (2025-12-30)
+
+### Feat
+
+- **CLI Examples Display:** After each command step, the CLI now displays examples used for grounding (slug and title), helping users know what to use in `<pin>` or `<exclude>` tags.
+
+- **Suspicious Files Diagnostic Logging (Issue #186):** Added `_detect_suspicious_files()` in `agentic_fix.py` to detect and log when single-character files (C, E, T) are created during agentic operations. Logs include timestamp, context, directory, file sizes, and stack trace. Persistent log saved to `~/.pdd/suspicious_files.log`.
+
+- **Cloud Example Generation:** Added cloud execution support to `context_generator_main` via async `_run_cloud_generation()` function. Uses JWT authentication with automatic local fallback on cloud failure.
+
+- **Improved Syntax Repair:** Rewrote `_validate_and_fix_python_syntax()` with a binary search algorithm to find the longest valid Python prefix when LLM output contains trailing JSON garbage (e.g., `"explanation":` metadata).
+
+### Fix
+
+- **Nested asyncio.run() Bug (PR #204):** Fixed `pdd example` command failing to make cloud calls due to nested asyncio.run() error. The issue occurred because `CloudConfig.get_jwt_token()` uses asyncio.run() internally, causing conflicts when called from within an async context. Fixed by acquiring JWT token before entering the async context. (Thanks Jiamin Cai!)
+
+- **HTTPStatusError Response Text:** Fixed error handling to check for empty `.text` instead of checking if response exists (response is always present on HTTPStatusError).
+
+- **Test Overwrite Bug:** Fixed sync bug that would overwrite existing tests. Now uses append mode when merging with existing tests via the `--merge` flag.
+
+- **CLI Test Fixture:** Fixed test fixture checking for "install_completion" instead of "install-completion" (Click converts underscores to hyphens in command names).
+
+### Refactor
+
+- **Existing Tests as Lists:** Changed `existing_tests` parameter from string path to list of paths in prompts, enabling multiple test files to be concatenated for context.
+
+- **Test File Organization:** Moved `tests/test_core_cli.py` to `tests/core/test_cli.py` for better module organization.
+
+### Docs
+
+- Clarified `existing_tests` parameter behavior in `cmd_test_main_python.prompt`, documenting that it accepts a list of test file paths.
+
+### Tests
+
+- Added regression tests for nested asyncio.run() bug in `test_context_generator_main.py`.
+- Updated `test_cmd_test_main.py` with coverage for test file append mode and existing_tests list handling.
+
+## v0.0.96 (2025-12-29)
+
+### Feat
+
+- **Cloud Example Generation:** Added cloud execution support to `context_generator_main` via new async `_run_cloud_generation()` function. Uses `CloudConfig.get_jwt_token()` for authentication and automatically falls back to local execution on cloud failure. Supports `--local` flag to bypass cloud.
+
+- **Improved Syntax Repair:** Rewrote `_validate_and_fix_python_syntax()` with a binary search algorithm to find the longest valid Python prefix when LLM output contains trailing JSON garbage (e.g., `"explanation":`, `"filename":` metadata). Provides user feedback on repair success/failure.
+
+### Refactor
+
+- **Prompt Include Tag Updates:** Standardized `<include>` tags in `context_generator_main_python.prompt` and `preprocess_python.prompt` to use consistent naming conventions (e.g., `<context.module_name>` wrappers).
+
+### Tests
+
+- Updated `tests/test_context_generator_main.py` with coverage for cloud execution, local fallback, and syntax repair scenarios.
+
+## v0.0.95 (2025-12-28)
+
+### Feat
+
+- **`--directory` Option for Update Command:** Added `--directory` flag to the `update` command, allowing users to specify a subdirectory to scan in repository-wide mode instead of scanning from the repo root.
+
+### Fix
+
+- **Reject Suspicious LLM-Generated Paths (Issue #187):** Added `_is_suspicious_path()` function to `agentic_fix.py` that rejects single/double-character filenames (e.g., 'C', 'E', 'T'), template variables (e.g., '{path}', '{code_abs}'), and dot-only paths. This prevents LLM artifacts from being written to disk when agents produce malformed output markers.
+
+- **Sync Only Files from Triggering Commit:** Fixed the `sync-from-public.yml` workflow to sync only files changed in the specific triggering commit, not all differences from `public/main`. This prevents inadvertently reverting private-only changes. Added conflict detection and warnings for files with local modifications.
+
+- **Fix `get_language()` Call in Update:** Corrected `find_and_resolve_all_pairs()` to pass file extension to `get_language()` instead of the full path.
+
+### Refactor
+
+- **Remove langchain_core Dependency:** Removed `langchain_core` from dependencies. Replaced `PromptTemplate.from_template()` with native Python `str.format()` in `llm_invoke.py`, updating error messages from 'prompt template' to 'prompt string'.
+
+- **LLM Invocation Prompt Reorganization:** Streamlined `prompts/llm_invoke_python.prompt` documentation for clarity.
+
+### Docs
+
+- **PDD Doctrine - Context Window Advantage:** Expanded `docs/prompt-driven-development-doctrine.md` with ~100 lines explaining how PDD's batch architecture eliminates agentic overhead, allowing 100% of the context window to be used for generation vs. competing with tool definitions and chat history.
+
+### Tests
+
+- Added 230+ lines of tests in `tests/test_agentic_fix.py` covering suspicious path detection, template variable rejection, and integration tests verifying files like 'C', 'E', 'T' are not written to disk.
+
+## v0.0.94 (2025-12-27)
+
+### Feat
+
+- **Custom prompts_dir Support in Update Command (Issue #86):** Fixed `resolve_prompt_code_pair()` to use context-aware `prompts_dir` from `.pddrc` instead of hardcoding `prompts/` at repo root. Added shared `_match_path_to_contexts()` helper function in `construct_paths.py` that provides core pattern matching logic for both `_detect_context()` and `detect_context_for_file()`.
+
+- **Enhanced Test File Discovery:** Added `tests_dir` parameter support from `.pddrc` configuration in `_discover_test_files()`. Now searches in this priority order: configured tests_dir → tests/ relative to code → same directory → sibling tests/ (../tests/) → project root tests/.
+
+- **Target Coverage Defaults:** Changed default `--target-coverage` from 0.0 to 90.0 in `sync_main` and `sync_orchestration`. Improved CLI option handling in maintenance commands to correctly pass `None` when no coverage target specified.
+
+- **Anthropic Result Parsing Update:** Updated `_parse_anthropic_result()` to prioritize `result` key for Claude Code output format while maintaining `response` for backward compatibility.
+
+- **Agent Output Markdown Rendering:** Updated `run_agentic_update()` to display agent output with Markdown formatting when updates succeed, improving readability of agent responses.
+
+- **Prose Field Detection in LLM Invoke:** Added `_PROSE_FIELD_NAMES` constant and `_is_prose_field_name()` helper to skip Python syntax validation on known prose fields (reasoning, explanation, analysis, etc.) that may mention code patterns but aren't actual code.
+
+- **Prompting Guide in Agentic Update:** Added `<include>docs/prompting_guide.md</include>` to `agentic_update_LLM.prompt` so agents follow PDD best practices when updating prompts. Also improved test file discovery instructions to search sibling directories.
+
+### Fix
+
+- **Wheel Packaging for Agentic Update Prompt:** Added special curly brace escaping in `preprocess_wheel.py` for `agentic_update_LLM.prompt` to handle code examples in the included prompting guide that would otherwise break Python's `str.format()`.
+
+- Remove Python syntax warnings across codebase.
+
+### Data
+
+- Added 'global' tag to Google models in `data/llm_model.csv` for fixing the missing model by location issues.
+
+### Tests
+
+- Added regression test for Issue #86 (prompts_dir configuration).
+- Added tests for custom tests_dir discovery in `test_agentic_update.py`.
+- Added tests for target coverage CLI handling in `test_commands_maintenance.py`.
+- Added tests for Anthropic result parsing with 'result' key in `test_agentic_common.py`.
+- Added tests for Markdown rendering of agent output.
+
+## v0.0.93 (2025-12-27)
+
+### Feat
+
+- **Non-Python Agentic Fallback (Issue #189):** For non-Python languages that lack verification commands (Java without Maven/Gradle, etc.), fix loops now directly trigger agentic fallback instead of raising an error. `sync_orchestration` sets `max_attempts=0` for non-Python languages to skip iterative loops and go straight to agentic fallback. Affects `fix_code_loop`, `fix_error_loop`, and `fix_verification_errors_loop`.
+
+- **Language Parameter Propagation:** Added `language` parameter to `llm_invoke()`, `code_generator()`, and related functions for improved language-specific handling and output schema support.
+
+- **Makefile Update Command:** Added `make update [MODULE=name]` target for updating prompts based on code changes using git diff.
+
+- **.env File Key Management (Issue #183):** Improved `_save_key_to_env_file()` to replace existing keys in-place (no comment + append accumulation), remove old commented versions of the same key, and use CWD-based project root when `PDD_PATH` points to a package directory.
+
+### Fix
+
+- **Vertex AI Credentials in Retry (Issue #185):** Fixed retry calls in `llm_invoke()` to include `vertex_credentials`, `vertex_project`, and `vertex_location` parameters. Previously retries would fail because LiteLLM defaulted to `us-central1` when these were missing.
+
+- Remove temporary 'NEW PARAMETER' comment.
+
+### Tests
+
+- Added 286 lines of tests in `tests/test_llm_invoke_vertex_retry.py` covering Vertex AI credential propagation in retry code paths (None content, malformed JSON, invalid Python).
+- Added 440 lines of tests in `tests/test_sync_orchestration.py` for non-Python agentic fallback behavior, verifying `max_attempts=0` is passed for crash, verify, and fix operations.
+
 ## v0.0.92 (2025-12-25)
 
 ### Feat
 
-- add cloud configuration examples and enhance path handling
-- support subdirectory basenames in output path generation
-- implement environment variable checks for cloud execution in code generator
-- enhance error handling for cloud execution in code generator
-- add centralized cloud configuration module for PDD CLI
-- enhance cloud URL configuration and authentication handling
-- enhance backup organization and schema validation
+- **Centralized Cloud Configuration:** Added `pdd/core/cloud.py` module providing `CloudConfig` class for consistent cloud URL configuration and JWT token handling across all cloud-enabled commands. Supports `PDD_CLOUD_URL` for testing against different environments (local emulator, staging, production) and `PDD_JWT_TOKEN` for pre-injected tokens in CI/CD pipelines.
+
+- **Subdirectory Basename Support:** Updated `generate_output_paths`, `sync_main`, and `sync_orchestration` to handle module basenames with subdirectory paths (e.g., `core/cloud`). Directory structure is preserved in output filenames: `core/cloud` with pattern `test_{basename}.py` produces `core/test_cloud.py`.
+
+- **Enhanced Cloud Error Handling:** Cloud code generation now distinguishes between recoverable errors (5xx, timeouts → local fallback) and non-recoverable errors (401 auth, 402 insufficient credits, 403 access denied, 400 validation → immediate failure with clear error message). Added `PDD_CLOUD_ONLY` and `PDD_NO_LOCAL_FALLBACK` env vars to disable local fallback.
+
+- **CI/Headless Mode Detection:** Added automatic TTY detection for CI/non-interactive environments. When `--force` is set and running in headless mode (non-TTY), API key prompts are skipped and cloud authentication failures fail gracefully instead of blocking on user input.
 
 ### Fix
 
-- resolve path resolution mismatch in sync_orchestration
-- mock isatty in test fixture for headless mode compatibility
-- extend --force to skip API key prompts in CI/headless environments
-- add headless mode detection for CI/non-TTY environments
-- add timeout and non-TTY mode for pdd sync in CI
-- rename code.py to buggy.py in agentic test fixtures
-- correct typo in prompt tag from <proompt_content> to <prompt_content>
-- package docs and add fallback path resolution for includes
+- **Path Resolution Mismatch (Issue #177):** Fixed `sync_orchestration` to use absolute paths when calling `code_generator_main` and `context_generator_main`, preventing path resolution mode conflicts between sync (`cwd`) and generate (`config_base`). Also ensures output directories exist before writing.
 
-### Refactor
+- **Package Include Resolution (Issue #175):** `preprocess.py` now falls back to package directory when resolving `<include>` directives, allowing bundled docs like `docs/prompting_guide.md` to be found after pip/wheel installation.
 
-- remove local _safe_basename function and update tests for subdirectory handling
-- centralize cloud configuration and authentication handling
+- **Sync Log Subdirectory Handling:** All sync log and fingerprint file operations now use `_safe_basename()` to properly handle subdirectory basenames in filenames.
+
+- **Prompt Tag Typo:** Corrected `<proompt_content>` to `<prompt_content>` in agentic fix prompt.
+
+- **Agentic Test Fixtures:** Renamed `code.py` to `buggy.py` in agentic test fixtures to avoid confusion with module names.
+
+### CI
+
+- **Package Install Test Workflow:** Added `.github/workflows/package-test.yml` to validate that packaged PDD correctly resolves `<include>` directives for bundled docs when installed via pip/wheel (not editable install).
+
+### Tests
+
+- Added 266 lines of tests in `tests/core/test_cloud.py` covering `CloudConfig` URL resolution, JWT token handling, and environment variable precedence.
+- Added subdirectory basename tests in `test_generate_output_paths.py` and `test_sync_orchestration.py`.
+- Added headless mode and force flag tests across sync and code generator modules.
 
 ## v0.0.91 (2025-12-24)
 
