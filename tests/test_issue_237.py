@@ -302,5 +302,63 @@ contexts:
             os.chdir(original_cwd)
 
 
+class TestConstructPathsContextDetection:
+    """Test that construct_paths uses prompt file path for context detection, not CWD."""
+
+    def test_construct_paths_uses_prompt_file_for_context_detection(self, tmp_path):
+        """Issue #237: Context should be detected from prompt file path, not CWD.
+
+        When construct_paths receives a prompt file path, it should use that path
+        to detect the context, not the current working directory. This ensures
+        that the correct outputs config (with templates) is used for path generation.
+        """
+        pddrc_content = """
+version: "1.0"
+contexts:
+  backend-utils:
+    paths:
+      - "prompts/backend/utils/**"
+    defaults:
+      default_language: "python"
+      outputs:
+        example:
+          path: "context/backend/{name}_example.py"
+  default:
+    defaults:
+      example_output_path: "context/"
+"""
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(pddrc_content)
+
+        # Create prompt file at path matching backend-utils context
+        prompt_dir = tmp_path / "prompts" / "backend" / "utils"
+        prompt_dir.mkdir(parents=True)
+        prompt_file = prompt_dir / "credit_helpers_python.prompt"
+        prompt_file.write_text("test prompt")
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)  # CWD is project root - doesn't match any pattern
+
+            from pdd.construct_paths import construct_paths
+
+            resolved_config, _, _, _ = construct_paths(
+                input_file_paths={"prompt_file": str(prompt_file)},
+                force=True,
+                quiet=True,
+                command="sync",
+                command_options={"basename": "credit_helpers", "language": "python"}
+            )
+
+            # BUG: Currently returns 'default' because it uses CWD for context detection
+            # EXPECTED: Should return 'backend-utils' because prompt file matches the pattern
+            assert resolved_config.get('_matched_context') == 'backend-utils', \
+                f"Expected context 'backend-utils' but got '{resolved_config.get('_matched_context')}'"
+            assert 'outputs' in resolved_config, \
+                "Expected 'outputs' in resolved_config for template-based path generation"
+        finally:
+            os.chdir(original_cwd)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
