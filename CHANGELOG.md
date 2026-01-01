@@ -1,3 +1,10 @@
+## v0.0.98 (2025-12-31)
+
+### Feat
+
+- Add check for suspicious single-letter files during release process
+- Add cloud execution support for pdd test command
+
 ## v0.0.97 (2025-12-30)
 
 ### Feat
