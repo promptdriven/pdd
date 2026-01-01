@@ -5,27 +5,12 @@
 
 <include>context/python_preamble.prompt</include>
 
-% Program Specification (README.md):
-    <README.md>
-    <include>./README.md</include>
-    </README.md>
-
 % Requirements
-  1. **detect**:
-     - Interface: Match the `detect` command specification in `README.md`.
-     - Logic: Validate >= 2 files. Last is change file. Call `detect_change_main`.
-  2. **conflicts**:
-     - Interface: Match the `conflicts` command specification in `README.md`.
-     - Logic: Call `conflicts_main`.
-  3. **bug**:
-     - Interface: Match the `bug` command specification in `README.md`.
-     - Logic: Call `bug_main`.
-  4. **crash**:
-     - Interface: Match the `crash` command specification in `README.md` (including loop and fallback options).
-     - Logic: Call `crash_main`.
-  5. **trace**:
-     - Interface: Match the `trace` command specification in `README.md`.
-     - Logic: Call `trace_main`.
+  1. **detect**: Validate >= 2 files (last is change file). Call `detect_change_main`. Options: `--output`.
+  2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
+  3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files. Call `bug_main`. Options: `--manual`, `--output`, `--language`.
+  4. **crash**: Takes 4 positional files (prompt, code, program, error). Call `crash_main`. Options: `--output`, `--output-program`, `--loop`, `--max-attempts`, `--budget`.
+  5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
 
 % Dependencies
   <detect_change_main_example>
