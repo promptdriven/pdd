@@ -167,17 +167,13 @@ def cmd_test_main(
     cloud_only = _env_flag_enabled("PDD_CLOUD_ONLY") or _env_flag_enabled("PDD_NO_LOCAL_FALLBACK")
     current_execution_is_local = is_local_execution_preferred and not cloud_only
 
-    # Generate or enhance unit tests
-    if not coverage_report:
-        # Validation for increase mode requirements
-        pass  # No additional validation needed for generate mode
-    else:
-        if not existing_tests:
-            print(
-                "[bold red]Error: --existing-tests is required "
-                "when using --coverage-report[/bold red]"
-            )
-            return "", 0.0, "Error: --existing-tests is required when using --coverage-report"
+    # Validate increase mode requirements
+    if coverage_report and not existing_tests:
+        print(
+            "[bold red]Error: --existing-tests is required "
+            "when using --coverage-report[/bold red]"
+        )
+        return "", 0.0, "Error: --existing-tests is required when using --coverage-report"
 
     # Determine mode for cloud request
     mode = "increase" if coverage_report else "generate"
@@ -320,6 +316,7 @@ def cmd_test_main(
                     source_file_path=source_file_path_for_prompt,
                     test_file_path=test_file_path_for_prompt,
                     module_name=module_name_for_prompt,
+                    existing_tests=input_strings.get("existing_tests"),
                 )
                 if verbose:
                     console.print(Panel(
@@ -376,10 +373,16 @@ def cmd_test_main(
         # Ensure parent directory exists
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(output_file, "w", encoding="utf-8") as file_handle:
-            file_handle.write(unit_test)
-        print(f"[bold green]Unit tests saved to:[/bold green] {output_file}")
+
+        # Use append mode when merging with existing tests
+        if merge and existing_tests:
+            with open(output_file, "a", encoding="utf-8") as file_handle:
+                file_handle.write("\n\n" + unit_test)
+            print(f"[bold green]Unit tests appended to:[/bold green] {output_file}")
+        else:
+            with open(output_file, "w", encoding="utf-8") as file_handle:
+                file_handle.write(unit_test)
+            print(f"[bold green]Unit tests saved to:[/bold green] {output_file}")
     except Exception as exception:
         # A broad exception is caught here to handle potential file system errors
         # (e.g., permissions, disk space) that can occur when writing the
