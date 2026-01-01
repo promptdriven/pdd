@@ -458,7 +458,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
 - **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash. Includes an agentic fallback mode for complex errors.
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line.
-- **[`bug`](#14-bug)**: Generates a unit test based on observed vs. desired program outputs.
+- **[`bug`](#14-bug)**: Generates a unit test from a GitHub issue via an agentic workflow that analyzes, reproduces, and creates failing tests.
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
 - **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
 
@@ -1802,26 +1802,46 @@ This will print out the line number in the prompt file for the associated the co
 
 ### 14. bug
 
-Generate a unit test based on observed and desired outputs, given the original prompt and code.
+Generate a unit test from a GitHub issue. The issue serves as the source of truth for both the error output and expected behavior. An agentic workflow analyzes the issue, reproduces the bug, and creates a failing test.
 
 ```
-pdd [GLOBAL OPTIONS] bug [OPTIONS] PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT_FILE DESIRED_OUTPUT_FILE
+pdd [GLOBAL OPTIONS] bug <github-issue-url>
+pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT DESIRED_OUTPUT
 ```
+
+**How it works (step-by-step with GitHub comments):**
+
+1. **Duplicate check** - Search for existing issues describing the same problem. If found, merge content and close the duplicate. Posts comment with findings.
+
+2. **Documentation check** - Review repo documentation to determine if this is a bug or user error. Posts comment with findings. **Stops if not a bug.**
+
+3. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
+
+4. **Root cause analysis** - Run experiments to identify the root cause. Posts comment explaining the root cause.
+
+5. **Test plan** - Design a plan for creating tests to detect the problem. Posts comment with the test plan.
+
+6. **Generate test** - Create the failing unit test. Posts comment with the generated test code. **Stops if no test generated.**
+
+7. **Verify detection** - Confirm the test successfully detects the bug. Posts comment confirming verification. **Stops if test doesn't fail correctly.**
+
+8. **Create draft PR** - Create a draft pull request with the failing test and link it to the issue. Posts comment with PR link.
 
 Arguments:
-- `PROMPT_FILE`: Filename of the prompt file that generated the code.
-- `CODE_FILE`: Filename of the code file being tested.
-- `PROGRAM_FILE`: Filename of the program used to run the code under test.
-- `CURRENT_OUTPUT_FILE`: File containing the current (incorrect) output of the program.
-- `DESIRED_OUTPUT_FILE`: File containing the desired (correct) output of the program.
+- `ISSUE_URL`: GitHub issue URL (e.g., https://github.com/owner/repo/issues/123)
 
 Options:
-- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_bug_1.py`) will be created instead of overwriting.
-- `--language`: Specify the programming language for the unit test (default is "Python").
+- `--manual`: Use legacy mode with explicit file arguments (PROMPT_FILE, CODE_FILE, PROGRAM_FILE, CURRENT_OUTPUT, DESIRED_OUTPUT)
+- `--output LOCATION`: Specify where to save the generated unit test. Default: `test_<module>_bug.py`
+- `--language LANG`: Specify the programming language for the unit test (default is "Python").
 
 Example:
-```
-pdd [GLOBAL OPTIONS] bug --output tests/test_factorial_calculator_bug.py factorial_calculator_python.prompt src/factorial_calculator.py main_program.py current_output.txt desired_output.txt
+```bash
+# Agentic mode (recommended)
+pdd bug https://github.com/myorg/myrepo/issues/42
+
+# Manual mode (legacy)
+pdd bug --manual prompt.prompt code.py main.py current.txt desired.txt
 ```
 
 ### 15. auto-deps
