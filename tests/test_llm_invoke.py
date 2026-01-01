@@ -346,11 +346,12 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
                 assert call_kwargs['model'] == 'gpt-5-nano'
-                # response_format now uses explicit json_object with response_schema for structured output
+                # response_format uses json_schema with strict=True for schema enforcement
                 response_format = call_kwargs['response_format']
-                assert response_format['type'] == 'json_object'
-                assert 'response_schema' in response_format
-                assert response_format['response_schema'] == SampleOutputModel.model_json_schema()
+                assert response_format['type'] == 'json_schema'
+                json_schema = response_format['json_schema']
+                assert json_schema['strict'] == True
+                assert json_schema['schema'] == SampleOutputModel.model_json_schema()
 
 def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_set_llm_cache):
     model_key_name = "GOOGLE_API_KEY"
@@ -374,11 +375,12 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
                 mock_completion.assert_called_once()
                 call_args, call_kwargs = mock_completion.call_args
                 assert call_kwargs['model'] == 'gemini-pro'
-                # response_format now uses explicit json_object with response_schema for structured output
+                # response_format uses json_schema with strict=True for schema enforcement
                 response_format = call_kwargs.get('response_format')
-                assert response_format['type'] == 'json_object'
-                assert 'response_schema' in response_format
-                assert response_format['response_schema'] == SampleOutputModel.model_json_schema()
+                assert response_format['type'] == 'json_schema'
+                json_schema = response_format['json_schema']
+                assert json_schema['strict'] == True
+                assert json_schema['schema'] == SampleOutputModel.model_json_schema()
 
 def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mock_set_llm_cache):
     """Test that when ALL models fail Pydantic validation, RuntimeError is raised.
@@ -1578,10 +1580,11 @@ def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm
                     "DeepSeek MaaS should have response_format passed - check that structured_output=True in CSV"
 
                 response_format = call_kwargs['response_format']
-                assert response_format['type'] == 'json_object', \
-                    f"Expected type 'json_object', got '{response_format.get('type')}'"
-                assert 'response_schema' in response_format, \
-                    "response_format should contain response_schema"
+                assert response_format['type'] == 'json_schema', \
+                    f"Expected type 'json_schema' for strict enforcement, got '{response_format.get('type')}'"
+                json_schema = response_format.get('json_schema', {})
+                assert json_schema.get('strict') == True, \
+                    "strict should be True to enforce all required fields"
 
 
 def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock_set_llm_cache):
@@ -1644,10 +1647,68 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
                     "Vertex AI Claude Opus should have response_format passed - ensure LiteLLM >=1.81.0"
 
                 response_format = call_kwargs['response_format']
-                assert response_format['type'] == 'json_object', \
-                    f"Expected type 'json_object', got '{response_format.get('type')}'"
-                assert 'response_schema' in response_format, \
-                    "response_format should contain response_schema"
+                assert response_format['type'] == 'json_schema', \
+                    f"Expected type 'json_schema' for strict enforcement, got '{response_format.get('type')}'"
+                json_schema = response_format.get('json_schema', {})
+                assert json_schema.get('strict') == True, \
+                    "strict should be True to enforce all required fields"
+
+
+def test_structured_output_uses_strict_json_schema_mode(mock_set_llm_cache):
+    """Verify that structured output uses strict JSON schema mode for schema enforcement.
+
+    Issue: When using output_pydantic, the code was using type='json_object' with
+    response_schema as a hint. This doesn't enforce the schema - the LLM can still
+    omit required fields.
+
+    Fix: Use type='json_schema' with strict=True to enforce ALL required fields
+    are present in the response.
+    """
+    from pdd.llm_invoke import _load_model_data
+
+    # Use a model with structured_output=True
+    real_data = _load_model_data(None)
+    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
+    assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
+
+    with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
+        with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                # Return valid JSON matching SampleOutputModel
+                json_response = '{"field1": "test_value", "field2": 42}'
+                mock_response = create_mock_litellm_response(
+                    json_response,
+                    model_name='vertex_ai/claude-opus-4-5'
+                )
+                mock_completion.return_value = mock_response
+
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                          {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    llm_invoke(
+                        prompt="Return a sample output.",
+                        input_json={"query": "test"},
+                        strength=0.5,
+                        temperature=0.7,
+                        output_pydantic=SampleOutputModel,
+                        verbose=True
+                    )
+
+                # Verify response_format uses strict json_schema mode
+                mock_completion.assert_called_once()
+                call_kwargs = mock_completion.call_args.kwargs
+                response_format = call_kwargs.get('response_format')
+
+                assert response_format is not None, "response_format should be set"
+                assert response_format.get('type') == 'json_schema', \
+                    f"Expected type='json_schema' for strict enforcement, got type='{response_format.get('type')}'"
+
+                json_schema = response_format.get('json_schema', {})
+                assert json_schema.get('strict') == True, \
+                    "strict should be True to enforce all required fields"
+                assert 'schema' in json_schema, \
+                    "json_schema should contain the schema definition"
+                assert json_schema.get('name') == 'SampleOutputModel', \
+                    f"json_schema name should be model name, got '{json_schema.get('name')}'"
 
 
 # ==============================================================================
