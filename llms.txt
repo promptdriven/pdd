@@ -1,0 +1,28 @@
+# PDD (Prompt-Driven Development)
+
+> PDD is a complete AI toolchain for generating and maintaining codebases reliably and repeatably using the prompt-driven approach. Each PDD prompt is a mini-spec of a single output file, giving you tight control and ensuring each output file is reliably re-generated from its prompt.
+
+Key concepts:
+
+- **Prompts as Source of Truth**: Prompts are authoritative; code is a generated artifact
+- **One Prompt per Output File**: Laser-focuses the LLM on a single target, reducing hallucination
+- **Regenerative Development**: Modify prompts and fully regenerate code rather than patching
+- **Accumulated Tests**: PDD detects/fixes bugs and accumulates unit and regression tests automatically
+
+PDD is an excellent complement to agentic coding tools (Claude, Codex, Cursor, etc.) - use PDD for long-lived codebases and repeatedly-rebuilt tasks; use agentic coders for incremental, one-off, or ephemeral tasks.
+
+## Docs
+
+- [Introduction & Quick Start](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README.md): Main README with installation instructions, quick start guide, and links to all other documentation
+- [Installation Prerequisites](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README-INSTALL-PREREQS.md): Platform-specific prerequisites for macOS and Linux including Python, uv, and pip setup
+- [Fundamental Concepts](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README-CONCEPTS.md): Core PDD concepts - prompts first, keeping prompts and code in sync, integrating via examples, modularizing prompts, and using tests
+- [Workflows](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README-WORKFLOWS.md): Complete workflow reference including initial development, feature enhancement, code-to-prompt updates, debugging workflows, and multi-prompt architecture
+- [Advanced Configuration](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README-ADVANCED-CONFIGURATION.md): Project configuration with .pddrc files, environment variables, context-specific settings, and model configuration
+- [PDD Cloud](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README-CLOUD.md): Cloud features including automated grounding, PDD Context Memory, dashboard access, and authentication
+- [Security Considerations](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README-SECURITY.md): Security best practices for code execution, data privacy, API keys, and cloud mode
+- [Troubleshooting](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README-TROUBLESHOOTING.md): Common issues and solutions for installation, commands, sync operations, and platform-specific problems
+
+## Optional
+
+- [Complete Documentation](https://raw.githubusercontent.com/promptdriven/pdd/refs/heads/main/README-COMPLETE.md): Full concatenation of all documentation files above in a single file for comprehensive context
+
