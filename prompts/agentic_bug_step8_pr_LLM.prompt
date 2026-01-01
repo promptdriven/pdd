@@ -67,14 +67,14 @@ gh pr create --draft --title "Add failing test for #{issue_number}" --body "$(ca
 Adds a failing test that detects the bug reported in #{issue_number}.
 
 ## Test File
-`{test_file_path}`
+`{{test_file_path}}`
 
 ## What This PR Contains
 - Failing unit test that reproduces the reported bug
 - Test is verified to fail on current code and will pass once the bug is fixed
 
 ## Root Cause
-{root_cause_summary}
+{{root_cause_summary}}
 
 ## Next Steps
 1. [ ] Implement the fix at the identified location
@@ -104,14 +104,14 @@ Your comment should follow this format:
 ## Step 8: Draft PR Created
 
 ### Pull Request
-**PR #{pr_number}:** [{pr_title}]({pr_url})
+**PR #{{pr_number}}:** [{{pr_title}}]({{pr_url}})
 
 ### Branch
 `fix/issue-{issue_number}`
 
 ### What's Included
-- Failing test at `{test_file_path}`
-- Commits: {commit_count}
+- Failing test at `{{test_file_path}}`
+- Commits: {{commit_count}}
 
 ### Next Steps for Maintainers
 1. Review the failing test to understand the expected behavior
