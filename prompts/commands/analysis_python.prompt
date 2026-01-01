@@ -11,21 +11,11 @@
     </README.md>
 
 % Requirements
-  1. **detect**:
-     - Interface: Match the `detect` command specification in `README.md`.
-     - Logic: Validate >= 2 files. Last is change file. Call `detect_change_main`.
-  2. **conflicts**:
-     - Interface: Match the `conflicts` command specification in `README.md`.
-     - Logic: Call `conflicts_main`.
-  3. **bug**:
-     - Interface: Match the `bug` command specification in `README.md`.
-     - Logic: Call `bug_main`.
-  4. **crash**:
-     - Interface: Match the `crash` command specification in `README.md` (including loop and fallback options).
-     - Logic: Call `crash_main`.
-  5. **trace**:
-     - Interface: Match the `trace` command specification in `README.md`.
-     - Logic: Call `trace_main`.
+  1. **detect**: Match the `detect` command specification in `README.md`. Validate >= 2 files (last is change file). Call `detect_change_main`.
+  2. **conflicts**: Match the `conflicts` command specification in `README.md`. Call `conflicts_main` with `verbose` from context.
+  3. **bug**: Match the `bug` command specification in `README.md`. Call `bug_main`.
+  4. **crash**: Match the `crash` command specification in `README.md` (including loop options). Call `crash_main` and format result as summary string.
+  5. **trace**: Match the `trace` command specification in `README.md`. Call `trace_main`.
 
 % Dependencies
   <detect_change_main_example>
@@ -46,14 +36,6 @@
   <track_cost_example>
   <include>context/track_cost_example.py</include>
   </track_cost_example>
-
-% Instructions
-  - Use `handle_error` for all exceptions except `click.Abort`.
-  - Re-raise `click.Abort` to allow user cancellation to propagate.
-  - Apply `@track_cost` decorator to all commands.
-  - Access context flags via `ctx.obj.get("key", default)`.
-  - Return `Optional[Tuple[result, float, str]]` where float is cost and str is model name.
-  - Return `None` when an error is handled.
 
 % Deliverables
   - Code: `pdd/commands/analysis.py`

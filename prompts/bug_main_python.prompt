@@ -1,56 +1,45 @@
-% You are an expert Python engineer. Your goal is to write a Python function, 'bug_main', that will be the CLI wrapper for generating unit tests based on observed and desired outputs. This function will take the original prompt, code, program, and outputs to generate a unit test that can reproduce and verify the bug fix.
+% You are an expert Python engineer. Write a CLI wrapper function `bug_main` that generates unit tests either from a GitHub issue (agentic mode) or from manual file arguments (legacy mode).
 
 <include>./context/python_preamble.prompt</include>
 <include>./context/ctx_obj_params.prompt</include>
 
-% Here are the inputs and outputs of the function:
+% Inputs/Outputs
     Inputs:
-        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
-        - `prompt_file` (str): Filename of the prompt file that generated the code.
-        - `code_file` (str): Filename of the code file being tested.
-        - `program_file` (str): Filename of the program used to run the code under test.
-        - `current_output` (str): Path to the file containing the current (incorrect) output text.
-        - `desired_output` (str): Path to the file containing the desired (correct) output text.
-        - `output` (Optional[str]): Optional file or directory where the generated unit test is saved. If None, a default path is chosen via `construct_paths` (e.g., `test_{basename}_bug{ext}`) and the test is also printed to the console.
-        - `language` (Optional[str]): Optional programming language for the unit test. Defaults to "Python". If None, `construct_paths` may detect it.
-    Outputs:
-        - Returns a tuple containing (`str`, `float`, `str`):
-            - `str`: The generated unit test code
-            - `float`: The total cost of the operation
-            - `str`: The name of the model used
+        - `ctx` (`click.Context`): Click context object (see ctx_obj_params.prompt)
+        - `issue_url` (Optional[str]): GitHub issue URL for agentic mode (e.g., https://github.com/owner/repo/issues/123)
+        - `manual` (bool): If True, use legacy 5-argument mode
+        - `prompt_file`, `code_file`, `program_file` (Optional[str]): Paths to source files (required if manual=True)
+        - `current_output`, `desired_output` (Optional[str]): Paths to output files (required if manual=True)
+        - `output` (Optional[str]): Output path for generated test
+        - `language` (Optional[str]): Language for test generation (default "Python")
+    Output:
+        - Tuple[str, float, str]: (generated_test_code_or_message, total_cost, model_name)
 
-% Implementation Note for `bug_main`:
-    - Retrieve options from the Click context with sensible defaults:
-        - `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`
-        - `temperature = ctx.obj.get('temperature', 0.0)`
-        - `time = ctx.obj.get('time', DEFAULT_TIME)`  # float time budget
-        - `force = ctx.obj.get('force', False)` and `quiet = ctx.obj.get('quiet', False)`
-    - Use `construct_paths` with `command='bug'` to:
-        - Resolve and validate all input file paths.
-        - Load file contents into strings for generation.
-        - Determine a default output path based on context/env/defaults.
-        - Detect the `language` when the CLI `language` option is None.
-      When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
-    - Call `bug_to_unit_test` with parameters in this order:
-        `(current_output_str, desired_output_str, prompt_str, code_str, program_str, strength, temperature, time, language)`.
-    - Save to the resolved output path (creating parent directories if needed). Print model and cost when not quiet, and always print the generated unit test to the console. On failure, print an error (unless quiet) and exit with status code 1.
+% Requirements
+    1. **Mode detection**: If `issue_url` is provided and `manual` is False, use agentic mode. Otherwise use manual mode.
+    2. **Agentic mode** (issue_url provided):
+        - Validate issue_url is a valid GitHub issue URL (https://github.com/{owner}/{repo}/issues/{number})
+        - Call `run_agentic_bug(issue_url, verbose=verbose, quiet=quiet)` from `pdd.agentic_bug`
+        - Returns 5-tuple: (success, message, cost, model, changed_files)
+        - Return (message, cost, model) to caller
+    3. **Manual mode** (--manual flag or no issue_url):
+        - Require all 5 file arguments (prompt_file, code_file, program_file, current_output, desired_output)
+        - Call `construct_paths(command='bug', context_override=ctx.obj.get('context'))` to resolve paths
+        - Call `bug_to_unit_test(current_output_str, desired_output_str, prompt_str, code_str, program_str, strength, temperature, time, language)`
+        - Save to output path; print model/cost when not quiet
+    4. Retrieve ctx.obj options: strength, temperature, time, force, quiet, verbose
+    5. On error: print message (unless quiet) and sys.exit(1)
 
 <examples>
-% Here are examples of how to use internal modules:
-   <internal_example_modules>
-      - Here is an example of how to use the `construct_paths` function:
-        <construct_paths_example>
-        <include>context/construct_paths_example.py</include>
-        </construct_paths_example>
+<construct_paths_example>
+<include>context/construct_paths_example.py</include>
+</construct_paths_example>
 
-      - Here is an example of how to use the `bug_to_unit_test` function:
-        <bug_to_unit_test_example>
-        <include>context/bug_to_unit_test_example.py</include>
-        </bug_to_unit_test_example>
-   </internal_example_modules>
+<bug_to_unit_test_example>
+<include>context/bug_to_unit_test_example.py</include>
+</bug_to_unit_test_example>
+
+<agentic_bug_example>
+<include>context/agentic_bug_example.py</include>
+</agentic_bug_example>
 </examples>
-
-% Here is the README for the cli command that has details of how the 'bug' command works:
-   <cli_command_readme>
-   <include>./README.md</include>
-   </cli_command_readme>
