@@ -640,9 +640,25 @@ def construct_paths(
             pddrc_config = _load_pddrc_config(pddrc_path)
             
             # Detect appropriate context
-            current_dir = Path.cwd()
-            context = _detect_context(current_dir, pddrc_config, context_override)
-            
+            # Priority: context_override > file-based detection > CWD-based detection
+            if context_override:
+                # Validate and use override
+                contexts = pddrc_config.get('contexts', {})
+                if context_override not in contexts:
+                    raise ValueError(f"Unknown context '{context_override}'")
+                context = context_override
+            else:
+                # Try file-based detection when prompt file is provided
+                prompt_file_str = input_file_paths.get('prompt_file') if input_file_paths else None
+                if prompt_file_str and Path(prompt_file_str).exists():
+                    detected_context, _ = detect_context_for_file(prompt_file_str)
+                    if detected_context:
+                        context = detected_context
+                    else:
+                        context = _detect_context(Path.cwd(), pddrc_config, None)
+                else:
+                    context = _detect_context(Path.cwd(), pddrc_config, None)
+
             # Get context-specific configuration
             context_config = _get_context_config(pddrc_config, context)
             original_context_config = context_config.copy()  # Store original before modifications
