@@ -726,9 +726,27 @@ def construct_paths(
                     resolved_config["code_dir"] = str(gen_path.parent)
             
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
-            # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+
+            # Determine examples_dir for auto-deps scanning
+            # First try old-style example_output_path from generate_output_paths
+            example_path_str = output_paths_str.get("example_output_path")
+
+            # If not found, check for new-style outputs.example.path in context config
+            if not example_path_str and original_context_config:
+                outputs_config = original_context_config.get('outputs', {})
+                example_config = outputs_config.get('example', {})
+                example_template = example_config.get('path')
+                if example_template:
+                    # Extract directory from template path
+                    # e.g., "context/backend/{name}_example.py" → "context/backend"
+                    example_path_str = str(Path(example_template).parent)
+
+            # Final fallback to "examples"
+            if not example_path_str:
+                example_path_str = "examples"
+
+            # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
             # If it ends with / or has no file extension, treat as directory; otherwise use parent
-            example_path_str = output_paths_str.get("example_output_path", "examples")
             example_path = Path(example_path_str)
             if example_path_str.endswith('/') or '.' not in example_path.name:
                 resolved_config["examples_dir"] = example_path_str.rstrip('/')
@@ -1043,9 +1061,27 @@ def construct_paths(
     resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
-    # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+
+    # Determine examples_dir for auto-deps scanning
+    # First try old-style example_output_path from resolved_config
+    example_path_str = resolved_config.get("example_output_path")
+
+    # If not found, check for new-style outputs.example.path in context config
+    if not example_path_str and original_context_config:
+        outputs_config = original_context_config.get('outputs', {})
+        example_config = outputs_config.get('example', {})
+        example_template = example_config.get('path')
+        if example_template:
+            # Extract directory from template path
+            # e.g., "context/backend/{name}_example.py" → "context/backend"
+            example_path_str = str(Path(example_template).parent)
+
+    # Final fallback to "examples"
+    if not example_path_str:
+        example_path_str = "examples"
+
+    # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
     # If it ends with / or has no file extension, treat as directory; otherwise use parent
-    example_path_str = resolved_config.get("example_output_path", "examples")
     example_path = Path(example_path_str)
     if example_path_str.endswith('/') or '.' not in example_path.name:
         resolved_config["examples_dir"] = example_path_str.rstrip('/')
