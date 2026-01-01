@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 2 of 11 in an agentic bug investigation workflow. Previous step checked for duplicate issues.
+You are working on step 2 of 8 in an agentic bug investigation workflow. Previous step confirmed this is not a duplicate issue.
 
 **This step may terminate the workflow** if the reported behavior matches documentation (not a bug).
 
@@ -11,7 +11,6 @@ You are working on step 2 of 11 in an agentic bug investigation workflow. Previo
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
-- Issue Author: @{issue_author}
 
 % Issue Content
 <issue_content>
@@ -66,7 +65,7 @@ Your comment should follow this format:
 [Explanation of what the documentation says vs. what the user reports]
 
 ---
-*Proceeding to Step 3: Triage*
+*Proceeding to Step 3: Reproduction*
 ```
 
 **If Feature Request (STOP workflow):**
@@ -90,8 +89,10 @@ The reported behavior matches the current documentation. This appears to be a **
 ### Recommendation
 If you'd like to change this behavior, consider using `pdd change` to create a feature request instead. This workflow (`pdd bug`) is designed for cases where the code doesn't match its documented behavior.
 
+**@{issue_author}** - Could you clarify why you believe this is a bug rather than a feature request? If the current behavior is intentional but you'd like it changed, we can convert this to a feature request.
+
 ---
-*Investigation paused - this appears to be a feature request, not a bug.*
+*Investigation paused pending clarification.*
 ```
 
 **If User Error (STOP workflow):**
@@ -115,15 +116,17 @@ The reported issue appears to be a usage error rather than a bug.
 ### Recommendation
 Please try the correct usage above. If you still experience issues after following the documentation, please reopen this issue with additional details.
 
+**@{issue_author}** - Does the above resolve your issue? If you believe this is still a bug after reviewing the documentation, please let us know why.
+
 ---
-*Investigation paused - this appears to be a usage error, not a bug.*
+*Investigation paused pending clarification.*
 ```
 
 % Important
 
-- **STOP the workflow** if status is "Feature Request" or "User Error"
+- **STOP the workflow** if status is "Feature Request" or "User Error" - ask for clarification first
 - **CONTINUE the workflow** if status is "Confirmed Bug", "Documentation Gap", or "Needs Investigation"
-- Tag the issue author when asking for clarification
+- Tag the issue author (@{issue_author}) when asking for clarification
 - Mention `pdd change` as an alternative for feature requests
 - Be helpful and non-judgmental in your assessment
 - Always post your findings as a GitHub comment before completing
