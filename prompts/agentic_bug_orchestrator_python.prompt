@@ -7,7 +7,7 @@ Write the `pdd/agentic_bug_orchestrator.py` module.
 Orchestrator for the 8-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
 % Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_content: str, repo_owner: str, repo_name: str, issue_number: int, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 8 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -48,7 +48,8 @@ The orchestrator must parse step output to detect stop conditions:
 
 | Step | Stop Condition | Detection |
 |------|----------------|-----------|
-| 2 | "Feature Request" or "User Error" | Output contains "Status: Feature Request" or "Status: User Error" |
+| 1 | Issue is a duplicate | Output contains "Duplicate of #" |
+| 2 | "Feature Request" or "User Error" | Output contains "Feature Request (Not a Bug)" or "User Error (Not a Bug)" |
 | 6 | No test file generated | No new test file in changed_files |
 | 7 | Test doesn't fail correctly | Output contains "FAIL: Test does not work" |
 
@@ -58,7 +59,8 @@ The orchestrator must parse step output to detect stop conditions:
 - Do NOT continue to subsequent steps
 
 **Soft failures (continue):**
-- If `run_agentic_task()` returns `(False, ...)` for steps 1, 3, 4, 5, 8: log warning and continue
+- If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
+- This applies to all steps - only the specific hard stop patterns above terminate the workflow
 - Steps should post their findings to GitHub even on partial failure
 
 % Dependencies
