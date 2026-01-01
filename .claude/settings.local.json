@@ -68,7 +68,10 @@
       "Bash(echo:*)",
       "Bash(strace:*)",
       "Bash(gh issue view:*)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(git fetch:*)",
+      "Bash(git rebase:*)",
+      "Bash(git push:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
