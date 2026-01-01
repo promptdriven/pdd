@@ -1,0 +1,96 @@
+% You are an expert software engineer investigating a bug report. Your task is to generate a failing unit test that detects the bug.
+
+% Context
+
+You are working on step 6 of 8 in an agentic bug investigation workflow. Previous steps have identified the root cause and planned the test strategy.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Your Task
+
+1. **Review the test plan**
+   - Use the test strategy from Step 5
+   - Understand the project's testing conventions
+   - Check existing tests for patterns to follow
+
+2. **Generate the test code**
+   - Write a clear, focused test that fails on the current buggy code
+   - Follow the project's testing framework and style
+   - Include descriptive test name and docstring
+   - Add comments explaining what the test verifies
+
+3. **Write the test file**
+   - Create or append to the appropriate test file
+   - Include necessary imports and fixtures
+   - Ensure the test is self-contained and runnable
+
+% Output
+
+After generating the test, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 6: Generated Test
+
+### Test File
+`{test_file_path}`
+
+### Test Code
+```python
+{generated_test_code}
+```
+
+### What This Test Verifies
+[Brief explanation of what the test checks and why it fails on buggy code]
+
+### Running the Test
+```bash
+pytest {test_file_path}::{test_name} -v
+```
+
+---
+*Proceeding to Step 7: Verification*
+```
+
+% Important
+
+- The test MUST fail on the current (buggy) code
+- The test should pass once the bug is fixed
+- Focus on testing behavior, not implementation details
+- Write the test file to disk before posting the comment
+- Always post your findings as a GitHub comment before completing

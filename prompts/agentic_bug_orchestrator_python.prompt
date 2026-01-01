@@ -1,0 +1,69 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_bug_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 8-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+
+% Requirements
+1. Function: `run_agentic_bug_orchestrator(issue_content: str, repo_owner: str, repo_name: str, issue_number: int, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run 8 steps sequentially, each as a separate `run_agentic_task()` call
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps
+6. Collect changed files from all steps
+
+% Step Execution
+For each step (1-8):
+1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
+2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, step1_output, step2_output, etc.
+3. Call `run_agentic_task(formatted_prompt, cwd, ...)`
+4. Store the output for use by subsequent steps
+5. Accumulate cost: `total_cost += step_cost`
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_bug_step1_duplicate_LLM | Search for duplicate issues |
+| 2 | agentic_bug_step2_docs_LLM | Check documentation for user error |
+| 3 | agentic_bug_step3_reproduce_LLM | Attempt to reproduce the bug |
+| 4 | agentic_bug_step4_root_cause_LLM | Analyze root cause |
+| 5 | agentic_bug_step5_test_plan_LLM | Design test strategy |
+| 6 | agentic_bug_step6_generate_LLM | Generate failing unit test |
+| 7 | agentic_bug_step7_verify_LLM | Verify test catches the bug |
+| 8 | agentic_bug_step8_pr_LLM | Create draft PR and link to issue |
+
+% Context Accumulation
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- ... and so on
+- Step 7 receives: issue_content, step1_output through step6_output
+- Step 8 receives: issue_content, step1_output through step7_output
+
+% Early Exit Conditions (Hard Stops)
+
+The orchestrator must parse step output to detect stop conditions:
+
+| Step | Stop Condition | Detection |
+|------|----------------|-----------|
+| 2 | "Feature Request" or "User Error" | Output contains "Status: Feature Request" or "Status: User Error" |
+| 6 | No test file generated | No new test file in changed_files |
+| 7 | Test doesn't fail correctly | Output contains "FAIL: Test does not work" |
+
+**Hard stop behavior:**
+- Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
+- The step has already posted its findings to GitHub before returning
+- Do NOT continue to subsequent steps
+
+**Soft failures (continue):**
+- If `run_agentic_task()` returns `(False, ...)` for steps 1, 3, 4, 5, 8: log warning and continue
+- Steps should post their findings to GitHub even on partial failure
+
+% Dependencies
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+
+% Deliverables
+- Code: `pdd/agentic_bug_orchestrator.py`
