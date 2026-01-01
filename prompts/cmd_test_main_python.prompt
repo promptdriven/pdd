@@ -33,19 +33,21 @@
 %      When calling `construct_paths`, include `context_override=ctx.obj.get('context')` so a global `--context` is honored.
 %      Also pass `confirm_callback=ctx.obj.get('confirm_callback')` for TUI confirmation support.
 %  - When `existing_tests` is provided, read all files and concatenate their content into `input_strings["existing_tests"]`.
-%  - If 'coverage_report' is NOT provided: call `generate_test(prompt, code, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name, existing_tests)`.
+%  - If 'coverage_report' is NOT provided: use Cloud vs Local Execution Strategy (see below) to generate tests.
+%      For local execution, call `generate_test(prompt, code, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name, existing_tests)`.
 %      The additional parameters are computed as:
 %      • `source_file_path = str(Path(code_file).expanduser().resolve())`
 %      • `test_file_path = str(Path(output_file).expanduser().resolve())` where `output_file` is the resolved output path
 %      • `module_name = Path(source_file_path).stem`
 %      • `existing_tests = input_strings.get("existing_tests")` (the concatenated content or None)
-%  - If 'coverage_report' IS provided: require 'existing_tests'; otherwise print a Rich error and return an error result. If provided, call
-%    `increase_tests(existing_unit_tests, coverage_report, code, prompt_that_generated_code, language, strength, temperature, time, verbose)`.
+%  - If 'coverage_report' IS provided: require 'existing_tests'; otherwise print a Rich error and return an error result.
+%      Use Cloud vs Local Execution Strategy (see below) to augment tests.
+%      For local execution, call `increase_tests(existing_unit_tests, coverage_report, code, prompt_that_generated_code, language, strength, temperature, time, verbose)`.
 %  - Use `ctx.obj.get('time')` to retrieve the time parameter; `time` is a float in [0.0–1.0] representing relative thinking time (or None if not set).
 %  - Validate generated content is non-empty after stripping; on empty, print diagnostics and return an error result.
 %  - Resolve output path:
 %      * If `output` is None, or is a directory path or ends with '/', write to the resolved file from `construct_paths`.
-%      * If `merge` is True and `existing_tests` is provided, write to `existing_tests[0]`.
+%      * If `merge` is True and `existing_tests` is provided, write to `existing_tests[0]` using append mode ("a"), prepending "\n\n" before new content.
 %      * Ensure parent directories exist and write with UTF-8 encoding.
 %  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}")` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
 
@@ -66,6 +68,18 @@
         <increase_tests_example>
         <include>context/increase_tests_example.py</include>
         </increase_tests_example>
+
+      - Here is an example of how to get a JWT token for cloud authentication:
+      <get_jwt_token_example>
+      <include>context/get_jwt_token_example.py</include>
+      </get_jwt_token_example>
+      % The `get_jwt_token` function is async and must be run with `asyncio.run`.
+      % Expects environment variables `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID`.
+
+      - Here is an example of how to call a cloud function:
+      <cloud_function_call_example>
+      <include>context/cloud_function_call.py</include>
+      </cloud_function_call_example>
    </internal_example_modules>
 </examples>
 
@@ -73,3 +87,17 @@
    <cli_command_readme>
    <include>./README.md</include>
    </cli_command_readme>
+
+% Cloud vs Local Execution Strategy:
+%  1. If `ctx.obj.get('local')` is True, use local execution directly.
+%  2. Otherwise, attempt cloud execution first:
+%     - Obtain JWT via `CloudConfig.get_jwt_token()`.
+%     - Use request timeout of 400 seconds.
+%     - For test generation: POST to the `generateTest` cloud endpoint
+%       with JSON payload: `{ "promptContent": <prompt>, "codeContent": <code>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "time": <time>, "verbose": <verbose>, "sourceFilePath": <path>, "testFilePath": <path>, "moduleName": <name>, "mode": "generate" }`
+%     - For coverage augmentation: use mode "increase" and include additional fields `existingTests` and `coverageReport` in the payload.
+%     - Expected response fields: `generatedTest`, `totalCost`, `modelName`.
+%  3. If cloud fails (auth/network/HTTP errors, timeout, or missing code):
+%     - Log warning and automatically fall back to local execution.
+%  4. For local execution, call `generate_test` or `increase_tests` as appropriate.
+%  5. If verbose is True, print execution info using Rich panels.
