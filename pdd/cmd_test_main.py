@@ -167,17 +167,13 @@ def cmd_test_main(
     cloud_only = _env_flag_enabled("PDD_CLOUD_ONLY") or _env_flag_enabled("PDD_NO_LOCAL_FALLBACK")
     current_execution_is_local = is_local_execution_preferred and not cloud_only
 
-    # Generate or enhance unit tests
-    if not coverage_report:
-        # Validation for increase mode requirements
-        pass  # No additional validation needed for generate mode
-    else:
-        if not existing_tests:
-            print(
-                "[bold red]Error: --existing-tests is required "
-                "when using --coverage-report[/bold red]"
-            )
-            return "", 0.0, "Error: --existing-tests is required when using --coverage-report"
+    # Validate increase mode requirements
+    if coverage_report and not existing_tests:
+        print(
+            "[bold red]Error: --existing-tests is required "
+            "when using --coverage-report[/bold red]"
+        )
+        return "", 0.0, "Error: --existing-tests is required when using --coverage-report"
 
     # Determine mode for cloud request
     mode = "increase" if coverage_report else "generate"

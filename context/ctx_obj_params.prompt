@@ -11,7 +11,6 @@
 %   - 'local' (bool): Use local execution instead of cloud execution.
 %   - 'context' (str | None): Optional context directory override.
 %   - 'confirm_callback' (Callable | None): Optional TUI confirmation callback.
-%   - 'local' (bool): Force local execution instead of cloud.
 %
 % When a cmd_* function accepts optional `strength` and `temperature` parameters directly,
 % the resolution pattern is: use the function parameter if not None, otherwise fall back
