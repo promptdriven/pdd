@@ -2,6 +2,7 @@
 Tests for the `cmd_test_main` function, which handles CLI commands for test generation.
 """
 import json
+import os
 from unittest.mock import patch, MagicMock, mock_open
 import pytest
 import click
@@ -9,6 +10,26 @@ import requests
 from click import Context
 from pdd.cmd_test_main import cmd_test_main, CLOUD_REQUEST_TIMEOUT
 from pdd.core.cloud import CloudConfig
+
+
+def _has_cloud_credentials() -> bool:
+    """Check if cloud credentials are available for E2E testing."""
+    return bool(
+        os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY") and
+        os.environ.get("GITHUB_CLIENT_ID")
+    )
+
+
+# Pytest markers for conditional test execution
+requires_cloud = pytest.mark.skipif(
+    not _has_cloud_credentials(),
+    reason="Cloud credentials not available"
+)
+
+requires_no_cloud = pytest.mark.skipif(
+    _has_cloud_credentials(),
+    reason="Cloud credentials present - skipping local-only test"
+)
 
 # Get the cloud URL for assertions in tests
 CLOUD_GENERATE_TEST_URL = CloudConfig.get_endpoint_url("generateTest")
@@ -50,6 +71,7 @@ def mock_files_fixture():
 
 
 # pylint: disable=redefined-outer-name
+@requires_no_cloud
 @pytest.mark.parametrize("coverage_report, existing_tests, expect_error", [
     (None, None, False),
     ("fake_coverage_report.xml", None, True),
@@ -124,6 +146,7 @@ def test_cmd_test_main_coverage_handling(
 
 
 # pylint: disable=unused-argument
+@requires_no_cloud
 def test_cmd_test_main_path_construction_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if construct_paths raises an exception,
@@ -152,6 +175,7 @@ def test_cmd_test_main_path_construction_error(mock_ctx_fixture, mock_files_fixt
 
 
 # pylint: disable=unused-argument
+@requires_no_cloud
 def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if generate_test raises an exception,
@@ -188,6 +212,7 @@ def test_cmd_test_main_generate_test_error(mock_ctx_fixture, mock_files_fixture)
 
 
 # pylint: disable=unused-argument
+@requires_no_cloud
 def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that if increase_tests raises an exception (when coverage_report is provided),
@@ -230,6 +255,7 @@ def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture
 
 
 # pylint: disable=redefined-outer-name
+@requires_no_cloud
 def test_cmd_test_main_successful_generate_test_no_coverage(mock_ctx_fixture, mock_files_fixture):
     """
     Tests successful run where no coverage_report is provided
@@ -269,6 +295,7 @@ def test_cmd_test_main_successful_generate_test_no_coverage(mock_ctx_fixture, mo
 
 
 # pylint: disable=redefined-outer-name
+@requires_no_cloud
 def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, mock_files_fixture):
     """
     Tests a successful run with a coverage report, which should trigger 'increase_tests'.
@@ -310,6 +337,7 @@ def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, 
 
 
 # pylint: disable=redefined-outer-name
+@requires_no_cloud
 def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture):
     """
     Tests that when 'merge' is True, the output file is the 'existing_tests' path
@@ -347,6 +375,7 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
         handle.write.assert_called_once_with("\n\n" + "merged_code")
 
 
+@requires_no_cloud
 def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture, mock_files_fixture, tmp_path):
     """
     Intended behavior: when output is a directory path, cmd should write to the
@@ -1147,3 +1176,49 @@ def test_cmd_test_main_cloud_payload_contains_all_params(
         assert "testFilePath" in payload
         assert "moduleName" in payload
         assert "mode" in payload
+
+
+# -----------------------------------------------------------------------------
+# E2E Cloud Tests (run when cloud credentials are available)
+# -----------------------------------------------------------------------------
+
+@requires_cloud
+def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path):
+    """E2E test: Real cloud test generation when credentials are available."""
+    # Create minimal test files in tmp_path
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("Generate unit tests for a simple add function.")
+
+    code_file = tmp_path / "simple_math.py"
+    code_file.write_text("def add(a, b):\n    return a + b\n")
+
+    output_file = tmp_path / "test_simple_math.py"
+
+    # Create real Click context with local=False
+    ctx = MagicMock(spec=Context)
+    ctx.obj = {
+        "verbose": True,
+        "force": True,
+        "quiet": False,
+        "local": False,  # Use cloud
+    }
+
+    result = cmd_test_main(
+        ctx=ctx,
+        prompt_file=str(prompt_file),
+        code_file=str(code_file),
+        output=str(output_file),
+        language="python",
+        coverage_report=None,
+        existing_tests=None,
+        target_coverage=None,
+        merge=False,
+    )
+
+    # Verify we got valid test code back
+    generated_test, cost, model = result
+    assert len(generated_test) > 0, "Cloud should return generated test code"
+    assert "def test" in generated_test.lower() or "class test" in generated_test.lower(), \
+        "Should contain test functions or test class"
+    assert cost > 0, "Cloud execution should have a cost"
+    assert output_file.exists(), "Output file should be created"
