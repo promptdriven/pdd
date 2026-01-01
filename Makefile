@@ -585,7 +585,33 @@ publish:
 check-deps:
 	@python scripts/check_deps.py
 
-release: check-deps
+# Issue #186: Detect suspicious single-letter files (C, E, T)
+# These files sometimes appear during release operations
+# Files are logged but NOT removed so we can debug when it happens
+.PHONY: check-suspicious-files
+check-suspicious-files:
+	@echo "Checking for suspicious single-letter files (Issue #186)..."
+	@SUSPICIOUS=$$(find . -maxdepth 1 -type f \( -name 'C' -o -name 'E' -o -name 'T' -o -name '?' -o -name '??' \) ! -name '.*' 2>/dev/null); \
+	if [ -n "$$SUSPICIOUS" ]; then \
+		echo "⚠️  SUSPICIOUS FILES DETECTED:"; \
+		echo "$$SUSPICIOUS"; \
+		echo "Logging to ~/.pdd/suspicious_files.log"; \
+		mkdir -p ~/.pdd; \
+		echo "" >> ~/.pdd/suspicious_files.log; \
+		echo "============================================================" >> ~/.pdd/suspicious_files.log; \
+		echo "Timestamp: $$(date -Iseconds)" >> ~/.pdd/suspicious_files.log; \
+		echo "Context: make check-suspicious-files" >> ~/.pdd/suspicious_files.log; \
+		echo "Directory: $$(pwd)" >> ~/.pdd/suspicious_files.log; \
+		echo "Files: $$SUSPICIOUS" >> ~/.pdd/suspicious_files.log; \
+		for f in $$SUSPICIOUS; do \
+			echo "  File: $$f, Size: $$(stat -f%z "$$f" 2>/dev/null || stat -c%s "$$f" 2>/dev/null) bytes, Modified: $$(stat -f%Sm "$$f" 2>/dev/null || stat -c%y "$$f" 2>/dev/null)" >> ~/.pdd/suspicious_files.log; \
+		done; \
+		echo "Files left in place for debugging."; \
+	else \
+		echo "No suspicious files found."; \
+	fi
+
+release: check-deps check-suspicious-files
 	@echo "Preparing release"
 	@CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
 	CURRENT_TAG="v$$CURRENT_VERSION"; \
@@ -600,6 +626,8 @@ release: check-deps
 		echo "Publishing new version"; \
 		$(MAKE) publish; \
 	fi
+	@# Post-release cleanup check (Issue #186)
+	@$(MAKE) check-suspicious-files
 
 analysis:
 	@echo "Running regression analysis"
