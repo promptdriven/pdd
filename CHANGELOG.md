@@ -1,9 +1,39 @@
+## v0.0.99 (2026-01-01)
+
+### Feat
+
+- Add cloud hybrid mode support for pdd fix command
+- Add additional Bash commands for Git operations in settings
+- Add WebFetch support for GitHub domain in settings
+- Enhance examples_dir determination in construct_paths
+- Add extensible output path templates for different project layouts (#237)
+- Enhance cloud execution and release process checks
+
+### Fix
+
+- Update test to check for write calls instead of any open calls
+- Revert cmd_test_main_example.py to origin/main
+- make test uses absolute PDD_PATH
+- ignore directives inside code spans
+- Improve examples_dir determination in construct_paths
+- Ensure outputs config is used when prompt file exists in path generation
+- Handle keychain write failure (-25299) when storing rotated refresh token
+
 ## v0.0.98 (2025-12-31)
 
 ### Feat
 
-- Add check for suspicious single-letter files during release process
-- Add cloud execution support for pdd test command
+- **Cloud Execution for `pdd test` Command (PR #206):** Added cloud-first execution with automatic local fallback. Uses JWT authentication via `CloudConfig.get_jwt_token()` and posts to the `generateTest` endpoint. Supports both generate and increase (coverage augmentation) modes. Non-recoverable errors (402 insufficient credits, 401/403 auth errors, 400 validation) raise `UsageError`; recoverable errors (5xx, timeouts, network issues) fall back to local. Set `PDD_CLOUD_ONLY=1` or `PDD_NO_LOCAL_FALLBACK=1` to disable fallback.
+
+- **Suspicious Files Check in Release:** Added check for single-letter files (C, E, T) during the release process to catch LLM artifacts before publishing.
+
+### Docs
+
+- Updated `cmd_test_main_python.prompt` with cloud vs local execution strategy documentation and added context examples for JWT token retrieval and cloud function calls.
+
+### Tests
+
+- Added 575+ lines of tests in `tests/test_cmd_test_main.py` covering cloud success paths, fallback scenarios, non-recoverable HTTP errors, cloud-only mode, and local mode bypass.
 
 ## v0.0.97 (2025-12-30)
 

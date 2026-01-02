@@ -126,7 +126,9 @@ def crash_main(
 
             update_program, update_code, fixed_program, fixed_code, _, cost, model = fix_code_module_errors(
                 program_content, prompt_content, code_content, error_content,
-                strength, temperature, verbose, time_param
+                strength, temperature, time_param, verbose,
+                program_path=program_file,
+                code_path=code_file,
             )
             success = True
             attempts = 1
