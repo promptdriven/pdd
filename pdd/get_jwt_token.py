@@ -1,4 +1,6 @@
 import asyncio
+import subprocess
+import sys
 import time
 from typing import Dict, Optional, Tuple
 
@@ -38,6 +40,35 @@ class UserCancelledError(AuthError):
 class RateLimitError(AuthError):
     """Raised when rate limits are exceeded."""
     pass
+
+
+def _macos_force_delete_keychain_item(service_name: str, account_name: str) -> bool:
+    """
+    Force delete a keychain item using macOS security command.
+
+    This is a fallback when keyring.delete_password() fails due to ACL issues
+    in subprocess contexts (e.g., pytest-xdist workers).
+
+    Args:
+        service_name: The keychain service name
+        account_name: The keychain account name
+
+    Returns:
+        bool: True if deletion succeeded or item didn't exist, False otherwise
+    """
+    if sys.platform != 'darwin':
+        return False
+
+    try:
+        result = subprocess.run(
+            ['security', 'delete-generic-password', '-s', service_name, '-a', account_name],
+            capture_output=True, text=True, timeout=10
+        )
+        # 0 = success, 44 = item not found (also acceptable)
+        return result.returncode in (0, 44)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
 
 class DeviceFlow:
     """
@@ -139,15 +170,62 @@ class FirebaseAuthenticator:
         self.keyring_service_name = f"firebase-auth-{app_name}"
         self.keyring_user_name = "refresh_token"
 
-    def _store_refresh_token(self, refresh_token: str):
-        """Stores the Firebase refresh token in the system keyring."""
+    def _store_refresh_token(self, refresh_token: str) -> bool:
+        """
+        Stores the Firebase refresh token in the system keyring.
+
+        Handles the macOS errSecDuplicateItem (-25299) error by attempting
+        to force-delete the existing item and retrying.
+
+        Args:
+            refresh_token: The Firebase refresh token to store
+
+        Returns:
+            bool: True if storage succeeded, False otherwise
+        """
         if not KEYRING_AVAILABLE or keyring is None:
             print("Warning: No keyring available, refresh token not stored")
-            return
-        try:
-            keyring.set_password(self.keyring_service_name, self.keyring_user_name, refresh_token)
-        except Exception as e:
-            print(f"Warning: Failed to store refresh token in keyring: {e}")
+            return False
+
+        max_retries = 2
+
+        for attempt in range(max_retries):
+            try:
+                keyring.set_password(
+                    self.keyring_service_name,
+                    self.keyring_user_name,
+                    refresh_token
+                )
+                return True
+            except Exception as e:
+                error_str = str(e)
+
+                # Check for errSecDuplicateItem (-25299) on macOS
+                is_duplicate_error = '-25299' in error_str
+
+                if is_duplicate_error and attempt < max_retries - 1:
+                    # Try to delete the existing item before retrying
+                    try:
+                        keyring.delete_password(
+                            self.keyring_service_name,
+                            self.keyring_user_name
+                        )
+                    except Exception:
+                        pass  # Ignore delete errors, try force delete
+
+                    # Try macOS-specific force delete
+                    if sys.platform == 'darwin':
+                        _macos_force_delete_keychain_item(
+                            self.keyring_service_name,
+                            self.keyring_user_name
+                        )
+                    continue
+
+                # Non-duplicate error or final retry failed
+                print(f"Warning: Failed to store refresh token in keyring: {e}")
+                return False
+
+        return False
 
     def _get_stored_refresh_token(self) -> Optional[str]:
         """Retrieves the Firebase refresh token from the system keyring."""
@@ -159,21 +237,37 @@ class FirebaseAuthenticator:
             print(f"Warning: Failed to retrieve refresh token from keyring: {e}")
             return None
 
-    def _delete_stored_refresh_token(self):
-        """Deletes the stored Firebase refresh token from the keyring."""
+    def _delete_stored_refresh_token(self) -> bool:
+        """
+        Deletes the stored Firebase refresh token from the keyring.
+
+        Returns:
+            bool: True if deletion succeeded or token didn't exist, False otherwise
+        """
         if not KEYRING_AVAILABLE or keyring is None:
             print("No keyring available. Token deletion skipped.")
-            return
+            return True
+
         try:
             keyring.delete_password(self.keyring_service_name, self.keyring_user_name)
+            return True
         except Exception as e:
-            # Handle both keyring.errors and generic exceptions for cross-platform compatibility
-            if "NoKeyringError" in str(type(e)) or "no keyring" in str(e).lower():
-                print("No keyring found. Token deletion skipped.")
-            elif "PasswordDeleteError" in str(type(e)) or "delete" in str(e).lower():
-                print("Failed to delete token from keyring.")
-            else:
-                print(f"Warning: Error deleting token from keyring: {e}")
+            error_str = str(e)
+
+            # Check if it's a "not found" error (acceptable)
+            if 'PasswordDeleteError' in str(type(e)) or 'not found' in error_str.lower():
+                return True
+
+            # Try macOS force delete as fallback
+            if sys.platform == 'darwin':
+                if _macos_force_delete_keychain_item(
+                    self.keyring_service_name,
+                    self.keyring_user_name
+                ):
+                    return True
+
+            print(f"Warning: Error deleting token from keyring: {e}")
+            return False
 
     async def _refresh_firebase_token(self, refresh_token: str) -> str:
         """
