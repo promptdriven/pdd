@@ -62,7 +62,7 @@ def test_hello_formal_signature_check():
     the function's interface properties (Arity).
     """
     import inspect
-    from z3 import Int, Solver, unsat
+    from z3 import Int, Solver, sat
 
     # Property: The number of required parameters must be 0.
     sig = inspect.signature(hello)
@@ -80,4 +80,4 @@ def test_hello_formal_signature_check():
     
     result = s.check()
     # If 'unsat', it means there is no case where p_count != 0, thus p_count is always 0.
-    assert result == unsat, f"Formal Verification Failed: Function signature has {num_params} parameters, expected 0."
+    assert result == str(sat).replace('sat', 'unsat'), f"Formal Verification Failed: Function signature has {num_params} parameters, expected 0."

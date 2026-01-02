@@ -127,6 +127,97 @@ def test_shell_second_pass_executes_after_deferral() -> None:
     assert processed == "Check Ready\n"
     mock_run.assert_called_once()
 
+
+def test_shell_tag_ignored_in_fenced_code_block() -> None:
+    """Shell tags inside fenced code blocks should not execute."""
+    prompt = "Before\n```xml\n<shell>echo Hello</shell>\n```\nAfter"
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = ""
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mock_run.assert_not_called()
+
+
+def test_shell_tag_ignored_in_inline_code() -> None:
+    """Shell tags inside inline code spans should not execute."""
+    prompt = "Use `<shell>echo Hello</shell>` as an example."
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = ""
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mock_run.assert_not_called()
+
+
+def test_shell_tag_spanning_inline_code_is_ignored() -> None:
+    """Shell tags whose match spans into inline code should not execute."""
+    prompt = "Intro <shell>not a directive. Example: `<shell>noop</shell>` end."
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = ""
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mock_run.assert_not_called()
+
+
+def test_include_tag_ignored_in_fenced_code_block() -> None:
+    """Include tags inside fenced code blocks should not execute."""
+    prompt = "```xml\n<include>file.txt</include>\n```"
+    with patch('builtins.open', mock_open(read_data="Included")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked_open.assert_not_called()
+
+
+def test_include_tag_ignored_in_inline_code() -> None:
+    """Include tags inside inline code spans should not execute."""
+    prompt = "Example `<include>file.txt</include>` in docs."
+    with patch('builtins.open', mock_open(read_data="Included")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked_open.assert_not_called()
+
+
+def test_include_many_tag_ignored_in_fenced_code_block() -> None:
+    """Include-many tags inside fenced code blocks should not execute."""
+    prompt = "```xml\n<include-many>one.txt, two.txt</include-many>\n```"
+    with patch('builtins.open', mock_open(read_data="Content")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked_open.assert_not_called()
+
+
+def test_shell_tag_spanning_fence_is_ignored(tmp_path, monkeypatch) -> None:
+    """Shell tags that overlap fenced code should not execute."""
+    guide = (
+        "Intro <shell>not a directive.\n"
+        "```mermaid\n"
+        "P --> C\n"
+        "P --> E\n"
+        "P --> T\n"
+        "</shell>\n"
+        "```\n"
+    )
+    guide_path = tmp_path / "guide.md"
+    guide_path.write_text(guide)
+    monkeypatch.chdir(tmp_path)
+    prompt = "<include>guide.md</include>"
+
+    def fake_run(*_args, **_kwargs):
+        for name in ("C", "E", "T"):
+            (tmp_path / name).write_text("")
+        completed = MagicMock()
+        completed.stdout = ""
+        completed.returncode = 0
+        return completed
+
+    with patch('subprocess.run', side_effect=fake_run) as mock_run:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == guide
+    assert not (tmp_path / "C").exists()
+    assert not (tmp_path / "E").exists()
+    assert not (tmp_path / "T").exists()
+    mock_run.assert_not_called()
+
 # Test for doubling curly brackets
 def test_double_curly_brackets() -> None:
     """Test doubling of curly brackets."""

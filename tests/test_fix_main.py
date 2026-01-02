@@ -59,6 +59,9 @@ def test_fix_main_without_loop(
     and saves the outputs correctly.
     """
     # Arrange
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
+
     # Configure the mock Path to return real Path objects for output paths,
     # but allow controlling exists() for error.log
     from pathlib import Path as RealPath
@@ -486,6 +489,8 @@ def test_fix_main_success_is_false_when_no_updates(
     This tests the actual logic: success = update_unit_test or update_code
     """
     # Arrange
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -552,6 +557,9 @@ def test_fix_main_success_when_only_code_updated(
     Test that success is True when only update_code=True (update_unit_test=False)
     AND the tests pass after validation.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
+
     from pathlib import Path as RealPath
 
     # Use real Path objects but wrap to track exists() calls
@@ -631,6 +639,8 @@ def test_fix_main_does_not_write_empty_files(
     Test that fix_main does NOT write files when fixed content is empty.
     Spec: 'Write fixed files only when the corresponding fixed content is non-empty.'
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -678,8 +688,10 @@ def test_fix_main_does_not_write_empty_files(
             auto_submit=False
         )
 
-    # Assert - open should NOT have been called since both contents are empty
-    m_open.assert_not_called()
+    # Assert - no write calls should have been made since both contents are empty
+    # (read calls may happen for language detection, etc.)
+    write_calls = [call for call in m_open.call_args_list if len(call[0]) > 1 and 'w' in call[0][1]]
+    assert len(write_calls) == 0, f"Expected no write calls, but got: {write_calls}"
 
 
 @patch('pdd.fix_main.construct_paths')
@@ -739,6 +751,8 @@ def test_fix_main_passes_time_to_fix_errors_from_unit_tests(
     """
     Test that the time parameter from context is passed to fix_errors_from_unit_tests.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_ctx.obj['time'] = 90
     mock_path.return_value.exists.return_value = True
 
@@ -784,6 +798,8 @@ def test_fix_main_passes_verbose_to_fix_errors_from_unit_tests(
     """
     Test that verbose parameter is passed to fix_errors_from_unit_tests.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_ctx.obj['verbose'] = True
     mock_path.return_value.exists.return_value = True
 
@@ -873,6 +889,8 @@ def test_fix_main_non_loop_mode_includes_error_file_in_input_paths(
     """
     Test that in non-loop mode, error_file IS included in input_file_paths.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -962,6 +980,8 @@ def test_fix_main_non_loop_always_has_one_attempt(
     """
     Test that in non-loop mode, attempts is always 1 regardless of success.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -1024,6 +1044,8 @@ def test_fix_main_non_loop_should_not_report_success_without_test_validation(
     Evidence from issue: model="" and actual_cost=0.0 with success=true
     indicates no LLM was actually invoked, yet success was claimed.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -1102,6 +1124,8 @@ def test_fix_main_non_loop_success_requires_test_validation_both_flags_true(
     The log evidence shows model="" and actual_cost=0.0 with success=true,
     meaning the system claimed success without any LLM invocation at all.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
     mock_ctx.obj['quiet'] = True  # Suppress output for cleaner test
 
@@ -1171,6 +1195,8 @@ def test_fix_main_non_loop_success_when_tests_pass_after_fix(
     Test that success=True when the LLM suggests a fix AND tests pass after validation.
     This is the positive case: the fix actually works.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
     mock_ctx.obj['quiet'] = True
 
@@ -1218,3 +1244,825 @@ def test_fix_main_non_loop_success_when_tests_pass_after_fix(
         f"success should be True when tests pass after fix. Got success={success}"
     )
     mock_run_pytest.assert_called_once()
+
+
+# ============================================================================
+# Cloud Execution Tests
+# ============================================================================
+
+@patch('pdd.fix_main.run_pytest_on_file')
+@patch('pdd.fix_main.requests.post')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_cloud_success(
+    mock_construct_paths,
+    mock_path,
+    mock_get_jwt,
+    mock_post,
+    mock_run_pytest,
+    mock_ctx
+):
+    """
+    Test that fix_main uses cloud execution successfully when available.
+    """
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = False  # Not forcing local
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test', 'error_file': 'error'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_get_jwt.return_value = "mock_jwt_token"
+
+    # Mock successful cloud response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        'success': True,
+        'fixedUnitTest': 'fixed test content',
+        'fixedCode': 'fixed code content',
+        'analysis': 'analysis content',
+        'updateUnitTest': True,
+        'updateCode': True,
+        'totalCost': 0.05,
+        'modelName': 'cloud-model'
+    }
+    mock_post.return_value = mock_response
+
+    # Mock pytest to pass after validation
+    mock_run_pytest.return_value = (0, 0, 0, "All tests passed")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.prompt",
+            code_file="code.py",
+            unit_test_file="test.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    # Assert cloud was used
+    mock_get_jwt.assert_called_once()
+    mock_post.assert_called_once()
+    assert success is True
+    assert fixed_test == 'fixed test content'
+    assert fixed_code == 'fixed code content'
+    assert total_cost == 0.05
+    assert model_name == 'cloud-model'
+
+
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_cloud_fallback_on_auth_failure(
+    mock_construct_paths,
+    mock_path,
+    mock_get_jwt,
+    mock_fix_errors,
+    mock_ctx
+):
+    """
+    Test that fix_main falls back to local when cloud authentication fails.
+    """
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = False
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test', 'error_file': 'error'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    # Cloud auth fails
+    mock_get_jwt.return_value = None
+
+    # Local fix returns result
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "local-model")
+
+    fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Assert fallback to local was used
+    mock_get_jwt.assert_called_once()
+    mock_fix_errors.assert_called_once()
+
+
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+@patch('pdd.fix_main.requests.post')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_cloud_fallback_on_timeout(
+    mock_construct_paths,
+    mock_path,
+    mock_get_jwt,
+    mock_post,
+    mock_fix_errors,
+    mock_ctx
+):
+    """
+    Test that fix_main falls back to local on cloud timeout.
+    """
+    import requests as real_requests
+
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = False
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test', 'error_file': 'error'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_get_jwt.return_value = "mock_jwt_token"
+    mock_post.side_effect = real_requests.exceptions.Timeout("Request timed out")
+
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "local-model")
+
+    fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Assert fallback to local was used after timeout
+    mock_post.assert_called_once()
+    mock_fix_errors.assert_called_once()
+
+
+@patch('pdd.fix_main.requests.post')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_cloud_insufficient_credits_raises_error(
+    mock_construct_paths,
+    mock_path,
+    mock_get_jwt,
+    mock_post,
+    mock_ctx
+):
+    """
+    Test that fix_main raises UsageError on insufficient credits (HTTP 402).
+    """
+    import requests as real_requests
+
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = False
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test', 'error_file': 'error'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_get_jwt.return_value = "mock_jwt_token"
+
+    # Mock 402 error response
+    mock_response = MagicMock()
+    mock_response.status_code = 402
+    mock_response.text = "Insufficient credits"
+    mock_response.json.return_value = {'currentBalance': 0, 'estimatedCost': 100}
+
+    http_error = real_requests.exceptions.HTTPError(response=mock_response)
+    mock_post.return_value.raise_for_status.side_effect = http_error
+
+    with pytest.raises(UsageError) as exc_info:
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.prompt",
+            code_file="code.py",
+            unit_test_file="test.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    assert "credits" in str(exc_info.value).lower()
+
+
+@patch('pdd.fix_main.fix_error_loop')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_loop_mode_with_local_flag_uses_local(
+    mock_construct_paths,
+    mock_fix_error_loop,
+    mock_ctx
+):
+    """
+    Test that loop mode with --local flag uses purely local execution (use_cloud=False).
+    """
+    mock_ctx.obj['local'] = True  # Force local execution
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_fix_error_loop.return_value = (True, "fixed test", "fixed code", 2, 1.0, "local-model")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.prompt",
+            code_file="code.py",
+            unit_test_file="test.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=True,
+            verification_program="verify.py",
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    # fix_error_loop should be called with use_cloud=False
+    mock_fix_error_loop.assert_called_once()
+    call_kwargs = mock_fix_error_loop.call_args[1]
+    assert call_kwargs.get('use_cloud') == False
+
+
+@patch('pdd.fix_main.fix_error_loop')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_loop_mode_uses_hybrid_cloud_by_default(
+    mock_construct_paths,
+    mock_fix_error_loop,
+    mock_ctx
+):
+    """
+    Test that loop mode without --local flag uses hybrid cloud mode (use_cloud=True).
+    Hybrid mode means local test execution + cloud LLM calls.
+    """
+    mock_ctx.obj['local'] = False  # Default - not forcing local
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_fix_error_loop.return_value = (True, "fixed test", "fixed code", 2, 1.0, "cloud-model")
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt.prompt",
+            code_file="code.py",
+            unit_test_file="test.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=True,
+            verification_program="verify.py",
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+    # fix_error_loop should be called with use_cloud=True
+    mock_fix_error_loop.assert_called_once()
+    call_kwargs = mock_fix_error_loop.call_args[1]
+    assert call_kwargs.get('use_cloud') == True
+
+
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_local_flag_skips_cloud(
+    mock_construct_paths,
+    mock_path,
+    mock_get_jwt,
+    mock_fix_errors,
+    mock_ctx
+):
+    """
+    Test that --local flag forces local execution, skipping cloud entirely.
+    """
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = True  # Force local
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test', 'error_file': 'error'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "local-model")
+
+    fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Cloud auth should not be called when --local is set
+    mock_get_jwt.assert_not_called()
+    # Local fix should be used
+    mock_fix_errors.assert_called_once()
+
+
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+@patch('pdd.fix_main.requests.post')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_cloud_fallback_on_network_error(
+    mock_construct_paths,
+    mock_path,
+    mock_get_jwt,
+    mock_post,
+    mock_fix_errors,
+    mock_ctx
+):
+    """
+    Test that fix_main falls back to local on cloud network error.
+    """
+    import requests as real_requests
+
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = False
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test', 'error_file': 'error'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_get_jwt.return_value = "mock_jwt_token"
+    mock_post.side_effect = real_requests.exceptions.ConnectionError("Network unreachable")
+
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "local-model")
+
+    success, _, _, _, _, model_name = fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Assert fallback to local was used after network error
+    mock_post.assert_called_once()
+    mock_fix_errors.assert_called_once()
+    assert model_name == "local-model"
+
+
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+@patch('pdd.fix_main.requests.post')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_cloud_fallback_on_5xx_error(
+    mock_construct_paths,
+    mock_path,
+    mock_get_jwt,
+    mock_post,
+    mock_fix_errors,
+    mock_ctx
+):
+    """
+    Test that fix_main falls back to local on 5xx server errors.
+    """
+    import requests as real_requests
+
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = False
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test', 'error_file': 'error'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_get_jwt.return_value = "mock_jwt_token"
+
+    # Mock 500 error response
+    mock_response = MagicMock()
+    mock_response.status_code = 500
+    mock_response.text = "Internal Server Error"
+
+    http_error = real_requests.exceptions.HTTPError(response=mock_response)
+    mock_post.return_value.raise_for_status.side_effect = http_error
+
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "local-model")
+
+    success, _, _, _, _, model_name = fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Assert fallback to local was used after 500 error
+    mock_fix_errors.assert_called_once()
+    assert model_name == "local-model"
+
+
+# ============ Tests for cloud_fix_errors function ============
+
+@patch('pdd.fix_error_loop.requests.post')
+@patch('pdd.fix_error_loop.CloudConfig.get_jwt_token')
+def test_cloud_fix_errors_success(mock_get_jwt, mock_post):
+    """
+    Test that cloud_fix_errors successfully calls the cloud endpoint and returns results.
+    """
+    from pdd.fix_error_loop import cloud_fix_errors
+
+    mock_get_jwt.return_value = "test-jwt-token"
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "success": True,
+        "fixedUnitTest": "fixed unit test code",
+        "fixedCode": "fixed code",
+        "analysis": "Analysis of fix",
+        "updateUnitTest": True,
+        "updateCode": True,
+        "totalCost": 0.05,
+        "modelName": "cloud-fix-model"
+    }
+    mock_post.return_value = mock_response
+
+    update_ut, update_code, fixed_ut, fixed_code, analysis, cost, model = cloud_fix_errors(
+        unit_test="original unit test",
+        code="original code",
+        prompt="test prompt",
+        error="test error logs",
+        error_file="error.log",
+        strength=0.7,
+        temperature=0.0,
+        verbose=False,
+        time=0.25,
+        code_file_ext=".py"
+    )
+
+    assert update_ut == True
+    assert update_code == True
+    assert fixed_ut == "fixed unit test code"
+    assert fixed_code == "fixed code"
+    assert analysis == "Analysis of fix"
+    assert cost == 0.05
+    assert model == "cloud-fix-model"
+
+    # Verify request was made correctly
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args
+    assert "Bearer test-jwt-token" in call_kwargs[1]["headers"]["Authorization"]
+
+
+@patch('pdd.fix_error_loop.CloudConfig.get_jwt_token')
+def test_cloud_fix_errors_auth_failure(mock_get_jwt):
+    """
+    Test that cloud_fix_errors raises RuntimeError when JWT token is unavailable.
+    """
+    from pdd.fix_error_loop import cloud_fix_errors
+
+    mock_get_jwt.return_value = None  # No JWT token
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cloud_fix_errors(
+            unit_test="test",
+            code="code",
+            prompt="prompt",
+            error="error",
+            error_file="error.log",
+            strength=0.7,
+            temperature=0.0
+        )
+
+    assert "authentication failed" in str(exc_info.value).lower()
+
+
+@patch('pdd.fix_error_loop.requests.post')
+@patch('pdd.fix_error_loop.CloudConfig.get_jwt_token')
+def test_cloud_fix_errors_insufficient_credits(mock_get_jwt, mock_post):
+    """
+    Test that cloud_fix_errors raises RuntimeError for 402 insufficient credits.
+    """
+    from pdd.fix_error_loop import cloud_fix_errors
+    import requests as real_requests
+
+    mock_get_jwt.return_value = "test-jwt-token"
+
+    mock_response = MagicMock()
+    mock_response.status_code = 402
+    mock_response.text = '{"error": "Insufficient credits"}'
+    mock_response.json.return_value = {"currentBalance": 0, "estimatedCost": 50}
+    mock_post.return_value = mock_response
+    mock_post.return_value.raise_for_status.side_effect = real_requests.HTTPError(
+        response=mock_response
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cloud_fix_errors(
+            unit_test="test",
+            code="code",
+            prompt="prompt",
+            error="error",
+            error_file="error.log",
+            strength=0.7,
+            temperature=0.0
+        )
+
+    assert "insufficient credits" in str(exc_info.value).lower()
+
+
+@patch('pdd.fix_error_loop.requests.post')
+@patch('pdd.fix_error_loop.CloudConfig.get_jwt_token')
+def test_cloud_fix_errors_timeout(mock_get_jwt, mock_post):
+    """
+    Test that cloud_fix_errors raises RuntimeError on timeout.
+    """
+    from pdd.fix_error_loop import cloud_fix_errors
+    import requests as real_requests
+
+    mock_get_jwt.return_value = "test-jwt-token"
+    mock_post.side_effect = real_requests.exceptions.Timeout("Request timed out")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cloud_fix_errors(
+            unit_test="test",
+            code="code",
+            prompt="prompt",
+            error="error",
+            error_file="error.log",
+            strength=0.7,
+            temperature=0.0
+        )
+
+    assert "timed out" in str(exc_info.value).lower()
+
+
+# ============ Tests for fix_error_loop with use_cloud parameter ============
+
+@patch('pdd.fix_error_loop.cloud_fix_errors')
+@patch('pdd.fix_error_loop.run_pytest_on_file')
+def test_fix_error_loop_uses_cloud_when_use_cloud_true(mock_pytest, mock_cloud_fix):
+    """
+    Test that fix_error_loop calls cloud_fix_errors when use_cloud=True.
+    """
+    from pdd.fix_error_loop import fix_error_loop
+    import tempfile
+    import os
+
+    # Create temp files for the test
+    with tempfile.TemporaryDirectory() as tmpdir:
+        unit_test_file = os.path.join(tmpdir, "test_code.py")
+        code_file = os.path.join(tmpdir, "code.py")
+        verification_file = os.path.join(tmpdir, "verify.py")
+        error_log_file = os.path.join(tmpdir, "error.log")
+
+        # Write minimal test files
+        with open(unit_test_file, "w") as f:
+            f.write("def test_example(): pass")
+        with open(code_file, "w") as f:
+            f.write("def example(): pass")
+        with open(verification_file, "w") as f:
+            f.write("print('verified')")
+
+        # Mock pytest to return failures initially, then success
+        mock_pytest.side_effect = [
+            (1, 0, 0, "1 failed"),  # Initial failure
+            (0, 0, 0, "1 passed"),  # After fix - success
+        ]
+
+        # Mock cloud fix to return successful fix
+        mock_cloud_fix.return_value = (
+            True,   # update_unit_test
+            True,   # update_code
+            "fixed test code",
+            "fixed code",
+            "Cloud analysis",
+            0.05,   # cost
+            "cloud-model"
+        )
+
+        success, final_ut, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=unit_test_file,
+            code_file=code_file,
+            prompt_file="prompt.prompt",
+            prompt="test prompt",
+            verification_program=verification_file,
+            strength=0.7,
+            temperature=0.0,
+            max_attempts=3,
+            budget=5.0,
+            error_log_file=error_log_file,
+            verbose=False,
+            use_cloud=True
+        )
+
+        # cloud_fix_errors should have been called
+        mock_cloud_fix.assert_called()
+
+
+@patch('pdd.fix_error_loop.fix_errors_from_unit_tests')
+@patch('pdd.fix_error_loop.run_pytest_on_file')
+def test_fix_error_loop_uses_local_when_use_cloud_false(mock_pytest, mock_local_fix):
+    """
+    Test that fix_error_loop calls fix_errors_from_unit_tests when use_cloud=False.
+    """
+    from pdd.fix_error_loop import fix_error_loop
+    import tempfile
+    import os
+
+    # Create temp files for the test
+    with tempfile.TemporaryDirectory() as tmpdir:
+        unit_test_file = os.path.join(tmpdir, "test_code.py")
+        code_file = os.path.join(tmpdir, "code.py")
+        verification_file = os.path.join(tmpdir, "verify.py")
+        error_log_file = os.path.join(tmpdir, "error.log")
+
+        # Write minimal test files
+        with open(unit_test_file, "w") as f:
+            f.write("def test_example(): pass")
+        with open(code_file, "w") as f:
+            f.write("def example(): pass")
+        with open(verification_file, "w") as f:
+            f.write("print('verified')")
+
+        # Mock pytest to return failures initially, then success
+        mock_pytest.side_effect = [
+            (1, 0, 0, "1 failed"),  # Initial failure
+            (0, 0, 0, "1 passed"),  # After fix - success
+        ]
+
+        # Mock local fix to return successful fix
+        mock_local_fix.return_value = (
+            True,   # update_unit_test
+            True,   # update_code
+            "fixed test code",
+            "fixed code",
+            "Local analysis",
+            0.03,   # cost
+            "local-model"
+        )
+
+        success, final_ut, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=unit_test_file,
+            code_file=code_file,
+            prompt_file="prompt.prompt",
+            prompt="test prompt",
+            verification_program=verification_file,
+            strength=0.7,
+            temperature=0.0,
+            max_attempts=3,
+            budget=5.0,
+            error_log_file=error_log_file,
+            verbose=False,
+            use_cloud=False
+        )
+
+        # fix_errors_from_unit_tests should have been called
+        mock_local_fix.assert_called()
+
+
+@patch('pdd.fix_error_loop.fix_errors_from_unit_tests')
+@patch('pdd.fix_error_loop.cloud_fix_errors')
+@patch('pdd.fix_error_loop.run_pytest_on_file')
+def test_fix_error_loop_cloud_fallback_to_local(mock_pytest, mock_cloud_fix, mock_local_fix):
+    """
+    Test that fix_error_loop falls back to local when cloud fails with recoverable error.
+    """
+    from pdd.fix_error_loop import fix_error_loop
+    import tempfile
+    import os
+
+    # Create temp files for the test
+    with tempfile.TemporaryDirectory() as tmpdir:
+        unit_test_file = os.path.join(tmpdir, "test_code.py")
+        code_file = os.path.join(tmpdir, "code.py")
+        verification_file = os.path.join(tmpdir, "verify.py")
+        error_log_file = os.path.join(tmpdir, "error.log")
+
+        # Write minimal test files
+        with open(unit_test_file, "w") as f:
+            f.write("def test_example(): pass")
+        with open(code_file, "w") as f:
+            f.write("def example(): pass")
+        with open(verification_file, "w") as f:
+            f.write("print('verified')")
+
+        # Mock pytest to return failures initially, then success
+        mock_pytest.side_effect = [
+            (1, 0, 0, "1 failed"),  # Initial failure
+            (0, 0, 0, "1 passed"),  # After fix - success
+        ]
+
+        # Mock cloud fix to fail with recoverable error
+        mock_cloud_fix.side_effect = RuntimeError("Cloud timeout error")
+
+        # Mock local fix to return successful fix (fallback)
+        mock_local_fix.return_value = (
+            True,   # update_unit_test
+            True,   # update_code
+            "fixed test code",
+            "fixed code",
+            "Local fallback analysis",
+            0.03,   # cost
+            "local-fallback-model"
+        )
+
+        success, final_ut, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=unit_test_file,
+            code_file=code_file,
+            prompt_file="prompt.prompt",
+            prompt="test prompt",
+            verification_program=verification_file,
+            strength=0.7,
+            temperature=0.0,
+            max_attempts=3,
+            budget=5.0,
+            error_log_file=error_log_file,
+            verbose=False,
+            use_cloud=True  # Request cloud, but will fall back to local
+        )
+
+        # Cloud should have been attempted
+        mock_cloud_fix.assert_called()
+        # Local fallback should have been used
+        mock_local_fix.assert_called()

@@ -22,7 +22,8 @@ def generate_test(
     verbose: bool = False,
     source_file_path: Optional[str] = None,
     test_file_path: Optional[str] = None,
-    module_name: Optional[str] = None
+    module_name: Optional[str] = None,
+    existing_tests: Optional[str] = None
 ) -> Tuple[str, float, str]:
     """
     Generate a unit test from a code file using LLM.
@@ -38,6 +39,7 @@ def generate_test(
         source_file_path (Optional[str]): Absolute or relative path to the code under test.
         test_file_path (Optional[str]): Destination path for the generated test file.
         module_name (Optional[str]): Module name (without extension) for proper imports.
+        existing_tests (Optional[str]): Content of existing tests to append to (for merge mode).
 
     Returns:
         Tuple[str, float, str]: (unit_test, total_cost, model_name)
@@ -62,7 +64,8 @@ def generate_test(
             "language": language,
             "source_file_path": source_file_path or "",
             "test_file_path": test_file_path or "",
-            "module_name": module_name or ""
+            "module_name": module_name or "",
+            "existing_tests": existing_tests or "",
         }
 
         if verbose:
