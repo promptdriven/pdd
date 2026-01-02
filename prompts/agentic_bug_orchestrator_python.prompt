@@ -51,7 +51,7 @@ The orchestrator must parse step output to detect stop conditions:
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 2 | "Feature Request" or "User Error" | Output contains "Feature Request (Not a Bug)" or "User Error (Not a Bug)" |
 | 6 | No test file generated | No new test file in changed_files |
-| 7 | Test doesn't fail correctly | Output contains "FAIL: Test does not work" |
+| 7 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
 
 **Hard stop behavior:**
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
