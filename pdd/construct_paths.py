@@ -640,9 +640,22 @@ def construct_paths(
             pddrc_config = _load_pddrc_config(pddrc_path)
             
             # Detect appropriate context
-            current_dir = Path.cwd()
-            context = _detect_context(current_dir, pddrc_config, context_override)
-            
+            # Priority: context_override > file-based detection > CWD-based detection
+            if context_override:
+                # Delegate validation to _detect_context to avoid duplicate validation logic
+                context = _detect_context(Path.cwd(), pddrc_config, context_override)
+            else:
+                # Try file-based detection when prompt file is provided
+                prompt_file_str = input_file_paths.get('prompt_file') if input_file_paths else None
+                if prompt_file_str and Path(prompt_file_str).exists():
+                    detected_context, _ = detect_context_for_file(prompt_file_str)
+                    if detected_context:
+                        context = detected_context
+                    else:
+                        context = _detect_context(Path.cwd(), pddrc_config, None)
+                else:
+                    context = _detect_context(Path.cwd(), pddrc_config, None)
+
             # Get context-specific configuration
             context_config = _get_context_config(pddrc_config, context)
             original_context_config = context_config.copy()  # Store original before modifications
@@ -728,27 +741,17 @@ def construct_paths(
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
 
             # Determine examples_dir for auto-deps scanning
-            # Priority: outputs.example.path template > example_output_path > "examples" fallback
+            # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
+            # NOT for determining scan scope. Using it caused CSV row deletion issues.
+            # Check RAW context config for example_output_path, or default to "context".
+            # Do NOT use output_paths_str since generate_output_paths always returns absolute paths.
             example_path_str = None
-
-            # First check for new-style outputs.example.path in context config (Issue #237)
-            # This takes priority over generate_output_paths result for template-based contexts
             if original_context_config:
-                outputs_config = original_context_config.get('outputs', {})
-                example_config = outputs_config.get('example', {})
-                example_template = example_config.get('path')
-                if example_template:
-                    # Extract directory from template path
-                    # e.g., "context/backend/{name}_example.py" → "context/backend"
-                    example_path_str = str(Path(example_template).parent)
+                example_path_str = original_context_config.get("example_output_path")
 
-            # Fallback to old-style example_output_path from generate_output_paths
+            # Final fallback to "context" (sensible default for this project)
             if not example_path_str:
-                example_path_str = output_paths_str.get("example_output_path")
-
-            # Final fallback to "examples"
-            if not example_path_str:
-                example_path_str = "examples"
+                example_path_str = "context"
 
             # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
             # If it ends with / or has no file extension, treat as directory; otherwise use parent
@@ -1068,27 +1071,17 @@ def construct_paths(
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
 
     # Determine examples_dir for auto-deps scanning
-    # Priority: outputs.example.path template > example_output_path > "examples" fallback
+    # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
+    # NOT for determining scan scope. Using it caused CSV row deletion issues.
+    # Check RAW context config for example_output_path, or default to "context".
+    # Do NOT use resolved_config since generate_output_paths sets it to absolute paths.
     example_path_str = None
-
-    # First check for new-style outputs.example.path in context config (Issue #237)
-    # This takes priority over generate_output_paths result for template-based contexts
     if original_context_config:
-        outputs_config = original_context_config.get('outputs', {})
-        example_config = outputs_config.get('example', {})
-        example_template = example_config.get('path')
-        if example_template:
-            # Extract directory from template path
-            # e.g., "context/backend/{name}_example.py" → "context/backend"
-            example_path_str = str(Path(example_template).parent)
+        example_path_str = original_context_config.get("example_output_path")
 
-    # Fallback to old-style example_output_path from resolved_config
+    # Final fallback to "context" (sensible default for this project)
     if not example_path_str:
-        example_path_str = resolved_config.get("example_output_path")
-
-    # Final fallback to "examples"
-    if not example_path_str:
-        example_path_str = "examples"
+        example_path_str = "context"
 
     # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
     # If it ends with / or has no file extension, treat as directory; otherwise use parent

@@ -548,14 +548,15 @@ contexts:
 
         return tmp_path
 
-    def test_construct_paths_sets_examples_dir_from_template(self, pddrc_with_outputs):
+    def test_construct_paths_sets_examples_dir_default(self, pddrc_with_outputs):
         """
-        BUG FIX: construct_paths should set examples_dir from outputs.example.path template.
+        examples_dir should default to "context" for auto-deps scanning.
 
-        For backend-utils context with outputs.example.path = "context/backend/{name}_example.py",
-        the examples_dir should be "context/backend", not the default "examples".
+        NOTE: outputs.example.path is for OUTPUT only (where to write examples),
+        NOT for determining scan scope. Using it for scan scope caused CSV row
+        deletion issues when syncing context-scoped modules.
 
-        This is critical for auto-deps to scan the correct directory.
+        The examples_dir should fall back to "context" as the sensible default.
         """
         from pdd.sync_main import _find_prompt_in_contexts
         from pdd.construct_paths import construct_paths
@@ -579,17 +580,17 @@ contexts:
                 context_override=context_name,
             )
 
-            # The examples_dir should be extracted from outputs.example.path template
+            # examples_dir should default to "context", NOT be derived from outputs.example.path
             examples_dir = resolved_config.get("examples_dir", "examples")
-            assert examples_dir == "context/backend", \
-                f"examples_dir should be 'context/backend' from template, got '{examples_dir}'"
+            assert examples_dir == "context", \
+                f"examples_dir should default to 'context', got '{examples_dir}'"
 
         finally:
             os.chdir(original_cwd)
 
     def test_examples_dir_points_to_existing_directory(self, pddrc_with_outputs):
         """
-        Verify the examples_dir from outputs template points to a real directory.
+        Verify the examples_dir default points to a real directory.
 
         This ensures auto-deps will find files in the correct location.
         """

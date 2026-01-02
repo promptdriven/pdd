@@ -786,20 +786,24 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     """
     Test that construct_paths runs in 'discovery mode' for the sync command
     when no input files are provided.
+
+    NOTE: examples_dir defaults to "context" when no explicit example_output_path
+    is in the raw context config. This is because outputs.example.path is for
+    OUTPUT only, not for determining scan scope.
     """
     input_file_paths = {} # No inputs
     force = False
     quiet = True
     command = 'sync'
     command_options = {"basename": "my_sync_project"}
-    
+
     # Mock generate_output_paths which is used internally for path inference
     mock_output_paths = {
         "generate_output_path": str(tmpdir / "src" / "my_sync_project.py"),
         "test_output_path": str(tmpdir / "tests" / "test_my_sync_project.py"),
         "example_output_path": str(tmpdir / "examples" / "ex_my_sync_project.py"),
     }
-    
+
     with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen_paths:
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
@@ -810,12 +814,13 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     assert "code_dir" in resolved_config
     assert "tests_dir" in resolved_config
     assert "examples_dir" in resolved_config
-    
+
     # Check that paths are derived correctly
     assert Path(resolved_config["prompts_dir"]).name == "prompts"
     assert Path(resolved_config["code_dir"]).name == "src"
     assert Path(resolved_config["tests_dir"]).name == "tests"
-    assert Path(resolved_config["examples_dir"]).name == "examples"
+    # examples_dir defaults to "context" since no example_output_path in raw config
+    assert resolved_config["examples_dir"] == "context"
     
     # Assert that other return values are empty/default
     assert input_strings == {}
@@ -878,8 +883,9 @@ def test_construct_paths_sync_uses_outputs_example_path_for_examples_dir(tmpdir)
     Test that construct_paths reads outputs.example.path from context config
     to determine examples_dir when example_output_path is not present.
 
-    Regression test for sync failing with 'auto-deps failed' when context
-    uses new-style outputs.example.path instead of old-style example_output_path.
+    The examples_dir should be the ROOT directory (first path component) from
+    outputs.example.path, not the parent directory. This ensures auto-deps scans
+    all examples, not just a subdirectory.
     """
     input_file_paths = {}  # No inputs for sync discovery mode
     force = False
@@ -894,7 +900,7 @@ def test_construct_paths_sync_uses_outputs_example_path_for_examples_dir(tmpdir)
         # NOTE: example_output_path intentionally MISSING to simulate new config format
     }
 
-    # Mock context config with new-style outputs.example.path
+    # Mock context config with new-style outputs.example.path in subdirectory
     mock_context_config = {
         "outputs": {
             "prompt": {"path": "prompts/backend/utils/{name}_{language}.prompt"},
@@ -913,9 +919,10 @@ def test_construct_paths_sync_uses_outputs_example_path_for_examples_dir(tmpdir)
             input_file_paths, force, quiet, command, command_options
         )
 
-    # examples_dir should be extracted from outputs.example.path, NOT default to "examples"
-    assert resolved_config["examples_dir"] == "context/backend", \
-        f"Expected 'context/backend' but got '{resolved_config['examples_dir']}'"
+    # examples_dir should be ROOT directory ("context"), NOT parent ("context/backend")
+    # This ensures auto-deps scans ALL examples, not just a subdirectory
+    assert resolved_config["examples_dir"] == "context", \
+        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent)"
 
 
 def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples_dir(tmpdir):
@@ -923,7 +930,9 @@ def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples
     Test that construct_paths reads outputs.example.path from context config
     to determine examples_dir when a prompt file is provided (not discovery mode).
 
-    This tests the regular mode path (when input_file_paths is not empty).
+    The examples_dir should be the ROOT directory (first path component) from
+    outputs.example.path, not the parent directory. This ensures auto-deps scans
+    all examples, not just a subdirectory.
     """
     # Create a temporary prompt file
     prompt_file = tmpdir / "credit_helpers_python.prompt"
@@ -942,7 +951,7 @@ def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples
         # NOTE: example_output_path intentionally MISSING to simulate new config format
     }
 
-    # Mock context config with new-style outputs.example.path
+    # Mock context config with new-style outputs.example.path in subdirectory
     mock_context_config = {
         "outputs": {
             "prompt": {"path": "prompts/backend/utils/{name}_{language}.prompt"},
@@ -961,9 +970,10 @@ def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples
             input_file_paths, force, quiet, command, command_options
         )
 
-    # examples_dir should be extracted from outputs.example.path, NOT default to "examples"
-    assert resolved_config["examples_dir"] == "context/backend", \
-        f"Expected 'context/backend' but got '{resolved_config['examples_dir']}'"
+    # examples_dir should be ROOT directory ("context"), NOT parent ("context/backend")
+    # This ensures auto-deps scans ALL examples, not just a subdirectory
+    assert resolved_config["examples_dir"] == "context", \
+        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent)"
 
 
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
@@ -2600,3 +2610,56 @@ class TestConstructPathsResolutionModeParameter:
 
         finally:
             os.chdir(original_cwd)
+
+
+def test_examples_dir_uses_root_of_outputs_example_path_not_parent(tmpdir):
+    """
+    Regression test: examples_dir should use the ROOT directory of outputs.example.path,
+    NOT its parent directory.
+
+    Bug: When outputs.example.path was "context/backend/{name}_example.py",
+    examples_dir was incorrectly set to "context/backend" (parent) instead of "context" (root).
+
+    This caused auto-deps to scan only context/backend/ (1 file) instead of context/ (175+ files),
+    which deleted all rows from project_dependencies.csv except for files in the subdirectory.
+
+    The outputs.example.path config specifies WHERE to write examples (OUTPUT).
+    The scan scope (INPUT) should be the root examples directory, not a subdirectory.
+    """
+    input_file_paths = {}  # No inputs for sync discovery mode
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {'basename': 'credit_helpers', 'language': 'python'}
+
+    # Mock output paths WITHOUT example_output_path (simulates new config format)
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "backend" / "functions" / "utils" / "credit_helpers.py"),
+        "test_output_path": str(tmpdir / "backend" / "tests" / "test_credit_helpers.py"),
+        # NOTE: example_output_path intentionally MISSING to simulate new config format
+    }
+
+    # Mock context config with new-style outputs.example.path in a SUBDIRECTORY
+    mock_context_config = {
+        "outputs": {
+            "prompt": {"path": "prompts/backend/utils/{name}_{language}.prompt"},
+            "code": {"path": "backend/functions/utils/{name}.py"},
+            "example": {"path": "context/backend/{name}_example.py"},  # Subdirectory!
+        }
+    }
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path(str(tmpdir / '.pddrc'))), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'backend-utils': {'defaults': mock_context_config}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='backend-utils'), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config):
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # examples_dir should be "context" (root), NOT "context/backend" (parent)
+    # This ensures auto-deps scans all example files, not just a subdirectory
+    assert resolved_config["examples_dir"] == "context", \
+        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent). " \
+        "examples_dir should use root of outputs.example.path, not parent directory."
