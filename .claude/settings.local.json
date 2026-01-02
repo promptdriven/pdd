@@ -67,7 +67,8 @@
       "Bash(source .env)",
       "Bash(echo:*)",
       "Bash(strace:*)",
-      "Bash(gh issue view:*)"
+      "Bash(gh issue view:*)",
+      "WebFetch(domain:github.com)"
     ]
   },
   "enableAllProjectMcpServers": true,

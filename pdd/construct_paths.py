@@ -125,6 +125,54 @@ def _match_path_to_contexts(
     return 'default' if 'default' in contexts else None
 
 
+def _get_relative_basename(input_path: str, pattern: str) -> str:
+    """
+    Compute basename relative to the matched pattern base.
+
+    This is critical for Issue #237: when a context pattern like
+    'frontend/components/**' matches 'frontend/components/marketplace/AssetCard',
+    we need to return 'marketplace/AssetCard' (relative to pattern base),
+    not the full path which would cause double-pathing in output.
+
+    Args:
+        input_path: The full input path (e.g., 'frontend/components/marketplace/AssetCard')
+        pattern: The matching pattern (e.g., 'frontend/components/**')
+
+    Returns:
+        Path relative to the pattern base (e.g., 'marketplace/AssetCard')
+
+    Examples:
+        >>> _get_relative_basename('frontend/components/marketplace/AssetCard', 'frontend/components/**')
+        'marketplace/AssetCard'
+        >>> _get_relative_basename('backend/utils/credit_helpers', 'backend/utils/**')
+        'credit_helpers'
+        >>> _get_relative_basename('unknown/path', 'other/**')
+        'unknown/path'  # No match, return as-is
+    """
+    # Strip glob patterns to get the base directory
+    pattern_base = pattern.rstrip('/**').rstrip('/*').rstrip('*')
+
+    # Remove trailing slash from pattern base if present
+    pattern_base = pattern_base.rstrip('/')
+
+    # Check if input path starts with pattern base
+    if input_path.startswith(pattern_base + '/'):
+        # Return the portion after pattern_base/
+        return input_path[len(pattern_base) + 1:]
+    elif input_path.startswith(pattern_base) and len(input_path) > len(pattern_base):
+        # Handle case where pattern_base has no trailing content
+        remainder = input_path[len(pattern_base):]
+        if remainder.startswith('/'):
+            return remainder[1:]
+        return remainder
+    elif input_path == pattern_base:
+        # Exact match - return just the last component
+        return input_path.split('/')[-1] if '/' in input_path else input_path
+
+    # No match - return as-is (fallback for default context)
+    return input_path
+
+
 def _detect_context(current_dir: Path, config: Dict[str, Any], context_override: Optional[str] = None) -> Optional[str]:
     """Detect the appropriate context based on current directory path."""
     if context_override:
@@ -204,7 +252,7 @@ def _resolve_config_hierarchy(
 ) -> Dict[str, Any]:
     """Apply configuration hierarchy: CLI > context > environment > defaults."""
     resolved = {}
-    
+
     # Configuration keys to resolve
     config_keys = {
         'generate_output_path': 'PDD_GENERATE_OUTPUT_PATH',
@@ -218,7 +266,7 @@ def _resolve_config_hierarchy(
         'budget': None,
         'max_attempts': None,
     }
-    
+
     for config_key, env_var in config_keys.items():
         # 1. CLI options (highest priority)
         if config_key in cli_options and cli_options[config_key] is not None:
@@ -230,7 +278,12 @@ def _resolve_config_hierarchy(
         elif env_var and env_var in env_vars:
             resolved[config_key] = env_vars[env_var]
         # 4. Defaults are handled elsewhere
-    
+
+    # Issue #237: Pass through 'outputs' config for template-based path generation
+    # This enables extensible project layouts (Next.js, Vue, Python, Go, etc.)
+    if 'outputs' in context_config:
+        resolved['outputs'] = context_config['outputs']
+
     return resolved
 
 
@@ -600,9 +653,15 @@ def construct_paths(
         # Apply configuration hierarchy
         env_vars = dict(os.environ)
         resolved_config = _resolve_config_hierarchy(command_options, context_config, env_vars)
-        
+
+        # Issue #237: Track matched context for debugging
+        resolved_config['_matched_context'] = context or 'default'
+
         # Update command_options with resolved configuration for internal use
+        # Exclude internal metadata keys (prefixed with _) from command_options
         for key, value in resolved_config.items():
+            if key.startswith('_'):
+                continue  # Skip internal metadata like _matched_context
             if key not in command_options or command_options[key] is None:
                 command_options[key] = value
         
@@ -667,9 +726,32 @@ def construct_paths(
                     resolved_config["code_dir"] = str(gen_path.parent)
             
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
-            # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+
+            # Determine examples_dir for auto-deps scanning
+            # Priority: outputs.example.path template > example_output_path > "examples" fallback
+            example_path_str = None
+
+            # First check for new-style outputs.example.path in context config (Issue #237)
+            # This takes priority over generate_output_paths result for template-based contexts
+            if original_context_config:
+                outputs_config = original_context_config.get('outputs', {})
+                example_config = outputs_config.get('example', {})
+                example_template = example_config.get('path')
+                if example_template:
+                    # Extract directory from template path
+                    # e.g., "context/backend/{name}_example.py" → "context/backend"
+                    example_path_str = str(Path(example_template).parent)
+
+            # Fallback to old-style example_output_path from generate_output_paths
+            if not example_path_str:
+                example_path_str = output_paths_str.get("example_output_path")
+
+            # Final fallback to "examples"
+            if not example_path_str:
+                example_path_str = "examples"
+
+            # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
             # If it ends with / or has no file extension, treat as directory; otherwise use parent
-            example_path_str = output_paths_str.get("example_output_path", "examples")
             example_path = Path(example_path_str)
             if example_path_str.endswith('/') or '.' not in example_path.name:
                 resolved_config["examples_dir"] = example_path_str.rstrip('/')
@@ -984,9 +1066,32 @@ def construct_paths(
     resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
-    # example_output_path can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+
+    # Determine examples_dir for auto-deps scanning
+    # Priority: outputs.example.path template > example_output_path > "examples" fallback
+    example_path_str = None
+
+    # First check for new-style outputs.example.path in context config (Issue #237)
+    # This takes priority over generate_output_paths result for template-based contexts
+    if original_context_config:
+        outputs_config = original_context_config.get('outputs', {})
+        example_config = outputs_config.get('example', {})
+        example_template = example_config.get('path')
+        if example_template:
+            # Extract directory from template path
+            # e.g., "context/backend/{name}_example.py" → "context/backend"
+            example_path_str = str(Path(example_template).parent)
+
+    # Fallback to old-style example_output_path from resolved_config
+    if not example_path_str:
+        example_path_str = resolved_config.get("example_output_path")
+
+    # Final fallback to "examples"
+    if not example_path_str:
+        example_path_str = "examples"
+
+    # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
     # If it ends with / or has no file extension, treat as directory; otherwise use parent
-    example_path_str = resolved_config.get("example_output_path", "examples")
     example_path = Path(example_path_str)
     if example_path_str.endswith('/') or '.' not in example_path.name:
         resolved_config["examples_dir"] = example_path_str.rstrip('/')
