@@ -678,8 +678,10 @@ def test_fix_main_does_not_write_empty_files(
             auto_submit=False
         )
 
-    # Assert - open should NOT have been called since both contents are empty
-    m_open.assert_not_called()
+    # Assert - no write calls should have been made since both contents are empty
+    # (read calls may happen for language detection, etc.)
+    write_calls = [call for call in m_open.call_args_list if len(call[0]) > 1 and 'w' in call[0][1]]
+    assert len(write_calls) == 0, f"Expected no write calls, but got: {write_calls}"
 
 
 @patch('pdd.fix_main.construct_paths')
