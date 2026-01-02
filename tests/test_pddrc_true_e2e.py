@@ -63,6 +63,7 @@ contexts:
 
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
+                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",  # Use our test context
                 "test",
                 "test.prompt",
@@ -107,6 +108,7 @@ contexts:
 
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
+                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "--strength", "0.3",  # CLI override
                 "test",
@@ -145,6 +147,7 @@ contexts:
 
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
+                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "test",
                 "test.prompt",
@@ -188,6 +191,7 @@ contexts:
 
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
+                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "change",
                 "change.prompt",  # CHANGE_PROMPT_FILE
@@ -235,6 +239,7 @@ contexts:
 
             runner = CliRunner()
             result = runner.invoke(cli.cli, [
+                "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "crash",
                 "module.prompt",

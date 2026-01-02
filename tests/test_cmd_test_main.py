@@ -2,6 +2,7 @@
 Tests for the `cmd_test_main` function, which handles CLI commands for test generation.
 """
 import json
+import os
 from unittest.mock import patch, MagicMock, mock_open
 import pytest
 import click
@@ -9,6 +10,21 @@ import requests
 from click import Context
 from pdd.cmd_test_main import cmd_test_main, CLOUD_REQUEST_TIMEOUT
 from pdd.core.cloud import CloudConfig
+
+
+def _has_cloud_credentials() -> bool:
+    """Check if cloud credentials are available for E2E testing."""
+    return bool(
+        os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY") and
+        os.environ.get("GITHUB_CLIENT_ID")
+    )
+
+
+# Pytest marker for tests that require cloud credentials (but not E2E execution)
+requires_cloud = pytest.mark.skipif(
+    not _has_cloud_credentials(),
+    reason="Cloud credentials not available"
+)
 
 # Get the cloud URL for assertions in tests
 CLOUD_GENERATE_TEST_URL = CloudConfig.get_endpoint_url("generateTest")
@@ -23,6 +39,7 @@ DEFAULT_MOCK_MODEL_NAME = "cloud_model"
 def mock_ctx_fixture():
     """
     Create a mock Click context with default settings for verbosity, strength, etc.
+    Forces local execution to ensure tests verify local behavior regardless of cloud credentials.
     """
     m_ctx = MagicMock(spec=Context)
     m_ctx.obj = {
@@ -30,7 +47,8 @@ def mock_ctx_fixture():
         "strength": 0.5,
         "temperature": 0.0,
         "force": False,
-        "quiet": False
+        "quiet": False,
+        "local": True,  # Force local execution for unit tests
     }
     return m_ctx
 
@@ -423,6 +441,7 @@ def test_cmd_test_main_uses_pddrc_strength_from_resolved_config():
         "verbose": False,
         "force": False,
         "quiet": False,
+        "local": True,  # Force local execution for unit test
         "time": 0.25,
         # strength/temperature NOT in ctx.obj (simulates CLI not passing --strength)
     }
@@ -472,6 +491,7 @@ def test_cmd_test_main_cli_strength_overrides_pddrc():
         "verbose": False,
         "force": False,
         "quiet": False,
+        "local": True,  # Force local execution for unit test
         "time": 0.25,
         "strength": 0.3,  # CLI passed --strength 0.3
         "temperature": 0.1,
@@ -522,6 +542,7 @@ def test_cmd_test_main_multiple_existing_tests_concatenated(tmp_path):
         "verbose": False,
         "force": True,
         "quiet": False,
+        "local": True,  # Force local execution for unit test
         "time": 0.25,
         "context": None,
         "confirm_callback": None,
@@ -1147,3 +1168,87 @@ def test_cmd_test_main_cloud_payload_contains_all_params(
         assert "testFilePath" in payload
         assert "moduleName" in payload
         assert "mode" in payload
+
+
+# -----------------------------------------------------------------------------
+# E2E Cloud Tests (run when cloud credentials are available)
+# -----------------------------------------------------------------------------
+
+def _has_cloud_jwt_token() -> bool:
+    """Check if a JWT token is available (either injected or via stored refresh token)."""
+    # First check for env var (fast path)
+    if os.environ.get("PDD_JWT_TOKEN"):
+        return True
+    # Check for stored refresh token (requires keyring)
+    try:
+        import keyring
+        token = keyring.get_password("firebase-auth-PDD Code Generator", "refresh_token")
+        return bool(token)
+    except Exception:
+        return False
+
+
+# Marker for tests that require actual cloud execution with valid token
+requires_cloud_e2e = pytest.mark.skipif(
+    not (_has_cloud_credentials() and _has_cloud_jwt_token()),
+    reason="Cloud E2E tests require credentials (API keys) and auth token (PDD_JWT_TOKEN or stored refresh token)"
+)
+
+
+@requires_cloud_e2e
+def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
+    """
+    E2E test: Real cloud test generation.
+
+    This test verifies actual cloud execution by:
+    1. Setting PDD_CLOUD_ONLY=1 to prevent silent fallback to local
+    2. Checking for "Cloud Success" in output
+
+    Requires PDD_JWT_TOKEN to be set (e.g., via infisical).
+    """
+    # Prevent silent fallback to local - cloud must work or test fails
+    monkeypatch.setenv("PDD_CLOUD_ONLY", "1")
+
+    # Create minimal test files in tmp_path
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("Generate unit tests for a simple add function.")
+
+    code_file = tmp_path / "simple_math.py"
+    code_file.write_text("def add(a, b):\n    return a + b\n")
+
+    output_file = tmp_path / "test_simple_math.py"
+
+    # Create real Click context with local=False
+    ctx = MagicMock(spec=Context)
+    ctx.obj = {
+        "verbose": True,
+        "force": True,
+        "quiet": False,
+        "local": False,  # Use cloud
+    }
+
+    result = cmd_test_main(
+        ctx=ctx,
+        prompt_file=str(prompt_file),
+        code_file=str(code_file),
+        output=str(output_file),
+        language="python",
+        coverage_report=None,
+        existing_tests=None,
+        target_coverage=None,
+        merge=False,
+    )
+
+    # Capture output to verify cloud execution
+    captured = capsys.readouterr()
+
+    # Verify we got valid test code back
+    generated_test, cost, model = result
+    assert len(generated_test) > 0, "Cloud should return generated test code"
+    assert "def test" in generated_test.lower() or "class test" in generated_test.lower(), \
+        "Should contain test functions or test class"
+    assert cost > 0, "Cloud execution should have a cost"
+    assert output_file.exists(), "Output file should be created"
+    # Verify cloud was actually used by checking for "Cloud Success" in output
+    assert "Cloud Success" in captured.out, \
+        f"Expected 'Cloud Success' in output, got: {captured.out[:500]}"
