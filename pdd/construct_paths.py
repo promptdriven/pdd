@@ -744,30 +744,14 @@ def construct_paths(
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
 
             # Determine examples_dir for auto-deps scanning
-            # Priority: outputs.example.path template > example_output_path > "examples" fallback
-            example_path_str = None
+            # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
+            # NOT for determining scan scope. Using it caused CSV row deletion issues.
+            # Use example_output_path config or default to "context".
+            example_path_str = output_paths_str.get("example_output_path")
 
-            # First check for new-style outputs.example.path in context config (Issue #237)
-            # This takes priority over generate_output_paths result for template-based contexts
-            if original_context_config:
-                outputs_config = original_context_config.get('outputs', {})
-                example_config = outputs_config.get('example', {})
-                example_template = example_config.get('path')
-                if example_template:
-                    # Extract ROOT directory from template path (first path component)
-                    # e.g., "context/backend/{name}_example.py" → "context"
-                    # This ensures auto-deps scans all examples, not just a subdirectory
-                    template_parts = Path(example_template).parts
-                    if template_parts:
-                        example_path_str = template_parts[0]
-
-            # Fallback to old-style example_output_path from generate_output_paths
+            # Final fallback to "context" (sensible default for this project)
             if not example_path_str:
-                example_path_str = output_paths_str.get("example_output_path")
-
-            # Final fallback to "examples"
-            if not example_path_str:
-                example_path_str = "examples"
+                example_path_str = "context"
 
             # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
             # If it ends with / or has no file extension, treat as directory; otherwise use parent
@@ -1087,30 +1071,14 @@ def construct_paths(
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
 
     # Determine examples_dir for auto-deps scanning
-    # Priority: outputs.example.path template > example_output_path > "examples" fallback
-    example_path_str = None
+    # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
+    # NOT for determining scan scope. Using it caused CSV row deletion issues.
+    # Use example_output_path config or default to "context".
+    example_path_str = resolved_config.get("example_output_path")
 
-    # First check for new-style outputs.example.path in context config (Issue #237)
-    # This takes priority over generate_output_paths result for template-based contexts
-    if original_context_config:
-        outputs_config = original_context_config.get('outputs', {})
-        example_config = outputs_config.get('example', {})
-        example_template = example_config.get('path')
-        if example_template:
-            # Extract ROOT directory from template path (first path component)
-            # e.g., "context/backend/{name}_example.py" → "context"
-            # This ensures auto-deps scans all examples, not just a subdirectory
-            template_parts = Path(example_template).parts
-            if template_parts:
-                example_path_str = template_parts[0]
-
-    # Fallback to old-style example_output_path from resolved_config
+    # Final fallback to "context" (sensible default for this project)
     if not example_path_str:
-        example_path_str = resolved_config.get("example_output_path")
-
-    # Final fallback to "examples"
-    if not example_path_str:
-        example_path_str = "examples"
+        example_path_str = "context"
 
     # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
     # If it ends with / or has no file extension, treat as directory; otherwise use parent
