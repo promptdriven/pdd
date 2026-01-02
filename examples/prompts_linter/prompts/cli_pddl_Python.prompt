@@ -1,0 +1,72 @@
+<prompt>
+The `cli_pddl` module serves as the primary command-line interface for the PDD Prompt Linter. It is responsible for parsing user commands and arguments using the `Typer` framework, invoking the core `LintEngine` to analyze prompt files, and rendering the results in either a human-readable terminal format or structured JSON for CI integration. This module acts as the orchestration layer between the user and the backend logic, ensuring proper exit codes and error handling.
+
+Requirements
+1.  **Framework**: Use `Typer` for CLI command definition and argument parsing. The entry point should handle `no_args_is_help=True`.
+2.  **Commands**:
+    *   `lint <file>`: The primary command. Accepts a file path. Options: `--format` (default: "text", choices: ["text", "json"]), `--resolve-includes` (flag, default: False), `--config` (path, optional).
+    *   `rules`: Lists all available linting rules with their IDs and short descriptions.
+    *   `explain <rule_id>`: detailed information about a specific rule, including rationale and examples.
+3.  **Lint Execution**:
+    *   Must instantiate the `LintEngine` (from `src.backend.core.lint_engine`).
+    *   Must read the target file content.
+    *   Must pass the content and configuration to the engine.
+4.  **Output Formatting**:
+    *   **Text Mode**: Print a summary header (score, issue counts). Group findings by severity (Error, Warning, Info). For each finding, display the Rule ID, Title, Line numbers, and Suggested Edits.
+    *   **JSON Mode**: Print the raw JSON representation of the `LintReport` object to `stdout`. Ensure no other text pollutes `stdout` in this mode.
+5.  **Exit Codes**:
+    *   `0`: Successful execution, no linting **errors** found (warnings/info are acceptable).
+    *   `1`: Linting **errors** found (severity == "error").
+    *   `2`: Tool/runtime failure (e.g., file not found, permission denied, unhandled exception).
+6.  **Error Handling**: Catch `FileNotFoundError` and generic `Exception`s during execution. Print user-friendly error messages to `stderr` and exit with code `2`.
+7.  **Rule Registration**: Ensure that `pdd_rules` are imported so that the registry is populated before commands run.
+
+Dependencies
+<lint_engine>
+  <include>src/backend/core/lint_engine.py</include>
+</lint_engine>
+<models_findings>
+  <include>src/backend/models/findings.py</include>
+</models_findings>
+<pdd_rules>
+  <include>src/backend/rules/pdd_rules.py</include>
+</pdd_rules>
+<rules_registry>
+  <include>src/backend/rules/registry.py</include>
+</rules_registry>
+
+Prompt Dependencies:
+- lint_engine_Python.prompt
+- models_findings_Python.prompt
+- pdd_rules_Python.prompt
+
+Instructions
+- Initialize a `Typer` app.
+- **Import Side-effects**: Import `src.backend.rules.pdd_rules` at the top level to ensure all rules are registered in the `Registry`.
+- **Command: `lint`**:
+    - Validate that the input file exists.
+    - Initialize `LintEngine`.
+    - Call `engine.lint(content, ...)`
+    - If `format == "json"`, use `report.model_dump_json(indent=2)` and print it.
+    - If `format == "text"`, implement a helper function `_print_text_report(report)`:
+        - Print a header with the Score.
+        - Iterate through findings. Use visual separators.
+        - Display "Evidence" (line numbers) and "Suggested Edits" clearly.
+    - Determine exit code: Iterate through `report.findings`. If any finding has `severity="error"`, exit with `1`. Otherwise `0`.
+- **Command: `rules`**:
+    - Access the `Registry` (likely via `LintEngine` or directly if static).
+    - Print a formatted list of `Rule ID`: `Description`.
+- **Command: `explain`**:
+    - Fetch the specific rule from the `Registry`.
+    - Print full details: Title, Severity, Message, and the "Rubric/Rationale" if available in the rule class.
+- **Main Block**: Include a standard `if __name__ == "__main__": app()` block.
+
+Deliverable
+- `src/cli/pddl.py`
+
+Implementation assumptions (explicit)
+- The `LintEngine` is synchronous and in-process.
+- The `LintReport` model has a `model_dump_json` method (Pydantic V2).
+- We are not using a complex configuration file loader for the MVP; the `--config` option can be a placeholder or simple pass-through if the Engine supports it, otherwise ignore it for now but define the argument.
+- `src.backend.rules.pdd_rules` contains the actual rule definitions and registering logic.
+</prompt>

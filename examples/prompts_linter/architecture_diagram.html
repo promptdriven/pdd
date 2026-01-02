@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>System Architecture</title>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+mermaid.initialize({startOnLoad:true,theme:'default'});
+window.addEventListener('load', () => {
+    const moduleData = {"models_findings_Python": {"filename": "models_findings_Python.prompt", "priority": 1, "description": "Pydantic models representing the canonical lint report structure. Includes `Finding` (rule_id, severity, message, evidence, suggested_edits) and `LintReport` (summary, findings, token_estimates).", "dependencies": [], "tags": ["backend", "core", "models"], "filepath": "src/backend/models/findings.py"}, "rules_registry_Python": {"filename": "rules_registry_Python.prompt", "priority": 2, "description": "A registry class or module that allows rules to be registered via decorators or explicit calls. It should support retrieving all rules or filtering by ID/tag. This decouples the engine from specific rule implementations.", "dependencies": ["models_findings_Python.prompt"], "tags": ["backend", "core", "rules"], "filepath": "src/backend/rules/registry.py"}, "parser_Python": {"filename": "parser_Python.prompt", "priority": 3, "description": "A parser module that reads a prompt file and breaks it down into sections (e.g., Requirements, Context), extracts tags (e.g., <include>, <shell>), and maintains a line map for reporting error locations.", "dependencies": [], "tags": ["backend", "core", "parser"], "filepath": "src/backend/core/parser.py"}, "include_resolver_Python": {"filename": "include_resolver_Python.prompt", "priority": 4, "description": "A utility module that resolves file paths referenced in <include> tags (respecting security roots), reads content, and provides simple token estimation (e.g., char count / 4). It must handle missing files gracefully.", "dependencies": [], "tags": ["backend", "core", "utils"], "filepath": "src/backend/core/include_resolver.py"}, "lint_engine_Python": {"filename": "lint_engine_Python.prompt", "priority": 5, "description": "The main engine class that takes raw text (and optional config), uses the Parser to structure it, iterates through registered rules from the Registry, and aggregates results into a LintReport object.", "dependencies": ["models_findings_Python.prompt", "rules_registry_Python.prompt", "parser_Python.prompt", "include_resolver_Python.prompt"], "tags": ["backend", "core", "engine"], "filepath": "src/backend/core/lint_engine.py"}, "pdd_rules_Python": {"filename": "pdd_rules_Python.prompt", "priority": 6, "description": "A collection of rule implementations (PDD001-PDD060) covering Structure, Requirements, IO, Context, Determinism, and Attention. Each rule analyzes the parsed structure and emits Findings if violations are detected.", "dependencies": ["models_findings_Python.prompt", "rules_registry_Python.prompt", "parser_Python.prompt"], "tags": ["backend", "rules"], "filepath": "src/backend/rules/pdd_rules.py"}, "api_main_Python": {"filename": "api_main_Python.prompt", "priority": 7, "description": "A FastAPI application exposing a POST /lint endpoint. It accepts prompt text and options, invokes the Lint Engine, and returns the JSON report. It handles request validation and error responses.", "dependencies": ["lint_engine_Python.prompt", "models_findings_Python.prompt", "pdd_rules_Python.prompt"], "tags": ["backend", "api", "fastapi"], "filepath": "src/backend/app/main.py"}, "cli_pddl_Python": {"filename": "cli_pddl_Python.prompt", "priority": 8, "description": "A Typer-based CLI tool. Commands include `lint <file>` (outputs text or JSON), `rules` (lists rules), and `explain <rule_id>`. It uses the Lint Engine directly (in-process) for performance and offline capability.", "dependencies": ["lint_engine_Python.prompt", "models_findings_Python.prompt", "pdd_rules_Python.prompt"], "tags": ["cli", "tool"], "filepath": "src/cli/pddl.py"}, "ui_streamlit_Python": {"filename": "ui_streamlit_Python.prompt", "priority": 9, "description": "A Streamlit application. Features a text area for input, a 'Lint' button, and a display area for the structured report. It communicates with the backend API (or imports the engine directly if deployed as a monolith for simplicity, though PRD suggests API call).", "dependencies": ["models_findings_Python.prompt", "api_main_Python.prompt"], "tags": ["ui", "streamlit", "frontend"], "filepath": "src/ui/streamlit_app.py"}};
+    
+    // Add hover listeners to all nodes
+    setTimeout(() => {
+        const nodes = document.querySelectorAll('.node');
+        nodes.forEach(node => {
+            const text = node.querySelector('.nodeLabel');
+            if (!text) return;
+            
+            const nodeText = text.textContent.trim();
+            const moduleId = nodeText.split(' ')[0];
+            const data = moduleData[moduleId];
+            
+            if (data) {
+                node.style.cursor = 'pointer';
+                
+                node.addEventListener('mouseenter', (e) => {
+                    showTooltip(e, data);
+                });
+                
+                node.addEventListener('mouseleave', () => {
+                    hideTooltip();
+                });
+            }
+        });
+    }, 500);
+});
+function showTooltip(e, data) {
+    hideTooltip();
+    
+    const tooltip = document.createElement('div');
+    tooltip.id = 'module-tooltip';
+    tooltip.innerHTML = `
+        <div style="font-weight:600;margin-bottom:8px;font-size:1.1em;">${data.filename}</div>
+        <div style="margin-bottom:6px;"><strong>Priority:</strong> ${data.priority}</div>
+        <div style="margin-bottom:6px;"><strong>Path:</strong> ${data.filepath}</div>
+        <div style="margin-bottom:6px;"><strong>Tags:</strong> ${data.tags.join(', ')}</div>
+        <div style="margin-bottom:6px;"><strong>Dependencies:</strong> ${data.dependencies.length > 0 ? data.dependencies.join(', ') : 'None'}</div>
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid #ddd;font-size:0.9em;color:#444;">${data.description}</div>
+    `;
+    
+    document.body.appendChild(tooltip);
+    
+    const rect = e.target.closest('.node').getBoundingClientRect();
+    tooltip.style.left = rect.right + 10 + 'px';
+    tooltip.style.top = rect.top + window.scrollY + 'px';
+}
+function hideTooltip() {
+    const existing = document.getElementById('module-tooltip');
+    if (existing) existing.remove();
+}
+</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#fff;color:#000;padding:2rem;max-width:1400px;margin:0 auto}
+h1{font-size:2rem;font-weight:600;margin-bottom:2rem;padding-bottom:1rem;border-bottom:2px solid #000}
+.diagram{border:1px solid #000;padding:2rem;margin:2rem 0;overflow-x:auto;position:relative}
+.mermaid{display:flex;justify-content:center}
+#module-tooltip{
+    position:absolute;
+    background:#fff;
+    border:2px solid #000;
+    padding:1rem;
+    max-width:400px;
+    z-index:1000;
+    box-shadow:4px 4px 0 rgba(0,0,0,0.1);
+    font-size:0.9rem;
+    line-height:1.5;
+}
+.node{transition:opacity 0.2s}
+.node:hover{opacity:0.8}
+</style></head><body>
+<h1>System Architecture</h1>
+<div class="diagram"><pre class="mermaid">flowchart TB
+        PRD["System Architecture"]
+    
+    subgraph Frontend
+        ui_streamlit_Python["ui_streamlit_Python (9)"]
+    end
+    
+    subgraph Backend
+        models_findings_Python["models_findings_Python (1)"]
+        rules_registry_Python["rules_registry_Python (2)"]
+        parser_Python["parser_Python (3)"]
+        include_resolver_Python["include_resolver_Python (4)"]
+        lint_engine_Python["lint_engine_Python (5)"]
+        pdd_rules_Python["pdd_rules_Python (6)"]
+        api_main_Python["api_main_Python (7)"]
+    end
+    
+    subgraph Shared
+        cli_pddl_Python["cli_pddl_Python (8)"]
+    end
+    
+    PRD --> Frontend
+    PRD --> Backend
+
+    rules_registry_Python -->|uses| models_findings_Python
+    lint_engine_Python -->|uses| models_findings_Python
+    lint_engine_Python -->|uses| rules_registry_Python
+    lint_engine_Python -->|uses| parser_Python
+    lint_engine_Python -->|uses| include_resolver_Python
+    pdd_rules_Python -->|uses| models_findings_Python
+    pdd_rules_Python -->|uses| rules_registry_Python
+    pdd_rules_Python -->|uses| parser_Python
+    api_main_Python -->|uses| lint_engine_Python
+    api_main_Python -->|uses| models_findings_Python
+    api_main_Python -->|uses| pdd_rules_Python
+    cli_pddl_Python -->|uses| lint_engine_Python
+    cli_pddl_Python -->|uses| models_findings_Python
+    cli_pddl_Python -->|uses| pdd_rules_Python
+    ui_streamlit_Python -->|uses| models_findings_Python
+    ui_streamlit_Python -->|uses| api_main_Python
+    
+    classDef frontend fill:#FFF3E0,stroke:#F57C00,stroke-width:2px
+    classDef backend fill:#E3F2FD,stroke:#1976D2,stroke-width:2px
+    classDef shared fill:#E8F5E9,stroke:#388E3C,stroke-width:2px
+    classDef system fill:#E0E0E0,stroke:#616161,stroke-width:3px
+    
+    class ui_streamlit_Python frontend
+    class models_findings_Python,rules_registry_Python,parser_Python,include_resolver_Python,lint_engine_Python,pdd_rules_Python,api_main_Python backend
+    class cli_pddl_Python shared
+    class PRD system</pre></div>
+</body></html>

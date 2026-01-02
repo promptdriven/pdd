@@ -1,0 +1,14 @@
+# .pddrc
+version: "1.0"
+
+contexts:
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      target_coverage: 10.0
+      strength: 0.75
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3

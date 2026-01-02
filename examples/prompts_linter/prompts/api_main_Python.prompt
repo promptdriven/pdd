@@ -1,0 +1,53 @@
+The `api_main` module serves as the primary entry point for the PDD Prompt Linter backend API. It initializes the FastAPI application, configures middleware (such as CORS), and exposes the REST endpoints required by the UI and external integrations—specifically the `/lint` endpoint. This module acts as the interface layer, receiving HTTP requests, validating payloads using Pydantic models, invoking the core linting engine, and returning structured JSON reports.
+
+Requirements
+1.  **FastAPI Application Setup**: Initialize a `FastAPI` app instance with appropriate metadata (title="PDD Prompt Linter", version="1.0").
+2.  **CORS Configuration**: Configure `CORSMiddleware` to allow requests from any origin (`*`) for the MVP, enabling the Streamlit UI (running on a different port) to communicate with the backend.
+3.  **Endpoint Definition**: Implement a `POST /lint` endpoint that accepts a JSON payload containing the prompt text and configuration options.
+4.  **Request Validation**: Use a Pydantic model (defined in `api_main` or imported if simple enough, though architecture suggests `models/findings.py` handles the response structure) for the request body. The request body must include `prompt_text` (string) and an optional `options` object.
+5.  **Core Integration**: The endpoint must instantiate or call the `LintEngine` to process the incoming text.
+6.  **Response Structure**: The endpoint must return a JSON object matching the `LintReport` schema defined in `models/findings.py`.
+7.  **Error Handling**: Implement global exception handlers to catch unhandled errors and return a 500 Internal Server Error with a generic message, ensuring the server doesn't crash.
+8.  **Health Check**: Include a simple `GET /health` endpoint returning `{"status": "ok"}` for deployment readiness probes.
+9.  **Statelessness**: The API must remain stateless; no database connections are required for this MVP.
+
+Dependencies
+<lint_engine>
+  <include>context/lint_engine_example.py</include>
+</lint_engine>
+<models_findings>
+  <include>context/models_findings_example.py</include>
+</models_findings>
+<pdd_rules>
+  <include>context/pdd_rules_example.py</include>
+</pdd_rules>
+
+Prompt Dependencies:
+- lint_engine_Python.prompt
+- models_findings_Python.prompt
+- pdd_rules_Python.prompt
+
+Instructions
+- Import `FastAPI`, `HTTPException`, and `CORSMiddleware` from `fastapi`.
+- Import `LintEngine` from `backend.core.lint_engine`.
+- Import `LintReport` from `backend.models.findings`.
+- Define a request model `LintRequest` (if not already in models) inheriting from Pydantic's `BaseModel`:
+    - `prompt_text`: str
+    - `options`: dict (optional, default empty)
+- Initialize the `LintEngine` once at the module level or within the endpoint (since it is stateless and deterministic, instantiation cost is low, but module-level is preferred if it loads rules).
+- Ensure the `LintEngine` has all standard PDD rules registered. If the engine requires manual rule registration, do so in a `startup` event or immediately upon instantiation.
+- In the `POST /lint` handler:
+    - Extract `prompt_text` from the request.
+    - Call `engine.lint(prompt_text)`.
+    - Return the resulting `LintReport`.
+- Add a `GET /` root endpoint that returns a welcome message and links to `/docs`.
+- Ensure the code is compatible with `uvicorn` execution (e.g., `if __name__ == "__main__": uvicorn.run(...)`).
+
+Deliverable
+- A single Python file `src/backend/app/main.py` containing the FastAPI app definition and route handlers.
+
+Implementation assumptions (explicit)
+- The `LintEngine` class has a method `lint(text: str) -> LintReport`.
+- The `LintEngine` automatically registers default rules upon initialization, or there is a simple way to register them here.
+- No authentication is required for the `/lint` endpoint for this MVP.
+- The backend package structure allows imports like `from backend.core.lint_engine import LintEngine`.
