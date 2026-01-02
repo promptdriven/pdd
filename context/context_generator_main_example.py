@@ -1,36 +1,83 @@
+import os
+import asyncio
+from pathlib import Path
 import click
 from pdd.context_generator_main import context_generator_main
 
-# Create a Click context object
-ctx = click.Context(click.Command("example"))
+def run_example():
+    """
+    Demonstrates the usage of context_generator_main to generate example code.
+    
+    Inputs to context_generator_main:
+        - ctx (click.Context): Click context containing global options (strength, temperature, etc.)
+        - prompt_file (str): Path to the .prompt file used to generate the original code.
+        - code_file (str): Path to the existing source code file.
+        - output (Optional[str]): Path to save the generated example. If None, uses default naming.
 
-# Set Click context parameters
-ctx.params = {
-    'force': False,  # Do not overwrite existing files
-    'quiet': False,  # Show output messages
-    'verbose': False  # Do not show verbose output
-}
+    Outputs of context_generator_main:
+        - generated_code (str): The resulting example code string.
+        - total_cost (float): The cost of the LLM operation in USD.
+        - model_name (str): The name of the AI model that performed the generation.
+    """
+    # 1. Setup directory structure in ./output
+    output_dir = Path("./output")
+    output_dir.mkdir(exist_ok=True)
 
-# Set Click context object attributes
-ctx.obj = {
-    'strength': 0.575,  # Strength of the AI model (0.0 to 1.0)
-    'temperature': 0.0  # Temperature of the AI model (0.0 to 1.0)
-}
+    prompt_path = output_dir / "math_utils_python.prompt"
+    code_path = output_dir / "math_utils.py"
+    example_output_path = output_dir / "math_utils_example.py"
 
-# Define input and output paths
-prompt_file = "prompts/get_extension_python.prompt"
-code_file = "pdd/get_extension.py"
-output = "output/example_code.py"  # Save output to the 'output' directory
+    # 2. Create dummy input files
+    prompt_path.write_text(
+        "Task: Create a utility for basic math operations.\n"
+        "Include a function 'add(a, b)' that returns the sum.",
+        encoding="utf-8"
+    )
+    
+    code_path.write_text(
+        "def add(a, b):\n    return a + b",
+        encoding="utf-8"
+    )
 
-# Call the context_generator_main function
-example_code, total_cost, model_name = context_generator_main(
-    ctx=ctx,
-    prompt_file=prompt_file,
-    code_file=code_file,
-    output=output
-)
+    # 3. Mock the Click Context object
+    # In a real CLI, this is provided by the @click.group or @click.command decorators
+    class MockContext:
+        def __init__(self):
+            self.obj = {
+                'strength': 0.7,        # LLM power (0.0 to 1.0)
+                'temperature': 0.2,     # Randomness (0.0 to 1.0)
+                'force': True,          # Overwrite existing files
+                'quiet': False,         # Show Rich console output
+                'verbose': True,        # Detailed logging
+                'time': 0.5             # Thinking time budget (0.0 to 1.0)
+            }
+            self.params = {'local': True} # Force local for this demo to avoid network calls
 
-# Print the results
-print(f"Generated Example Code:\n{example_code}")
-print(f"Total Cost: ${total_cost:.6f}")
-print(f"Model Used: {model_name}")
+    ctx = click.Context(click.Command('example'), obj=MockContext().obj)
+    ctx.params = {'local': True}
+
+    # 4. Execute the main wrapper
+    # This function handles path resolution, preprocessing, cloud/local logic, and syntax fixing
+    generated_code, cost, model = context_generator_main(
+        ctx=ctx,
+        prompt_file=str(prompt_path),
+        code_file=str(code_path),
+        output=str(example_output_path)
+    )
+
+    # 5. Display results
+    print(f"--- Generation Results ---")
+    print(f"Model Used: {model}")
+    print(f"Total Cost: ${cost:.6f}")
+    print(f"Output saved to: {example_output_path}")
+    print("\nGenerated Code Snippet:")
+    print("-" * 20)
+    print(generated_code[:150] + "...")
+
+if __name__ == "__main__":
+    # Ensure environment variables required by internal modules are present
+    # (Normally these are set in the user's shell environment)
+    if "NEXT_PUBLIC_FIREBASE_API_KEY" not in os.environ:
+        os.environ["NEXT_PUBLIC_FIREBASE_API_KEY"] = "mock_key"
+    
+    run_example()
