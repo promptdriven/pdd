@@ -1,0 +1,41 @@
+The `rules_registry` module serves as the central catalog for all Prompt-Driven Development (PDD) linting rules. It decouples the linting engine from specific rule implementations by providing a standardized mechanism to register, validate, and retrieve rules dynamically. This module ensures that the application can easily extend its rule set without modifying the core engine logic.
+
+Requirements
+1.  **Rule Interface Definition**: Define an abstract base class (ABC) or Protocol named `LintRule` that all rules must implement. This interface must enforce the presence of:
+    -   `rule_id` (str): The unique identifier (e.g., "PDD001").
+    -   `severity` (str): Default severity (e.g., "error", "warn", "info").
+    -   `title` (str): A short descriptive title.
+    -   `analyze(self, prompt_structure: Any) -> List[Finding]`: A method that takes the parsed prompt structure and returns a list of findings.
+2.  **Registry Management**: Implement a `RuleRegistry` class responsible for storing registered rules. It should support:
+    -   Adding a rule.
+    -   Retrieving a rule by ID.
+    -   Retrieving all rules (sorted by ID).
+    -   Clearing the registry (useful for testing).
+3.  **Registration Decorator**: Provide a `@register` decorator (or a method on the registry instance) that allows rule classes to register themselves upon module import.
+4.  **Validation**: Ensure that no two rules can be registered with the same `rule_id`. Raise a `ValueError` if a duplicate is detected.
+5.  **Type Safety**: Use strict type hinting. The `analyze` method returns a list of `Finding` objects (imported from the models module).
+6.  **No External Dependencies**: This module should not depend on the `parser` or `lint_engine`. It only depends on the data models for the return types.
+
+Dependencies
+<models_findings>
+  <include>context/models_findings_example.py</include>
+</models_findings>
+
+Prompt Dependencies:
+- models_findings_Python.prompt
+
+Instructions
+-   Import `Finding` from `src.backend.models.findings` (or the appropriate relative path based on the file structure).
+-   Define the `LintRule` class using `abc.ABC`. The `analyze` method should be an `@abstractmethod`.
+-   The `RuleRegistry` should likely be a Singleton or instantiated as a global instance within this module (e.g., `default_registry`) so that decorators can access it easily.
+-   The `analyze` method input type is technically the output of the Parser, but to avoid circular imports or tight coupling, type it as `Any` or `Dict[str, Any]` in the ABC, with a docstring explaining it expects the parsed prompt object.
+-   Implement a `register_rule` method in the registry and a standalone `register` decorator that wraps it.
+-   Ensure the `severity` field in `LintRule` validates against allowed values ("error", "warn", "info") if possible, or rely on the `Finding` model validation.
+
+Deliverable
+-   `src/backend/rules/registry.py`
+
+Implementation assumptions (explicit)
+-   The `models` module is available and contains the `Finding` class.
+-   Rules will be defined in separate files and will import this registry to register themselves.
+-   The parsing structure passed to `analyze` is a dictionary or object, but the registry doesn't need to know its exact schema, only that it is passed through.
