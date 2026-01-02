@@ -123,6 +123,9 @@ Notes:
     <pytest_output>
         <include>context/pytest_example.py</include>
     </pytest_output>
+    <python_env_detector>
+        <include>context/python_env_detector_example.py</include>
+    </python_env_detector>
 </internal_modules>
 
 ### Instructions:
