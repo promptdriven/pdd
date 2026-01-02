@@ -1,3 +1,24 @@
+## v0.0.99 (2026-01-01)
+
+### Feat
+
+- Add cloud hybrid mode support for pdd fix command
+- Add additional Bash commands for Git operations in settings
+- Add WebFetch support for GitHub domain in settings
+- Enhance examples_dir determination in construct_paths
+- Add extensible output path templates for different project layouts (#237)
+- Enhance cloud execution and release process checks
+
+### Fix
+
+- Update test to check for write calls instead of any open calls
+- Revert cmd_test_main_example.py to origin/main
+- make test uses absolute PDD_PATH
+- ignore directives inside code spans
+- Improve examples_dir determination in construct_paths
+- Ensure outputs config is used when prompt file exists in path generation
+- Handle keychain write failure (-25299) when storing rotated refresh token
+
 ## v0.0.98 (2025-12-31)
 
 ### Feat
