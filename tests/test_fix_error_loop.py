@@ -732,3 +732,89 @@ def test_sync_orchestration_context_none_by_default():
 
     ctx = _create_mock_context(force=False)
     assert ctx.obj.get('context') is None
+
+
+# ============================================================================
+# Bug Fix Tests - Agentic Fallback CWD
+# ============================================================================
+
+def test_agentic_fallback_cwd_is_project_root_not_prompt_parent(tmp_path, monkeypatch):
+    """
+    BUG FIX TEST: When agentic fallback is triggered, the cwd parameter passed
+    to run_agentic_fix should be None (to use project root), NOT Path(prompt_file).parent.
+
+    The bug was that fix_error_loop passed cwd=Path(prompt_file).parent, which
+    caused path resolution failures when:
+    - prompt_file is in a subdirectory (e.g., prompts/backend/utils/)
+    - code_file is relative to project root (e.g., backend/functions/utils/code.py)
+
+    This resulted in malformed paths like:
+    prompts/backend/utils/backend/functions/utils/code.py
+    """
+    monkeypatch.chdir(tmp_path)
+
+    # Create nested prompt directory structure (like prompts/backend/utils/)
+    prompt_dir = tmp_path / "prompts" / "backend" / "utils"
+    prompt_dir.mkdir(parents=True)
+    prompt_file = prompt_dir / "my_module_python.prompt"
+    prompt_file.write_text("Generate a module")
+
+    # Create code directory structure (like backend/functions/utils/)
+    code_dir = tmp_path / "backend" / "functions" / "utils"
+    code_dir.mkdir(parents=True)
+    code_file = code_dir / "my_module.py"
+    code_file.write_text("def foo(): pass")
+
+    # Create test file
+    test_dir = tmp_path / "tests"
+    test_dir.mkdir()
+    test_file = test_dir / "test_my_module.py"
+    test_file.write_text("def test_foo(): pass")
+
+    error_log = tmp_path / "error_log.txt"
+
+    captured_cwd = []
+
+    def capture_cwd_mock(**kwargs):
+        """Capture the cwd parameter passed to run_agentic_fix"""
+        captured_cwd.append(kwargs.get('cwd'))
+        return (True, "Fixed", 0.1, "mock-model", [])
+
+    with patch("pdd.fix_error_loop.run_agentic_fix", side_effect=capture_cwd_mock) as mock_agent, \
+         patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("subprocess.run") as mock_subprocess:
+        # Make tests have warnings (0 fails, 0 errors, 4 warnings) to trigger agentic fallback
+        # since success = (fails == 0 and errors == 0 and warnings == 0) will be False
+        mock_pytest.return_value = (0, 0, 4, "4 warnings")
+        # Mock subprocess for verification program
+        mock_subprocess.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(test_file),
+            code_file=str(code_file),
+            prompt_file=str(prompt_file),
+            prompt="Fix the module",
+            verification_program=str(tmp_path / "verify.py"),  # Provide a verification program path
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=1,
+            budget=5.0,
+            error_log_file=str(error_log),
+            verbose=False,
+            agentic_fallback=True,
+        )
+
+    # Verify agentic fallback was called
+    assert mock_agent.called, "Agentic fallback should have been triggered"
+
+    # THE BUG: cwd was set to Path(prompt_file).parent = prompts/backend/utils
+    # THE FIX: cwd should be None (to use project root)
+    assert len(captured_cwd) > 0, "Should have captured cwd parameter"
+    cwd_value = captured_cwd[0]
+
+    # cwd should be None (use project root) or the actual project root
+    # It should NOT be the prompt file's parent directory
+    prompt_parent = Path(prompt_file).parent
+    assert cwd_value is None or cwd_value == tmp_path, \
+        f"BUG: cwd should be None or project root, but got {cwd_value}. " \
+        f"This causes path resolution failures when prompt is in a subdirectory!"

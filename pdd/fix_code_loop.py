@@ -496,6 +496,8 @@ def fix_code_loop(
                 temperature=temperature,
                 time=time, # Pass time
                 verbose=verbose,
+                program_path=verification_program,  # Pass file path for LLM context
+                code_path=code_file,                # Pass file path for LLM context
             )
             if model_name_iter:
                  model_name = model_name_iter # Update model name if returned

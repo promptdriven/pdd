@@ -1659,11 +1659,15 @@ def llm_invoke(
                     if output_pydantic:
                         if verbose:
                             logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
-                        # Use explicit json_object format with response_schema for better Gemini/Vertex AI compatibility
-                        # Passing Pydantic class directly may not trigger native structured output for all providers
+                        # Use json_schema with strict=True to enforce ALL required fields are present
+                        # This prevents LLMs from omitting required fields when they think they're not needed
                         response_format = {
-                            "type": "json_object",
-                            "response_schema": output_pydantic.model_json_schema()
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": output_pydantic.__name__,
+                                "schema": output_pydantic.model_json_schema(),
+                                "strict": True
+                            }
                         }
                     else: # output_schema is set
                         if verbose:
