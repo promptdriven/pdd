@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 5 of 11 in an agentic bug investigation workflow. Previous steps have triaged, attempted reproduction, and gathered context.
+You are working on step 5 of 9 in an agentic bug investigation workflow. Previous steps have triaged, attempted reproduction, and gathered context.
 
 % Inputs
 
@@ -39,36 +39,17 @@ You are working on step 5 of 11 in an agentic bug investigation workflow. Previo
    - Trace the execution flow that leads to the error
    - Understand the data flow and transformations
 
-2. **Research external sources**
-   - Search for the error message or symptoms online
-   - Check if the issue relates to a known bug in dependencies
-   - Look for similar issues in library/framework documentation
-   - Search GitHub issues, StackOverflow, or forums for related problems
-   - Note any relevant version constraints or breaking changes
-
-3. **Analyze repository history**
-   - Use `git log` and `git blame` on affected files to identify when problematic code was introduced
-   - Search for related PRs that modified this code: `gh pr list --search "keyword" --state all`
-   - Review PR discussions for context on why changes were made
-   - Check closed issues for similar (not just duplicate) problems that provide historical insight
-   - Look for recent commits that might correlate with the bug's first appearance
-
-4. **Identify the root cause**
+2. **Identify the root cause**
    - What condition triggers the bug?
    - Is it a logic error, edge case, race condition, or incorrect assumption?
+   - When was this code introduced? (use git blame/log if helpful)
 
-5. **Explore existing patterns in the codebase**
-   - Search the codebase for how similar problems are already handled
-   - Example: if the bug is "user type X doesn't get redirected correctly," search for how other user types ARE redirected and where that logic lives
-   - If an existing pattern already solves an analogous case, the fix should extend that same pattern — not introduce a new approach
-   - Trace the bug to its TRUE root cause — don't stop at the component where symptoms appear. If component A is stuck on the wrong page, the root cause may be in component B's routing logic, not in component A itself
-
-6. **Run experiments**
+3. **Run experiments**
    - Add debug output or modify code temporarily to verify hypotheses
    - Test edge cases and boundary conditions
    - Confirm your understanding of why the bug occurs
 
-7. **Document the root cause**
+4. **Document the root cause**
    - Explain the bug in clear terms
    - Identify the specific line(s) or logic that need to change
    - Note any related issues or implications
@@ -100,35 +81,20 @@ problematic_code_snippet()
 ```
 - **Why it fails:** [Explanation]
 
-### External Research
-- **Search terms:** [key terms searched]
-- **Sources checked:** [GitHub, StackOverflow, docs, etc.]
-- **Relevant findings:** [any related issues, known bugs, or workarounds found]
-
-### Repository History
-- **Relevant commits:** [commits that introduced or modified the problematic code]
-- **Related PRs:** [PRs that touch the affected code path, with discussion context]
-- **Similar past issues:** [closed issues with related symptoms or fixes]
-
 ### Experiments Performed
 1. [What you tested and what it revealed]
 2. ...
 
-### Fix Location
-- **File(s) to modify:** `path/to/root_cause_file.py`
-- **Why this location:** [Explain why this is the root cause, not just where symptoms appear]
-- **Existing pattern:** [Reference the analogous case in the codebase that already works correctly]
-- **Fix approach:** [How to extend the existing pattern to cover this case]
+### Fix Direction
+[High-level description of what needs to change to fix this]
 
 ---
-*Proceeding to Step 5.5: Prompt Classification*
+*Proceeding to Step 6: Test Plan*
 ```
 
 % Important
 
 - Be specific about the exact location and nature of the bug
-- Trace to the TRUE root cause — the component where symptoms appear is often not the right place to fix
-- Search for existing patterns that solve analogous problems before recommending a fix approach
-- The fix location you recommend here directly determines which component pdd bug will create tests for — getting this wrong means tests will target the wrong code
+- Distinguish between symptoms and root cause
 - If root cause is unclear, document what you learned and hypotheses
 - Always post your findings as a GitHub comment before completing
