@@ -240,7 +240,7 @@ def fix_error_loop(unit_test_file: str,
                     code_file=code_file,
                     unit_test_file=unit_test_file,
                     error_log_file=error_log_file,
-                    cwd=Path(prompt_file).parent if prompt_file else None,
+                    cwd=None,  # Use project root (cwd), not prompt file's parent
                 )
                 if not success:
                     rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
@@ -299,7 +299,7 @@ def fix_error_loop(unit_test_file: str,
                 code_file=code_file,
                 unit_test_file=unit_test_file,
                 error_log_file=error_log_file,
-                cwd=Path(prompt_file).parent if prompt_file else None,
+                cwd=None,  # Use project root (cwd), not prompt file's parent
             )
             if not success:
                 rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
@@ -680,7 +680,7 @@ def fix_error_loop(unit_test_file: str,
             code_file=code_file,
             unit_test_file=unit_test_file,
             error_log_file=error_log_file,
-            cwd=Path(prompt_file).parent if prompt_file else None,
+            cwd=None,  # Use project root (cwd), not prompt file's parent
         )
         total_cost += agent_cost
         if not agent_success:
