@@ -3,6 +3,10 @@
 ### Role and Scope:
 This module acts as the core execution engine for an automated code-repair system. It manages the lifecycle of a "fix attempt," which includes running tests, capturing failures, invoking an LLM to suggest repairs, verifying those repairs, and falling back to a more powerful agentic fix if the iterative loop fails. It is responsible for state management (backups and restoration) and detailed logging.
 
+The module supports both local and cloud execution modes:
+- **Local mode**: LLM calls are made directly using local libraries
+- **Cloud mode (hybrid)**: LLM calls go through the cloud fixCode endpoint, but test execution remains local
+
 ### Requirements:
 1.  **Iterative Fixing Logic:** The `fix_error_loop` must attempt to resolve code/test mismatches over multiple iterations (up to `max_attempts`). It must track failures, errors, and warnings at each step.
 2.  **Statistics & Improvement Tracking:** Maintain a `stats` dictionary to track initial/final states, improvement percentages, and identify the `best_iteration`.
@@ -12,13 +16,38 @@ This module acts as the core execution engine for an automated code-repair syste
 6.  **Agentic Fallback:** If the loop finishes without total success and budget remains, invoke `run_agentic_fix`. Ensure the `error_log_file` is populated with the current state before the agent is called.
 7.  **Non-Python Support:** Detect non-Python files by extension. Use `default_verify_cmd_for` to run initial verification. If it fails, skip the standard pytest loop and go directly to the agentic fallback.
 8.  **Cost & Budget Management:** Accumulate `total_cost` from LLM calls and stop the loop immediately if the `budget` is exceeded.
-9.  **Output Contract:** Return a 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
+9.  **Cloud Execution Support:** Implement `cloud_fix_errors` function that calls the cloud fixCode endpoint with the same interface as `fix_errors_from_unit_tests`. This enables hybrid mode where LLM calls go to the cloud while test execution stays local.
+10. **Output Contract:** Return a 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
     *   *Note:* If tests pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and an empty string for `model_name`.
-10. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
+11. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
 
 ### Public Interface:
 
 ```python
+def cloud_fix_errors(
+    unit_test: str,
+    code: str,
+    prompt: str,
+    error: str,
+    error_file: str,
+    strength: float,
+    temperature: float,
+    verbose: bool = False,
+    time: float = DEFAULT_TIME,
+    code_file_ext: str = ".py"
+) -> Tuple[bool, bool, str, str, str, float, str]:
+    """
+    Call the cloud fixCode endpoint to fix errors in code and unit tests.
+
+    This function has the same interface as fix_errors_from_unit_tests to allow
+    seamless switching between local and cloud execution in the fix loop.
+
+    Returns: (update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name)
+
+    Raises:
+        RuntimeError: When cloud execution fails with non-recoverable error
+    """
+
 def fix_error_loop(
     unit_test_file: str,
     code_file: str,
@@ -114,6 +143,9 @@ Notes:
     <fix_errors_from_unit_tests>
         <include>context/fix_errors_from_unit_tests_example.py</include>
     </fix_errors_from_unit_tests>
+    <cloud_config>
+        <include>context/core/cloud_example.py</include>
+    </cloud_config>
     <agentic_fix>
         <include>context/agentic_fix_example.py</include>
     </agentic_fix>
@@ -130,15 +162,29 @@ Notes:
 
 ### Instructions:
 1.  **Implement `run_pytest_on_file(test_file)`**: Use `run_pytest_and_capture_output`. Extract failures, errors, and warnings from the first result in the JSON. Combine `standard_output` and `standard_error` for the log.
-2.  **Implement `format_log_for_output(log_structure)`**: Convert the iteration list into a string. Include model name in `<fix_attempt>` tags.
-3.  **Implement `fix_error_loop`**:
-    *   Create timestamped backups in `.pdd/backups/{code_basename}/{timestamp}/` with format: `test_{iter}_{errors}_{fails}_{warnings}.py` and `code_{iter}_{errors}_{fails}_{warnings}.py`
-    *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context
-    *   Print a `rich` summary of improvements including percentage reduction
-4.  **Agentic Fallback Logic**: Implement `_safe_run_agentic_fix` which calls the agent and passes the result through `_normalize_agentic_result`.
-    * Pass `cwd=None` to `run_agentic_fix` to use project root, NOT the prompt file's parent directory
-    * Log the list of `agent_changed_files` to the console if the agent modifies files
-5.  **Console Output**: Use `rich.print` (as `rprint`). Implement an `escape_brackets` helper to prevent Rich from parsing square brackets in logs.
+2.  **Implement `format_log_for_output(log_structure)`**: Convert the iteration list into a string. Include model name in `<fix_attempt>` tags. Ensure the first iteration includes the initial test output. Use XML tags with `iteration=n` attributes.
+3.  **Implement `cloud_fix_errors`**:
+    *   Get JWT token using `CloudConfig.get_jwt_token(verbose=verbose)`. Raise `RuntimeError` if token is not available.
+    *   Build payload with: `unitTest`, `code`, `prompt`, `errors`, `language` (from code_file_ext), `strength`, `temperature`, `time`, `verbose`.
+    *   Call `CloudConfig.get_endpoint_url("fixCode")` to get the cloud URL.
+    *   Make a POST request with `requests.post` using `CLOUD_FIX_TIMEOUT` (400 seconds).
+    *   Parse the JSON response and extract: `success`, `fixedUnitTest`, `fixedCode`, `analysis`, `updateUnitTest`, `updateCode`, `totalCost`, `modelName`.
+    *   Return the 7-tuple matching `fix_errors_from_unit_tests` interface.
+    *   Handle errors gracefully: HTTP errors, timeouts, and JSON parsing errors should raise `RuntimeError` with descriptive messages.
+4.  **Implement `fix_error_loop`**:
+    *   **Initialization**: Setup stats, best iteration tracker (using `sys.maxsize` for initial comparison), and the structured log.
+    *   **Initial Check**: Run pytest (or verification for non-Python). If initially passing, exit early per the output contract.
+    *   **The Loop**:
+        *   Create timestamped backups in `.pdd/backups/{code_basename}/{timestamp}/` with format: `test_{iter}_{errors}_{fails}_{warnings}.py` and `code_{iter}_{errors}_{fails}_{warnings}.py`
+        *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context.
+        *   Update files, run verification, and re-run pytest to update the state.
+    *   **Finalization**: Compare final state to the best iteration and restore if necessary. Print a `rich` summary of improvements including percentage reduction.
+5.  **Agentic Fallback Logic**: Implement `_safe_run_agentic_fix` which calls the agent and passes the result through `_normalize_agentic_result`.
+    * Pass `cwd=None` to `run_agentic_fix` to use project root, NOT the prompt file's parent directory.
+    * Ensure the `error_log_file` is written to disk before the agent is called.
+    * If no iterations were run, write the initial state and pytest output to the log file.
+    * Log the list of `agent_changed_files` to the console if the agent modifies files.
+6.  **Console Output**: Use `rich.print` (as `rprint`). Implement an `escape_brackets` helper to prevent Rich from parsing square brackets in logs.
 
 ### Deliverables:
 *   A standalone Python file containing `run_pytest_on_file`, `format_log_for_output`, `fix_error_loop`, and the normalization helpers.
