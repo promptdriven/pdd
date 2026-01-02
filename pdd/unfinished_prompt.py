@@ -114,7 +114,8 @@ def unfinished_prompt(
             temperature=temperature,
             time=time,
             verbose=verbose,
-            output_pydantic=PromptAnalysis
+            output_pydantic=PromptAnalysis,
+            language=language,
         )
 
         # Step 3: Extract and return results

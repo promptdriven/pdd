@@ -197,3 +197,44 @@ def test_cli_setup_command(mock_auto_update, mock_install, mock_run, _mock_remin
     mock_run.assert_called_once_with([sys.executable, "-m", "pdd.setup_tool"])
     # assert "Setup completed" in result.output
 
+
+# --- Issue #194: None Parameter Handling Tests ---
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_no_target_coverage_does_not_raise_typeerror(mock_sync_main, mock_auto_update, runner):
+    """Issue #194: pdd sync without --target-coverage should not raise TypeError."""
+    mock_sync_main.return_value = ('success', 0.5, 'model')
+
+    result = runner.invoke(cli.cli, ["sync", "test_module"])
+
+    # Should not raise: TypeError: '<' not supported between instances of 'float' and 'NoneType'
+    assert 'TypeError' not in (result.output or '')
+    assert 'NoneType' not in (result.output or '')
+    mock_sync_main.assert_called_once()
+
+    # Verify target_coverage passed to sync_main is a float, not None
+    call_kwargs = mock_sync_main.call_args.kwargs
+    target_coverage = call_kwargs.get('target_coverage')
+    assert target_coverage is None or isinstance(target_coverage, float), \
+        f"target_coverage should be float or None (handled downstream), got {type(target_coverage)}"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_target_coverage_cli_option_converts_string_to_float(mock_sync_main, mock_auto_update, runner):
+    """Issue #194: --target-coverage '90' should be converted to float 90.0, not string '90'."""
+    mock_sync_main.return_value = ('success', 0.5, 'model')
+
+    result = runner.invoke(cli.cli, ["sync", "test_module", "--target-coverage", "85.5"])
+
+    # Should not raise: TypeError: '<' not supported between instances of 'float' and 'str'
+    assert 'TypeError' not in (result.output or '')
+    mock_sync_main.assert_called_once()
+
+    # Verify target_coverage is a float, not a string
+    call_kwargs = mock_sync_main.call_args.kwargs
+    target_coverage = call_kwargs.get('target_coverage')
+    assert isinstance(target_coverage, float), \
+        f"target_coverage should be float, got {type(target_coverage)}: {target_coverage}"
+    assert target_coverage == 85.5

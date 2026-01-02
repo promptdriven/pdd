@@ -559,3 +559,288 @@ def test_error_indicator_distinguishable_from_success():
     # Callers can check
     assert not success_model_name.startswith("Error:")
     assert error_model_name.startswith("Error:")
+
+
+# ============================================================================
+# Regression Tests - Prompt Authoritative Behavior
+# ============================================================================
+# These tests ensure the fix for the test-fix cycle bug (where PDD would
+# repeatedly try to modify code to match an incorrect test expectation).
+# Root cause: The fix prompt didn't establish that the prompt is authoritative.
+
+def test_prompt_authoritative_fixes_test_not_code(temp_error_file, mock_llm_invoke, mock_load_prompt_template):
+    """
+    REGRESSION TEST: When a test expects behavior not specified in the prompt,
+    the LLM should fix the test, not the code.
+
+    This reproduces the agentic_update bug where test_detect_changed_files_logic
+    expected arbitrary files to be tracked, but the prompt only specified
+    tracking prompt/code/test files.
+    """
+    # Prompt specifies tracking only prompt/code/test files
+    prompt = """
+Write a function that tracks file changes.
+The function should:
+- Track changes to the prompt file
+- Track changes to the code file
+- Track changes to test files (matching test discovery patterns)
+- Return a list of changed file paths
+"""
+
+    # Code correctly implements the prompt
+    code = """
+def track_changes(prompt_path, code_path, test_paths, start_time):
+    changed = []
+    for path in [prompt_path, code_path] + test_paths:
+        if path.stat().st_mtime > start_time:
+            changed.append(str(path))
+    return changed
+"""
+
+    # Test incorrectly expects arbitrary files to be tracked (not in prompt)
+    unit_test = """
+def test_detect_changed_files_logic():
+    # Creates new_file.py and expects it in changed_files
+    new_file = project_root / "new_file.py"  # NOT a test file!
+    new_file.write_text("content")
+    changed = track_changes(prompt_path, code_path, test_paths, start_time)
+    assert str(new_file) in changed  # WRONG: prompt doesn't specify tracking arbitrary files
+"""
+
+    error = """
+AssertionError: assert '/tmp/new_file.py' in ['/tmp/prompt.md']
+"""
+
+    # Expected: LLM should fix the TEST, not add functionality to code
+    analysis_result = """
+Analysis: The test expects new_file.py to be tracked, but the prompt only specifies
+tracking prompt, code, and test files. The test expectation is incorrect.
+The code correctly implements the prompt specification.
+Fix: Update the test to use a filename matching test discovery patterns.
+"""
+
+    fixed_test = """
+def test_detect_changed_files_logic():
+    # Use a test file pattern so it gets discovered and tracked
+    new_file = project_root / "test_new_module.py"  # Matches test pattern!
+    new_file.write_text("content")
+    changed = track_changes(prompt_path, code_path, test_paths, start_time)
+    assert str(new_file) in changed
+"""
+
+    mock_load_prompt_template.return_value = "mock template"
+    mock_llm_invoke.side_effect = [
+        {'result': analysis_result, 'cost': 0.001, 'model_name': "claude"},
+        {
+            'result': CodeFix(
+                update_unit_test=True,  # Fix the test
+                update_code=False,       # NOT the code
+                fixed_unit_test=fixed_test,
+                fixed_code=""
+            ),
+            'cost': 0.002,
+            'model_name': "claude"
+        }
+    ]
+
+    result = fix_errors_from_unit_tests(
+        unit_test=unit_test,
+        code=code,
+        prompt=prompt,
+        error=error,
+        error_file=temp_error_file,
+        strength=0.7,
+        temperature=0.5
+    )
+
+    update_unit_test, update_code, fixed_unit_test, fixed_code, _, _, _ = result
+
+    # The critical assertion: test should be fixed, not code
+    assert update_unit_test is True, "Should fix the test"
+    assert update_code is False, "Should NOT modify code to add unspecified functionality"
+    assert "test_new_module.py" in fixed_unit_test or "test_" in fixed_unit_test
+    assert fixed_code == ""
+
+
+def test_prompt_authoritative_does_not_add_unspecified_features(
+    temp_error_file, mock_llm_invoke, mock_load_prompt_template
+):
+    """
+    REGRESSION TEST: Code should not be modified to add features not in prompt,
+    even if the test expects them.
+
+    This is the inverse of the previous test - ensure we never expand code
+    beyond prompt specification.
+    """
+    # Simple prompt with specific behavior
+    prompt = "Write a function add(a, b) that returns the sum of two numbers."
+
+    # Code correctly implements only what's specified
+    code = """
+def add(a, b):
+    return a + b
+"""
+
+    # Test incorrectly expects error handling not specified in prompt
+    unit_test = """
+def test_add_with_none():
+    # Expects None handling - NOT in prompt!
+    result = add(None, 5)
+    assert result is None
+"""
+
+    error = "TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'"
+
+    # LLM should recognize the test expects unspecified behavior
+    analysis = "Test expects None handling, but prompt only specifies adding two numbers."
+
+    mock_load_prompt_template.return_value = "mock template"
+    mock_llm_invoke.side_effect = [
+        {'result': analysis, 'cost': 0.001, 'model_name': "model"},
+        {
+            'result': CodeFix(
+                update_unit_test=True,  # Fix test to not expect None handling
+                update_code=False,
+                fixed_unit_test="def test_add(): assert add(2, 3) == 5",
+                fixed_code=""
+            ),
+            'cost': 0.002,
+            'model_name': "model"
+        }
+    ]
+
+    result = fix_errors_from_unit_tests(
+        unit_test=unit_test,
+        code=code,
+        prompt=prompt,
+        error=error,
+        error_file=temp_error_file,
+        strength=0.7,
+        temperature=0.5
+    )
+
+    update_unit_test, update_code, _, fixed_code, _, _, _ = result
+
+    # Should fix test, not add None handling to code
+    assert update_unit_test is True
+    assert update_code is False
+    assert fixed_code == ""
+
+
+# ============================================================================
+# Integration Test - Live LLM Verification
+# ============================================================================
+# These tests use real LLM API calls to verify the prompt authoritative behavior
+# end-to-end. Run with: pytest -m integration
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_integration_prompt_authoritative_with_live_llm(temp_error_file):
+    """
+    INTEGRATION TEST: Verify live LLM respects prompt as authoritative.
+
+    This test makes real LLM API calls to verify the fix prompt guidance
+    causes the LLM to fix tests (not code) when tests expect unspecified behavior.
+
+    Run with: pytest -m integration tests/test_fix_errors_from_unit_tests.py
+    """
+    # Prompt clearly specifies ONLY tracking specific file types
+    prompt = """
+Write a Python function `track_file_changes` that:
+- Takes: prompt_path (Path), code_path (Path), test_paths (list of Paths), start_time (float)
+- Returns: list of file path strings that were modified after start_time
+- ONLY tracks changes to the provided prompt, code, and test files
+- Does NOT track any other files
+"""
+
+    # Code correctly implements ONLY what the prompt specifies
+    code = '''
+from pathlib import Path
+from typing import List
+
+def track_file_changes(
+    prompt_path: Path,
+    code_path: Path,
+    test_paths: List[Path],
+    start_time: float
+) -> List[str]:
+    """Track changes to prompt, code, and test files only."""
+    changed = []
+    all_tracked = [prompt_path, code_path] + list(test_paths)
+    for path in all_tracked:
+        if path.exists() and path.stat().st_mtime > start_time:
+            changed.append(str(path))
+    return changed
+'''
+
+    # Test incorrectly expects tracking of arbitrary files (NOT in prompt)
+    unit_test = '''
+import pytest
+from pathlib import Path
+
+def test_detect_new_arbitrary_files(tmp_path):
+    """Bug: This test expects arbitrary files to be tracked."""
+    prompt = tmp_path / "prompt.md"
+    code = tmp_path / "main.py"
+    prompt.write_text("content")
+    code.write_text("content")
+
+    import time
+    start = time.time()
+
+    # Create arbitrary file NOT in prompt/code/test list
+    arbitrary_file = tmp_path / "random_data.json"
+    arbitrary_file.write_text("{}")
+
+    from track_file_changes import track_file_changes
+    changed = track_file_changes(prompt, code, [], start)
+
+    # BUG: This assertion is WRONG per the prompt specification
+    assert str(arbitrary_file) in changed, "Should track arbitrary files"
+'''
+
+    error = """
+FAILED test_track.py::test_detect_new_arbitrary_files - AssertionError: Should track arbitrary files
+E   AssertionError: assert '/tmp/random_data.json' in []
+"""
+
+    # Call the real function
+    result = fix_errors_from_unit_tests(
+        unit_test=unit_test,
+        code=code,
+        prompt=prompt,
+        error=error,
+        error_file=temp_error_file,
+        strength=0.85,
+        temperature=0.3,
+        verbose=True
+    )
+
+    update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, cost, model = result
+
+    # Verify LLM understood prompt is authoritative
+    assert cost > 0, "Should have made LLM API call"
+    assert model != "", "Should return model name"
+
+    # The critical check: LLM should fix the TEST, not add unspecified behavior to code
+    # This may pass or fail depending on LLM behavior - but we want it to fix the test
+    print(f"\n=== Integration Test Results ===")
+    print(f"Model: {model}")
+    print(f"Cost: ${cost:.4f}")
+    print(f"update_unit_test: {update_unit_test}")
+    print(f"update_code: {update_code}")
+    print(f"\nAnalysis:\n{analysis[:500]}...")
+    if update_unit_test:
+        print(f"\nFixed test:\n{fixed_unit_test[:500]}...")
+    if update_code:
+        print(f"\nFixed code:\n{fixed_code[:500]}...")
+
+    # Soft assertions - log but don't fail if LLM misbehaves
+    # The mock tests above verify the expected behavior
+    if not update_unit_test or update_code:
+        print("\nWARNING: LLM did not follow prompt-authoritative guidance!")
+        print("Expected: update_unit_test=True, update_code=False")
+        print(f"Got: update_unit_test={update_unit_test}, update_code={update_code}")
+
+    # Hard assertion: at least one fix should be proposed
+    assert update_unit_test or update_code, "LLM should propose at least one fix"

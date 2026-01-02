@@ -27,6 +27,19 @@ class SampleOutputModel(BaseModel):
     field1: str
     field2: int
 
+
+# Issue #168: Model mimicking production CodeFix schema
+class CodeFixLikeModel(BaseModel):
+    """Test model mimicking production CodeFix schema from fix_code_module_errors.py.
+
+    Used to reproduce the Opus bug where it returned only 'fixed_program'
+    without 'fixed_code', causing Pydantic validation to fail.
+    """
+    update_program: bool
+    update_code: bool
+    fixed_program: str
+    fixed_code: str
+
 # Fixture to mock the internal _load_model_data function returning a DataFrame
 @pytest.fixture
 def mock_load_models():
@@ -368,26 +381,37 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
                 assert response_format['response_schema'] == SampleOutputModel.model_json_schema()
 
 def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mock_set_llm_cache):
-    model_key_name = "GOOGLE_API_KEY"
-    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+    """Test that when ALL models fail Pydantic validation, RuntimeError is raised.
+
+    Updated for Issue #168: Validation failures now trigger model fallback.
+    When all models fail validation, RuntimeError is raised instead of returning
+    an error string.
+    """
+    # All API keys needed so all models can be tried
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+    with patch.dict(os.environ, all_keys):
         with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # ALL models return invalid JSON (field2 should be int, not string)
             invalid_json_str = '{"field1": "value1", "field2": "not_an_int"}'
-            mock_response = create_mock_litellm_response(invalid_json_str, model_name='gemini-pro')
+            mock_response = create_mock_litellm_response(invalid_json_str, model_name='test-model')
             mock_completion.return_value = mock_response
             mock_cost = 0.00009
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 11, "output_tokens": 16}):
-                response = llm_invoke(
-                    prompt="Provide data.", input_json={"query": "Provide data."},
-                    strength=0.3, 
-                    temperature=0.7, verbose=False, 
-                    output_pydantic=SampleOutputModel
-                )
-                assert isinstance(response['result'], str)
-                assert "ERROR: Failed to parse structured output" in response['result']
-                assert repr(invalid_json_str) in response['result']
-                assert response['model_name'] == 'gemini-pro'
-                assert response['cost'] == mock_cost
-                mock_completion.assert_called_once()
+                # All models fail validation, so RuntimeError should be raised
+                with pytest.raises(RuntimeError, match="All candidate models failed"):
+                    llm_invoke(
+                        prompt="Provide data.", input_json={"query": "Provide data."},
+                        strength=0.3,
+                        temperature=0.7, verbose=False,
+                        output_pydantic=SampleOutputModel
+                    )
+                # All models should have been tried
+                num_models = len(mock_load_models.return_value)
+                assert mock_completion.call_count == num_models
 
 
 def test_llm_invoke_llm_error(mock_load_models, mock_set_llm_cache):
@@ -415,43 +439,35 @@ def test_llm_invoke_auth_error_new_key_retry(mock_load_models, mock_set_llm_cach
     input_json = {"test": "data"}
     mock_input = MagicMock()
     mock_input.side_effect = ["bad_key_initially", "good_key_later"]
-    def mock_setenv(key, value):
-        os.environ[key] = value
-    def mock_delenv(key):
-        if key in os.environ:
-            del os.environ[key]
     mock_completion = MagicMock()
     mock_request = MagicMock(spec=httpx.Request)
     mock_request.url = "http://fakeurl.com/api"
     mock_response_obj = MagicMock(spec=httpx.Response)
     mock_response_obj.request = mock_request
-    mock_response_obj.status_code = 401 
+    mock_response_obj.status_code = 401
     mock_headers = MagicMock()
-    mock_headers.get.return_value = None 
+    mock_headers.get.return_value = None
     mock_response_obj.headers = mock_headers
     auth_error = openai.AuthenticationError(message="Invalid API Key", response=mock_response_obj, body=None)
     mock_successful_response = create_mock_litellm_response("Success after retry", model_name='gpt-5-nano')
     mock_completion.side_effect = [auth_error, mock_successful_response]
 
-    with patch('builtins.open', mock_open()), \
+    # Use patch.dict to properly isolate the environment, removing all API keys
+    # This ensures no API keys are present, forcing the code to prompt for them
+    env_without_api_keys = {k: v for k, v in os.environ.items()
+                           if not k.endswith('_API_KEY') and k != 'PDD_FORCE'}
+
+    with patch.dict(os.environ, env_without_api_keys, clear=True), \
+         patch('builtins.open', mock_open()), \
          patch('builtins.input', mock_input), \
-         patch('os.environ.__setitem__', mock_setenv), \
-         patch('os.environ.__delitem__', mock_delenv), \
          patch('pdd.llm_invoke.litellm.completion', mock_completion), \
          patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
-        original_env_value = os.environ.pop(model_key_name, None)
-        try:
-            response = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5, verbose=True) 
-            assert response['result'] == "Success after retry"
-            assert response['model_name'] == 'gpt-5-nano'
-            assert mock_input.call_count == 2
-            assert mock_completion.call_count == 2
-            assert os.environ.get(model_key_name) == "good_key_later"
-        finally:
-            if original_env_value is not None:
-                os.environ[model_key_name] = original_env_value
-            elif model_key_name in os.environ:
-                 del os.environ[model_key_name]
+        response = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5, verbose=True)
+        assert response['result'] == "Success after retry"
+        assert response['model_name'] == 'gpt-5-nano'
+        assert mock_input.call_count == 2
+        assert mock_completion.call_count == 2
+        assert os.environ.get(model_key_name) == "good_key_later"
 
 
 def test_llm_invoke_verbose(mock_load_models, mock_set_llm_cache, caplog): # Changed capsys to caplog
@@ -723,6 +739,70 @@ def test_has_invalid_python_code_ignores_non_code_strings():
     assert not _has_invalid_python_code(obj)
 
 
+def test_has_invalid_python_code_ignores_prose_fields():
+    """Prose fields with Python keywords should NOT trigger validation.
+
+    This reproduces issue #193: PromptAnalysis.reasoning contains
+    'return statement' which triggers false positive validation.
+    """
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class PromptAnalysis(BaseModel):
+        reasoning: str
+        is_finished: bool
+
+    # This prose mentions "return" - should NOT be validated as Python code
+    obj = PromptAnalysis(
+        reasoning="Python code parses; ends on a complete return statement.",
+        is_finished=True
+    )
+    # BUG: Currently returns True (false positive), should return False
+    assert not _has_invalid_python_code(obj)
+
+
+def test_is_prose_field_name():
+    """Test prose field name detection."""
+    from pdd.llm_invoke import _is_prose_field_name
+
+    # Prose fields (should be skipped)
+    assert _is_prose_field_name("reasoning")
+    assert _is_prose_field_name("explanation")
+    assert _is_prose_field_name("analysis")
+    assert _is_prose_field_name("change_instructions")
+    assert _is_prose_field_name("REASONING")  # Case insensitive
+
+    # Code fields (should NOT be skipped)
+    assert not _is_prose_field_name("fixed_code")
+    assert not _is_prose_field_name("extracted_code")
+    assert not _is_prose_field_name("trimmed_continued_generation")
+    assert not _is_prose_field_name("code_block")
+
+
+def test_has_invalid_python_code_validates_non_prose_code_fields():
+    """Ensure code fields (including non-obvious ones) still get validated."""
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class TrimResultsOutput(BaseModel):
+        explanation: str
+        trimmed_continued_generation: str  # This IS code, not prose!
+
+    # Valid code
+    valid = TrimResultsOutput(
+        explanation="Good code with return statement",
+        trimmed_continued_generation="def f():\n    return 1"
+    )
+    assert not _has_invalid_python_code(valid)
+
+    # Invalid code in trimmed_continued_generation should be detected
+    invalid = TrimResultsOutput(
+        explanation="Broken with import issues",
+        trimmed_continued_generation="def broken(:\n    pass"
+    )
+    assert _has_invalid_python_code(invalid)
+
+
 def test_llm_invoke_retries_on_invalid_python_code(mock_load_models, mock_set_llm_cache, caplog):
     """Test that llm_invoke retries with cache bypass when Python code is invalid after repair."""
     model_key_name = "OPENAI_API_KEY"
@@ -801,17 +881,24 @@ def test_llm_invoke_uses_repaired_code_without_retry(mock_load_models, mock_set_
 
 
 def test_llm_invoke_no_retry_in_batch_mode(mock_load_models, mock_set_llm_cache, caplog):
-    """Test that retry is skipped in batch mode even with invalid Python code."""
+    """Test that retry is skipped in batch mode even with invalid Python code.
+
+    Note: This test uses valid Pydantic schema but invalid Python syntax.
+    The code has invalid Python (unclosed string) but the JSON is valid.
+    In batch mode, the retry-with-cache-bypass logic is skipped.
+    """
     model_key_name = "OPENAI_API_KEY"
 
-    # Invalid code that can't be repaired
+    # Invalid Python code that can't be repaired (unclosed string literal)
+    # But the JSON structure is valid for the Pydantic model
     invalid_code = 'def test():\n    x = "hello\n    return x'
     response_json = json.dumps({"explanation": "Batch result", "code": invalid_code})
 
     with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
-        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
-            mock_response = create_mock_litellm_response([response_json], model_name='gpt-5-nano')
-            mock_completion.return_value = mock_response
+        with patch('pdd.llm_invoke.litellm.batch_completion') as mock_batch_completion:
+            # Fix: Return proper batch response format (list of responses)
+            mock_response = create_mock_litellm_response(response_json, model_name='gpt-5-nano')
+            mock_batch_completion.return_value = [mock_response]
 
             mock_cost = 0.0001
             with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
@@ -825,10 +912,16 @@ def test_llm_invoke_no_retry_in_batch_mode(mock_load_models, mock_set_llm_cache,
                     use_batch_mode=True
                 )
 
-                # Should NOT have retried (batch mode)
-                assert mock_completion.call_count == 1
+                # Should NOT have retried (batch mode - retry logic is skipped)
+                assert mock_batch_completion.call_count == 1
 
-                # Should log that retry was skipped
+                # Result should still be a valid CodeOutputModel (parsed successfully)
+                # even though the Python code inside is invalid
+                assert isinstance(response['result'], list)
+                assert len(response['result']) == 1
+                assert isinstance(response['result'][0], CodeOutputModel)
+
+                # Should log that retry was skipped due to batch mode
                 assert "batch mode" in caplog.text.lower() or "cannot retry" in caplog.text.lower()
 
 
@@ -1094,3 +1187,590 @@ def test_vertex_location_fallback_when_empty(mock_set_llm_cache):
                 # Assert vertex_location falls back to env var 'global'
                 call_kwargs = mock_completion.call_args[1]
                 assert call_kwargs.get('vertex_location') == 'global'
+
+
+# ==============================================================================
+# Test for API key input() hang bug fix
+#
+# Bug: When API key is missing, _ensure_api_key calls input() which in TUI
+# context goes through TUIStdinRedirector.request_input() with 300s timeout.
+# This causes apparent hang when user doesn't respond to the modal.
+# ==============================================================================
+
+class TestApiKeyInputHang:
+    """Tests for API key input() timeout behavior."""
+
+    def test_ensure_api_key_returns_false_when_input_empty(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that _ensure_api_key returns False immediately when user provides
+        empty input (simulating cancelled modal or timeout).
+
+        This test verifies the fix for the hang bug where the crash step would
+        wait indefinitely for API key input via TUI modal.
+        """
+        from pdd.llm_invoke import _ensure_api_key
+
+        model_info = {
+            'model': 'test-model',
+            'api_key': 'TEST_API_KEY'
+        }
+        newly_acquired_keys = {}
+
+        # Simulate empty input (user cancelled or timeout)
+        with patch.dict(os.environ, {}, clear=False):
+            # Remove the API key from environment if present
+            os.environ.pop('TEST_API_KEY', None)
+
+            # Mock input() to return empty string (simulating cancelled modal)
+            with patch('builtins.input', return_value=''):
+                result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+
+                # Should return False when no API key provided
+                assert result is False
+
+    def test_ensure_api_key_input_not_called_when_key_exists(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that input() is NOT called when API key already exists in environment.
+        This prevents unnecessary prompts that could cause TUI hangs.
+        """
+        from pdd.llm_invoke import _ensure_api_key
+
+        model_info = {
+            'model': 'test-model',
+            'api_key': 'EXISTING_API_KEY'
+        }
+        newly_acquired_keys = {}
+
+        with patch.dict(os.environ, {'EXISTING_API_KEY': 'sk-test-key'}):
+            with patch('builtins.input') as mock_input:
+                result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+
+                # Should return True and NOT call input()
+                assert result is True
+                mock_input.assert_not_called()
+
+    def test_ensure_api_key_skips_input_when_pdd_force_set(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that _ensure_api_key returns False without prompting when PDD_FORCE is set.
+        This is the fix for CI environments where --force should skip all interactive prompts.
+        """
+        from pdd.llm_invoke import _ensure_api_key
+
+        model_info = {
+            'model': 'test-model',
+            'api_key': 'MISSING_API_KEY'
+        }
+        newly_acquired_keys = {}
+
+        # Set PDD_FORCE and ensure the API key doesn't exist
+        with patch.dict(os.environ, {'PDD_FORCE': '1'}, clear=False):
+            os.environ.pop('MISSING_API_KEY', None)
+
+            with patch('builtins.input') as mock_input:
+                result = _ensure_api_key(model_info, newly_acquired_keys, verbose=False)
+
+                # Should return False (skip this model) without calling input()
+                assert result is False
+                mock_input.assert_not_called()
+
+    def test_llm_invoke_skips_model_on_missing_api_key(self, mock_load_models, mock_set_llm_cache):
+        """
+        Test that llm_invoke skips a model when API key is missing and user
+        provides empty input, then tries the next model.
+
+        This ensures the crash step doesn't hang when one model's API key
+        is unavailable - it should gracefully fall through to other models.
+        """
+        prompt = "Test prompt"
+        input_json = {"test": "data"}
+
+        # Mock: First model has missing key (user cancels prompt),
+        # second model has valid key
+        input_call_count = [0]
+        def mock_input_side_effect(prompt_text):
+            input_call_count[0] += 1
+            if input_call_count[0] == 1:
+                return ''  # User cancels first prompt
+            return 'valid-key-for-second'
+
+        mock_completion = MagicMock()
+        mock_completion.return_value = create_mock_litellm_response("Success", model_name='cheap-model')
+
+        # Only the second model (cheap-model) has API key; first model prompts
+        env_with_second_key = {
+            'ANTHROPIC_API_KEY': 'test-anthropic-key',  # For claude-3
+        }
+
+        with patch.dict(os.environ, env_with_second_key, clear=True):
+            # Remove OPENAI_API_KEY to force prompting for gpt-5-nano
+            os.environ.pop('OPENAI_API_KEY', None)
+
+            with patch('builtins.input', side_effect=mock_input_side_effect):
+                with patch('pdd.llm_invoke.litellm.completion', mock_completion):
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001}):
+                        # Should successfully invoke with a model that has API key
+                        # (even though first model's key was cancelled)
+                        result = llm_invoke(prompt=prompt, input_json=input_json, strength=0.5)
+
+                        # Verify we got a result
+                        assert result['result'] == "Success"
+
+
+# --- Tests for Issue #168: Pydantic Validation Failure Should Trigger Model Fallback ---
+
+def test_llm_invoke_pydantic_validation_failure_triggers_model_fallback(mock_load_models, mock_set_llm_cache):
+    """Test that Pydantic validation failure triggers model fallback.
+
+    BUG (Issue #168): Previously, when validation failed, the code used `continue`,
+    which advanced to the next batch item instead of triggering model fallback.
+    This test verifies that model fallback occurs correctly.
+    """
+    # All API keys needed so multiple models can be tried
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+
+    with patch.dict(os.environ, all_keys):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # First model returns invalid JSON (field2 should be int, not string)
+            invalid_json = '{"field1": "value", "field2": "not_an_int"}'
+            first_response = create_mock_litellm_response(invalid_json, model_name='gpt-5-nano')
+
+            # Second model returns valid JSON
+            valid_json = '{"field1": "value", "field2": 123}'
+            second_response = create_mock_litellm_response(valid_json, model_name='gemini-pro')
+
+            mock_completion.side_effect = [first_response, second_response]
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Provide data.",
+                    input_json={"query": "test"},
+                    strength=0.5,
+                    temperature=0.7,
+                    output_pydantic=SampleOutputModel,
+                    verbose=True
+                )
+
+                # EXPECTED after fix: Second model was tried (fallback happened)
+                assert mock_completion.call_count >= 2, \
+                    f"Expected model fallback, but only {mock_completion.call_count} call(s) made"
+
+                # EXPECTED after fix: Result is valid Pydantic object from second model
+                assert isinstance(response['result'], SampleOutputModel), \
+                    f"Expected SampleOutputModel, got {type(response['result'])}: {response['result']}"
+
+
+def test_llm_invoke_missing_required_field_triggers_model_fallback(mock_load_models, mock_set_llm_cache):
+    """Issue #168: Missing required field should trigger model fallback.
+
+    This test reproduces the exact production scenario where Opus returned
+    {"fixed_program": "..."} without the required "fixed_code" field.
+
+    BUG BEHAVIOR (main branch):
+    - Only 1 LLM call made
+    - Returns ERROR string instead of Pydantic object
+    - No fallback to next model
+
+    FIX BEHAVIOR (this branch):
+    - 2+ LLM calls made (fallback occurred)
+    - Returns valid Pydantic object from second model
+    """
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+
+    with patch.dict(os.environ, all_keys):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # First model returns incomplete response - missing 'fixed_code' (exactly like Opus bug)
+            incomplete_json = '{"update_program": true, "update_code": true, "fixed_program": "def foo(): pass"}'
+            first_response = create_mock_litellm_response(incomplete_json, model_name='gpt-5-nano')
+
+            # Second model returns complete valid response
+            complete_json = '{"update_program": true, "update_code": true, "fixed_program": "def foo(): pass", "fixed_code": "def bar(): pass"}'
+            second_response = create_mock_litellm_response(complete_json, model_name='gemini-pro')
+
+            mock_completion.side_effect = [first_response, second_response]
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Fix the code that has errors.",
+                    input_json={"code": "broken_code"},
+                    strength=0.5,
+                    temperature=0.7,
+                    output_pydantic=CodeFixLikeModel,
+                    verbose=True
+                )
+
+            # EXPECTED after fix: Model fallback happened (2+ calls)
+            assert mock_completion.call_count >= 2, \
+                f"Expected model fallback (2+ calls), but only {mock_completion.call_count} call(s) made. " \
+                "BUG: The 'continue' statement is not triggering fallback to next model."
+
+            # EXPECTED after fix: Result is valid Pydantic object from second model
+            assert isinstance(response['result'], CodeFixLikeModel), \
+                f"Expected CodeFixLikeModel, got {type(response['result'])}: {response['result']}"
+
+            # Verify the result came from the second model's complete response
+            assert response['result'].fixed_code == "def bar(): pass", \
+                f"Expected fixed_code from second model, got: {response['result'].fixed_code}"
+
+
+def test_llm_invoke_all_models_fail_validation_raises_runtime_error(mock_load_models, mock_set_llm_cache):
+    """Issue #168: When ALL models fail validation, should raise RuntimeError.
+
+    This test verifies that when every candidate model returns an invalid
+    response, the function properly raises a RuntimeError after exhausting
+    all options.
+    """
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+
+    with patch.dict(os.environ, all_keys):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # All models return incomplete response (missing both 'update_code' and 'fixed_code')
+            incomplete_json = '{"update_program": true, "fixed_program": "code"}'
+            responses = [
+                create_mock_litellm_response(incomplete_json, model_name=f'model-{i}')
+                for i in range(4)  # 4 mock models in fixture
+            ]
+            mock_completion.side_effect = responses
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                with pytest.raises(RuntimeError, match="All candidate models failed"):
+                    llm_invoke(
+                        prompt="Fix the code that has errors.",
+                        input_json={"code": "broken_code"},
+                        strength=0.5,
+                        output_pydantic=CodeFixLikeModel,
+                    )
+
+            # EXPECTED: All models were tried before raising error
+            assert mock_completion.call_count == 4, \
+                f"Expected all 4 models to be tried, but only {mock_completion.call_count} call(s) made"
+
+
+def test_llm_invoke_dict_response_missing_field_triggers_fallback(mock_load_models, mock_set_llm_cache):
+    """Issue #168: Dict response (structured output mode) with missing field triggers fallback.
+
+    This tests line 2082: model_validate(dict) when LiteLLM returns a dict directly
+    instead of a JSON string. This happens in structured output mode.
+
+    BUG BEHAVIOR (main branch):
+    - Only 1 LLM call made
+    - Returns ERROR string instead of Pydantic object
+    - No fallback to next model
+
+    FIX BEHAVIOR (this branch):
+    - 2+ LLM calls made (fallback occurred)
+    - Returns valid Pydantic object from second model
+    """
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+
+    with patch.dict(os.environ, all_keys):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # First model returns dict (structured output mode) with missing 'fixed_code'
+            incomplete_dict = {"update_program": True, "update_code": True, "fixed_program": "def foo(): pass"}
+            # NOTE: No "fixed_code" field!
+            first_response = create_mock_litellm_response(incomplete_dict, model_name='gpt-5-nano')
+
+            # Second model returns complete dict
+            complete_dict = {
+                "update_program": True,
+                "update_code": True,
+                "fixed_program": "def foo(): pass",
+                "fixed_code": "def bar(): pass"
+            }
+            second_response = create_mock_litellm_response(complete_dict, model_name='gemini-pro')
+
+            mock_completion.side_effect = [first_response, second_response]
+
+            mock_cost = 0.0001
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Fix the code that has errors.",
+                    input_json={"code": "broken_code"},
+                    strength=0.5,
+                    temperature=0.7,
+                    output_pydantic=CodeFixLikeModel,
+                    verbose=True
+                )
+
+            # EXPECTED after fix: Model fallback happened (2+ calls)
+            assert mock_completion.call_count >= 2, \
+                f"Expected model fallback (2+ calls), but only {mock_completion.call_count} call(s) made. " \
+                "BUG: Dict validation is not triggering fallback to the next model."
+
+            # EXPECTED after fix: Result is valid Pydantic object from second model
+            assert isinstance(response['result'], CodeFixLikeModel), \
+                f"Expected CodeFixLikeModel, got {type(response['result'])}: {response['result']}"
+
+            # Verify the result came from the second model's complete response
+            assert response['result'].fixed_code == "def bar(): pass", \
+                f"Expected fixed_code from second model, got: {response['result'].fixed_code}"
+
+
+# --- Tests for structured_output CSV flag behavior ---
+
+def test_deepseek_maas_passes_response_format_for_structured_output(mock_set_llm_cache):
+    """Verify that DeepSeek MaaS model passes response_format when output_pydantic is requested.
+
+    According to Google Cloud documentation, all Vertex AI MaaS models (including DeepSeek)
+    support structured output. This test verifies the CSV has structured_output=True for DeepSeek.
+
+    This test will:
+    - FAIL if structured_output=False in CSV (the bug)
+    - PASS if structured_output=True in CSV (after fix)
+    """
+    # Read the REAL CSV to get DeepSeek's actual structured_output value
+    from pdd.llm_invoke import _load_model_data
+    real_data = _load_model_data(None)  # None uses package default CSV path
+
+    # Filter to only include DeepSeek MaaS model
+    deepseek_data = real_data[real_data['model'] == 'vertex_ai/deepseek-ai/deepseek-v3.2-maas'].copy()
+    assert len(deepseek_data) == 1, "DeepSeek MaaS model not found in CSV"
+
+    with patch('pdd.llm_invoke._load_model_data', return_value=deepseek_data):
+        with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                # Return valid JSON that matches SampleOutputModel
+                json_response = '{"field1": "test_value", "field2": 42}'
+                mock_response = create_mock_litellm_response(
+                    json_response,
+                    model_name='vertex_ai/deepseek-ai/deepseek-v3.2-maas'
+                )
+                mock_completion.return_value = mock_response
+
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                          {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Return a sample output.",
+                        input_json={"query": "test"},
+                        strength=0.5,
+                        temperature=0.7,
+                        output_pydantic=SampleOutputModel,
+                        verbose=True
+                    )
+
+                # Verify DeepSeek was called
+                mock_completion.assert_called_once()
+                call_args, call_kwargs = mock_completion.call_args
+                assert call_kwargs['model'] == 'vertex_ai/deepseek-ai/deepseek-v3.2-maas', \
+                    f"Expected DeepSeek model, got {call_kwargs['model']}"
+
+                # EXPECTED: DeepSeek MaaS should have response_format passed
+                # because it supports structured output (per Google Cloud docs)
+                assert 'response_format' in call_kwargs, \
+                    "DeepSeek MaaS should have response_format passed - check that structured_output=True in CSV"
+
+                response_format = call_kwargs['response_format']
+                assert response_format['type'] == 'json_object', \
+                    f"Expected type 'json_object', got '{response_format.get('type')}'"
+                assert 'response_schema' in response_format, \
+                    "response_format should contain response_schema"
+
+
+def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock_set_llm_cache):
+    """Verify that Vertex AI Claude Opus passes response_format when output_pydantic is requested.
+
+    LiteLLM had a bug (#17755) where Vertex AI rejected the anthropic-beta headers
+    for structured output. This was fixed in LiteLLM versions after v1.80.5.
+
+    This test verifies that after upgrading LiteLLM to >=1.81.0:
+    - structured_output=True in CSV for vertex_ai/claude-opus-4-5
+    - response_format is correctly passed to LiteLLM
+
+    This test will:
+    - FAIL if LiteLLM version is too old or structured_output=False
+    - PASS if LiteLLM is upgraded and structured_output=True
+    """
+    # Read the REAL CSV to get Claude Opus's actual structured_output value
+    from pdd.llm_invoke import _load_model_data
+    real_data = _load_model_data(None)  # None uses package default CSV path
+
+    # Filter to only include Vertex AI Claude Opus model
+    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
+    assert len(opus_data) == 1, "Vertex AI Claude Opus model not found in CSV"
+
+    # Verify CSV has structured_output=True
+    assert opus_data.iloc[0]['structured_output'] == True, \
+        "vertex_ai/claude-opus-4-5 should have structured_output=True in CSV"
+
+    with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
+        with patch.dict(os.environ, {'VERTEX_CREDENTIALS': 'fake_creds'}):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                # Return valid JSON that matches SampleOutputModel
+                json_response = '{"field1": "test_value", "field2": 42}'
+                mock_response = create_mock_litellm_response(
+                    json_response,
+                    model_name='vertex_ai/claude-opus-4-5'
+                )
+                mock_completion.return_value = mock_response
+
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                          {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Return a sample output.",
+                        input_json={"query": "test"},
+                        strength=0.5,
+                        temperature=0.7,
+                        output_pydantic=SampleOutputModel,
+                        verbose=True
+                    )
+
+                # Verify Claude Opus was called
+                mock_completion.assert_called_once()
+                call_args, call_kwargs = mock_completion.call_args
+                assert call_kwargs['model'] == 'vertex_ai/claude-opus-4-5', \
+                    f"Expected Claude Opus model, got {call_kwargs['model']}"
+
+                # EXPECTED: Vertex AI Claude Opus should have response_format passed
+                # This requires LiteLLM >=1.81.0 to fix the beta headers issue
+                assert 'response_format' in call_kwargs, \
+                    "Vertex AI Claude Opus should have response_format passed - ensure LiteLLM >=1.81.0"
+
+                response_format = call_kwargs['response_format']
+                assert response_format['type'] == 'json_object', \
+                    f"Expected type 'json_object', got '{response_format.get('type')}'"
+                assert 'response_schema' in response_format, \
+                    "response_format should contain response_schema"
+
+
+# ==============================================================================
+# Issue #183: Tests for .env file handling bugs
+# ==============================================================================
+
+from pdd.llm_invoke import _save_key_to_env_file, _is_env_path_package_dir, _detect_project_root_from_cwd
+
+
+class TestSaveKeyToEnvFile:
+    """Tests for Bug 1: .env key accumulation fix (Issue #183)."""
+
+    def test_replaces_key_in_place(self, tmp_path):
+        """Key should replace in-place, not comment + append."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('OPENAI_API_KEY="old_key"\n')
+
+        _save_key_to_env_file('OPENAI_API_KEY', 'new_key', env_file)
+
+        content = env_file.read_text()
+        assert content == 'OPENAI_API_KEY="new_key"\n'
+        assert '# ' not in content  # No commented lines
+
+    def test_removes_old_commented_keys(self, tmp_path):
+        """Updating a key should remove old commented versions."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('''# OPENAI_API_KEY="very_old"
+# OPENAI_API_KEY="old"
+OPENAI_API_KEY="current"
+OTHER_KEY="keep"
+''')
+
+        _save_key_to_env_file('OPENAI_API_KEY', 'new_key', env_file)
+
+        content = env_file.read_text()
+        assert content.count('OPENAI_API_KEY') == 1
+        assert '# OPENAI_API_KEY' not in content
+        assert 'OTHER_KEY="keep"' in content
+
+    def test_adds_key_to_empty_file(self, tmp_path):
+        """Should add key to empty/new .env file."""
+        env_file = tmp_path / ".env"
+
+        _save_key_to_env_file('NEW_KEY', 'value', env_file)
+
+        content = env_file.read_text()
+        assert content == 'NEW_KEY="value"\n'
+
+    def test_preserves_other_keys(self, tmp_path):
+        """Should preserve unrelated keys."""
+        env_file = tmp_path / ".env"
+        env_file.write_text('OTHER_KEY="keep"\nANOTHER="also_keep"\n')
+
+        _save_key_to_env_file('NEW_KEY', 'value', env_file)
+
+        content = env_file.read_text()
+        assert 'OTHER_KEY="keep"' in content
+        assert 'ANOTHER="also_keep"' in content
+        assert 'NEW_KEY="value"' in content
+
+
+class TestEnvPathLocation:
+    """Tests for Bug 2: .env location when PDD_PATH is package dir (Issue #183)."""
+
+    def test_is_env_path_package_dir_detects_package(self):
+        """_is_env_path_package_dir should return True for package path."""
+        import importlib.resources
+        pkg_path = Path(str(importlib.resources.files('pdd')))
+
+        assert _is_env_path_package_dir(pkg_path) is True
+
+    def test_is_env_path_package_dir_false_for_user_project(self, tmp_path):
+        """_is_env_path_package_dir should return False for user project."""
+        user_project = tmp_path / "my_project"
+        user_project.mkdir()
+
+        assert _is_env_path_package_dir(user_project) is False
+
+    def test_detect_project_root_finds_git_marker(self, tmp_path, monkeypatch):
+        """_detect_project_root_from_cwd should find .git marker."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".git").mkdir()
+        subdir = project / "src"
+        subdir.mkdir()
+
+        monkeypatch.chdir(subdir)
+
+        result = _detect_project_root_from_cwd()
+        assert result == project
+
+
+# --- Tests for Language-Aware Python Validation (Issue: JavaScript false positives) ---
+
+def test_javascript_code_does_not_trigger_python_validation(mock_load_models, mock_set_llm_cache, caplog):
+    """Test that JavaScript code with 'return' does not trigger Python syntax validation.
+
+    JavaScript code containing 'return ' matches _looks_like_python_code() pattern,
+    causing ast.parse() to fail and log "Invalid Python syntax" warnings.
+    When language="javascript" is passed, validation should be skipped.
+    """
+    import logging
+    caplog.set_level(logging.WARNING)
+
+    model_key_name = "OPENAI_API_KEY"
+
+    # Valid JavaScript that contains 'return' (matches _looks_like_python_code pattern)
+    js_code = 'function isPalindrome(str) { return str === str.split("").reverse().join(""); }'
+
+    response_json = json.dumps({"explanation": "JavaScript function", "code": js_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response(response_json, model_name='gpt-5-nano')
+            mock_completion.return_value = mock_response
+
+            result = llm_invoke(
+                prompt="Write JavaScript",
+                input_json={},
+                output_pydantic=CodeOutputModel,
+                language="javascript",  # Skip Python validation
+            )
+
+    # Should NOT log Python syntax warning for JavaScript
+    assert "invalid python syntax" not in caplog.text.lower(), \
+        f"JavaScript should not trigger Python validation. Logs: {caplog.text}"

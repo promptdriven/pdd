@@ -2,9 +2,11 @@ import pytest
 from unittest.mock import patch, mock_open, MagicMock
 from pdd.summarize_directory import summarize_directory
 import os
+import sys
 from datetime import datetime, UTC
 import csv
 from io import StringIO
+from typing import Callable, Optional
 
 @pytest.fixture
 def mock_load_prompt_template():
@@ -429,3 +431,150 @@ def test_skips_pyc_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     assert len(rows) == 1
     assert rows[0]['full_path'].endswith('.py')
     assert rows[0]['file_summary'] == "This is a summary."
+
+
+# ============================================================================
+# Progress Callback Tests (TDD - these should FAIL initially)
+# ============================================================================
+
+class TestProgressCallback:
+    """Tests for progress callback feature used by TUI ProgressBar."""
+
+    def test_summarize_directory_accepts_progress_callback(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """summarize_directory should accept an optional progress_callback parameter."""
+        file1 = tmp_path / "file1.py"
+        file1.write_text("print('Hello')")
+
+        progress_calls = []
+        def mock_callback(current: int, total: int) -> None:
+            progress_calls.append((current, total))
+
+        # This should not raise TypeError about unexpected keyword argument
+        csv_output, total_cost, model_name = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None,
+            progress_callback=mock_callback  # New parameter
+        )
+
+        # Function should complete successfully
+        assert csv_output is not None
+
+    def test_progress_callback_called_with_correct_values(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Progress callback should be called with (current, total) for each file."""
+        # Create 3 test files
+        for i in range(1, 4):
+            (tmp_path / f"file{i}.py").write_text(f"print({i})")
+
+        progress_calls = []
+        def mock_callback(current: int, total: int) -> None:
+            progress_calls.append((current, total))
+
+        summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None,
+            progress_callback=mock_callback
+        )
+
+        # Should be called 3 times with correct values
+        assert len(progress_calls) == 3
+        assert progress_calls == [(1, 3), (2, 3), (3, 3)]
+
+    def test_progress_callback_not_required(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """progress_callback should be optional (None by default)."""
+        file1 = tmp_path / "file1.py"
+        file1.write_text("print('Hello')")
+
+        # Should work without progress_callback (backward compatibility)
+        csv_output, total_cost, model_name = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+            # No progress_callback
+        )
+
+        assert csv_output is not None
+
+    def test_no_rich_track_output_when_callback_provided(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke, capsys
+    ):
+        """When progress_callback is provided, Rich track() should not output to stdout."""
+        file1 = tmp_path / "file1.py"
+        file1.write_text("print('Hello')")
+
+        progress_calls = []
+        def mock_callback(current: int, total: int) -> None:
+            progress_calls.append((current, total))
+
+        # Set COLUMNS env var to simulate TUI context
+        old_columns = os.environ.get("COLUMNS")
+        os.environ["COLUMNS"] = "80"
+
+        try:
+            summarize_directory(
+                directory_path=str(tmp_path / "*.py"),
+                strength=0.5,
+                temperature=0.7,
+                verbose=False,
+                csv_file=None,
+                progress_callback=mock_callback
+            )
+        finally:
+            if old_columns is not None:
+                os.environ["COLUMNS"] = old_columns
+            elif "COLUMNS" in os.environ:
+                del os.environ["COLUMNS"]
+
+        captured = capsys.readouterr()
+        # Should NOT contain Rich progress bar output
+        assert "Processing files" not in captured.out
+        assert "\r" not in captured.out  # No carriage returns from progress
+
+    def test_progress_callback_skips_directories_and_pycache(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Progress callback total should only count processable files."""
+        # Create 2 regular files
+        (tmp_path / "file1.py").write_text("print(1)")
+        (tmp_path / "file2.py").write_text("print(2)")
+
+        # Create __pycache__ with .pyc file (should be skipped)
+        pycache = tmp_path / "__pycache__"
+        pycache.mkdir()
+        (pycache / "file1.cpython-312.pyc").write_bytes(b'\x00\x00\x00\x00')
+
+        # Create a subdirectory (should be skipped)
+        (tmp_path / "subdir").mkdir()
+
+        progress_calls = []
+        def mock_callback(current: int, total: int) -> None:
+            progress_calls.append((current, total))
+
+        summarize_directory(
+            directory_path=str(tmp_path / "**/*"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None,
+            progress_callback=mock_callback
+        )
+
+        # Should only count the 2 .py files, not pycache or directories
+        # The total in progress_calls should reflect actual processed files
+        assert len(progress_calls) == 2
+        # All calls should have total=2 (only .py files)
+        for current, total in progress_calls:
+            assert total == 2

@@ -32,7 +32,7 @@ def mock_files_fixture():
         "prompt_file": "fake_prompt_file.prompt",
         "code_file": "fake_code_file.py",
         "output": "fake_test_output.py",
-        "existing_tests": "fake_existing_tests.py",
+        "existing_tests": ["fake_existing_tests.py"],  # Now a list to support multiple test files
         "coverage_report": "fake_coverage_report.xml",
     }
 
@@ -41,7 +41,7 @@ def mock_files_fixture():
 @pytest.mark.parametrize("coverage_report, existing_tests, expect_error", [
     (None, None, False),
     ("fake_coverage_report.xml", None, True),
-    ("fake_coverage_report.xml", "fake_existing_tests.py", False),
+    ("fake_coverage_report.xml", ["fake_existing_tests.py"], False),  # Now a list
 ])
 def test_cmd_test_main_coverage_handling(
     mock_ctx_fixture,
@@ -182,7 +182,8 @@ def test_cmd_test_main_increase_tests_error(mock_ctx_fixture, mock_files_fixture
     cmd_test_main handles it and returns an error result tuple.
     """
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
-         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests:
+         patch("pdd.cmd_test_main.increase_tests") as mock_increase_tests, \
+         patch("builtins.open", mock_open(read_data="existing test content")) as m_file:
 
         mock_construct_paths.return_value = (
             {},  # resolved_config
@@ -290,7 +291,7 @@ def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, 
         )
 
         # Verify file writing and result
-        m_file.assert_called_once_with(mock_files_fixture["output"], "w", encoding="utf-8")
+        m_file.assert_any_call(mock_files_fixture["output"], "w", encoding="utf-8")
         handle = m_file()
         handle.write.assert_called_once_with("more_tests")
         assert result == ("more_tests", 0.20, "model_v2")
@@ -321,13 +322,13 @@ def test_cmd_test_main_merge_existing_tests(mock_ctx_fixture, mock_files_fixture
             output=None,
             language=None,
             coverage_report=None,
-            existing_tests=mock_files_fixture["existing_tests"],
+            existing_tests=mock_files_fixture["existing_tests"],  # Already a list
             target_coverage=None,
             merge=True,
         )
 
-        # The opened file should be the existing_tests path, not the regular output
-        m_file.assert_called_once_with(mock_files_fixture["existing_tests"], "w", encoding="utf-8")
+        # The opened file should be the first existing_tests path, not the regular output
+        m_file.assert_any_call(mock_files_fixture["existing_tests"][0], "w", encoding="utf-8")
         handle = m_file()
         handle.write.assert_called_once_with("merged_code")
 
@@ -493,3 +494,67 @@ def test_cmd_test_main_cli_strength_overrides_pddrc():
         call_kwargs = mock_generate_test.call_args.kwargs
         assert call_kwargs["strength"] == 0.3, \
             f"Expected CLI strength 0.3, got {call_kwargs['strength']}"
+
+
+def test_cmd_test_main_multiple_existing_tests_concatenated(tmp_path):
+    """
+    Test that cmd_test_main correctly concatenates multiple existing test files.
+
+    This tests the new feature where multiple --existing-tests options can be provided
+    and their content is concatenated before being passed to the test generation.
+    """
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.obj = {
+        "verbose": False,
+        "force": True,
+        "quiet": False,
+        "time": 0.25,
+        "context": None,
+        "confirm_callback": None,
+    }
+
+    # Create test files
+    test_file_1 = tmp_path / "test_1.py"
+    test_file_1.write_text("# test 1 content\ndef test_one(): pass")
+    test_file_2 = tmp_path / "test_2.py"
+    test_file_2.write_text("# test 2 content\ndef test_two(): pass")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {
+                "prompt_file": "prompt_contents",
+                "code_file": "code_contents",
+                # existing_tests will be populated by cmd_test_main after construct_paths
+            },
+            {"output": "test_output.py"},
+            "python"
+        )
+        mock_generate_test.return_value = ("generated_tests", 0.10, "model_v1")
+
+        result = cmd_test_main(
+            ctx=mock_ctx,
+            prompt_file="test.prompt",
+            code_file="test.py",
+            output="test_output.py",
+            language=None,
+            coverage_report=None,
+            existing_tests=[str(test_file_1), str(test_file_2)],
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify generate_test was called and received concatenated existing tests
+        mock_generate_test.assert_called_once()
+        call_kwargs = mock_generate_test.call_args.kwargs
+
+        # The existing_tests should contain content from both files
+        if "existing_tests" in call_kwargs:
+            existing_tests_content = call_kwargs["existing_tests"]
+            assert "test 1 content" in existing_tests_content, \
+                "Content from test_file_1 should be in existing_tests"
+            assert "test 2 content" in existing_tests_content, \
+                "Content from test_file_2 should be in existing_tests"

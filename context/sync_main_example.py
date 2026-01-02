@@ -148,7 +148,7 @@ def main() -> None:
             skip_verify=False,
             skip_tests=False,
             target_coverage=90.0,
-            log=False,
+            dry_run=False,
         )
 
     console.rule("[bold blue]3. Results from `sync_main`[/bold blue]")

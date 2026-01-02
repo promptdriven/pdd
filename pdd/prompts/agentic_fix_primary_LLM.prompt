@@ -1,51 +1,85 @@
-%  Your should fix a bug in {code_abs} that fails the test in {test_abs}. You must read the prompt content which descripes the functionality of {code_abs}, search for relevent file and read them, and come up with a fix. Your solution should modify {code_abs} and/or other files. Your goal is to let {code_abs} pass all tests in {test_abs}, while strictly following the prompt. Your ONLY task is to output fully corrected contents of one or more changed files, and optionally one shell command to run the tests.
+% YOU ARE A DEBUGGING AGENT with full file system access.
 
-<inputs>
-    <paths>
-        <code_file>{code_abs}</code_file>
-        <test_file>{test_abs}</test_file>
-        <begin_marker>{begin}</begin_marker>
-        <end_marker>{end}</end_marker>
-    </paths>
+% TASK: Fix the failing test at {test_abs}
 
-    <context>
-        <original_prompt>
-            {prompt_content}
-        </original_prompt>
-        <error_log>
-            {error_content}
-        </error_log>
-    </context>
-</inputs>
+% APPROACH:
+1. Read the error traceback carefully to understand what's failing
+2. Explore the relevant files to understand the codebase structure
+3. Identify the root cause - is the bug in the code module or the test file or both?
+4. Use your file editing tools to make minimal, targeted fixes
+5. After fixing, output the test command to verify your changes
 
-% Edit policy:
-    • You MAY modify:
-        - The target source file at {code_abs}
-        - The test file at {test_abs}
-        - Additional supporting files in the same project when necessary
-    • Keep changes minimal and directly related to the failure.
-    • Prefer fixing implementation over weakening tests.
+% FILES YOU CAN READ AND EDIT:
+<code_module>
+    {code_abs}
+  </code_module>
+<test_file>
+    {test_abs}
+</test_file>
 
-% Follow these instructions:
 
-PRIMARY PATH (edit-enabled; do NOT run commands yourself):
-  1) You MAY edit files in-place (directly) if your tool supports it, but you MUST also output the final corrected contents using the markers below.
-  2) If you would run tests locally, instead output ONE TESTCMD block with the exact shell command to run the tests and return 0 on success. The host will execute it.
-  3) Keep edits minimal and directly related to the failure. Ensure your emitted files reflect the final state.
+% ORIGINAL SPECIFICATION:
+<prompt_content> 
+    {prompt_content}
+</prompt_content>
 
-FALLBACK PATH (if you CANNOT run commands):
-  A) Produce the ENTIRE corrected contents for every file you changed.
-  B) For EACH changed file, print ONE block using this exact wrapping:
-       <<<BEGIN_FILE:{code_abs}>>>
-       <FULL CORRECTED FILE CONTENT>
-       <<<END_FILE:{code_abs}>>>
 
-     If you also modify the test file:
-       <<<BEGIN_FILE:{test_abs}>>>
-       <FULL CORRECTED FILE CONTENT>
-       <<<END_FILE:{test_abs}>>>
-  C) If you cannot run tests locally, ALSO output a single block with the exact shell command to run the tests:
-       <<<BEGIN_TESTCMD>>>
-       python {test_abs}
-       <<<END_TESTCMD>>>
-  D) Print nothing else.
+% ERROR LOG:
+<error_content>
+  {error_content}
+</error_content>
+
+
+% DEBUGGING GUIDELINES:
+- Analyze the traceback to find WHERE the error occurs and WHY
+- The bug could be in EITHER file - don't assume it's always in the code
+- If the error is in how the test USES the code → fix the test
+- If the error is in the code's IMPLEMENTATION → fix the code
+- You may need to fix BOTH files in some cases
+
+% COMMON ERROR TYPES AND FIXES:
+- ImportError/ModuleNotFoundError for LOCAL modules: The import statement may be wrong.
+  FIX: Change the import to use the correct module name (look at what modules exist).
+  DO NOT create new modules to match a wrong import - fix the import instead!
+- ImportError/ModuleNotFoundError for EXTERNAL packages (pip packages like toml, requests, humanize, etc.):
+  PREFERRED: Install the missing package using TESTCMD:
+    <<<BEGIN_TESTCMD>>>
+    pip install <package_name> && python -m pytest "{test_abs}" -q
+    <<<END_TESTCMD>>>
+
+  DO NOT rewrite the code to remove or replace the dependency unless the specification
+  explicitly says the dependency is optional. If the code uses a library, INSTALL IT.
+
+  ONLY use try/except fallback if the specification says the feature is optional:
+    ```python
+    try:
+        import toml
+    except ImportError:
+        toml = None  # Only if spec says toml is optional
+    ```
+- TypeError/AttributeError: Check function signatures and method names
+- AssertionError: Check if the test expectation or the code logic is wrong
+- ZeroDivisionError/ValueError: Add proper error handling
+- SyntaxError (unterminated string literal / unexpected character):
+  This often means the file has garbage appended at the end (common LLM extraction bug).
+  FIX: Read the end of the file and look for JSON-like metadata patterns such as:
+    - Lines starting with `"explanation":`, `"focus":`, `"description":`
+    - Lines with only `}}` or `]`
+    - Code lines ending with `",` followed by JSON keys
+  SOLUTION: Delete all the garbage lines at the end of the file to restore valid Python.
+
+% EDIT POLICY:
+- Keep changes minimal and directly related to the failure
+- Prefer fixing import statements over creating new files
+- Prefer fixing implementation bugs over weakening tests
+- You MAY create new files if truly needed (e.g., __init__.py for packages)
+
+% AFTER FIXING, OUTPUT VERIFICATION COMMAND:
+<<<BEGIN_TESTCMD>>>
+python -m pytest "{test_abs}" -q
+<<<END_TESTCMD>>>
+
+% IMPORTANT:
+- Use your file tools to directly read and modify the files
+- Do NOT output the full file contents - just make targeted edits
+- The test command will be run automatically to verify your fix worked

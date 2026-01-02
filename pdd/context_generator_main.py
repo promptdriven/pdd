@@ -1,4 +1,5 @@
 import sys
+import ast
 from typing import Tuple, Optional
 from pathlib import Path
 import click
@@ -6,6 +7,59 @@ from rich import print as rprint
 
 from .construct_paths import construct_paths
 from .context_generator import context_generator
+
+
+def _validate_python_syntax(code: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate that the code is valid Python syntax.
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    try:
+        ast.parse(code)
+        return True, None
+    except SyntaxError as e:
+        return False, f"SyntaxError at line {e.lineno}: {e.msg}"
+
+
+def _try_fix_json_garbage(code: str) -> Optional[str]:
+    """
+    Attempt to fix code that has JSON metadata garbage appended at the end.
+    This is a common LLM extraction failure pattern.
+
+    Returns:
+        Fixed code if successful, None if not fixable.
+    """
+    lines = code.split('\n')
+
+    # Look for JSON-like patterns at the end
+    json_patterns = ['"explanation":', '"focus":', '"description":', '"code":']
+
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i].strip()
+
+        # If we find a line that's clearly JSON garbage
+        if any(pattern in line for pattern in json_patterns):
+            # Go back and find where valid Python ends
+            for j in range(i - 1, -1, -1):
+                candidate = '\n'.join(lines[:j + 1])
+                is_valid, _ = _validate_python_syntax(candidate)
+                if is_valid:
+                    return candidate
+            break
+
+        # If line is just "}" or "]", likely JSON ending
+        if line in ['}', ']', '},', '],']:
+            continue
+
+        # If line ends with '",  (JSON string end)
+        if line.endswith('",') or line.endswith('"'):
+            # Check if this looks like inside a JSON object
+            if any(pattern in lines[i] if i < len(lines) else '' for pattern in json_patterns):
+                continue
+
+    return None
 
 def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str]) -> Tuple[str, float, str]:
     """
@@ -81,6 +135,27 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             else:
                 final_output_path = output
         if final_output_path and example_code is not None:
+            # Validate Python syntax before saving
+            if language == "python":
+                is_valid, error_msg = _validate_python_syntax(example_code)
+                if not is_valid:
+                    if not ctx.obj.get('quiet', False):
+                        rprint(f"[yellow]Warning: Generated code has syntax error: {error_msg}[/yellow]")
+                        rprint("[yellow]Attempting to fix JSON garbage pattern...[/yellow]")
+
+                    # Try to fix JSON garbage at end of file
+                    fixed_code = _try_fix_json_garbage(example_code)
+                    if fixed_code:
+                        is_valid_fixed, _ = _validate_python_syntax(fixed_code)
+                        if is_valid_fixed:
+                            if not ctx.obj.get('quiet', False):
+                                rprint("[green]Successfully removed garbage and fixed syntax.[/green]")
+                            example_code = fixed_code
+                        else:
+                            rprint("[red]Could not fix syntax error. Saving as-is.[/red]")
+                    else:
+                        rprint("[red]Could not detect fixable pattern. Saving as-is.[/red]")
+
             with open(final_output_path, 'w') as f:
                 f.write(example_code)
         elif final_output_path and example_code is None:

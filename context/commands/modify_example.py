@@ -669,6 +669,7 @@ def example_update_command():
     Options:
         --original-code: Path to original code for comparison (optional)
         --output: Where to save the updated prompt (default: overwrites input)
+        --simple: Use legacy 2-stage LLM update instead of agentic mode
     
     Returns via @track_cost decorator:
         Tuple[Dict[str, str], float, str]:

@@ -13,7 +13,7 @@ from .preprocess import preprocess
 
 from .construct_paths import construct_paths
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
-from .fix_error_loop import fix_error_loop
+from .fix_error_loop import fix_error_loop, run_pytest_on_file
 from .get_jwt_token import get_jwt_token
 from .get_language import get_language
 
@@ -141,8 +141,50 @@ def fix_main(
                 time=time, # Pass time to fix_errors_from_unit_tests
                 verbose=verbose
             )
-            success = update_unit_test or update_code
             attempts = 1
+
+            # Issue #158 fix: Validate the fix by running tests instead of
+            # trusting the LLM's suggestion flags (update_unit_test/update_code)
+            if update_unit_test or update_code:
+                # Write fixed files to temp location first, then run tests
+                import tempfile
+                import os as os_module
+
+                # Create temp files for testing
+                test_dir = tempfile.mkdtemp(prefix="pdd_fix_validate_")
+                temp_test_file = os_module.path.join(test_dir, "test_temp.py")
+                temp_code_file = os_module.path.join(test_dir, "code_temp.py")
+
+                try:
+                    # Write the fixed content (or original if not changed)
+                    test_content = fixed_unit_test if fixed_unit_test else input_strings["unit_test_file"]
+                    code_content = fixed_code if fixed_code else input_strings["code_file"]
+
+                    with open(temp_test_file, 'w') as f:
+                        f.write(test_content)
+                    with open(temp_code_file, 'w') as f:
+                        f.write(code_content)
+
+                    # Run pytest on the fixed test file to validate
+                    fails, errors, warnings, test_output = run_pytest_on_file(temp_test_file)
+
+                    # Success only if tests pass (no failures or errors)
+                    success = (fails == 0 and errors == 0)
+
+                    if verbose:
+                        rprint(f"[cyan]Fix validation: {fails} failures, {errors} errors, {warnings} warnings[/cyan]")
+                        if not success:
+                            rprint("[yellow]Fix suggested by LLM did not pass tests[/yellow]")
+                finally:
+                    # Cleanup temp files
+                    import shutil
+                    try:
+                        shutil.rmtree(test_dir)
+                    except Exception:
+                        pass
+            else:
+                # No changes suggested by LLM
+                success = False
 
         # Save fixed files
         if fixed_unit_test:

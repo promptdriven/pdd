@@ -86,7 +86,8 @@ def code_generator(
                 temperature=temperature,
                 time=time,
                 verbose=verbose,
-                output_schema=output_schema
+                output_schema=output_schema,
+                language=language,
             )
         else:
             response = llm_invoke(
@@ -96,7 +97,8 @@ def code_generator(
                 temperature=temperature,
                 time=time,
                 verbose=verbose,
-                output_schema=output_schema
+                output_schema=output_schema,
+                language=language,
             )
         initial_output = response['result']
         total_cost += response['cost']

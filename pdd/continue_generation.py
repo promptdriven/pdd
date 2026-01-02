@@ -84,7 +84,8 @@ def continue_generation(
             temperature=0,
             time=time,
             output_pydantic=TrimResultsStartOutput,
-            verbose=verbose
+            verbose=verbose,
+            language=language,
         )
         total_cost += trim_start_response['cost']
         code_block = trim_start_response['result'].code_block
@@ -111,7 +112,8 @@ def continue_generation(
                 strength=strength,
                 temperature=temperature,
                 time=time,
-                verbose=verbose
+                verbose=verbose,
+                language=language,
             )
             
             total_cost += continue_response['cost']
@@ -171,7 +173,8 @@ def continue_generation(
                     temperature=0,
                     time=time,
                     output_pydantic=TrimResultsOutput,
-                    verbose=verbose
+                    verbose=verbose,
+                    language=language,
                 )
                 total_cost += trim_response['cost']
                 code_block += trim_response['result'].trimmed_continued_generation

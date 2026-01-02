@@ -2,7 +2,7 @@
 
 % IMPORTANT: The crash command should fix whatever needs to be fixed to make the program run successfully:
 - If the code module has bugs, fix the code module
-- If the calling program has bugs, fix the calling program  
+- If the calling program has bugs, fix the calling program
 - If both have issues that contribute to the crash, fix BOTH
 - The goal is to ensure the program runs without errors after all fixes are applied
 - If you are not able to fix the calling program, or if you cannot access it, you shouldn't guess at fixes to the calling program. Do not add the functionality of the calling program to the code_module.

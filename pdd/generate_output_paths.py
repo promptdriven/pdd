@@ -1,6 +1,9 @@
 import os
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
+
+# Type alias for path resolution mode
+PathResolutionMode = Literal["config_base", "cwd"]
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -153,17 +156,38 @@ CONTEXT_CONFIG_MAP: Dict[str, Dict[str, str]] = {
 # --- Helper Function ---
 
 def _get_default_filename(command: str, output_key: str, basename: str, language: str, file_extension: str) -> str:
-    """Generates the default filename based on the command and output key."""
+    """Generates the default filename based on the command and output key.
+
+    Supports subdirectory basenames like 'core/cloud'. When the basename contains
+    a forward slash, the directory structure is preserved in the output:
+    - Directory part (e.g., 'core/') is prepended to the final filename
+    - Pattern is applied only to the name part (e.g., 'cloud')
+
+    Example: basename='core/cloud', pattern='test_{basename}{ext}'
+    Result: 'core/test_cloud.py' (NOT 'test_core/cloud.py')
+    """
     try:
+        # Split basename into directory and name components for subdirectory support
+        if '/' in basename:
+            dir_part, name_part = basename.rsplit('/', 1)
+            dir_prefix = dir_part + '/'
+        else:
+            dir_prefix = ''
+            name_part = basename
+
         pattern = DEFAULT_FILENAMES[command][output_key]
+
         # Use specific extension if in pattern, otherwise use language extension
         if '{ext}' in pattern:
-             # Ensure file_extension starts with '.' if not empty
+            # Ensure file_extension starts with '.' if not empty
             effective_extension = file_extension if file_extension.startswith('.') or not file_extension else '.' + file_extension
-            return pattern.format(basename=basename, language=language, ext=effective_extension)
+            filename = pattern.format(basename=name_part, language=language, ext=effective_extension)
         else:
             # Pattern already contains the full extension (e.g., .prompt, .log, .csv)
-             return pattern.format(basename=basename, language=language) # ext might not be needed
+            filename = pattern.format(basename=name_part, language=language)
+
+        # Prepend directory part to preserve subdirectory structure
+        return dir_prefix + filename
     except KeyError:
         logger.error(f"Default filename pattern not found for command '{command}', output key '{output_key}'.")
         # Fallback or raise error - returning a basic fallback for now
@@ -184,6 +208,7 @@ def generate_output_paths(
     input_file_dir: Optional[str] = None,
     input_file_dirs: Optional[Dict[str, str]] = None,
     config_base_dir: Optional[str] = None,
+    path_resolution_mode: PathResolutionMode = "config_base",
 ) -> Dict[str, str]:
     """
     Generates the full, absolute output paths for a given PDD command.
@@ -216,6 +241,12 @@ def generate_output_paths(
                         config paths resolve under this directory (typically the
                         directory containing `.pddrc`) instead of the input file
                         directory.
+        path_resolution_mode: Controls how relative paths from `.pddrc` and
+                             environment variables are resolved. "config_base"
+                             (default) resolves relative to config_base_dir,
+                             "cwd" resolves relative to the current working
+                             directory. Use "cwd" for sync command to ensure
+                             output files are created where the user is.
 
     Returns:
         A dictionary where keys are the standardized output identifiers
@@ -228,6 +259,7 @@ def generate_output_paths(
     logger.debug(f"Context config: {context_config}")
     logger.debug(f"Input file dirs: {input_file_dirs}")
     logger.debug(f"Config base dir: {config_base_dir}")
+    logger.debug(f"Path resolution mode: {path_resolution_mode}")
     logger.debug(f"Basename: {basename}, Language: {language}, Extension: {file_extension}")
 
     context_config = context_config or {}
@@ -300,10 +332,14 @@ def generate_output_paths(
         elif context_path:
             source = "context"
 
-            # Resolve relative `.pddrc` paths under the config base dir when available.
+            # Resolve relative `.pddrc` paths based on path_resolution_mode.
+            # "cwd" mode: resolve relative to current working directory (for sync)
+            # "config_base" mode: resolve relative to config_base_dir (for fix, etc.)
             # Fall back to the input file directory for backwards compatibility.
             if not os.path.isabs(context_path):
-                if config_base_dir_abs:
+                if path_resolution_mode == "cwd":
+                    context_path = os.path.join(os.getcwd(), context_path)
+                elif config_base_dir_abs:
                     context_path = os.path.join(config_base_dir_abs, context_path)
                 elif input_file_dir:
                     context_path = os.path.join(input_file_dir, context_path)
@@ -329,10 +365,12 @@ def generate_output_paths(
         elif env_path:
             source = "environment"
 
-            # Resolve relative env paths under the config base dir when available.
-            # Fall back to the input file directory for backwards compatibility.
+            # Resolve relative env paths based on path_resolution_mode.
+            # Same logic as .pddrc paths for consistency.
             if not os.path.isabs(env_path):
-                if config_base_dir_abs:
+                if path_resolution_mode == "cwd":
+                    env_path = os.path.join(os.getcwd(), env_path)
+                elif config_base_dir_abs:
                     env_path = os.path.join(config_base_dir_abs, env_path)
                 elif input_file_dir:
                     env_path = os.path.join(input_file_dir, env_path)

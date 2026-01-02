@@ -1,6 +1,7 @@
 """
 Error handling logic for PDD CLI.
 """
+import os
 import traceback
 from typing import Any, Dict, List
 import click
@@ -60,4 +61,7 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
             console.print(escape(str(exception)))
         else:
             console.print(f"  [error]An unexpected error occurred:[/error] {exception}", style="error")
+    strict_exit = os.environ.get("PDD_STRICT_EXIT", "").strip().lower() in {"1", "true", "yes", "on"}
+    if strict_exit:
+        raise SystemExit(1)
     # Do NOT re-raise e here. Let the command function return None.

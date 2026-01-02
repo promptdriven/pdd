@@ -47,7 +47,7 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file, cwd=None):
     """
     Call (possibly monkeypatched) run_agentic_fix and normalize its return.
     """
@@ -56,17 +56,18 @@ def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_f
         code_file=code_file,
         unit_test_file=unit_test_file,
         error_log_file=error_log_file,
+        cwd=cwd,
     )
     return _normalize_agentic_result(res)
 # ---------------------------------------------------------------------
 
 
 def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
-    from .pytest_output import run_pytest_and_capture_output
     """
     Run pytest on the specified test file using the subprocess-based runner.
     Returns a tuple: (failures, errors, warnings, logs)
     """
+    from .pytest_output import run_pytest_and_capture_output
     # Use the subprocess-based runner to avoid module caching issues
     output_data = run_pytest_and_capture_output(test_file)
     
@@ -223,8 +224,44 @@ def fix_error_loop(unit_test_file: str,
             lang = get_language(os.path.splitext(code_file)[1])
             verify_cmd = default_verify_cmd_for(lang, unit_test_file)
             if not verify_cmd:
-                raise ValueError(f"No default verification command for language: {lang}")
-            
+                # No verify command available (e.g., Java without maven/gradle).
+                # Trigger agentic fallback directly.
+                rprint(f"[cyan]No verification command for {lang}. Triggering agentic fallback directly...[/cyan]")
+                error_log_path = Path(error_log_file)
+                error_log_path.parent.mkdir(parents=True, exist_ok=True)
+                if not error_log_path.exists() or error_log_path.stat().st_size == 0:
+                    with open(error_log_path, "w") as f:
+                        f.write(f"No verification command available for language: {lang}\n")
+                        f.write("Agentic fix will attempt to resolve the issue.\n")
+
+                rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
+                success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    unit_test_file=unit_test_file,
+                    error_log_file=error_log_file,
+                    cwd=Path(prompt_file).parent if prompt_file else None,
+                )
+                if not success:
+                    rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
+                if agent_changed_files:
+                    rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+                    for f in agent_changed_files:
+                        rprint(f"  • {f}")
+                final_unit_test = ""
+                final_code = ""
+                try:
+                    with open(unit_test_file, "r") as f:
+                        final_unit_test = f.read()
+                except Exception:
+                    pass
+                try:
+                    with open(code_file, "r") as f:
+                        final_code = f.read()
+                except Exception:
+                    pass
+                return success, final_unit_test, final_code, 1, agent_cost, agent_model
+
             verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL)
             pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
             if verify_result.returncode == 0:
@@ -256,12 +293,16 @@ def fix_error_loop(unit_test_file: str,
             with open(error_log_path, "w") as f:
                 f.write(pytest_output)
             
-            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+            rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
+            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
                 prompt_file=prompt_file,
                 code_file=code_file,
                 unit_test_file=unit_test_file,
                 error_log_file=error_log_file,
+                cwd=Path(prompt_file).parent if prompt_file else None,
             )
+            if not success:
+                rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
             if agent_changed_files:
                 rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
                 for f in agent_changed_files:
@@ -378,17 +419,18 @@ def fix_error_loop(unit_test_file: str,
             break
 
         # We only attempt to fix if test is failing or has warnings:
-        # Let's create backups:
-        unit_test_dir, unit_test_name = os.path.split(unit_test_file)
-        code_dir, code_name = os.path.split(code_file)
-        unit_test_backup = os.path.join(
-            unit_test_dir,
-            f"{os.path.splitext(unit_test_name)[0]}_{iteration}_{errors}_{fails}_{warnings}_{timestamp}.py"
-        )
-        code_backup = os.path.join(
-            code_dir,
-            f"{os.path.splitext(code_name)[0]}_{iteration}_{errors}_{fails}_{warnings}_{timestamp}.py"
-        )
+        # Let's create backups in .pdd/backups/ to avoid polluting code/test directories
+        code_name = os.path.basename(code_file)
+        code_basename = os.path.splitext(code_name)[0]
+        unit_test_name = os.path.basename(unit_test_file)
+        unit_test_ext = os.path.splitext(unit_test_name)[1]
+        code_ext = os.path.splitext(code_name)[1]
+
+        backup_dir = Path.cwd() / '.pdd' / 'backups' / code_basename / timestamp
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        unit_test_backup = str(backup_dir / f"test_{iteration}_{errors}_{fails}_{warnings}{unit_test_ext}")
+        code_backup = str(backup_dir / f"code_{iteration}_{errors}_{fails}_{warnings}{code_ext}")
         try:
             shutil.copy(unit_test_file, unit_test_backup)
             shutil.copy(code_file, code_backup)
@@ -581,8 +623,8 @@ def fix_error_loop(unit_test_file: str,
     else:
         stats["best_iteration"] = "final"
 
-    # Read final file contents, but only if tests weren't initially passing
-    # For initially passing tests, keep empty strings as required by the test
+    # Read final file contents for non-initially-passing tests
+    # (Initially passing tests have files read at lines 344-348)
     try:
         if not initially_passing:
             with open(unit_test_file, "r") as f:
@@ -593,11 +635,6 @@ def fix_error_loop(unit_test_file: str,
         rprint(f"[red]Error reading final files:[/red] {e}")
         final_unit_test, final_code = "", ""
 
-    # Check if we broke out early because tests already passed
-    if stats["best_iteration"] == 0 and fix_attempts == 0:
-        # Still return at least 1 attempt to acknowledge the work done
-        fix_attempts = 1
-        
     # Print summary statistics
     rprint("\n[bold cyan]Summary Statistics:[/bold cyan]")
     rprint(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings")
@@ -637,13 +674,17 @@ def fix_error_loop(unit_test_file: str,
         except Exception as e:
             rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
 
-        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+        rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
+        agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
             prompt_file=prompt_file,
             code_file=code_file,
             unit_test_file=unit_test_file,
             error_log_file=error_log_file,
+            cwd=Path(prompt_file).parent if prompt_file else None,
         )
         total_cost += agent_cost
+        if not agent_success:
+            rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
         if agent_changed_files:
             rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:

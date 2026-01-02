@@ -114,7 +114,8 @@ def fix_errors_from_unit_tests(
     Fix errors in unit tests using LLM models and log the process.
 
     Args:
-        unit_test (str): The unit test code
+        unit_test (str): The unit test code, potentially multiple files concatenated
+                         with <file name="filename.py">...</file> tags.
         code (str): The code under test
         prompt (str): The prompt that generated the code
         error (str): The error message

@@ -15,8 +15,12 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main, CLOUD_GENERATE_URL, CLOUD_REQUEST_TIMEOUT
+from pdd.code_generator_main import code_generator_main, CLOUD_REQUEST_TIMEOUT
+from pdd.core.cloud import CloudConfig
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
+
+# Get the cloud URL for assertions in tests
+CLOUD_GENERATE_URL = CloudConfig.get_endpoint_url("generateCode")
 from pdd import DEFAULT_TIME # Ensure DEFAULT_TIME is available if mock_ctx doesn't always set 'time'
 
 # Constants for mocking
@@ -182,10 +186,11 @@ def mock_incremental_generator_fixture(monkeypatch):
 # --- End Mocks for PDD internal functions ---
 
 # --- Start Mocks for External Dependencies ---
-@pytest.fixture(autouse=True) 
+@pytest.fixture(autouse=True)
 def mock_get_jwt_token_fixture(monkeypatch):
-    mock = AsyncMock(return_value="test_jwt_token")
-    monkeypatch.setattr("pdd.code_generator_main.get_jwt_token", mock)
+    # Mock CloudConfig.get_jwt_token since we no longer import get_jwt_token directly
+    mock = MagicMock(return_value="test_jwt_token")
+    monkeypatch.setattr("pdd.code_generator_main.CloudConfig.get_jwt_token", mock)
     return mock
 
 @pytest.fixture(autouse=True) 
@@ -488,7 +493,8 @@ def test_full_gen_cloud_fallback_scenarios(
     mock_pdd_preprocess_fixture.return_value = "Preprocessed fallback prompt"
 
     if isinstance(cloud_error, AuthError):
-        mock_get_jwt_token_fixture.side_effect = cloud_error
+        # CloudConfig.get_jwt_token catches AuthError internally and returns None
+        mock_get_jwt_token_fixture.return_value = None
     elif cloud_error == "NO_CODE_RETURNED":
         mock_response = MagicMock(spec=requests.Response)
         mock_response.json.return_value = {"totalCost": 0.01, "modelName": "cloud_model_no_code"} 
@@ -530,8 +536,8 @@ def test_full_gen_cloud_fallback_scenarios(
     else:
         mock_local_generator_fixture.assert_not_called()
     
-    mock_get_jwt_token_fixture.side_effect = None 
-    mock_get_jwt_token_fixture.return_value = "test_jwt_token" 
+    mock_get_jwt_token_fixture.side_effect = None
+    mock_get_jwt_token_fixture.return_value = "test_jwt_token"
     mock_requests_post_fixture.side_effect = None
     default_mock_response = MagicMock(spec=requests.Response)
     default_mock_response.json.return_value = {"generatedCode": DEFAULT_MOCK_GENERATED_CODE, "totalCost": DEFAULT_MOCK_COST, "modelName": "cloud_model"}
@@ -540,10 +546,104 @@ def test_full_gen_cloud_fallback_scenarios(
     mock_requests_post_fixture.return_value = default_mock_response
 
 
+# Tests for non-recoverable HTTP errors that should NOT fall back to local
+@pytest.mark.parametrize("status_code, error_message, expected_match", [
+    (402, "Insufficient credits", "Insufficient credits"),
+    (401, "Invalid token", "Cloud authentication failed"),
+    (403, "User not approved", "Access denied"),
+    (400, "Empty prompt not allowed", "Invalid request"),
+])
+def test_full_gen_cloud_non_recoverable_http_errors(
+    status_code, error_message, expected_match, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture,
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+):
+    """Test that HTTP 402, 401, 403, 400 errors raise UsageError instead of falling back to local."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "non_recoverable_prompt_python.prompt"
+    create_file(prompt_file_path, "Non-recoverable test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "non_recoverable_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},  # resolved_config
+        {"prompt_file": "Non-recoverable test prompt"},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = "Preprocessed prompt"
+
+    # Create mock response with the specific status code
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.status_code = status_code
+    mock_response.text = error_message
+    mock_response.json.return_value = {"error": error_message, "currentBalance": 0, "estimatedCost": 0.05}
+
+    http_error = requests.exceptions.HTTPError(response=mock_response)
+    http_error.response = mock_response
+    mock_requests_post_fixture.side_effect = http_error
+
+    # Should raise click.UsageError, NOT fall back to local
+    with pytest.raises(click.UsageError, match=expected_match):
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+    # Local generator should NOT have been called
+    mock_local_generator_fixture.assert_not_called()
+
+    # Reset mocks for next test
+    mock_requests_post_fixture.side_effect = None
+    default_mock_response = MagicMock(spec=requests.Response)
+    default_mock_response.json.return_value = {"generatedCode": DEFAULT_MOCK_GENERATED_CODE, "totalCost": DEFAULT_MOCK_COST, "modelName": "cloud_model"}
+    default_mock_response.status_code = 200
+    default_mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = default_mock_response
+
+
+def test_full_gen_cloud_insufficient_credits_displays_balance(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture,
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+):
+    """Test that HTTP 402 error displays current balance and estimated cost from response."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "credits_prompt_python.prompt"
+    create_file(prompt_file_path, "Credits test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "credits_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Credits test prompt"},
+        {"output": output_file_path_str},
+        "python"
+    )
+
+    # Create 402 response with balance info
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.status_code = 402
+    mock_response.text = "Insufficient credits"
+    mock_response.json.return_value = {"error": "Insufficient credits", "currentBalance": 0.02, "estimatedCost": 0.05}
+
+    http_error = requests.exceptions.HTTPError(response=mock_response)
+    http_error.response = mock_response
+    mock_requests_post_fixture.side_effect = http_error
+
+    with pytest.raises(click.UsageError, match="Insufficient credits"):
+        code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
+
+    # Check that balance info was printed
+    printed_messages = [str(call_args[0][0]) for call_args in mock_rich_console_fixture.call_args_list if call_args[0]]
+    assert any("0.02" in msg and "0.05" in msg for msg in printed_messages), \
+        f"Expected balance/cost info in output. Got: {printed_messages}"
+
+    # Reset
+    mock_requests_post_fixture.side_effect = None
+
+
 def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
     mock_pdd_preprocess_fixture,
-    mock_local_generator_fixture, mock_rich_console_fixture, monkeypatch 
+    mock_local_generator_fixture, mock_rich_console_fixture, mock_get_jwt_token_fixture, monkeypatch
 ):
     mock_ctx.obj['local'] = False
     prompt_file_path = temp_dir_setup["prompts_dir"] / "env_var_prompt_python.prompt"
@@ -553,19 +653,16 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     mock_construct_paths_fixture.return_value = (
         {},  # resolved_config
         {"prompt_file": "Env var test prompt"},
-        {"output": output_file_path_str}, 
-        "python" 
+        {"output": output_file_path_str},
+        "python"
     )
-    
-    monkeypatch.delenv("NEXT_PUBLIC_FIREBASE_API_KEY", raising=False)
-    
-    async def mock_get_jwt_token_with_check_for_this_test(firebase_api_key, **kwargs):
-        if not os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"): 
-            raise AuthError("Firebase API key not set.")
-        return "test_jwt_token"
-    
+
+    # CloudConfig.get_jwt_token returns None when env vars are missing
+    # (it catches the AuthError internally)
+    mock_get_jwt_token_fixture.return_value = None
+
     code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
-    
+
     # Local fallback should call generator with preprocess_prompt=False now
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     assert called_kwargs["prompt"] == "Env var test prompt"

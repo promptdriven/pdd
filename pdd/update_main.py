@@ -16,10 +16,12 @@ from rich.progress import (
 from rich.table import Table
 from rich.theme import Theme
 
-from .construct_paths import construct_paths
+from .construct_paths import construct_paths, get_tests_dir_from_config, detect_context_for_file
 from .get_language import get_language
 from .update_prompt import update_prompt
 from .git_update import git_update
+from .agentic_common import get_available_agents
+from .agentic_update import run_agentic_update
 from . import DEFAULT_TIME
 
 custom_theme = Theme({
@@ -68,8 +70,13 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
             # If not a git repo, use the directory containing the code file
             pass
 
-        # Use the default prompts directory at repo root
-        prompts_dir = os.path.join(repo_root, "prompts")
+        # Use context-aware prompts_dir from .pddrc if available
+        context_name, context_config = detect_context_for_file(code_file_path, repo_root)
+        prompts_dir_config = context_config.get("prompts_dir", "prompts")
+        if os.path.isabs(prompts_dir_config):
+            prompts_dir = prompts_dir_config
+        else:
+            prompts_dir = os.path.join(repo_root, prompts_dir_config)
 
     # Construct the prompt filename in the determined directory
     prompt_filename = f"{base_name}_{language}.prompt"
@@ -123,7 +130,7 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
     code_files = [
         f for f in all_files
         if (
-            get_language(f) is not None and
+            get_language(os.path.splitext(f)[1]) and  # Pass extension, not full path
             not f.endswith('.prompt') and
             not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
             not os.path.splitext(os.path.basename(f))[0].endswith('_example')
@@ -142,12 +149,41 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
         
     return pairs
 
-def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo) -> Dict[str, Any]:
+def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo, simple: bool = False) -> Dict[str, Any]:
     """
     Wrapper to update a single file pair, choosing the correct method based on Git status and prompt content.
     """
     try:
-        # Read the prompt first to decide the strategy.
+        verbose = ctx.obj.get("verbose", False)
+        quiet = ctx.obj.get("quiet", False)
+
+        # Agentic routing - try first before legacy paths
+        use_agentic = not simple and get_available_agents()
+
+        if use_agentic:
+            tests_dir = get_tests_dir_from_config()
+            success, message, agentic_cost, provider, changed_files = run_agentic_update(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                test_files=None,
+                tests_dir=tests_dir,
+                verbose=verbose,
+                quiet=quiet,
+            )
+
+            if success:
+                with open(prompt_file, 'r') as f:
+                    modified_prompt = f.read()
+                return {
+                    "prompt_file": prompt_file,
+                    "status": "✅ Success (agentic)",
+                    "cost": agentic_cost,
+                    "model": provider,
+                    "error": "",
+                }
+            # Agentic failed - fall through to legacy
+
+        # Legacy path: Read the prompt first to decide the strategy.
         try:
             with open(prompt_file, 'r') as f:
                 input_prompt = f.read()
@@ -159,7 +195,7 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
 
         # GENERATION MODE: Trigger if the file is new OR if the prompt is empty.
         if is_untracked or not input_prompt.strip():
-            if not ctx.obj.get("quiet", False):
+            if not quiet:
                 if is_untracked:
                     console.print(f"[info]New untracked file detected, generating new prompt for:[/info] [path]{relative_code_path}[/path]")
                 else:
@@ -174,7 +210,7 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
                 modified_code=modified_code,
                 strength=ctx.obj.get("strength", 0.5),
                 temperature=ctx.obj.get("temperature", 0),
-                verbose=ctx.obj.get("verbose", False),
+                verbose=verbose,
                 time=ctx.obj.get('time', DEFAULT_TIME),
             )
         # UPDATE MODE: Only trigger if the file is tracked AND the prompt has content.
@@ -184,10 +220,13 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
                 modified_code_file=code_file,
                 strength=ctx.obj.get("strength", 0.5),
                 temperature=ctx.obj.get("temperature", 0),
-                verbose=ctx.obj.get("verbose", False),
+                verbose=verbose,
                 time=ctx.obj.get('time', DEFAULT_TIME),
+                simple=True,  # Force legacy since we already tried agentic
+                quiet=quiet,
+                prompt_file=prompt_file,
             )
-        
+
         if modified_prompt is not None:
             # Overwrite the original prompt file
             with open(prompt_file, "w") as f:
@@ -228,8 +267,10 @@ def update_main(
     use_git: bool = False,
     repo: bool = False,
     extensions: Optional[str] = None,
+    directory: Optional[str] = None,
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
+    simple: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -243,6 +284,7 @@ def update_main(
     :param use_git: Use Git history to retrieve the original code if True.
     :param repo: If True, run in repository-wide mode.
     :param extensions: Comma-separated string of file extensions to filter by in repo mode.
+    :param directory: Optional directory to scan in repo mode (defaults to repo root).
     :param strength: Optional strength parameter (overrides ctx.obj if provided).
     :param temperature: Optional temperature parameter (overrides ctx.obj if provided).
     :return: Tuple containing the updated prompt, total cost, and model name.
@@ -264,7 +306,12 @@ def update_main(
             # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
             return None
 
-        pairs = find_and_resolve_all_pairs(repo_root, quiet, extensions, output)
+        # Use specified directory if provided, otherwise scan from repo root
+        if directory:
+            scan_dir = os.path.abspath(directory)
+        else:
+            scan_dir = repo_root
+        pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
         
         if not pairs:
             rprint("[info]No scannable code files found in the repository.[/info]")
@@ -299,7 +346,7 @@ def update_main(
                 relative_path = os.path.relpath(code_path, repo_root)
                 progress.update(task, description=f"Processing [path]{relative_path}[/path]")
                 
-                result = update_file_pair(prompt_path, code_path, ctx, repo_obj)
+                result = update_file_pair(prompt_path, code_path, ctx, repo_obj, simple=simple)
                 results.append(result)
                 
                 total_repo_cost += result.get("cost", 0.0)
@@ -358,24 +405,58 @@ def update_main(
                 # No output specified, use default behavior
                 prompt_path, _ = resolve_prompt_code_pair(modified_code_file, quiet)
 
+            # Agentic routing for regeneration mode
+            use_agentic = not simple and get_available_agents()
+            verbose = ctx.obj.get("verbose", False)
+
+            if use_agentic:
+                # Ensure prompt file exists for agentic
+                Path(prompt_path).touch(exist_ok=True)
+
+                tests_dir = get_tests_dir_from_config()
+                success, message, agentic_cost, provider, changed_files = run_agentic_update(
+                    prompt_file=prompt_path,
+                    code_file=modified_code_file,
+                    test_files=None,
+                    tests_dir=tests_dir,
+                    verbose=verbose,
+                    quiet=quiet,
+                )
+
+                if success:
+                    with open(prompt_path, 'r') as f:
+                        generated_prompt = f.read()
+
+                    if not quiet:
+                        rprint("[bold green]Prompt generated successfully (agentic).[/bold green]")
+                        rprint(f"[bold]Provider:[/bold] {provider}")
+                        rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
+                        rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
+
+                    return generated_prompt, agentic_cost, provider
+
+                # Agentic failed - fall through to legacy
+                if not quiet:
+                    rprint(f"[warning]Agentic failed: {message}. Falling back to legacy.[/warning]")
+
+            # Legacy path
             with open(modified_code_file, 'r') as f:
                 modified_code_content = f.read()
 
-            # Directly call update_prompt in generation mode.
             modified_prompt, total_cost, model_name = update_prompt(
                 input_prompt="no prompt exists yet, create a new one",
                 input_code="",
                 modified_code=modified_code_content,
                 strength=ctx.obj.get("strength", 0.5),
                 temperature=ctx.obj.get("temperature", 0),
-                verbose=ctx.obj.get("verbose", False),
+                verbose=verbose,
                 time=ctx.obj.get('time', DEFAULT_TIME)
             )
 
             # Write the result to the derived/correct prompt path.
             with open(prompt_path, "w") as f:
                 f.write(modified_prompt)
-            
+
             if not quiet:
                 rprint("[bold green]Prompt generated successfully.[/bold green]")
                 rprint(f"[bold]Model used:[/bold] {model_name}")
@@ -388,8 +469,45 @@ def update_main(
         # Triggered when the user provides the prompt file, indicating a desire to update it.
         else:
             actual_input_prompt_file = input_prompt_file
+            final_output_path = output or actual_input_prompt_file
+            verbose = ctx.obj.get("verbose", False)
 
-            # Prepare input_file_paths for construct_paths
+            # Agentic routing for true update mode (try before construct_paths)
+            use_agentic = not simple and get_available_agents()
+
+            if use_agentic:
+                tests_dir = get_tests_dir_from_config()
+                success, message, agentic_cost, provider, changed_files = run_agentic_update(
+                    prompt_file=actual_input_prompt_file,
+                    code_file=modified_code_file,
+                    test_files=None,
+                    tests_dir=tests_dir,
+                    verbose=verbose,
+                    quiet=quiet,
+                )
+
+                if success:
+                    with open(actual_input_prompt_file, 'r') as f:
+                        updated_prompt = f.read()
+
+                    # Handle output path if different from input
+                    if final_output_path != actual_input_prompt_file:
+                        with open(final_output_path, 'w') as f:
+                            f.write(updated_prompt)
+
+                    if not quiet:
+                        rprint("[bold green]Prompt updated successfully (agentic).[/bold green]")
+                        rprint(f"[bold]Provider:[/bold] {provider}")
+                        rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
+                        rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
+
+                    return updated_prompt, agentic_cost, provider
+
+                # Agentic failed - fall through to legacy
+                if not quiet:
+                    rprint(f"[warning]Agentic failed: {message}. Falling back to legacy.[/warning]")
+
+            # Legacy path: Prepare input_file_paths for construct_paths
             input_file_paths = {
                 "input_prompt_file": actual_input_prompt_file,
                 "modified_code_file": modified_code_file
@@ -397,10 +515,8 @@ def update_main(
             if input_code_file:
                 input_file_paths["input_code_file"] = input_code_file
 
-            # Determine output path
-            final_output_path = output or actual_input_prompt_file
             command_options = {"output": final_output_path}
-                
+
             _, input_strings, output_file_paths, _ = construct_paths(
                 input_file_paths=input_file_paths,
                 force=ctx.obj.get("force", False),
@@ -434,22 +550,25 @@ def update_main(
                     modified_code_file=modified_code_file,
                     strength=ctx.obj.get("strength", 0.5),
                     temperature=ctx.obj.get("temperature", 0),
-                    verbose=ctx.obj.get("verbose", False),
-                    time=time
+                    verbose=verbose,
+                    time=time,
+                    simple=True if use_agentic else simple,  # Force legacy if agentic was tried
+                    quiet=quiet,
+                    prompt_file=actual_input_prompt_file,
                 )
             else:
                 if input_code is None:
                     # This will now only be triggered if --git is not used and no input_code_file is provided,
                     # which is an error state for a true update.
                     raise ValueError("For a true update, you must either provide an original code file or use the --git flag.")
-                
+
                 modified_prompt, total_cost, model_name = update_prompt(
                     input_prompt=input_prompt,
                     input_code=input_code,
                     modified_code=modified_code,
                     strength=ctx.obj.get("strength", 0.5),
                     temperature=ctx.obj.get("temperature", 0),
-                    verbose=ctx.obj.get("verbose", False),
+                    verbose=verbose,
                     time=time
                 )
 

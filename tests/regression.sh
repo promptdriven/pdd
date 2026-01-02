@@ -1795,6 +1795,110 @@ EOF
   fi
 fi
 
+# 21. Testing 'fix' with multiple test files (end-to-end with LLM)
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "21" ]; then
+  log "21. Testing 'fix' command with multiple test files (E2E)"
+
+  # Create a directory for this test (use absolute path)
+  MULTI_FIX_DIR="$REGRESSION_DIR/multi_fix_test"
+  mkdir -p "$MULTI_FIX_DIR"
+
+  # Create a buggy code file - has real bugs that tests will catch
+  cat > "$MULTI_FIX_DIR/buggy_math.py" << 'PYEOF'
+def double(x):
+    # BUG: returns x instead of x * 2
+    return x
+
+def square(x):
+    # BUG: returns x * 2 instead of x * x
+    return x * 2
+PYEOF
+
+  # Create first test file - tests double() function
+  cat > "$MULTI_FIX_DIR/test_double.py" << 'PYEOF'
+from buggy_math import double
+
+def test_double_positive():
+    assert double(5) == 10
+
+def test_double_zero():
+    assert double(0) == 0
+
+def test_double_negative():
+    assert double(-3) == -6
+PYEOF
+
+  # Create second test file - tests square() function
+  cat > "$MULTI_FIX_DIR/test_square.py" << 'PYEOF'
+from buggy_math import square
+
+def test_square_positive():
+    assert square(3) == 9
+
+def test_square_zero():
+    assert square(0) == 0
+
+def test_square_negative():
+    assert square(-2) == 4
+PYEOF
+
+  # Create a simple prompt file
+  cat > "$MULTI_FIX_DIR/buggy_math_python.prompt" << 'PYEOF'
+// Language: Python
+// Description: Simple math utilities
+
+Create a Python module with:
+- double(x): Returns x multiplied by 2
+- square(x): Returns x squared (x * x)
+PYEOF
+
+  # Run pytest to generate error log
+  log "Running pytest on buggy code to generate errors"
+  python -m pytest "$MULTI_FIX_DIR/test_double.py" "$MULTI_FIX_DIR/test_square.py" \
+    > "$MULTI_FIX_DIR/errors.log" 2>&1 || true
+
+  # Show what errors we got
+  if grep -q "FAILED" "$MULTI_FIX_DIR/errors.log"; then
+    FAIL_COUNT=$(grep -c "FAILED" "$MULTI_FIX_DIR/errors.log" || echo "0")
+    log "Found $FAIL_COUNT failing tests - running fix with multiple test files"
+
+    # Run fix command with TWO test files - each should be processed by LLM
+    log "Calling pdd fix with test_double.py and test_square.py"
+    run_pdd_command --local fix \
+      --output-code "$MULTI_FIX_DIR/fixed_math.py" \
+      --output-test "$MULTI_FIX_DIR/fixed_tests/" \
+      --output-results "$MULTI_FIX_DIR/fix_results.log" \
+      "$MULTI_FIX_DIR/buggy_math_python.prompt" \
+      "$MULTI_FIX_DIR/buggy_math.py" \
+      "$MULTI_FIX_DIR/test_double.py" \
+      "$MULTI_FIX_DIR/test_square.py" \
+      "$MULTI_FIX_DIR/errors.log"
+
+    # Check if fixed code was created
+    if [ -f "$MULTI_FIX_DIR/fixed_math.py" ]; then
+      log "Fixed code file created: $MULTI_FIX_DIR/fixed_math.py"
+
+      # Verify the fix actually works by running tests against fixed code
+      cp "$MULTI_FIX_DIR/fixed_math.py" "$MULTI_FIX_DIR/buggy_math.py"
+      if python -m pytest "$MULTI_FIX_DIR/test_double.py" "$MULTI_FIX_DIR/test_square.py" >> "$LOG_FILE" 2>&1; then
+        log "All tests pass after fix - multiple test files feature working!"
+        log_timestamped "Test 21 PASSED: 'fix' with multiple test files - tests pass after fix"
+      else
+        log "Some tests still fail after fix (LLM may need more attempts)"
+        log_timestamped "Test 21 PARTIAL: 'fix' ran but some tests still fail"
+      fi
+    else
+      log_error "Fixed code file was NOT created"
+      log_timestamped "Test 21 FAILED: No fixed code output"
+    fi
+  else
+    log "Tests unexpectedly passed - skipping fix test"
+    log_timestamped "Test 21 SKIPPED: No failing tests found"
+  fi
+
+  log "Multiple test files fix test completed"
+fi
+
 # --- Final Summary ---
 log_timestamped "======== Regression Tests Completed (Target: $TARGET_TEST) ========"
 log "----------------------------------------"

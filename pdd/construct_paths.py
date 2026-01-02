@@ -73,6 +73,58 @@ def list_available_contexts(start_path: Optional[Path] = None) -> list[str]:
     names = sorted(contexts.keys()) if isinstance(contexts, dict) else []
     return names or ["default"]
 
+def _match_path_to_contexts(
+    path_str: str,
+    contexts: Dict[str, Any],
+    use_specificity: bool = False,
+    is_absolute: bool = False
+) -> Optional[str]:
+    """
+    Core pattern matching logic - matches a path against context patterns.
+
+    Args:
+        path_str: Path to match (can be relative or absolute)
+        contexts: The contexts dict from .pddrc config
+        use_specificity: If True, return most specific match; else first match
+        is_absolute: If True, use absolute path matching with "*/" prefix
+
+    Returns:
+        Context name or None
+    """
+    matches = []
+    for context_name, context_config in contexts.items():
+        if context_name == 'default':
+            continue
+        for path_pattern in context_config.get('paths', []):
+            pattern_base = path_pattern.rstrip('/**').rstrip('/*')
+
+            # Check for match - handle both absolute and relative paths
+            matched = False
+            if is_absolute:
+                # For absolute paths (CWD-based detection), use existing logic
+                if fnmatch.fnmatch(path_str, f"*/{path_pattern}") or \
+                   fnmatch.fnmatch(path_str, path_pattern) or \
+                   path_str.endswith(f"/{pattern_base}"):
+                    matched = True
+            else:
+                # For relative paths (file-based detection)
+                if fnmatch.fnmatch(path_str, path_pattern) or \
+                   path_str.startswith(pattern_base + '/') or \
+                   path_str.startswith(pattern_base):
+                    matched = True
+
+            if matched:
+                if not use_specificity:
+                    return context_name  # First match wins
+                matches.append((context_name, len(pattern_base)))
+
+    if matches:
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return matches[0][0]
+
+    return 'default' if 'default' in contexts else None
+
+
 def _detect_context(current_dir: Path, config: Dict[str, Any], context_override: Optional[str] = None) -> Optional[str]:
     """Detect the appropriate context based on current directory path."""
     if context_override:
@@ -82,28 +134,59 @@ def _detect_context(current_dir: Path, config: Dict[str, Any], context_override:
             available = list(contexts.keys())
             raise ValueError(f"Unknown context '{context_override}'. Available contexts: {available}")
         return context_override
-    
+
     contexts = config.get('contexts', {})
-    current_path_str = str(current_dir)
-    
-    # Try to match against each context's paths
-    for context_name, context_config in contexts.items():
-        if context_name == 'default':
-            continue  # Handle default as fallback
-        
-        paths = context_config.get('paths', [])
-        for path_pattern in paths:
-            # Convert glob pattern to match current directory
-            if fnmatch.fnmatch(current_path_str, f"*/{path_pattern}") or \
-               fnmatch.fnmatch(current_path_str, path_pattern) or \
-               current_path_str.endswith(f"/{path_pattern.rstrip('/**')}"):
-                return context_name
-    
-    # Return default context if available
-    if 'default' in contexts:
-        return 'default'
-    
-    return None
+    return _match_path_to_contexts(str(current_dir), contexts, use_specificity=False, is_absolute=True)
+
+
+def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> Tuple[Optional[str], Dict[str, Any]]:
+    """
+    Detect the appropriate context for a file path based on .pddrc configuration.
+
+    This function finds the most specific matching context by comparing pattern lengths.
+    For example, 'backend/functions/utils/**' is more specific than 'backend/**'.
+
+    Args:
+        file_path: Path to the file (can be absolute or relative)
+        repo_root: Optional repository root path. If not provided, will be detected.
+
+    Returns:
+        Tuple of (context_name, context_config_defaults) or (None, {}) if no match.
+    """
+    # Find repo root if not provided
+    if repo_root is None:
+        try:
+            import git
+            repo = git.Repo(file_path, search_parent_directories=True)
+            repo_root = repo.working_tree_dir
+        except:
+            repo_root = os.getcwd()
+
+    # Make file_path relative to repo_root for matching
+    file_path_abs = os.path.abspath(file_path)
+    repo_root_abs = os.path.abspath(repo_root)
+
+    if file_path_abs.startswith(repo_root_abs):
+        relative_path = os.path.relpath(file_path_abs, repo_root_abs)
+    else:
+        relative_path = file_path
+
+    # Find and load .pddrc
+    pddrc_path = _find_pddrc_file(Path(repo_root))
+    if not pddrc_path:
+        return None, {}
+
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except ValueError:
+        return None, {}
+
+    contexts = config.get('contexts', {})
+
+    # Use shared helper with specificity matching for file-based detection
+    context_name = _match_path_to_contexts(relative_path, contexts, use_specificity=True, is_absolute=False)
+    return context_name, _get_context_config(config, context_name)
+
 
 def _get_context_config(config: Dict[str, Any], context_name: Optional[str]) -> Dict[str, Any]:
     """Get configuration settings for the specified context."""
@@ -149,6 +232,47 @@ def _resolve_config_hierarchy(
         # 4. Defaults are handled elsewhere
     
     return resolved
+
+
+def get_tests_dir_from_config(start_path: Optional[Path] = None) -> Optional[Path]:
+    """
+    Get the tests directory from .pddrc configuration.
+
+    Searches for .pddrc, detects the appropriate context, and returns the
+    configured test_output_path as a Path object.
+
+    Args:
+        start_path: Starting directory for .pddrc search. Defaults to CWD.
+
+    Returns:
+        Path to tests directory if configured, None otherwise.
+    """
+    if start_path is None:
+        start_path = Path.cwd()
+
+    # Find and load .pddrc
+    pddrc_path = _find_pddrc_file(start_path)
+    if not pddrc_path:
+        return None
+
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except ValueError:
+        return None
+
+    # Detect context and get its config
+    context_name = _detect_context(start_path, config)
+    context_config = _get_context_config(config, context_name)
+
+    # Check context config first, then env var
+    test_output_path = context_config.get('test_output_path')
+    if not test_output_path:
+        test_output_path = os.environ.get('PDD_TEST_OUTPUT_PATH')
+
+    if test_output_path:
+        return Path(test_output_path)
+
+    return None
 
 
 def _read_file(path: Path) -> str:
@@ -271,6 +395,24 @@ def _extract_basename(
     """
     Deduce the project basename according to the rules explained in *Step A*.
     """
+    # Handle 'fix' command specifically to create a unique basename per test file
+    if command == "fix":
+        prompt_path = _candidate_prompt_path(input_file_paths)
+        if not prompt_path:
+            raise ValueError("Could not determine prompt file for 'fix' command.")
+        
+        prompt_basename = _strip_language_suffix(prompt_path)
+        
+        unit_test_path = input_file_paths.get("unit_test_file")
+        if not unit_test_path:
+            # Fallback to just the prompt basename if no unit test file is provided
+            # This might happen in some edge cases, but 'fix' command structure requires it
+            return prompt_basename
+
+        # Use the stem of the unit test file to make the basename unique
+        test_basename = Path(unit_test_path).stem
+        return f"{prompt_basename}_{test_basename}"
+        
     # Handle conflicts first due to its unique structure
     if command == "conflicts":
         key1 = "prompt1"
@@ -416,6 +558,7 @@ def construct_paths(
     create_error_file: bool = True,  # Added parameter to control error file creation
     context_override: Optional[str] = None,  # Added parameter for context override
     confirm_callback: Optional[Callable[[str, str], bool]] = None,  # Callback for interactive confirmation
+    path_resolution_mode: Optional[str] = None,  # "cwd" or "config_base" - if None, use command default
 ) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]:
     """
     High‑level orchestrator that loads inputs, determines basename/language,
@@ -494,23 +637,8 @@ def construct_paths(
                 file_extension=".py", # Dummy extension
                 context_config=context_config,
                 config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
+                path_resolution_mode="cwd",  # Sync resolves paths relative to CWD
             )
-
-            # Honor .pddrc generate_output_path explicitly for sync discovery (robust to logger source)
-            try:
-                cfg_gen_dir = context_config.get("generate_output_path")
-                current_gen = output_paths_str.get("generate_output_path")
-                # Only override when generator placed code at CWD root (the problematic case)
-                if cfg_gen_dir and current_gen and Path(current_gen).parent.resolve() == Path.cwd().resolve():
-                    # Preserve the filename selected by generate_output_paths (e.g., basename + ext)
-                    gen_filename = Path(current_gen).name
-                    base_dir = Path.cwd()
-                    # Compose absolute path under configured directory
-                    abs_cfg_gen_dir = (base_dir / cfg_gen_dir).resolve() if not Path(cfg_gen_dir).is_absolute() else Path(cfg_gen_dir)
-                    output_paths_str["generate_output_path"] = str((abs_cfg_gen_dir / gen_filename).resolve())
-            except Exception:
-                # Best-effort override; fall back silently if anything goes wrong
-                pass
 
             # Infer base directories from a sample output path
             gen_path = Path(output_paths_str.get("generate_output_path", "src"))
@@ -629,7 +757,13 @@ def construct_paths(
 
     # ------------- Step 2: basename --------------------------
     try:
-        basename = _extract_basename(command, input_paths)
+        # For sync, example, and test commands, prefer the basename from command_options if provided.
+        # This preserves subdirectory paths like 'core/cloud' which would otherwise
+        # be lost when extracting from the prompt file path.
+        if command in ("sync", "example", "test") and command_options.get("basename"):
+            basename = command_options["basename"]
+        else:
+            basename = _extract_basename(command, input_paths)
     except ValueError as exc:
          # Check if it's the specific error from the initial check (now done at start)
          # This try/except might not be needed if initial check is robust
@@ -742,6 +876,13 @@ def construct_paths(
         # generate_output_paths might return Dict[str, str] or Dict[str, Path]
         # Let's assume it returns Dict[str, str] based on verification error,
         # and convert them to Path objects here.
+        # Determine path resolution mode:
+        # - If explicitly provided, use it
+        # - Otherwise: sync uses "cwd", other commands use "config_base"
+        effective_path_resolution_mode = path_resolution_mode
+        if effective_path_resolution_mode is None:
+            effective_path_resolution_mode = "cwd" if command == "sync" else "config_base"
+
         output_paths_str: Dict[str, str] = generate_output_paths(
             command=command,
             output_locations=output_location_opts,
@@ -752,24 +893,9 @@ def construct_paths(
             input_file_dir=input_file_dir,
             input_file_dirs=input_file_dirs,
             config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
+            path_resolution_mode=effective_path_resolution_mode,
         )
 
-        # For sync, explicitly honor .pddrc generate_output_path even if generator logged as 'default'
-        if command == "sync":
-            try:
-                cfg_gen_dir = context_config.get("generate_output_path")
-                current_gen = output_paths_str.get("generate_output_path")
-                # Only override when generator placed code at CWD root (the problematic case)
-                if cfg_gen_dir and current_gen and Path(current_gen).parent.resolve() == Path.cwd().resolve():
-                    # Keep the filename chosen by generate_output_paths
-                    gen_filename = Path(current_gen).name
-                    # Resolve configured directory relative to CWD (or prompt file directory if available)
-                    base_dir = Path.cwd()
-                    abs_cfg_gen_dir = (base_dir / cfg_gen_dir).resolve() if not Path(cfg_gen_dir).is_absolute() else Path(cfg_gen_dir)
-                    output_paths_str["generate_output_path"] = str((abs_cfg_gen_dir / gen_filename).resolve())
-            except Exception:
-                # Non-fatal; fall back to whatever generate_output_paths returned
-                pass
         # Convert to Path objects for internal use
         output_paths_resolved: Dict[str, Path] = {k: Path(v) for k, v in output_paths_str.items()}
 
@@ -778,12 +904,25 @@ def construct_paths(
          raise # Re-raise the ValueError
 
     # ------------- Step 4: overwrite confirmation ------------
-    # Check if any output *file* exists (operate on Path objects)
+    # Initialize existing_files before the conditional to avoid UnboundLocalError
     existing_files: Dict[str, Path] = {}
-    for k, p_obj in output_paths_resolved.items():
-        # p_obj = Path(p_val) # Conversion now happens earlier
-        if p_obj.is_file():
-            existing_files[k] = p_obj # Store the Path object
+
+    if command in ["test", "bug"] and not force:
+        # For test/bug commands without --force, create numbered files instead of overwriting
+        for key, path in output_paths_resolved.items():
+            if path.is_file():
+                base, ext = os.path.splitext(path)
+                i = 1
+                new_path = Path(f"{base}_{i}{ext}")
+                while new_path.exists():
+                    i += 1
+                    new_path = Path(f"{base}_{i}{ext}")
+                output_paths_resolved[key] = new_path
+    else:
+        # Check if any output *file* exists (operate on Path objects)
+        for k, p_obj in output_paths_resolved.items():
+            if p_obj.is_file():
+                existing_files[k] = p_obj # Store the Path object
 
     if existing_files and not force:
         paths_list = "\n".join(f"  • {p.resolve()}" for p in existing_files.values())

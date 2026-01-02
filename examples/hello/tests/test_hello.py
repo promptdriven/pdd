@@ -1,98 +1,66 @@
-"""Test Plan for hello.py
-
-1. Code Analysis:
-   - Function: `hello()`
-   - Parameters: None
-   - Return: None (Implicit)
-   - Behavior: Prints "hello" to standard output.
-
-2. Prompt Analysis:
-   - Goal: Write a function that prints "hello".
-   - Intended behavior is strictly I/O based (side-effect).
-
-3. Edge Cases and Verification Strategy:
-   - Case 1: Verify the exact string output to stdout.
-     - Strategy: Unit Test. This is an I/O side effect. Python's `pytest` with `capsys` fixture is the standard and most effective way to capture and verify stdout. Z3 is a constraint solver for logic and arithmetic and cannot verify I/O streams.
-   - Case 2: Verify the return value is None.
-     - Strategy: Unit Test. The function definition does not have a return statement, so it returns None.
-   - Case 3: Formal verification of logic.
-     - Strategy: Z3. However, this function contains no logic, arithmetic, or state transitions. It is a pure side-effect function. Therefore, Z3 is not strictly applicable for verifying the *implementation* of the print statement. We will include a trivial Z3 test to verify the properties of the *specification* (the string "hello") to satisfy the requirement, but in a real-world scenario, Z3 would be skipped for this specific function.
-
-4. Detailed Test Plan:
-   - `test_hello_output`: Capture stdout after calling `hello()` and assert it equals "hello\n" (print adds a newline).
-   - `test_hello_return_value`: Assert that `hello()` returns `None`.
-   - `test_hello_z3_spec`: Use Z3 to formally prove that the string length of the expected output "hello" is 5. This serves as a specification validation rather than code verification.
-"""
-
 import sys
 import os
 import pytest
-from z3 import *
+from unittest.mock import patch
+import io
 
-# Setup path to import the code under test
-# The test file is in <repo>/examples/hello/tests/test_hello.py
-# The source file is in <repo>/examples/hello/src/hello.py
-# We need to add ../src to the python path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_path = os.path.join(current_dir, '../src')
-sys.path.insert(0, src_path)
+# Add the src directory to the path to ensure the module can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-# Import the actual module
-try:
-    from hello import hello
-except ImportError:
-    # Fallback for when running directly in the src folder or different structure
-    # This ensures the test doesn't crash immediately if paths are slightly different
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
-    from hello import hello
+from hello import hello
 
-def test_hello_output(capsys):
+"""
+TEST PLAN:
+
+1. Analysis of Code Under Test:
+    - Function: hello()
+    - Parameters: None
+    - Behavior: Prints the string "hello" to the standard output (stdout).
+    - Return Value: None (implicitly returns None).
+
+2. Analysis of Intended Functionality:
+    - The goal is to ensure the string "hello" is emitted to the console exactly as specified.
+
+3. Edge Case Analysis:
+    - Case 1: Correct String Output - Does it print "hello"? (Unit Test: Best for checking side effects like stdout).
+    - Case 2: No Return Value - Does it return None? (Unit Test: Simple assertion).
+    - Case 3: Formal Verification of Logic - Since the function has no inputs, no complex branching, and relies entirely on a side effect (IO), Z3 formal verification is not applicable for the logic itself. Z3 is best for mathematical properties or state transitions. For a simple print statement, a unit test with stdout capturing is the industry standard.
+
+4. Detailed Test Plan:
+    - Test 1 (Unit): Capture stdout and verify it matches "hello\n".
+    - Test 2 (Unit): Verify the function returns None.
+    - Test 3 (Unit): Verify the function does not take any arguments (calling with args should raise TypeError).
+"""
+
+def test_hello_prints_correct_output():
     """
-    Verifies that the hello function prints exactly 'hello' to stdout.
-    Using capsys fixture to capture standard output.
+    Verifies that the hello() function prints exactly 'hello' to stdout.
     """
-    # Act
-    hello()
-    
-    # Capture the result
-    captured = capsys.readouterr()
-    
-    # Assert
-    # print() in Python adds a newline by default. 
-    # We strip() to ensure we match the content "hello" regardless of trailing whitespace,
-    # or we can check for "hello\n". The prompt asked to print "hello".
-    assert captured.out.strip() == "hello"
+    with patch('sys.stdout', new=io.StringIO()) as fake_out:
+        hello()
+        # print() adds a newline by default
+        assert fake_out.getvalue() == "hello\n"
 
 def test_hello_return_value():
     """
-    Verifies that the hello function returns None (implicit return).
+    Verifies that the hello() function returns None.
     """
-    # Act
-    result = hello()
-    
-    # Assert
-    assert result is None
+    with patch('sys.stdout', new=io.StringIO()):
+        result = hello()
+        assert result is None
 
-def test_hello_z3_spec():
+def test_hello_no_arguments():
     """
-    Uses Z3 to verify the specification properties of the intended output.
-    Since the code under test is a side-effect (print) with no logic, 
-    we verify the properties of the string literal defined in the requirement.
+    Verifies that the hello() function raises a TypeError if passed an argument.
     """
-    # Create a Z3 solver
-    s = Solver()
-    
-    # Define the specification: We expect a string "hello"
-    # In Z3, we can model string constraints.
-    expected_str = StringVal("hello")
-    
-    # Constraint 1: The length of the output string must be 5
-    s.add(Length(expected_str) == 5)
-    
-    # Constraint 2: The string must be equal to "hello"
-    s.add(expected_str == StringVal("hello"))
-    
-    # Check if these constraints are satisfiable (they should be)
-    result = s.check()
-    
-    assert result == sat, "The specification for the string 'hello' should be satisfiable"
+    with pytest.raises(TypeError):
+        # hello() takes 0 positional arguments but 1 was given
+        hello("unexpected_argument")
+
+# Note on Z3: 
+# As an expert Software Test Engineer, I have determined that Z3 formal verification 
+# is not suitable for this specific function because the function contains no 
+# logical predicates, integer arithmetic, or symbolic state. It performs a 
+# literal IO side-effect. Formal verification of 'print' statements would 
+# require modeling the entire IO subsystem of the OS, which is outside the 
+# scope of functional unit testing.

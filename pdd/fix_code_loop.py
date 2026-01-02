@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import shutil
 import subprocess
@@ -14,10 +15,10 @@ except ImportError:
 
 # Try to import agentic modules, with fallbacks
 try:
-    from .agentic_fix import run_agentic_fix
+    from .agentic_crash import run_agentic_crash
 except ImportError:
-    def run_agentic_fix(**kwargs):
-        return (False, "Agentic fix not available", 0.0, "N/A", [])
+    def run_agentic_crash(**kwargs):
+        return (False, "Agentic crash handler not available", 0.0, "N/A", [])
 
 try:
     from .get_language import get_language
@@ -33,7 +34,7 @@ except ImportError:
 
 def _normalize_agentic_result(result):
     """
-    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
+    Normalize run_agentic_crash result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
     Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
     """
     if isinstance(result, tuple):
@@ -52,19 +53,33 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file):
+def _safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None):
     """
-    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
+    Call (possibly monkeypatched) run_agentic_crash and normalize its return.
+    Maps arguments to the expected signature of run_agentic_crash.
+
+    Note: cwd parameter is accepted for compatibility but not passed to run_agentic_crash
+    as it determines the working directory from prompt_file.parent internally.
     """
     if not prompt_file:
         return False, "Agentic fix requires a valid prompt file.", 0.0, "agentic-cli", []
-    res = run_agentic_fix(
-        prompt_file=prompt_file,
-        code_file=code_file,
-        unit_test_file=unit_test_file,
-        error_log_file=error_log_file,
-    )
-    return _normalize_agentic_result(res)
+
+    try:
+        # Ensure inputs are Path objects as expected by run_agentic_crash
+        call_args = {
+            "prompt_file": Path(prompt_file),
+            "code_file": Path(code_file),
+            "program_file": Path(program_file),
+            "crash_log_file": Path(crash_log_file),
+            "verbose": True,
+            "quiet": False,
+        }
+        # Note: cwd is not passed - run_agentic_crash uses prompt_file.parent as project root
+
+        res = run_agentic_crash(**call_args)
+        return _normalize_agentic_result(res)
+    except Exception as e:
+        return False, f"Agentic crash handler failed: {e}", 0.0, "agentic-cli", []
 
 # Use Rich for pretty printing to the console
 try:
@@ -98,14 +113,21 @@ def run_process_with_output(cmd_args, timeout=300):
     """
     Runs a process, streaming stdout/stderr to the console while capturing them.
     Allows interaction via stdin.
+
+    Uses start_new_session=True to create a new process group, allowing us to
+    kill all child processes if the main process times out.
     """
+    import os
+    import signal
+
     try:
         proc = subprocess.Popen(
             cmd_args,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=0
+            bufsize=0,
+            start_new_session=True  # Create new process group for clean termination
         )
     except Exception as e:
         return -1, "", str(e)
@@ -120,29 +142,60 @@ def run_process_with_output(cmd_args, timeout=300):
                 if not chunk:
                     break
                 capture_list.append(chunk)
-            except (ValueError, IOError):
+            except (ValueError, IOError, OSError):
+                # OSError can occur when pipe is closed during read
                 break
 
-    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout))
-    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr))
+    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout), daemon=True)
+    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr), daemon=True)
 
     t_out.start()
     t_err.start()
 
+    timed_out = False
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+        timed_out = True
         captured_stderr.append(b"\n[Timeout]\n")
-    
-    t_out.join()
-    t_err.join()
-    
+
+    # Kill process and entire process group if needed
+    if timed_out or proc.returncode is None:
+        try:
+            # Kill entire process group to handle forked children
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            # Process group may already be dead
+            pass
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+    # Close pipes to unblock reader threads
+    try:
+        proc.stdout.close()
+    except Exception:
+        pass
+    try:
+        proc.stderr.close()
+    except Exception:
+        pass
+
+    # Wait for threads with timeout to prevent indefinite hangs
+    THREAD_JOIN_TIMEOUT = 5  # seconds
+    t_out.join(timeout=THREAD_JOIN_TIMEOUT)
+    t_err.join(timeout=THREAD_JOIN_TIMEOUT)
+
+    # If threads are still alive after timeout, log it (they're daemon threads so won't block exit)
+    if t_out.is_alive() or t_err.is_alive():
+        captured_stderr.append(b"\n[Thread join timeout - some output may be lost]\n")
+
     stdout_str = b"".join(captured_stdout).decode('utf-8', errors='replace')
     stderr_str = b"".join(captured_stderr).decode('utf-8', errors='replace')
-    
-    return proc.returncode, stdout_str, stderr_str
+
+    return proc.returncode if proc.returncode is not None else -1, stdout_str, stderr_str
 
 
 def fix_code_loop(
@@ -155,7 +208,7 @@ def fix_code_loop(
     budget: float,
     error_log_file: str,
     verbose: bool = False,
-    time: float = None,
+    time: float = DEFAULT_TIME,
     prompt_file: str = "",
     agentic_fallback: bool = True,
 ) -> Tuple[bool, str, str, int, float, Optional[str]]:
@@ -185,7 +238,7 @@ def fix_code_loop(
         - total_cost (float): Total cost of all fix attempts.
         - model_name (str | None): Name of the LLM model used (or None if no LLM calls were made).
     """
-    # Handle default time
+    # Handle default time if passed as None (though signature defaults to DEFAULT_TIME)
     if time is None:
         time = DEFAULT_TIME
     
@@ -204,7 +257,37 @@ def fix_code_loop(
         lang = get_language(os.path.splitext(code_file)[1])
         verify_cmd = default_verify_cmd_for(lang, verification_program)
         if not verify_cmd:
-            raise ValueError(f"No default verification command for language: {lang}")
+            # No verify command available (e.g., Java without maven/gradle).
+            # Trigger agentic fallback directly using any existing error log.
+            rprint(f"[cyan]No verification command for {lang}. Triggering agentic fallback directly...[/cyan]")
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            # Read existing error content or create minimal log
+            if not error_log_path.exists() or error_log_path.stat().st_size == 0:
+                with open(error_log_path, "w") as f:
+                    f.write(f"No verification command available for language: {lang}\n")
+                    f.write("Agentic fix will attempt to resolve the issue.\n")
+
+            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_crash(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                program_file=verification_program,
+                crash_log_file=error_log_file,
+                cwd=Path(prompt_file).parent if prompt_file else None
+            )
+            final_program = ""
+            final_code = ""
+            try:
+                with open(verification_program, "r") as f:
+                    final_program = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return success, final_program, final_code, 1, agent_cost, agent_model
         
         verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True)
         pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
@@ -215,11 +298,12 @@ def fix_code_loop(
             with open(error_log_path, "w") as f:
                 f.write(pytest_output)
             
-            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+            success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_crash(
                 prompt_file=prompt_file,
                 code_file=code_file,
-                unit_test_file=verification_program,
-                error_log_file=error_log_file,
+                program_file=verification_program,
+                crash_log_file=error_log_file,
+                cwd=Path(prompt_file).parent if prompt_file else None
             )
             final_program = ""
             final_code = ""
@@ -266,10 +350,17 @@ def fix_code_loop(
     history_log = "<history>\n"
 
     # Create initial backups before any modifications
+    # Store in .pdd/backups/ to avoid polluting code/test directories
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     code_file_path = Path(code_file)
     verification_program_path = Path(verification_program)
-    original_code_backup = f"{code_file_path.stem}_original_backup{code_file_path.suffix}"
-    original_program_backup = f"{verification_program_path.stem}_original_backup{verification_program_path.suffix}"
+
+    backup_dir = Path.cwd() / '.pdd' / 'backups' / code_file_path.stem / timestamp
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    original_code_backup = str(backup_dir / f"code_original{code_file_path.suffix}")
+    original_program_backup = str(backup_dir / f"program_original{verification_program_path.suffix}")
 
     try:
         shutil.copy2(code_file, original_code_backup)
@@ -357,10 +448,9 @@ def fix_code_loop(
 
 
         # Create backup copies for this iteration BEFORE calling LLM
-        code_base, code_ext = os.path.splitext(code_file)
-        program_base, program_ext = os.path.splitext(verification_program)
-        code_backup_path = f"{code_base}_{current_iteration_number}{code_ext}"
-        program_backup_path = f"{program_base}_{current_iteration_number}{program_ext}"
+        # Store in .pdd/backups/ (backup_dir already created above)
+        code_backup_path = str(backup_dir / f"code_{current_iteration_number}{code_file_path.suffix}")
+        program_backup_path = str(backup_dir / f"program_{current_iteration_number}{verification_program_path.suffix}")
 
         try:
             shutil.copy2(code_file, code_backup_path)
@@ -562,13 +652,17 @@ def fix_code_loop(
         except Exception as e:
             rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
 
-        agent_success, _msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+        rprint(f"[cyan]Attempting agentic fallback (prompt_file={prompt_file!r})...[/cyan]")
+        agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_crash(
             prompt_file=prompt_file,
             code_file=code_file,
-            unit_test_file=verification_program,
-            error_log_file=error_log_file,
+            program_file=verification_program,
+            crash_log_file=error_log_file,
+            cwd=Path(prompt_file).parent if prompt_file else None
         )
         total_cost += agent_cost
+        if not agent_success:
+            rprint(f"[bold red]Agentic fallback failed: {agent_msg}[/bold red]")
         if agent_changed_files:
             rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:
