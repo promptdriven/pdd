@@ -746,8 +746,11 @@ def construct_paths(
             # Determine examples_dir for auto-deps scanning
             # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
             # NOT for determining scan scope. Using it caused CSV row deletion issues.
-            # Use example_output_path config or default to "context".
-            example_path_str = output_paths_str.get("example_output_path")
+            # Check RAW context config for example_output_path, or default to "context".
+            # Do NOT use output_paths_str since generate_output_paths always returns absolute paths.
+            example_path_str = None
+            if original_context_config:
+                example_path_str = original_context_config.get("example_output_path")
 
             # Final fallback to "context" (sensible default for this project)
             if not example_path_str:
@@ -1073,8 +1076,11 @@ def construct_paths(
     # Determine examples_dir for auto-deps scanning
     # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
     # NOT for determining scan scope. Using it caused CSV row deletion issues.
-    # Use example_output_path config or default to "context".
-    example_path_str = resolved_config.get("example_output_path")
+    # Check RAW context config for example_output_path, or default to "context".
+    # Do NOT use resolved_config since generate_output_paths sets it to absolute paths.
+    example_path_str = None
+    if original_context_config:
+        example_path_str = original_context_config.get("example_output_path")
 
     # Final fallback to "context" (sensible default for this project)
     if not example_path_str:

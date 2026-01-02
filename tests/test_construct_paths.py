@@ -786,20 +786,24 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     """
     Test that construct_paths runs in 'discovery mode' for the sync command
     when no input files are provided.
+
+    NOTE: examples_dir defaults to "context" when no explicit example_output_path
+    is in the raw context config. This is because outputs.example.path is for
+    OUTPUT only, not for determining scan scope.
     """
     input_file_paths = {} # No inputs
     force = False
     quiet = True
     command = 'sync'
     command_options = {"basename": "my_sync_project"}
-    
+
     # Mock generate_output_paths which is used internally for path inference
     mock_output_paths = {
         "generate_output_path": str(tmpdir / "src" / "my_sync_project.py"),
         "test_output_path": str(tmpdir / "tests" / "test_my_sync_project.py"),
         "example_output_path": str(tmpdir / "examples" / "ex_my_sync_project.py"),
     }
-    
+
     with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen_paths:
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
@@ -810,12 +814,13 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     assert "code_dir" in resolved_config
     assert "tests_dir" in resolved_config
     assert "examples_dir" in resolved_config
-    
+
     # Check that paths are derived correctly
     assert Path(resolved_config["prompts_dir"]).name == "prompts"
     assert Path(resolved_config["code_dir"]).name == "src"
     assert Path(resolved_config["tests_dir"]).name == "tests"
-    assert Path(resolved_config["examples_dir"]).name == "examples"
+    # examples_dir defaults to "context" since no example_output_path in raw config
+    assert resolved_config["examples_dir"] == "context"
     
     # Assert that other return values are empty/default
     assert input_strings == {}
