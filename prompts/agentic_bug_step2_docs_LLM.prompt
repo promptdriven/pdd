@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 2 of 8 in an agentic bug investigation workflow. Previous step checked for duplicate issues.
+You are working on step 2 of 9 in an agentic bug investigation workflow. Previous step checked for duplicate issues.
 
 **This step may terminate the workflow** if the reported behavior matches documentation (not a bug).
 
@@ -65,7 +65,7 @@ Your comment should follow this format:
 [Explanation of what the documentation says vs. what the user reports]
 
 ---
-*Proceeding to Step 3: Reproduction*
+*Proceeding to Step 3: Triage*
 ```
 
 **If Feature Request (STOP workflow):**

@@ -4,18 +4,18 @@
 Write the `pdd/agentic_bug_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 8-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+Orchestrator for the 9-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
 % Requirements
 1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
-3. Run 8 steps sequentially, each as a separate `run_agentic_task()` call
+3. Run 9 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
 6. Collect changed files from all steps
 
 % Step Execution
-For each step (1-8):
+For each step (1-9):
 1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
 2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, step1_output, step2_output, etc.
 3. Call `run_agentic_task(formatted_prompt, cwd, ...)`
@@ -27,20 +27,22 @@ For each step (1-8):
 |------|---------------|---------|
 | 1 | agentic_bug_step1_duplicate_LLM | Search for duplicate issues |
 | 2 | agentic_bug_step2_docs_LLM | Check documentation for user error |
-| 3 | agentic_bug_step3_reproduce_LLM | Attempt to reproduce the bug |
-| 4 | agentic_bug_step4_root_cause_LLM | Analyze root cause |
-| 5 | agentic_bug_step5_test_plan_LLM | Design test strategy |
-| 6 | agentic_bug_step6_generate_LLM | Generate failing unit test |
-| 7 | agentic_bug_step7_verify_LLM | Verify test catches the bug |
-| 8 | agentic_bug_step8_pr_LLM | Create draft PR and link to issue |
+| 3 | agentic_bug_step3_triage_LLM | Assess if enough info to proceed |
+| 4 | agentic_bug_step4_reproduce_LLM | Attempt to reproduce the bug |
+| 5 | agentic_bug_step5_root_cause_LLM | Analyze root cause |
+| 6 | agentic_bug_step6_test_plan_LLM | Design test strategy |
+| 7 | agentic_bug_step7_generate_LLM | Generate failing unit test |
+| 8 | agentic_bug_step8_verify_LLM | Verify test catches the bug |
+| 9 | agentic_bug_step9_pr_LLM | Create draft PR and link to issue |
 
 % Context Accumulation
 - Step 1 receives: issue_content
 - Step 2 receives: issue_content, step1_output
 - Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output through step3_output
 - ... and so on
-- Step 7 receives: issue_content, step1_output through step6_output
 - Step 8 receives: issue_content, step1_output through step7_output
+- Step 9 receives: issue_content, step1_output through step8_output
 
 % Early Exit Conditions (Hard Stops)
 
@@ -50,8 +52,9 @@ The orchestrator must parse step output to detect stop conditions:
 |------|----------------|-----------|
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 2 | "Feature Request" or "User Error" | Output contains "Feature Request (Not a Bug)" or "User Error (Not a Bug)" |
-| 6 | No test file generated | No new test file in changed_files |
-| 7 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
+| 3 | Needs more info from author | Output contains "Needs More Info" |
+| 7 | No test file generated | No new test file in changed_files |
+| 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
 
 **Hard stop behavior:**
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
