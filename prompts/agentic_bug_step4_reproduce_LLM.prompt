@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 3 of 8 in an agentic bug investigation workflow. Previous steps confirmed this is not a duplicate and assessed documentation.
+You are working on step 4 of 9 in an agentic bug investigation workflow. Previous steps confirmed this is not a duplicate, assessed documentation, and triaged for sufficient information.
 
 % Inputs
 
@@ -23,6 +23,10 @@ You are working on step 3 of 8 in an agentic bug investigation workflow. Previou
 <step2_output>
 {step2_output}
 </step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
 
 % Your Task
 
@@ -58,7 +62,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 Your comment should follow this format:
 
 ```markdown
-## Step 3: Reproduction
+## Step 4: Reproduction
 
 **Status:** [Reproduced | Partially Reproduced | Could Not Reproduce]
 
@@ -82,7 +86,7 @@ Your comment should follow this format:
 [Any additional observations or discrepancies from the reported issue]
 
 ---
-*Proceeding to Step 4: Root Cause Analysis*
+*Proceeding to Step 5: Root Cause Analysis*
 ```
 
 % Important
