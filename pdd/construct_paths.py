@@ -642,11 +642,8 @@ def construct_paths(
             # Detect appropriate context
             # Priority: context_override > file-based detection > CWD-based detection
             if context_override:
-                # Validate and use override
-                contexts = pddrc_config.get('contexts', {})
-                if context_override not in contexts:
-                    raise ValueError(f"Unknown context '{context_override}'")
-                context = context_override
+                # Delegate validation to _detect_context to avoid duplicate validation logic
+                context = _detect_context(Path.cwd(), pddrc_config, context_override)
             else:
                 # Try file-based detection when prompt file is provided
                 prompt_file_str = input_file_paths.get('prompt_file') if input_file_paths else None
