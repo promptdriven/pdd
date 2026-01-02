@@ -86,7 +86,7 @@
 
 % Structured Output:
     - Check 'structured_output' CSV flag.
-    - Use response_format with type='json_object' and response_schema for Pydantic models.
+    - Use response_format with type='json_schema', json_schema containing name, schema, and strict=True to enforce all required fields.
     - LM Studio: Use extra_body to bypass drop_params stripping the schema.
     - Groq: Use simple json_object mode with schema instruction in system prompt.
     - If model doesn't support structured output, parse response as JSON and validate.
