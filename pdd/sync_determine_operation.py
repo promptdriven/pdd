@@ -35,6 +35,7 @@ from pdd.construct_paths import construct_paths
 from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
 from pdd.get_language import get_language
+from pdd.template_expander import expand_template
 
 # Constants - Use functions for dynamic path resolution
 def get_pdd_dir():
@@ -242,6 +243,79 @@ def get_extension(language: str) -> str:
     return extensions.get(language.lower(), language.lower())
 
 
+def _generate_paths_from_templates(
+    basename: str,
+    language: str,
+    extension: str,
+    outputs_config: Dict[str, Any],
+    prompt_path: str
+) -> Dict[str, Path]:
+    """
+    Generate file paths from template configuration.
+
+    This function is used by Issue #237 to support extensible output path patterns
+    for different project layouts (Next.js, Vue, Python backend, etc.).
+
+    Args:
+        basename: The relative basename (e.g., 'marketplace/AssetCard' or 'credit_helpers')
+        language: The full language name (e.g., 'python', 'typescript')
+        extension: The file extension (e.g., 'py', 'tsx')
+        outputs_config: The 'outputs' section from .pddrc context config
+        prompt_path: The prompt file path to use as fallback
+
+    Returns:
+        Dictionary mapping file types ('prompt', 'code', 'test', etc.) to Path objects
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Extract name parts for template context
+    parts = basename.split('/')
+    name = parts[-1] if parts else basename
+    category = '/'.join(parts[:-1]) if len(parts) > 1 else ''
+
+    # Build dir_prefix (for legacy template compatibility)
+    dir_prefix = '/'.join(parts[:-1]) + '/' if len(parts) > 1 else ''
+
+    # Build template context
+    template_context = {
+        'name': name,
+        'category': category,
+        'dir_prefix': dir_prefix,
+        'ext': extension,
+        'language': language,
+    }
+
+    logger.debug(f"Template context: {template_context}")
+
+    result = {}
+
+    # Expand templates for each output type
+    for output_type, config in outputs_config.items():
+        if isinstance(config, dict) and 'path' in config:
+            template = config['path']
+            expanded = expand_template(template, template_context)
+            result[output_type] = Path(expanded)
+            logger.debug(f"Template {output_type}: {template} -> {expanded}")
+
+    # Ensure prompt is always present (fallback to provided prompt_path)
+    if 'prompt' not in result:
+        result['prompt'] = Path(prompt_path)
+
+    # Handle test_files for Bug #156 compatibility
+    if 'test' in result:
+        test_path = result['test']
+        test_dir_path = test_path.parent
+        test_stem = f"test_{name}"
+        if test_dir_path.exists():
+            matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
+        else:
+            matching_test_files = [test_path] if test_path.exists() else []
+        result['test_files'] = matching_test_files or [test_path]
+
+    return result
+
+
 def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]:
     """Returns a dictionary mapping file types to their expected Path objects."""
     import logging
@@ -274,15 +348,30 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger = logging.getLogger(__name__)
                 logger.info(f"resolved_config: {resolved_config}")
                 logger.info(f"output_paths: {output_paths}")
-                
+
+                # Issue #237: Check for 'outputs' config for template-based path generation
+                outputs_config = resolved_config.get('outputs')
+                if outputs_config:
+                    logger.info(f"Using template-based paths from outputs config")
+                    result = _generate_paths_from_templates(
+                        basename=basename,
+                        language=language,
+                        extension=extension,
+                        outputs_config=outputs_config,
+                        prompt_path=prompt_path
+                    )
+                    logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
+                    return result
+
+                # Legacy path construction (backwards compatibility)
                 # Extract directory configuration from resolved_config
                 # Note: construct_paths sets tests_dir, examples_dir, code_dir keys
                 test_dir = resolved_config.get('tests_dir', 'tests/')
                 example_dir = resolved_config.get('examples_dir', 'examples/')
                 code_dir = resolved_config.get('code_dir', './')
-                
+
                 logger.info(f"Extracted dirs - test: {test_dir}, example: {example_dir}, code: {code_dir}")
-                
+
                 # Ensure directories end with /
                 if test_dir and not test_dir.endswith('/'):
                     test_dir = test_dir + '/'
@@ -290,7 +379,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     example_dir = example_dir + '/'
                 if code_dir and not code_dir.endswith('/'):
                     code_dir = code_dir + '/'
-                
+
                 # Extract directory and name parts for subdirectory basename support
                 dir_prefix, name_part = _extract_name_part(basename)
 
@@ -357,7 +446,23 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             command_options={"basename": basename, "language": language},
             context_override=context_override
         )
-        
+
+        # Issue #237: Check for 'outputs' config for template-based path generation
+        # This must be checked even when prompt EXISTS (not just when it doesn't exist)
+        outputs_config = resolved_config.get('outputs')
+        if outputs_config:
+            extension = get_extension(language)
+            logger.info(f"Using template-based paths from outputs config (prompt exists)")
+            result = _generate_paths_from_templates(
+                basename=basename,
+                language=language,
+                extension=extension,
+                outputs_config=outputs_config,
+                prompt_path=prompt_path
+            )
+            logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
+            return result
+
         # For sync command, output_file_paths contains the configured paths
         # Extract the code path from output_file_paths
         code_path = output_file_paths.get('generate_output_path', '')

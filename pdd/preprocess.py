@@ -37,21 +37,48 @@ def _write_debug_report() -> None:
         console.print("[dim]Debug mode enabled but PDD_PREPROCESS_DEBUG_FILE not set (output shown in console only)[/dim]")
 
 def _extract_fence_spans(text: str) -> List[Tuple[int, int]]:
-    """Return list of (start, end) spans for fenced code blocks ```...```.
+    """Return list of (start, end) spans for fenced code blocks (``` or ~~~).
 
     The spans are [start, end) indices in the original text.
     """
     spans: List[Tuple[int, int]] = []
     try:
-        for m in re.finditer(r"```[\w\s]*\n[\s\S]*?```", text):
+        fence_re = re.compile(
+            r"(?m)^[ \t]*([`~]{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*(?:\n|$)"
+        )
+        for m in fence_re.finditer(text):
             spans.append((m.start(), m.end()))
     except Exception:
         pass
     return spans
 
+
+def _extract_inline_code_spans(text: str) -> List[Tuple[int, int]]:
+    """Return list of (start, end) spans for inline code (backticks)."""
+    spans: List[Tuple[int, int]] = []
+    try:
+        for m in re.finditer(r"(?<!`)(`+)([^\n]*?)\1", text):
+            spans.append((m.start(), m.end()))
+    except Exception:
+        pass
+    return spans
+
+
+def _extract_code_spans(text: str) -> List[Tuple[int, int]]:
+    spans = _extract_fence_spans(text)
+    spans.extend(_extract_inline_code_spans(text))
+    return sorted(spans, key=lambda s: s[0])
+
 def _is_inside_any_span(idx: int, spans: List[Tuple[int, int]]) -> bool:
     for s, e in spans:
         if s <= idx < e:
+            return True
+    return False
+
+
+def _intersects_any_span(start: int, end: int, spans: List[Tuple[int, int]]) -> bool:
+    for s, e in spans:
+        if start < e and end > s:
             return True
     return False
 
@@ -240,7 +267,12 @@ def process_include_tags(text: str, recursive: bool) -> str:
     current_text = text
     while prev_text != current_text:
         prev_text = current_text
-        current_text = re.sub(pattern, replace_include, current_text, flags=re.DOTALL)
+        code_spans = _extract_code_spans(current_text)
+        def replace_include_with_spans(match):
+            if _intersects_any_span(match.start(), match.end(), code_spans):
+                return match.group(0)
+            return replace_include(match)
+        current_text = re.sub(pattern, replace_include_with_spans, current_text, flags=re.DOTALL)
     return current_text
 
 def process_pdd_tags(text: str) -> str:
@@ -273,7 +305,12 @@ def process_shell_tags(text: str, recursive: bool) -> str:
             console.print(f"[bold red]Error executing shell command:[/bold red] {str(e)}")
             _dbg(f"Shell execution exception: {e}")
             return f"[Shell execution error: {str(e)}]"
-    return re.sub(pattern, replace_shell, text, flags=re.DOTALL)
+    code_spans = _extract_code_spans(text)
+    def replace_shell_with_spans(match):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            return match.group(0)
+        return replace_shell(match)
+    return re.sub(pattern, replace_shell_with_spans, text, flags=re.DOTALL)
 
 def process_web_tags(text: str, recursive: bool) -> str:
     pattern = r'<web>(.*?)</web>'
@@ -308,7 +345,12 @@ def process_web_tags(text: str, recursive: bool) -> str:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")
             return f"[Web scraping error: {str(e)}]"
-    return re.sub(pattern, replace_web, text, flags=re.DOTALL)
+    code_spans = _extract_code_spans(text)
+    def replace_web_with_spans(match):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            return match.group(0)
+        return replace_web(match)
+    return re.sub(pattern, replace_web_with_spans, text, flags=re.DOTALL)
 
 def process_include_many_tags(text: str, recursive: bool) -> str:
     """Process <include-many> blocks whose inner content is a comma- or newline-separated
@@ -339,7 +381,12 @@ def process_include_many_tags(text: str, recursive: bool) -> str:
                 _dbg(f"Error processing include-many {p}: {e}")
                 contents.append(f"[Error processing include: {p}]")
         return "\n".join(contents)
-    return re.sub(pattern, replace_many, text, flags=re.DOTALL)
+    code_spans = _extract_code_spans(text)
+    def replace_many_with_spans(match):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            return match.group(0)
+        return replace_many(match)
+    return re.sub(pattern, replace_many_with_spans, text, flags=re.DOTALL)
 
 def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     if exclude_keys is None:

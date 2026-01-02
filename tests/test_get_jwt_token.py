@@ -7,7 +7,8 @@ from pdd.get_jwt_token import (
     NetworkError,
     TokenError,
     UserCancelledError,
-    RateLimitError
+    RateLimitError,
+    FirebaseAuthenticator,
 )
 
 
@@ -157,3 +158,51 @@ async def test_get_jwt_token_refresh_rate_limited(
     assert "Too many attempts" in str(excinfo.value)
     mock_get_stored_token.assert_called_once()
     mock_refresh.assert_called_once()
+
+
+class TestKeyringErrorHandling:
+    """Tests for keyring error handling in FirebaseAuthenticator."""
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_store_refresh_token_retries_on_duplicate_error(self, mock_keyring):
+        """Should retry after errSecDuplicateItem (-25299) error."""
+        # First call fails with duplicate error (actual error format from keyring lib)
+        mock_keyring.set_password.side_effect = [
+            Exception("Can't store password on keychain: (-25299, 'Unknown Error')"),
+            None  # Succeeds on retry
+        ]
+        mock_keyring.delete_password.return_value = None
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+        result = auth._store_refresh_token("new_token")
+
+        assert result is True
+        assert mock_keyring.set_password.call_count == 2
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_store_refresh_token_returns_false_on_persistent_error(self, mock_keyring):
+        """Should return False if error persists after retries."""
+        mock_keyring.set_password.side_effect = Exception("Persistent error")
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+        result = auth._store_refresh_token("new_token")
+
+        assert result is False
+
+    @patch("pdd.get_jwt_token.KEYRING_AVAILABLE", False)
+    def test_store_refresh_token_returns_false_when_no_keyring(self):
+        """Should return False when keyring unavailable."""
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+        result = auth._store_refresh_token("token")
+
+        assert result is False
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_store_refresh_token_returns_true_on_success(self, mock_keyring):
+        """Should return True on successful storage."""
+        mock_keyring.set_password.return_value = None
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+        result = auth._store_refresh_token("token")
+
+        assert result is True
