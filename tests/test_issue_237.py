@@ -350,8 +350,8 @@ contexts:
                 command_options={"basename": "credit_helpers", "language": "python"}
             )
 
-            # BUG: Currently returns 'default' because it uses CWD for context detection
-            # EXPECTED: Should return 'backend-utils' because prompt file matches the pattern
+            # Verify context is determined from the prompt file path, not just the CWD.
+            # Should return 'backend-utils' because the prompt file matches the backend-utils pattern.
             assert resolved_config.get('_matched_context') == 'backend-utils', \
                 f"Expected context 'backend-utils' but got '{resolved_config.get('_matched_context')}'"
             assert 'outputs' in resolved_config, \
