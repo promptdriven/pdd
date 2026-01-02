@@ -6,9 +6,12 @@ import shutil
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Tuple, Optional
 
+import requests
 from rich import print as rprint
 from rich.console import Console
+from rich.panel import Panel
 
 # Relative import from an internal module.
 from .get_language import get_language
@@ -17,13 +20,143 @@ from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
 from .agentic_langtest import default_verify_cmd_for
+from .core.cloud import CloudConfig
 
+# Cloud request timeout for LLM calls
+CLOUD_FIX_TIMEOUT = 400  # seconds
 
 console = Console()
 
 def escape_brackets(text: str) -> str:
     """Escape square brackets so Rich doesn't misinterpret them."""
     return text.replace("[", "\\[").replace("]", "\\]")
+
+
+def cloud_fix_errors(
+    unit_test: str,
+    code: str,
+    prompt: str,
+    error: str,
+    error_file: str,
+    strength: float,
+    temperature: float,
+    verbose: bool = False,
+    time: float = DEFAULT_TIME,
+    code_file_ext: str = ".py"
+) -> Tuple[bool, bool, str, str, str, float, str]:
+    """
+    Call the cloud fixCode endpoint to fix errors in code and unit tests.
+
+    This function has the same interface as fix_errors_from_unit_tests to allow
+    seamless switching between local and cloud execution in the fix loop.
+
+    Args:
+        unit_test: Unit test code string
+        code: Source code string
+        prompt: Prompt that generated the code
+        error: Error messages/logs from test failures
+        error_file: Path to write error analysis (not used in cloud, but kept for interface compatibility)
+        strength: Model strength parameter [0,1]
+        temperature: Model temperature parameter [0,1]
+        verbose: Enable verbose logging
+        time: Time budget for thinking effort
+        code_file_ext: File extension to determine language (e.g., ".py", ".java")
+
+    Returns:
+        Tuple of:
+        - update_unit_test: Whether unit test was updated
+        - update_code: Whether code was updated
+        - fixed_unit_test: Fixed unit test code
+        - fixed_code: Fixed source code
+        - analysis: Analysis/explanation of fixes
+        - total_cost: Cost of the operation
+        - model_name: Name of model used
+
+    Raises:
+        RuntimeError: When cloud execution fails with non-recoverable error
+    """
+    jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+
+    if not jwt_token:
+        raise RuntimeError("Cloud authentication failed - no JWT token available")
+
+    # Build cloud payload
+    payload = {
+        "unitTest": unit_test,
+        "code": code,
+        "prompt": prompt,
+        "errors": error,
+        "language": get_language(code_file_ext),
+        "strength": strength,
+        "temperature": temperature,
+        "time": time if time is not None else 0.25,
+        "verbose": verbose,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Content-Type": "application/json"
+    }
+    cloud_url = CloudConfig.get_endpoint_url("fixCode")
+
+    if verbose:
+        console.print(Panel(f"Calling cloud fix at {cloud_url}", title="[blue]Cloud LLM[/blue]", expand=False))
+
+    try:
+        response = requests.post(
+            cloud_url,
+            json=payload,
+            headers=headers,
+            timeout=CLOUD_FIX_TIMEOUT
+        )
+        response.raise_for_status()
+
+        response_data = response.json()
+        fixed_unit_test = response_data.get("fixedUnitTest", "")
+        fixed_code = response_data.get("fixedCode", "")
+        analysis = response_data.get("analysis", "")
+        total_cost = float(response_data.get("totalCost", 0.0))
+        model_name = response_data.get("modelName", "cloud_model")
+        update_unit_test = response_data.get("updateUnitTest", False)
+        update_code = response_data.get("updateCode", False)
+
+        if verbose:
+            console.print(f"[cyan]Cloud fix completed. Model: {model_name}, Cost: ${total_cost:.6f}[/cyan]")
+
+        return update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name
+
+    except requests.exceptions.Timeout:
+        raise RuntimeError(f"Cloud fix timed out after {CLOUD_FIX_TIMEOUT}s")
+
+    except requests.exceptions.HTTPError as e:
+        status_code = e.response.status_code if e.response else 0
+        err_content = e.response.text[:200] if e.response else "No response content"
+
+        # Non-recoverable errors
+        if status_code == 402:
+            try:
+                error_data = e.response.json()
+                current_balance = error_data.get("currentBalance", "unknown")
+                estimated_cost = error_data.get("estimatedCost", "unknown")
+                raise RuntimeError(f"Insufficient credits. Balance: {current_balance}, estimated cost: {estimated_cost}")
+            except json.JSONDecodeError:
+                raise RuntimeError(f"Insufficient credits: {err_content}")
+        elif status_code == 401:
+            raise RuntimeError(f"Authentication failed: {err_content}")
+        elif status_code == 403:
+            raise RuntimeError(f"Access denied: {err_content}")
+        elif status_code == 400:
+            raise RuntimeError(f"Invalid request: {err_content}")
+        else:
+            # 5xx or other errors - raise for caller to handle
+            raise RuntimeError(f"Cloud HTTP error ({status_code}): {err_content}")
+
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Cloud network error: {e}")
+
+    except json.JSONDecodeError:
+        raise RuntimeError("Cloud returned invalid JSON response")
+
 
 # ---------- Normalize any agentic return shape to a 4-tuple ----------
 def _normalize_agentic_result(result):
@@ -137,14 +270,20 @@ def fix_error_loop(unit_test_file: str,
                    error_log_file: str = "error_log.txt",
                    verbose: bool = False,
                    time: float = DEFAULT_TIME,
-                   agentic_fallback: bool = True):
+                   agentic_fallback: bool = True,
+                   use_cloud: bool = False):
     """
-    Attempt to fix errors in a unit test and corresponding code using repeated iterations, 
-    counting only the number of times we actually call the LLM fix function. 
+    Attempt to fix errors in a unit test and corresponding code using repeated iterations,
+    counting only the number of times we actually call the LLM fix function.
     The tests are re-run in the same iteration after a fix to see if we've succeeded,
     so that 'attempts' matches the number of fix attempts (not the total test runs).
 
     This updated version uses structured logging to avoid redundant entries.
+
+    Hybrid Cloud Support:
+        When use_cloud=True, the LLM fix calls are routed to the cloud fixCode endpoint
+        while local test execution (pytest, verification programs) stays local. This allows
+        the loop to pass local test results to the cloud for analysis and fixes.
 
     Inputs:
         unit_test_file: Path to the file containing unit tests.
@@ -159,6 +298,7 @@ def fix_error_loop(unit_test_file: str,
         verbose: Enable verbose logging (default: False).
         time: Time parameter for the fix_errors_from_unit_tests call.
         agentic_fallback: Whether to trigger cli agentic fallback when fix fails.
+        use_cloud: If True, use cloud LLM for fix calls while keeping test execution local.
     Outputs:
         success: Boolean indicating if the overall process succeeded.
         final_unit_test: String contents of the final unit test file.
@@ -464,28 +604,64 @@ def fix_error_loop(unit_test_file: str,
             rprint(f"[red]Error reading input files:[/red] {e}")
             return False, "", "", fix_attempts, total_cost, model_name
 
-        # Call fix:
+        # Call fix (cloud or local based on use_cloud parameter):
         try:
-            # Format the log for the LLM
+            # Format the log for the LLM - includes local test results
             formatted_log = format_log_for_output(log_structure)
 
-            updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                unit_test_contents,
-                code_contents,
-                prompt,
-                formatted_log,  # Use formatted log instead of reading the file
-                error_log_file,
-                strength,
-                temperature,
-                verbose=verbose,
-                time=time  # Pass time parameter
-            )
-            
+            if use_cloud:
+                # Use cloud LLM for fix - local test results passed via formatted_log
+                try:
+                    updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
+                        unit_test=unit_test_contents,
+                        code=code_contents,
+                        prompt=prompt,
+                        error=formatted_log,  # Pass local test results to cloud
+                        error_file=error_log_file,
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=verbose,
+                        time=time,
+                        code_file_ext=os.path.splitext(code_file)[1]
+                    )
+                except RuntimeError as cloud_err:
+                    # Cloud failed - fall back to local if it's a recoverable error
+                    if "Insufficient credits" in str(cloud_err) or "Authentication failed" in str(cloud_err) or "Access denied" in str(cloud_err):
+                        # Non-recoverable errors - stop the loop
+                        rprint(f"[red]Cloud fix error (non-recoverable):[/red] {cloud_err}")
+                        break
+                    # Recoverable errors - fall back to local
+                    rprint(f"[yellow]Cloud fix failed, falling back to local:[/yellow] {cloud_err}")
+                    updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
+                        unit_test_contents,
+                        code_contents,
+                        prompt,
+                        formatted_log,
+                        error_log_file,
+                        strength,
+                        temperature,
+                        verbose=verbose,
+                        time=time
+                    )
+            else:
+                # Use local LLM for fix
+                updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
+                    unit_test_contents,
+                    code_contents,
+                    prompt,
+                    formatted_log,  # Use formatted log instead of reading the file
+                    error_log_file,
+                    strength,
+                    temperature,
+                    verbose=verbose,
+                    time=time  # Pass time parameter
+                )
+
             # Update the fix attempt in the structured log
             log_structure["iterations"][-1]["fix_attempt"] = analysis
             log_structure["iterations"][-1]["model_name"] = model_name
         except Exception as e:
-            rprint(f"[red]Error during fix_errors_from_unit_tests call:[/red] {e}")
+            rprint(f"[red]Error during fix call:[/red] {e}")
             break
 
         fix_attempts += 1  # We used one fix attempt

@@ -91,11 +91,27 @@
     c) Submit to `https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample` with Bearer token.
     d) Trigger auto-submit when `success` is True (both loop and non-loop modes).
 
-5.  Verbose Output:
+5.  Cloud vs Local Execution Strategy:
+    %  Cloud execution is only supported for single-pass (non-loop) mode because loop mode requires running tests locally.
+    %  1. If `ctx.obj.get('local')` is True, use local execution directly.
+    %  2. Otherwise, attempt cloud execution first for single-pass mode:
+    %     - Obtain JWT via `CloudConfig.get_jwt_token(verbose=verbose)`.
+    %     - Use request timeout of 400 seconds.
+    %     - POST to the `fixCode` cloud endpoint with JSON payload:
+    %       `{ "unitTest": <unit_test>, "code": <code>, "prompt": <prompt>, "errors": <errors>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "time": <time>, "verbose": <verbose> }`
+    %     - Expected response fields: `success`, `fixedUnitTest`, `fixedCode`, `analysis`, `updateUnitTest`, `updateCode`, `totalCost`, `modelName`.
+    %  3. If cloud fails (auth/network/HTTP errors, timeout, or missing code):
+    %     - Log warning and automatically fall back to local execution.
+    %     - Non-recoverable errors (402 insufficient credits, 401 auth, 403 access denied, 400 validation) should raise click.UsageError.
+    %  4. For local execution, call `fix_errors_from_unit_tests` as appropriate.
+    %  5. Loop mode (`--loop`) always uses local execution (fix_error_loop).
+    %  6. If verbose is True, print execution info using Rich panels.
+
+6.  Verbose Output:
     - The `verbose` parameter (retrieved from `ctx`) should be passed to both `fix_error_loop` and `fix_errors_from_unit_tests` calls.
     - When `verbose` is True, these functions should provide additional debugging information during the fixing process.
 
-6.  User Feedback:
+7.  User Feedback:
     - Use `rich.print` for formatted output.
     - Show success/failure status.
     - Display total attempts and cost.
@@ -130,6 +146,11 @@
       <get_language_example>
       <include>context/get_language_example.py</include>
       </get_language_example>
+
+      - Here is an example of how to call a cloud function:
+      <cloud_function_call_example>
+      <include>context/cloud_function_call.py</include>
+      </cloud_function_call_example>
    </internal_example_modules>
 </examples>
 
