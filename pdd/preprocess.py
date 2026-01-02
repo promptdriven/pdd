@@ -119,8 +119,19 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         return prompt
 
 def get_file_path(file_name: str) -> str:
-    base_path = './'
-    return os.path.join(base_path, file_name)
+    # First try CWD (for user project files)
+    cwd_path = os.path.join('./', file_name)
+    if os.path.exists(cwd_path):
+        return cwd_path
+
+    # Fallback to package directory (for bundled files like docs/)
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    pkg_path = os.path.join(package_dir, file_name)
+    if os.path.exists(pkg_path):
+        return pkg_path
+
+    # Return CWD path (will fail with FileNotFoundError, preserving current behavior)
+    return cwd_path
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
     # More specific pattern that doesn't match nested > characters

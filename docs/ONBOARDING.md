@@ -79,63 +79,33 @@ To enable syntax highlighting for `.prompt` files in your editor, you'll need to
     -   Type `"Extensions: Install from VSIX..."` and select it.
     -   Locate the `prompt-*.vsix` file you downloaded and select it to complete the installation.
 
-### 7. Set Up Infisical for Secrets Management (Recommended)
+### 7. Set Up API Keys
 
-Managing API keys and other secrets securely is crucial. We recommend using [Infisical](https://infisical.com/) to handle your environment variables.
-
-**1. Install the Infisical CLI:**
-
-Choose the command for your operating system:
-
--   **Windows (PowerShell):**
-    ```powershell
-    winget install infisical
-    ```
--   **macOS:**
-    ```bash
-    brew install infisical
-    ```
--   **Linux:**
-    ```bash
-    curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
-    ```
-
-**2. Configure Your Project:**
-
-You can either use your own Infisical project or join an existing one.
-
--   **To use your own project:**
-    1.  Set up a new project in your Infisical dashboard.
-    2.  Add all the API keys you intend to use with PDD.
-    3.  Refer to the [Infisical Quick Start Guide](https://infisical.com/docs/cli/usage) for more details.
--   **To join an existing project:**
-    1.  Check your email for an invitation.
-    2.  Accept the invitation and ensure you can see the project in your dashboard.
-
-**3. Authenticate and Link Your Local Repository:**
-
-Run these commands in your terminal from the root of the `pdd` repository:
+Add your LLM API keys to a `.env` file in the project root:
 
 ```bash
-# Log in to your Infisical account
-infisical login
+# Required: At least one LLM provider
+OPENAI_API_KEY=sk-your-key-here
+# OR
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+# OR
+GOOGLE_API_KEY=your-google-api-key
 
-# Link your local repo to the Infisical project
-infisical init
+# Optional: For Vertex AI (Gemini via GCP)
+VERTEX_CREDENTIALS=/path/to/service-account.json
+VERTEX_PROJECT=your-gcp-project-id
+VERTEX_LOCATION=us-central1
 ```
 
-**Important Notes on Secrets Management:**
-- Using Infisical is the recommended way to manage secrets, as it avoids storing keys in plaintext files like `.env`.
-- If you use a local `.env` file for non-secret values (e.g., local file paths), ensure that the keys do not overlap with any secret names in your Infisical project. In case of a name conflict, Infisical's values will take precedence.
+**To use Vertex AI (optional):**
 
-Any command that requires API keys (like `make test`) should be run using the `infisical run` wrapper. This command injects the secrets from your Infisical project into the command's environment, making them securely available.
+1. Go to [GCP Console > IAM > Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts)
+2. Create a service account with the "Vertex AI User" role
+3. Create and download a JSON key file
+4. Save it securely (e.g., `~/.gcp/pdd-service-account.json`)
+5. Set `VERTEX_CREDENTIALS` to the file path in your `.env`
 
-If your local `.env` file contains keys that are also present in your Infisical project, the values from Infisical will be used. Keys that exist only in your local `.env` file will also be loaded.
-
-- **Example:**
-  ```bash
-  infisical run -- make test
-  ```
+See `.env.example` for a complete list of supported environment variables.
 
 ### Final Project Configuration
 
@@ -284,7 +254,7 @@ If you're contributing to the PDD project, follow these additional setup steps t
 **Create and activate the pdd conda environment:**
 ```bash
 # Create a new conda environment named 'pdd' with Python 3.11+
-conda create -n pdd python=3.11
+conda create -n pdd python=3.12
 conda activate pdd
 ```
 

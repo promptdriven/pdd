@@ -6,6 +6,7 @@ from pdd.pytest_output import (
     run_pytest_and_capture_output,
     save_output_to_json,
     TestResultCollector,
+    extract_failing_files_from_output,
 )
 import pdd.pytest_output
 import sys
@@ -323,4 +324,165 @@ def test_run_pytest_and_capture_output_nonzero_returncode_never_looks_passing(tm
     results = result.get("test_results", [{}])[0]
     assert results.get("return_code") == 1
     assert (results.get("failures", 0) + results.get("errors", 0)) > 0
-    
+
+
+# ============================================================================
+# Regression Tests - PDD Project Structure (Cross-Directory Imports)
+# ============================================================================
+
+def test_run_pytest_with_pdd_project_structure_and_src_imports(tmp_path) -> None:
+    """
+    Regression test: PDD projects with src/ imports should work correctly.
+
+    This tests the fix for the bug where pytest would fail with:
+        ModuleNotFoundError: No module named 'mymodule'
+
+    when running from a different directory than the project root.
+    The fix detects .pddrc files and sets proper cwd/PYTHONPATH.
+    """
+    # Create a PDD project structure
+    project_root = tmp_path / "my_pdd_project"
+    project_root.mkdir()
+
+    # Create .pddrc marker file (this triggers the fix)
+    pddrc = project_root / ".pddrc"
+    pddrc.write_text("version: '1.0'\n", encoding="utf-8")
+
+    # Create src/ directory with a module
+    src_dir = project_root / "src"
+    src_dir.mkdir()
+
+    module_file = src_dir / "mymodule.py"
+    module_file.write_text(
+        "def add(a: int, b: int) -> int:\n"
+        "    return a + b\n",
+        encoding="utf-8"
+    )
+
+    # Create tests/ directory with a test that imports from src/
+    tests_dir = project_root / "tests"
+    tests_dir.mkdir()
+
+    test_file = tests_dir / "test_mymodule.py"
+    test_file.write_text(
+        "from mymodule import add\n\n"
+        "def test_add():\n"
+        "    assert add(2, 3) == 5\n",
+        encoding="utf-8"
+    )
+
+    # Run pytest on the test file (this would fail before the fix)
+    result = run_pytest_and_capture_output(str(test_file))
+
+    # Verify the test passed (no import error)
+    results = result.get("test_results", [{}])[0]
+    assert results.get("return_code") == 0, (
+        f"Expected return_code=0 but got {results.get('return_code')}. "
+        f"stdout: {results.get('standard_output', '')[:500]}"
+    )
+    assert results.get("passed") == 1
+    assert results.get("failures") == 0
+    assert results.get("errors") == 0
+
+
+def test_run_pytest_without_pddrc_uses_original_behavior(tmp_path) -> None:
+    """
+    Regression test: projects without .pddrc should use original behavior.
+
+    This ensures the fix is conservative and doesn't change behavior for
+    non-PDD projects.
+    """
+    # Create a simple test file without .pddrc in its directory hierarchy
+    test_file = tmp_path / "test_simple.py"
+    test_file.write_text(
+        "def test_pass():\n"
+        "    assert True\n",
+        encoding="utf-8"
+    )
+
+    # Run pytest - should work with original behavior
+    result = run_pytest_and_capture_output(str(test_file))
+
+    results = result.get("test_results", [{}])[0]
+    assert results.get("return_code") == 0
+    assert results.get("passed") == 1
+
+
+# --- Tests for extract_failing_files_from_output (Bug #156) ---
+
+def test_extract_failing_files_single_failure():
+    """Test extraction of a single failing file."""
+    output = "FAILED tests/test_foo.py::test_bar - AssertionError"
+    result = extract_failing_files_from_output(output)
+    assert result == ["tests/test_foo.py"]
+
+
+def test_extract_failing_files_multiple_files():
+    """Test extraction from multiple failing files."""
+    output = """
+    FAILED tests/test_foo.py::test_a - Error
+    FAILED tests/test_foo_0.py::test_b - Error
+    FAILED tests/test_bar.py::test_c - Error
+    """
+    result = extract_failing_files_from_output(output)
+    assert result == ["tests/test_foo.py", "tests/test_foo_0.py", "tests/test_bar.py"]
+
+
+def test_extract_failing_files_deduplicates():
+    """Test that multiple failures in the same file are deduplicated."""
+    output = """
+    FAILED tests/test_foo.py::test_a - Error
+    FAILED tests/test_foo.py::test_b - Error
+    FAILED tests/test_foo.py::test_c - Error
+    """
+    result = extract_failing_files_from_output(output)
+    assert result == ["tests/test_foo.py"]
+
+
+def test_extract_failing_files_verbose_format():
+    """Test extraction from verbose pytest output format."""
+    output = """
+    tests/test_foo.py::test_pass PASSED
+    tests/test_bar.py::test_fail FAILED
+    """
+    result = extract_failing_files_from_output(output)
+    assert result == ["tests/test_bar.py"]
+
+
+def test_extract_failing_files_no_failures():
+    """Test extraction with no failures returns empty list."""
+    output = """
+    tests/test_ok.py::test_a PASSED
+    tests/test_ok.py::test_b PASSED
+    2 passed in 0.5s
+    """
+    result = extract_failing_files_from_output(output)
+    assert result == []
+
+
+def test_extract_failing_files_with_ansi_codes():
+    """Test extraction handles ANSI color codes."""
+    output = "\x1b[31mFAILED tests/test_color.py::test_red - Error\x1b[0m"
+    result = extract_failing_files_from_output(output)
+    assert result == ["tests/test_color.py"]
+
+
+def test_extract_failing_files_absolute_paths():
+    """Test extraction with absolute paths."""
+    output = "FAILED /Users/dev/project/tests/test_abs.py::test_func - Error"
+    result = extract_failing_files_from_output(output)
+    assert result == ["/Users/dev/project/tests/test_abs.py"]
+
+
+def test_extract_failing_files_mixed_formats():
+    """Test extraction with mixed output formats."""
+    output = """
+    tests/test_a.py::test_1 PASSED
+    FAILED tests/test_b.py::test_2 - AssertionError
+    tests/test_c.py::test_3 FAILED
+    FAILED tests/test_d.py::test_4 - ValueError
+    """
+    result = extract_failing_files_from_output(output)
+    # Pattern 1 (FAILED prefix) matches first, then pattern 2 (FAILED suffix)
+    assert result == ["tests/test_b.py", "tests/test_d.py", "tests/test_c.py"]
+

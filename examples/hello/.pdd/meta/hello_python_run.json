@@ -1,7 +1,11 @@
 {
-  "timestamp": "2025-12-08T07:21:25.660790+00:00",
+  "timestamp": "2025-12-27T06:20:47.161210+00:00",
   "exit_code": 0,
   "tests_passed": 3,
   "tests_failed": 0,
-  "coverage": 33.0
+  "coverage": 100.0,
+  "test_hash": "f1d1487a1384af1c7eceaa1eca0d9ed4251e832ce2bf7d8b41be41fbccb5c57e",
+  "test_files": {
+    "test_hello.py": "f1d1487a1384af1c7eceaa1eca0d9ed4251e832ce2bf7d8b41be41fbccb5c57e"
+  }
 }

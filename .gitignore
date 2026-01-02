@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.vsix
+.tmp/
+.agentic_prompt*
 
 .vscode/settings.json
 

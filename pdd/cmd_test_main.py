@@ -21,7 +21,7 @@ def cmd_test_main(
     output: str | None,
     language: str | None,
     coverage_report: str | None,
-    existing_tests: str | None,
+    existing_tests: list[str] | None,
     target_coverage: float | None,
     merge: bool | None,
     strength: float | None = None,
@@ -40,7 +40,7 @@ def cmd_test_main(
         output (str | None): Path to save the generated test file.
         language (str | None): Programming language.
         coverage_report (str | None): Path to the coverage report file.
-        existing_tests (str | None): Path to the existing unit test file.
+        existing_tests (list[str] | None): Paths to the existing unit test files.
         target_coverage (float | None): Desired code coverage percentage.
         merge (bool | None): Whether to merge new tests with existing tests.
 
@@ -76,7 +76,7 @@ def cmd_test_main(
         if coverage_report:
             input_file_paths["coverage_report"] = coverage_report
         if existing_tests:
-            input_file_paths["existing_tests"] = existing_tests
+            input_file_paths["existing_tests"] = existing_tests[0]
 
         command_options = {
             "output": output,
@@ -94,6 +94,15 @@ def cmd_test_main(
             context_override=ctx.obj.get('context'),
             confirm_callback=ctx.obj.get('confirm_callback')
         )
+
+        # Read multiple existing test files and concatenate their content
+        if existing_tests:
+            existing_tests_content = ""
+            for test_file in existing_tests:
+                with open(test_file, 'r') as f:
+                    existing_tests_content += f.read() + "\n"
+            input_strings["existing_tests"] = existing_tests_content
+
         # Use centralized config resolution with proper priority:
         # CLI > pddrc > defaults
         effective_config = resolve_effective_config(
@@ -119,20 +128,11 @@ def cmd_test_main(
         print(f"[bold blue]Language detected:[/bold blue] {language}")
 
     # Determine where the generated tests will be written so we can share it with the LLM
+    # Always use resolved_output since construct_paths handles numbering for test/bug commands
     resolved_output = output_file_paths["output"]
-    if output is None:
-        output_file = resolved_output
-    else:
-        try:
-            is_dir_hint = output.endswith('/')
-        except Exception:
-            is_dir_hint = False
-        if is_dir_hint or (Path(output).exists() and Path(output).is_dir()):
-            output_file = resolved_output
-        else:
-            output_file = output
+    output_file = resolved_output
     if merge and existing_tests:
-        output_file = existing_tests
+        output_file = existing_tests[0]
 
     if not output_file:
         print("[bold red]Error: Output file path could not be determined.[/bold red]")
@@ -193,6 +193,17 @@ def cmd_test_main(
             # Return error result instead of ctx.exit(1) to allow orchestrator to handle gracefully
             return "", 0.0, f"Error: {exception}"
 
+    # Handle output - always use resolved file path since construct_paths handles numbering
+    resolved_output = output_file_paths["output"]
+    output_file = resolved_output
+    if merge and existing_tests:
+        output_file = existing_tests[0] if existing_tests else None
+
+    if not output_file:
+        print("[bold red]Error: Output file path could not be determined.[/bold red]")
+        ctx.exit(1)
+        return "", 0.0, ""
+    
     # Check if unit_test content is empty
     if not unit_test or not unit_test.strip():
         print(f"[bold red]Error: Generated unit test content is empty or whitespace-only.[/bold red]")

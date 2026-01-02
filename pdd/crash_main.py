@@ -110,7 +110,7 @@ def crash_main(
         if loop:
             success, final_program, final_code, attempts, cost, model = fix_code_loop(
                 code_file, prompt_content, program_file, strength, temperature,
-                max_attempts or 3, budget or 5.0, error_file, verbose, time_param,
+                max_attempts if max_attempts is not None else 3, budget or 5.0, error_file, verbose, time_param,
                 prompt_file=prompt_file, agentic_fallback=agentic_fallback
             )
             # Always set final_code/final_program to something non-empty

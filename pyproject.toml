@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.87"
+version = "0.0.95"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -39,12 +39,11 @@ dependencies = [
     "firecrawl-py",
     "firebase_admin==6.6.0",
     "keyring==25.6.0",
-    "langchain_core==0.3.56",
     "nest_asyncio==1.6.0",
     "pandas==2.2.3",
     "psutil==5.9.0",
     "pydantic==2.11.2",
-    "litellm[caching]>=1.75.5",
+    "litellm[caching]>=1.80.0",
     "rich==14.0.0",
     "semver==3.0.2",
     "setuptools",
@@ -78,6 +77,7 @@ include = ["pdd*"]
     "prompts/*_LLM.prompt",
     "templates/**",
     "data/*",
+    "docs/prompting_guide.md",
     "mcp_config.json",
     "*.zsh",
     "*.fish",
@@ -99,7 +99,7 @@ dev = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.0.87"
+version = "0.0.95"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",

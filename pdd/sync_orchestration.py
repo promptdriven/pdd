@@ -13,7 +13,8 @@ import re
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
+import tempfile
 import sys
 
 import click
@@ -21,6 +22,8 @@ import logging
 
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
+MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
+MAX_CONSECUTIVE_CRASHES = 3  # Allow up to 3 consecutive crash attempts (Bug #157 fix)
 
 # --- Real PDD Component Imports ---
 from .sync_tui import SyncApp
@@ -34,6 +37,8 @@ from .sync_determine_operation import (
     SyncLock,
     read_run_report,
     calculate_sha256,
+    calculate_current_hashes,
+    _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -45,13 +50,113 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
+from .pytest_output import extract_failing_files_from_output
 from . import DEFAULT_STRENGTH
+
+
+# --- Helper Functions ---
+# Note: _safe_basename is imported from sync_determine_operation
+
+
+# --- Atomic State Update (Issue #159 Fix) ---
+
+@dataclass
+class PendingStateUpdate:
+    """Holds pending state updates for atomic commit."""
+    run_report: Optional[Dict[str, Any]] = None
+    fingerprint: Optional[Dict[str, Any]] = None
+    run_report_path: Optional[Path] = None
+    fingerprint_path: Optional[Path] = None
+
+
+class AtomicStateUpdate:
+    """
+    Context manager for atomic state updates.
+
+    Ensures run_report and fingerprint are both written or neither is written.
+    This fixes Issue #159 where non-atomic writes caused state desynchronization.
+
+    Usage:
+        with AtomicStateUpdate(basename, language) as state:
+            state.set_run_report(report_dict, report_path)
+            state.set_fingerprint(fingerprint_dict, fp_path)
+        # On successful exit, both files are written atomically
+        # On exception, neither file is written (rollback)
+    """
+
+    def __init__(self, basename: str, language: str):
+        self.basename = basename
+        self.language = language
+        self.pending = PendingStateUpdate()
+        self._temp_files: List[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self._commit()
+        else:
+            self._rollback()
+        return False  # Don't suppress exceptions
+
+    def set_run_report(self, report: Dict[str, Any], path: Path):
+        """Buffer a run report for atomic write."""
+        self.pending.run_report = report
+        self.pending.run_report_path = path
+
+    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
+        """Buffer a fingerprint for atomic write."""
+        self.pending.fingerprint = fingerprint
+        self.pending.fingerprint_path = path
+
+    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
+        """Write data to file atomically using temp file + rename pattern."""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write to temp file in same directory (required for atomic rename)
+        fd, temp_path = tempfile.mkstemp(
+            dir=target_path.parent,
+            prefix=f".{target_path.stem}_",
+            suffix=".tmp"
+        )
+        self._temp_files.append(temp_path)
+
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(data, f, indent=2, default=str)
+
+            # Atomic rename - guaranteed atomic on POSIX systems
+            os.replace(temp_path, target_path)
+            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
+        except Exception:
+            # Leave temp file for rollback to clean up
+            raise
+
+    def _commit(self):
+        """Commit all pending state updates atomically."""
+        # Write fingerprint first (checkpoint), then run_report
+        if self.pending.fingerprint and self.pending.fingerprint_path:
+            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
+        if self.pending.run_report and self.pending.run_report_path:
+            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
+
+    def _rollback(self):
+        """Clean up any temp files without committing changes."""
+        for temp_path in self._temp_files:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except OSError:
+                pass  # Best effort cleanup
+        self._temp_files.clear()
+
 
 # --- Mock Helper Functions ---
 
 def load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]:
     """Load sync log entries for a basename and language."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     if not log_file.exists():
         return []
     try:
@@ -93,7 +198,7 @@ def update_sync_log_entry(entry: Dict[str, Any], result: Dict[str, Any], duratio
 
 def append_sync_log(basename: str, language: str, entry: Dict[str, Any]):
     """Append completed log entry to the sync log file."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     META_DIR.mkdir(parents=True, exist_ok=True)
     with open(log_file, 'a') as f:
         f.write(json.dumps(entry) + '\n')
@@ -107,20 +212,44 @@ def log_sync_event(basename: str, language: str, event: str, details: Dict[str, 
     }
     append_sync_log(basename, language, entry)
 
-def save_run_report(report: Dict[str, Any], basename: str, language: str):
-    """Save a run report to the metadata directory."""
-    report_file = META_DIR / f"{basename}_{language}_run.json"
-    META_DIR.mkdir(parents=True, exist_ok=True)
-    with open(report_file, 'w') as f:
-        json.dump(report, f, indent=2, default=str)
+def save_run_report(report: Dict[str, Any], basename: str, language: str,
+                    atomic_state: Optional['AtomicStateUpdate'] = None):
+    """Save a run report to the metadata directory.
 
-def _save_operation_fingerprint(basename: str, language: str, operation: str, 
-                               paths: Dict[str, Path], cost: float, model: str):
-    """Save fingerprint state after successful operation."""
+    Args:
+        report: The run report dictionary to save.
+        basename: The module basename.
+        language: The programming language.
+        atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
+    """
+    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
+    if atomic_state:
+        # Buffer for atomic write
+        atomic_state.set_run_report(report, report_file)
+    else:
+        # Legacy direct write
+        META_DIR.mkdir(parents=True, exist_ok=True)
+        with open(report_file, 'w') as f:
+            json.dump(report, f, indent=2, default=str)
+
+def _save_operation_fingerprint(basename: str, language: str, operation: str,
+                               paths: Dict[str, Path], cost: float, model: str,
+                               atomic_state: Optional['AtomicStateUpdate'] = None):
+    """Save fingerprint state after successful operation.
+
+    Args:
+        basename: The module basename.
+        language: The programming language.
+        operation: The operation that was performed.
+        paths: Dictionary of PDD file paths.
+        cost: The cost of the operation.
+        model: The model used.
+        atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
+    """
     from datetime import datetime, timezone
     from .sync_determine_operation import calculate_current_hashes, Fingerprint
     from . import __version__
-    
+
     current_hashes = calculate_current_hashes(paths)
     fingerprint = Fingerprint(
         pdd_version=__version__,
@@ -129,13 +258,19 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         prompt_hash=current_hashes.get('prompt_hash'),
         code_hash=current_hashes.get('code_hash'),
         example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash')
+        test_hash=current_hashes.get('test_hash'),
+        test_files=current_hashes.get('test_files'),  # Bug #156
     )
-    
-    META_DIR.mkdir(parents=True, exist_ok=True)
-    fingerprint_file = META_DIR / f"{basename}_{language}.json"
-    with open(fingerprint_file, 'w') as f:
-        json.dump(asdict(fingerprint), f, indent=2, default=str)
+
+    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language}.json"
+    if atomic_state:
+        # Buffer for atomic write
+        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
+    else:
+        # Legacy direct write
+        META_DIR.mkdir(parents=True, exist_ok=True)
+        with open(fingerprint_file, 'w') as f:
+            json.dump(asdict(fingerprint), f, indent=2, default=str)
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
@@ -353,6 +488,94 @@ def _detect_example_errors(output: str) -> tuple[bool, str]:
     return False, ''
 
 
+def _try_auto_fix_import_error(
+    error_output: str,
+    code_file: Path,
+    example_file: Path,
+) -> tuple[bool, str]:
+    """
+    Try to automatically fix common import errors before calling expensive agentic fix.
+
+    Returns:
+        (fixed, message): Whether a fix was attempted and what was done.
+    """
+    import re
+
+    # Check for ModuleNotFoundError or ImportError
+    module_not_found = re.search(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]", error_output)
+    import_error = re.search(r"ImportError: cannot import name ['\"]([^'\"]+)['\"]", error_output)
+
+    if not module_not_found and not import_error:
+        return False, "No import error detected"
+
+    if module_not_found:
+        missing_module = module_not_found.group(1)
+        # Split by . to get the top-level package
+        top_level_package = missing_module.split('.')[0]
+
+        # Check if this is the module we're trying to import (local module)
+        code_module_name = code_file.stem  # e.g., "data_validator" from "data_validator.py"
+
+        if top_level_package == code_module_name:
+            # It's trying to import our own generated code - fix the example's sys.path
+            # Read the example and fix the path manipulation
+            try:
+                example_content = example_file.read_text(encoding='utf-8')
+                code_dir = str(code_file.parent.resolve())
+
+                # Look for existing sys.path manipulation
+                if 'sys.path' in example_content:
+                    # Try to fix the existing path manipulation
+                    # Common pattern: module_path = os.path.abspath(os.path.join(...))
+                    # Replace with correct path
+                    fixed_content = re.sub(
+                        r"module_path\s*=\s*os\.path\.abspath\([^)]+\)",
+                        f"module_path = '{code_dir}'",
+                        example_content
+                    )
+                    if fixed_content != example_content:
+                        example_file.write_text(fixed_content, encoding='utf-8')
+                        return True, f"Fixed sys.path to point to {code_dir}"
+
+                # If no existing sys.path, add one at the start after imports
+                lines = example_content.split('\n')
+                insert_pos = 0
+                for i, line in enumerate(lines):
+                    if line.startswith('import ') or line.startswith('from '):
+                        if 'sys' in line or 'os' in line:
+                            insert_pos = i + 1
+                            continue
+                    if line.strip() and not line.startswith('#') and not line.startswith('import') and not line.startswith('from'):
+                        insert_pos = i
+                        break
+
+                path_fix = f"\n# Auto-added by pdd to fix import\nimport sys\nsys.path.insert(0, '{code_dir}')\n"
+                lines.insert(insert_pos, path_fix)
+                example_file.write_text('\n'.join(lines), encoding='utf-8')
+                return True, f"Added sys.path.insert(0, '{code_dir}') to example"
+
+            except Exception as e:
+                return False, f"Failed to fix import path: {e}"
+
+        else:
+            # It's an external package - try pip install
+            try:
+                result = subprocess.run(
+                    [sys.executable, '-m', 'pip', 'install', top_level_package],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                if result.returncode == 0:
+                    return True, f"Installed missing package: {top_level_package}"
+                else:
+                    return False, f"Failed to install {top_level_package}: {result.stderr}"
+            except Exception as e:
+                return False, f"Failed to run pip install: {e}"
+
+    return False, "Import error detected but no auto-fix available"
+
+
 def _run_example_with_error_detection(
     cmd_parts: list[str],
     env: dict,
@@ -444,18 +667,34 @@ def _execute_tests_and_create_run_report(
     target_coverage: float = 90.0,
     *,
     code_file: Optional[Path] = None,
+    atomic_state: Optional['AtomicStateUpdate'] = None,
+    test_files: Optional[List[Path]] = None,  # Bug #156: Support multiple test files
 ) -> RunReport:
     """Execute tests and create a RunReport with actual results.
 
     Now supports multiple languages by using get_test_command_for_file()
     to determine the appropriate test runner.
+
+    Args:
+        test_file: Primary test file (for backward compat)
+        test_files: Optional list of all test files to run (Bug #156)
     """
     from .get_test_command import get_test_command_for_file
 
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    # Calculate test file hash for staleness detection
+    # Bug #156: Use test_files if provided, otherwise just the single test_file
+    all_test_files = test_files if test_files else [test_file]
+
+    # Calculate test file hash for staleness detection (primary file for backward compat)
     test_hash = calculate_sha256(test_file) if test_file.exists() else None
+
+    # Bug #156: Calculate hashes for ALL test files
+    test_file_hashes = {
+        f.name: calculate_sha256(f)
+        for f in all_test_files
+        if f.exists()
+    } if all_test_files else None
 
     # Use clean env without TUI-specific vars
     clean_env = os.environ.copy()
@@ -479,14 +718,19 @@ def _execute_tests_and_create_run_report(
             if not cov_target:
                 cov_target = basename or module_name
 
-            result = subprocess.run([
+            # Bug #156: Run pytest on ALL test files
+            pytest_args = [
                 python_executable, '-m', 'pytest',
-                str(test_file),
+            ] + [str(f) for f in all_test_files] + [
                 '-v',
                 '--tb=short',
                 f'--cov={cov_target}',
                 '--cov-report=term-missing'
-            ], capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True)
+            ]
+            result = subprocess.run(
+                pytest_args,
+                capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
+            )
 
             exit_code = result.returncode
             stdout = result.stdout + (result.stderr or '')
@@ -504,9 +748,10 @@ def _execute_tests_and_create_run_report(
                     tests_passed=0,
                     tests_failed=0,
                     coverage=0.0,
-                    test_hash=test_hash
+                    test_hash=test_hash,
+                    test_files=test_file_hashes,  # Bug #156
                 )
-                save_run_report(asdict(report), basename, language)
+                save_run_report(asdict(report), basename, language, atomic_state)
                 return report
 
             # Run the test command
@@ -534,7 +779,8 @@ def _execute_tests_and_create_run_report(
             tests_passed=tests_passed,
             tests_failed=tests_failed,
             coverage=coverage,
-            test_hash=test_hash
+            test_hash=test_hash,
+            test_files=test_file_hashes,  # Bug #156
         )
 
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError, Exception) as e:
@@ -544,10 +790,11 @@ def _execute_tests_and_create_run_report(
             tests_passed=0,
             tests_failed=1,
             coverage=0.0,
-            test_hash=test_hash
+            test_hash=test_hash,
+            test_files=test_file_hashes,  # Bug #156
         )
 
-    save_run_report(asdict(report), basename, language)
+    save_run_report(asdict(report), basename, language, atomic_state)
     return report
 
 def _create_mock_context(**kwargs) -> click.Context:
@@ -559,7 +806,7 @@ def _create_mock_context(**kwargs) -> click.Context:
 
 def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
     """Displays the sync log for a given basename and language."""
-    log_file = META_DIR / f"{basename}_{language}_sync.log"
+    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
     if not log_file.exists():
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
@@ -662,6 +909,14 @@ def sync_orchestration(
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
     """
+    # Handle None values from CLI (Issue #194) - defense in depth
+    if target_coverage is None:
+        target_coverage = 90.0
+    if budget is None:
+        budget = 10.0
+    if max_attempts is None:
+        max_attempts = 3
+
     # Import get_extension at function scope
     from .sync_determine_operation import get_extension
     
@@ -714,6 +969,9 @@ def sync_orchestration(
     # Mutable container for the app reference (set after app creation)
     # This allows the worker to access app.request_confirmation()
     app_ref: List[Optional['SyncApp']] = [None]
+
+    # Progress callback ref for TUI ProgressBar updates during auto-deps
+    progress_callback_ref: List[Optional[Callable[[int, int], None]]] = [None]
 
     # Track if user has already confirmed overwrite (to avoid asking multiple times)
     user_confirmed_overwrite: List[bool] = [False]
@@ -786,27 +1044,29 @@ def sync_orchestration(
                             operation = 'generate'
                             decision.operation = 'generate' # Update decision too
 
+                    # Bug #4 fix: Detect crash-verify cycle pattern
+                    # The pattern [crash, verify, crash, verify] or [verify, crash, verify, crash]
+                    # represents 2 iterations of the alternating cycle, so break immediately
                     if len(operation_history) >= 4:
                         recent_ops = operation_history[-4:]
                         if (recent_ops == ['crash', 'verify', 'crash', 'verify'] or
                             recent_ops == ['verify', 'crash', 'verify', 'crash']):
-                            cycle_count = 0
-                            # Simplified counting
-                            if operation_history[-2] == operation and operation_history[-4] == operation:
-                                 cycle_count = 2 # Just detected it
-                            
-                            if cycle_count >= MAX_CYCLE_REPEATS:
-                                errors.append(f"Detected crash-verify cycle repeated {cycle_count} times. Breaking cycle.")
-                                break
+                            # Pattern detected - this represents MAX_CYCLE_REPEATS iterations
+                            errors.append(f"Detected crash-verify cycle repeated {MAX_CYCLE_REPEATS} times. Breaking cycle.")
+                            log_sync_event(basename, language, "cycle_detected", {"cycle_type": "crash-verify", "count": MAX_CYCLE_REPEATS})
+                            break
 
+                    # Bug #4 fix: Detect test-fix cycle pattern
+                    # The pattern [test, fix, test, fix] or [fix, test, fix, test]
+                    # represents 2 iterations of the alternating cycle, so break immediately
                     if len(operation_history) >= 4:
                         recent_ops = operation_history[-4:]
                         if (recent_ops == ['test', 'fix', 'test', 'fix'] or
                             recent_ops == ['fix', 'test', 'fix', 'test']):
-                            cycle_count = 2
-                            if cycle_count >= MAX_CYCLE_REPEATS:
-                                errors.append(f"Detected test-fix cycle repeated {cycle_count} times. Breaking cycle.")
-                                break
+                            # Pattern detected - this represents MAX_CYCLE_REPEATS iterations
+                            errors.append(f"Detected test-fix cycle repeated {MAX_CYCLE_REPEATS} times. Breaking cycle.")
+                            log_sync_event(basename, language, "cycle_detected", {"cycle_type": "test-fix", "count": MAX_CYCLE_REPEATS})
+                            break
                                 
                     if operation == 'fix':
                         consecutive_fixes = 0
@@ -830,6 +1090,31 @@ def sync_orchestration(
                             errors.append(f"Detected {consecutive_tests} consecutive test operations. Breaking infinite test loop.")
                             break
 
+                    # Bug #157 fix: Prevent infinite crash retry loops
+                    if operation == 'crash':
+                        consecutive_crashes = 0
+                        for i in range(len(operation_history) - 1, -1, -1):
+                            if operation_history[i] == 'crash':
+                                consecutive_crashes += 1
+                            else:
+                                break
+                        if consecutive_crashes >= MAX_CONSECUTIVE_CRASHES:
+                            errors.append(f"Detected {consecutive_crashes} consecutive crash operations. Breaking infinite crash loop.")
+                            break
+
+                    if operation == 'test_extend':
+                        # Count test_extend attempts to prevent infinite loop
+                        extend_attempts = sum(1 for op in operation_history if op == 'test_extend')
+                        if extend_attempts >= MAX_TEST_EXTEND_ATTEMPTS:
+                            # Accept current coverage after max attempts
+                            log_sync_event(basename, language, "test_extend_limit", {
+                                "attempts": extend_attempts,
+                                "max_attempts": MAX_TEST_EXTEND_ATTEMPTS,
+                                "reason": "Accepting current coverage after max extend attempts"
+                            })
+                            success = True
+                            break
+
                     if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
                         current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
                         success = operation in ['all_synced', 'nothing']
@@ -848,27 +1133,40 @@ def sync_orchestration(
                         append_sync_log(basename, language, log_entry)
                         break
                     
-                    # Handle skips - per spec, save fingerprint to advance state machine
+                    # Handle skips - save fingerprint with 'skip:' prefix to distinguish from actual execution
+                    # Bug #11 fix: Use 'skip:' prefix so _is_workflow_complete() knows the op was skipped
                     if operation == 'verify' and (skip_verify or skip_tests):
                         skipped_operations.append('verify')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
-                        # Save fingerprint to advance state machine (as per spec)
-                        _save_operation_fingerprint(basename, language, 'verify', pdd_files, 0.0, 'skip_verify')
+                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
+                        _save_operation_fingerprint(basename, language, 'skip:verify', pdd_files, 0.0, 'skipped')
                         continue
                     if operation == 'test' and skip_tests:
                         skipped_operations.append('test')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
-                        # Save fingerprint to advance state machine (as per spec)
-                        _save_operation_fingerprint(basename, language, 'test', pdd_files, 0.0, 'skipped')
+                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
+                        _save_operation_fingerprint(basename, language, 'skip:test', pdd_files, 0.0, 'skipped')
                         continue
-                    if operation == 'crash' and skip_tests:
+                    if operation == 'crash' and (skip_tests or skip_verify):
                         skipped_operations.append('crash')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
-                        # Save fingerprint to advance state machine (as per spec)
-                        _save_operation_fingerprint(basename, language, 'crash', pdd_files, 0.0, 'skipped')
+                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
+                        _save_operation_fingerprint(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
+                        # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
+                        # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
+                        current_hashes = calculate_current_hashes(pdd_files)
+                        synthetic_report = RunReport(
+                            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            exit_code=0,  # Assume success since we're skipping validation
+                            tests_passed=0,
+                            tests_failed=0,
+                            coverage=0.0,
+                            test_hash=current_hashes.get('test_hash')
+                        )
+                        save_run_report(asdict(synthetic_report), basename, language)
                         continue
 
                     current_function_name_ref[0] = operation
@@ -885,121 +1183,387 @@ def sync_orchestration(
                     success = False
                     op_start_time = time.time()
 
-                    # --- Execute Operation ---
-                    try:
-                        if operation == 'auto-deps':
-                            temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
-                            original_content = pdd_files['prompt'].read_text(encoding='utf-8')
-                            result = auto_deps_main(
-                                ctx,
-                                prompt_file=str(pdd_files['prompt']),
-                                directory_path=examples_dir,
-                                auto_deps_csv_path="project_dependencies.csv",
-                                output=temp_output,
-                                force_scan=False
-                            )
-                            if Path(temp_output).exists():
-                                import shutil
-                                new_content = Path(temp_output).read_text(encoding='utf-8')
-                                if new_content != original_content:
-                                    shutil.move(temp_output, str(pdd_files['prompt']))
-                                else:
-                                    Path(temp_output).unlink()
-                                    result = (new_content, 0.0, 'no-changes')
-                        elif operation == 'generate':
-                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt']), output=str(pdd_files['code']), original_prompt_file_path=None, force_incremental_flag=False)
-                            # Clear stale run_report so crash/verify is required for newly generated code
-                            run_report_file = META_DIR / f"{basename}_{language}_run.json"
-                            run_report_file.unlink(missing_ok=True)
-                        elif operation == 'example':
-                            result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['example']))
-                        elif operation == 'crash':
-                            required_files = [pdd_files['code'], pdd_files['example']]
-                            missing_files = [f for f in required_files if not f.exists()]
-                            if missing_files:
-                                skipped_operations.append('crash')
-                                continue
-                            
-                            # Crash handling logic (simplified copy from original)
-                            current_run_report = read_run_report(basename, language)
-                            crash_log_content = ""
-                            
-                            # Check for crash condition (either run report says so, or we check manually)
-                            has_crash = False
-                            if current_run_report and current_run_report.exit_code != 0:
-                                has_crash = True
-                                crash_log_content = f"Test execution failed exit code: {current_run_report.exit_code}\n"
-                            else:
-                                # Manual check - run the example to see if it crashes
-                                env = os.environ.copy()
-                                src_dir = Path.cwd() / 'src'
-                                env['PYTHONPATH'] = f"{src_dir}:{env.get('PYTHONPATH', '')}"
-                                # Remove TUI-specific env vars that might contaminate subprocess
-                                for var in ['FORCE_COLOR', 'COLUMNS']:
-                                    env.pop(var, None)
-                                # Get language-appropriate run command from language_format.csv
-                                example_path = str(pdd_files['example'])
-                                run_cmd = get_run_command_for_file(example_path)
-                                if run_cmd:
-                                    # Use the language-specific interpreter (e.g., node for .js)
-                                    cmd_parts = run_cmd.split()
-                                else:
-                                    # Fallback to Python if no run command found
-                                    cmd_parts = ['python', example_path]
-                                # Use error-detection runner that handles server-style examples
-                                returncode, stdout, stderr = _run_example_with_error_detection(
-                                    cmd_parts,
-                                    env=env,
-                                    cwd=str(pdd_files['example'].parent),
-                                    timeout=60
+                    # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
+                    with AtomicStateUpdate(basename, language) as atomic_state:
+
+                        # --- Execute Operation ---
+                        try:
+                            if operation == 'auto-deps':
+                                temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
+                                original_content = pdd_files['prompt'].read_text(encoding='utf-8')
+                                result = auto_deps_main(
+                                    ctx,
+                                    prompt_file=str(pdd_files['prompt']),
+                                    directory_path=examples_dir,
+                                    auto_deps_csv_path="project_dependencies.csv",
+                                    output=temp_output,
+                                    force_scan=False,
+                                    progress_callback=progress_callback_ref[0]
                                 )
-
-                                class ExampleResult:
-                                    def __init__(self, rc, out, err):
-                                        self.returncode = rc
-                                        self.stdout = out
-                                        self.stderr = err
-
-                                ex_res = ExampleResult(returncode, stdout, stderr)
-                                if ex_res.returncode != 0:
+                                if Path(temp_output).exists():
+                                    import shutil
+                                    new_content = Path(temp_output).read_text(encoding='utf-8')
+                                    if new_content != original_content:
+                                        shutil.move(temp_output, str(pdd_files['prompt']))
+                                    else:
+                                        Path(temp_output).unlink()
+                                        result = (new_content, 0.0, 'no-changes')
+                            elif operation == 'generate':
+                                # Ensure code directory exists before generating
+                                pdd_files['code'].parent.mkdir(parents=True, exist_ok=True)
+                                # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
+                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
+                                # Clear stale run_report so crash/verify is required for newly generated code
+                                run_report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
+                                run_report_file.unlink(missing_ok=True)
+                            elif operation == 'example':
+                                # Ensure example directory exists before generating
+                                pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
+                                # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and example (config_base)
+                                result = context_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), code_file=str(pdd_files['code'].resolve()), output=str(pdd_files['example'].resolve()))
+                            elif operation == 'crash':
+                                required_files = [pdd_files['code'], pdd_files['example']]
+                                missing_files = [f for f in required_files if not f.exists()]
+                                if missing_files:
+                                    skipped_operations.append('crash')
+                                    continue
+                            
+                                # Crash handling logic (simplified copy from original)
+                                current_run_report = read_run_report(basename, language)
+                                crash_log_content = ""
+                            
+                                # Check for crash condition (either run report says so, or we check manually)
+                                has_crash = False
+                                if current_run_report and current_run_report.exit_code != 0:
                                     has_crash = True
-                                    crash_log_content = f"Example failed exit code: {ex_res.returncode}\nSTDOUT:\n{ex_res.stdout}\nSTDERR:\n{ex_res.stderr}\n"
-                                    if "SyntaxError" in ex_res.stderr:
-                                         crash_log_content = "SYNTAX ERROR DETECTED:\n" + crash_log_content
+                                    crash_log_content = f"Test execution failed exit code: {current_run_report.exit_code}\n"
                                 else:
-                                    # No crash - save run report with exit_code=0 so sync_determine_operation
-                                    # knows the example was tested and passed (prevents infinite loop)
-                                    # Include test_hash for staleness detection
-                                    test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
-                                    report = RunReport(
-                                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                                        exit_code=0,
-                                        tests_passed=1,
-                                        tests_failed=0,
-                                        coverage=0.0,
-                                        test_hash=test_hash
+                                    # Manual check - run the example to see if it crashes
+                                    env = os.environ.copy()
+                                    src_dir = Path.cwd() / 'src'
+                                    env['PYTHONPATH'] = f"{src_dir}:{env.get('PYTHONPATH', '')}"
+                                    # Remove TUI-specific env vars that might contaminate subprocess
+                                    for var in ['FORCE_COLOR', 'COLUMNS']:
+                                        env.pop(var, None)
+                                    # Get language-appropriate run command from language_format.csv
+                                    example_path = str(pdd_files['example'])
+                                    run_cmd = get_run_command_for_file(example_path)
+                                    if run_cmd:
+                                        # Use the language-specific interpreter (e.g., node for .js)
+                                        cmd_parts = run_cmd.split()
+                                    else:
+                                        # Fallback to Python if no run command found
+                                        cmd_parts = ['python', example_path]
+                                    # Use error-detection runner that handles server-style examples
+                                    returncode, stdout, stderr = _run_example_with_error_detection(
+                                        cmd_parts,
+                                        env=env,
+                                        cwd=str(pdd_files['example'].parent),
+                                        timeout=60
                                     )
-                                    save_run_report(asdict(report), basename, language)
-                                    skipped_operations.append('crash')
-                                    continue
-                                    
-                            if has_crash:
-                                Path("crash.log").write_text(crash_log_content)
-                                try:
-                                    result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log", output=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
-                                except Exception as e:
-                                    print(f"Crash fix failed: {e}")
-                                    skipped_operations.append('crash')
-                                    continue
 
-                        elif operation == 'verify':
-                            if not pdd_files['example'].exists():
-                                skipped_operations.append('verify')
-                                continue
-                            result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
-                        elif operation == 'test':
-                            pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
-                            result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
+                                    class ExampleResult:
+                                        def __init__(self, rc, out, err):
+                                            self.returncode = rc
+                                            self.stdout = out
+                                            self.stderr = err
+
+                                    ex_res = ExampleResult(returncode, stdout, stderr)
+                                    if ex_res.returncode != 0:
+                                        has_crash = True
+                                        crash_log_content = f"Example failed exit code: {ex_res.returncode}\nSTDOUT:\n{ex_res.stdout}\nSTDERR:\n{ex_res.stderr}\n"
+                                        if "SyntaxError" in ex_res.stderr:
+                                             crash_log_content = "SYNTAX ERROR DETECTED:\n" + crash_log_content
+                                    else:
+                                        # No crash - save run report with exit_code=0 so sync_determine_operation
+                                        # knows the example was tested and passed (prevents infinite loop)
+                                        # Include test_hash for staleness detection
+                                        test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                        report = RunReport(
+                                            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                            exit_code=0,
+                                            tests_passed=1,
+                                            tests_failed=0,
+                                            coverage=0.0,
+                                            test_hash=test_hash
+                                        )
+                                        save_run_report(asdict(report), basename, language)
+                                        skipped_operations.append('crash')
+                                        continue
+                                    
+                                if has_crash:
+                                    # Try auto-fix for common import errors before expensive agentic call
+                                    auto_fixed, auto_fix_msg = _try_auto_fix_import_error(
+                                        crash_log_content,
+                                        pdd_files['code'],
+                                        pdd_files['example']
+                                    )
+                                    if auto_fixed:
+                                        log_sync_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg})
+                                        # Retry running the example after auto-fix
+                                        retry_returncode, retry_stdout, retry_stderr = _run_example_with_error_detection(
+                                            cmd_parts,
+                                            env=env,
+                                            cwd=str(pdd_files['example'].parent),
+                                            timeout=60
+                                        )
+                                        if retry_returncode == 0:
+                                            # Auto-fix worked! Save run report and continue
+                                            log_sync_event(basename, language, "auto_fix_success", {"message": auto_fix_msg})
+                                            test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                            report = RunReport(
+                                                datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                                exit_code=0,
+                                                tests_passed=1,
+                                                tests_failed=0,
+                                                coverage=0.0,
+                                                test_hash=test_hash
+                                            )
+                                            save_run_report(asdict(report), basename, language)
+                                            result = (True, 0.0, 'auto-fix')
+                                            success = True
+                                            actual_cost = 0.0
+                                            model_name = 'auto-fix'
+                                            # Update crash_log_content for logging
+                                            crash_log_content = f"Auto-fixed: {auto_fix_msg}"
+                                            continue  # Skip crash_main, move to next operation
+                                        else:
+                                            # Auto-fix didn't fully work, update error log and proceed
+                                            crash_log_content = f"Auto-fix attempted ({auto_fix_msg}) but still failing:\nRETRY STDOUT:\n{retry_stdout}\nRETRY STDERR:\n{retry_stderr}\n"
+
+                                    Path("crash.log").write_text(crash_log_content)
+                                    try:
+                                        # For non-Python languages, set max_attempts=0 to skip iterative loop
+                                        # and go directly to agentic fallback
+                                        effective_max_attempts = 0 if language.lower() != 'python' else max_attempts
+                                        result = crash_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), error_file="crash.log", output=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
+                                    except Exception as e:
+                                        print(f"Crash fix failed: {e}")
+                                        skipped_operations.append('crash')
+                                        continue
+
+                            elif operation == 'verify':
+                                if not pdd_files['example'].exists():
+                                    skipped_operations.append('verify')
+                                    continue
+                                # For non-Python languages, set max_attempts=0 to skip iterative loop
+                                # and go directly to agentic fallback
+                                effective_max_attempts = 0 if language.lower() != 'python' else max_attempts
+                                result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
+                            elif operation == 'test':
+                                pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
+                                # Use merge=True when test file exists to preserve fixes and append new tests
+                                # instead of regenerating from scratch (which would overwrite fixes)
+                                test_file_exists = pdd_files['test'].exists()
+                                result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature)
+                                if pdd_files['test'].exists():
+                                    _execute_tests_and_create_run_report(
+                                        pdd_files['test'],
+                                        basename,
+                                        language,
+                                        target_coverage,
+                                        code_file=pdd_files.get("code"),
+                                        atomic_state=atomic_state,
+                                        test_files=pdd_files.get('test_files'),  # Bug #156
+                                    )
+                            elif operation == 'test_extend':
+                                # Extend existing tests to improve coverage
+                                # Uses existing_tests and merge=True to add more test cases
+                                pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
+                                if pdd_files['test'].exists():
+                                    existing_test_path = str(pdd_files['test'])
+                                    result = cmd_test_main(
+                                        ctx,
+                                        prompt_file=str(pdd_files['prompt']),
+                                        code_file=str(pdd_files['code']),
+                                        output=str(pdd_files['test']),
+                                        language=language,
+                                        coverage_report=None,
+                                        existing_tests=[existing_test_path],
+                                        target_coverage=target_coverage,
+                                        merge=True,
+                                        strength=strength,
+                                        temperature=temperature
+                                    )
+                                    _execute_tests_and_create_run_report(
+                                        pdd_files['test'],
+                                        basename,
+                                        language,
+                                        target_coverage,
+                                        code_file=pdd_files.get("code"),
+                                        atomic_state=atomic_state,
+                                        test_files=pdd_files.get('test_files'),  # Bug #156
+                                    )
+                                else:
+                                    # No existing test file, fall back to regular test generation
+                                    result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
+                                    if pdd_files['test'].exists():
+                                        _execute_tests_and_create_run_report(
+                                            pdd_files['test'],
+                                            basename,
+                                            language,
+                                            target_coverage,
+                                            code_file=pdd_files.get("code"),
+                                            atomic_state=atomic_state,
+                                            test_files=pdd_files.get('test_files'),  # Bug #156
+                                        )
+                            elif operation == 'fix':
+                                error_file_path = Path("fix_errors.log")
+                                # Capture errors using language-appropriate test command
+                                try:
+                                    from .get_test_command import get_test_command_for_file
+                                    test_cmd = get_test_command_for_file(str(pdd_files['test']), language)
+
+                                    # Use clean env without TUI-specific vars
+                                    clean_env = os.environ.copy()
+                                    for var in ['FORCE_COLOR', 'COLUMNS']:
+                                        clean_env.pop(var, None)
+
+                                    if test_cmd:
+                                        # Run language-appropriate test command
+                                        if language.lower() == 'python':
+                                            # Use pytest directly for Python
+                                            python_executable = detect_host_python_executable()
+                                            # Bug #156: Run pytest on ALL matching test files
+                                            test_files = pdd_files.get('test_files', [pdd_files['test']])
+                                            pytest_args = [python_executable, '-m', 'pytest'] + [str(f) for f in test_files] + ['-v', '--tb=short']
+                                            test_result = subprocess.run(
+                                                pytest_args,
+                                                capture_output=True, text=True, timeout=300,
+                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True,
+                                                cwd=str(pdd_files['test'].parent)
+                                            )
+                                        else:
+                                            # Use shell command for non-Python
+                                            test_result = subprocess.run(
+                                                test_cmd,
+                                                shell=True,
+                                                capture_output=True, text=True, timeout=300,
+                                                stdin=subprocess.DEVNULL, env=clean_env,
+                                                cwd=str(pdd_files['test'].parent),
+                                                start_new_session=True
+                                            )
+                                        error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
+                                    else:
+                                        # No test command available - trigger agentic fallback with context
+                                        error_content = f"No test command available for {language}. Please run tests manually and provide error output."
+                                except Exception as e:
+                                    error_content = f"Test execution error: {e}"
+                                error_file_path.write_text(error_content)
+
+                                # Bug #156 fix: Parse pytest output to find actual failing files
+                                # and pass the correct file to fix_main
+                                failing_files = extract_failing_files_from_output(error_content)
+                                unit_test_file_for_fix = str(pdd_files['test'])  # Default to tracked file
+
+                                if failing_files:
+                                    # Try to resolve the failing file paths
+                                    test_dir = pdd_files['test'].parent
+                                    tracked_file_name = pdd_files['test'].name
+
+                                    # Check if the tracked file is among the failures
+                                    tracked_in_failures = any(
+                                        Path(ff).name == tracked_file_name for ff in failing_files
+                                    )
+
+                                    if not tracked_in_failures:
+                                        # Failures are in a different file - use the first failing file
+                                        for ff in failing_files:
+                                            # Try to resolve the path relative to test directory
+                                            ff_path = Path(ff)
+                                            if ff_path.is_absolute() and ff_path.exists():
+                                                unit_test_file_for_fix = str(ff_path)
+                                                break
+                                            else:
+                                                # Try to find it in the test directory
+                                                candidate = test_dir / ff_path.name
+                                                if candidate.exists():
+                                                    unit_test_file_for_fix = str(candidate)
+                                                    break
+                                                # Also try the path as-is relative to cwd
+                                                if ff_path.exists():
+                                                    unit_test_file_for_fix = str(ff_path.resolve())
+                                                    break
+
+                                # For non-Python languages, set max_attempts=0 to skip iterative loop
+                                # and go directly to agentic fallback
+                                effective_max_attempts = 0 if language.lower() != 'python' else max_attempts
+                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
+                            elif operation == 'update':
+                                result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
+                            else:
+                                errors.append(f"Unknown operation {operation}")
+                                result = {'success': False}
+
+                            # Result parsing
+                            if isinstance(result, dict):
+                                success = result.get('success', False)
+                                current_cost_ref[0] += result.get('cost', 0.0)
+                            elif isinstance(result, tuple) and len(result) >= 3:
+                                if operation == 'test': success = pdd_files['test'].exists()
+                                else: success = bool(result[0])
+                                cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
+                                current_cost_ref[0] += cost
+                            else:
+                                success = result is not None
+
+                        except Exception as e:
+                            errors.append(f"Exception during '{operation}': {e}")
+                            success = False
+                    
+                        # Log update
+                        duration = time.time() - op_start_time
+                        actual_cost = 0.0
+                        model_name = "unknown"
+                        if success:
+                            if isinstance(result, dict):
+                                 actual_cost = result.get('cost', 0.0)
+                                 model_name = result.get('model', 'unknown')
+                            elif isinstance(result, tuple) and len(result) >= 3:
+                                 actual_cost = result[-2] if len(result) >= 2 else 0.0
+                                 model_name = result[-1] if len(result) >= 1 else 'unknown'
+                            last_model_name = str(model_name)
+                            operations_completed.append(operation)
+                            _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
+
+                        update_sync_log_entry(log_entry, {'success': success, 'cost': actual_cost, 'model': model_name, 'error': errors[-1] if errors and not success else None}, duration)
+                        append_sync_log(basename, language, log_entry)
+
+                        # Post-operation checks (simplified)
+                        if success and operation == 'crash':
+                            # Re-run example to verify crash fix worked
+                            try:
+                                 # Use clean env without TUI-specific vars
+                                 clean_env = os.environ.copy()
+                                 for var in ['FORCE_COLOR', 'COLUMNS']:
+                                     clean_env.pop(var, None)
+                                 # Get language-appropriate run command
+                                 example_path = str(pdd_files['example'])
+                                 run_cmd = get_run_command_for_file(example_path)
+                                 if run_cmd:
+                                     cmd_parts = run_cmd.split()
+                                 else:
+                                     cmd_parts = ['python', example_path]
+                                 # Use error-detection runner that handles server-style examples
+                                 returncode, stdout, stderr = _run_example_with_error_detection(
+                                     cmd_parts,
+                                     env=clean_env,
+                                     cwd=str(pdd_files['example'].parent),
+                                     timeout=60
+                                 )
+                                 # Include test_hash for staleness detection
+                                 test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                 report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
+                                 save_run_report(asdict(report), basename, language)
+                            except Exception as e:
+                                 # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
+                                 error_msg = f"Post-crash verification failed: {e}"
+                                 errors.append(error_msg)
+                                 log_sync_event(basename, language, "post_crash_verification_failed", {"error": str(e)})
+                    
+                        if success and operation == 'fix':
+                            # Re-run tests to update run_report after successful fix
+                            # This prevents infinite loop by updating the state machine
                             if pdd_files['test'].exists():
                                 _execute_tests_and_create_run_report(
                                     pdd_files['test'],
@@ -1007,131 +1571,13 @@ def sync_orchestration(
                                     language,
                                     target_coverage,
                                     code_file=pdd_files.get("code"),
+                                    atomic_state=atomic_state,
+                                    test_files=pdd_files.get('test_files'),  # Bug #156
                                 )
-                        elif operation == 'fix':
-                            error_file_path = Path("fix_errors.log")
-                            # Capture errors using language-appropriate test command
-                            try:
-                                from .get_test_command import get_test_command_for_file
-                                test_cmd = get_test_command_for_file(str(pdd_files['test']), language)
-
-                                # Use clean env without TUI-specific vars
-                                clean_env = os.environ.copy()
-                                for var in ['FORCE_COLOR', 'COLUMNS']:
-                                    clean_env.pop(var, None)
-
-                                if test_cmd:
-                                    # Run language-appropriate test command
-                                    if language.lower() == 'python':
-                                        # Use pytest directly for Python
-                                        python_executable = detect_host_python_executable()
-                                        test_result = subprocess.run(
-                                            [python_executable, '-m', 'pytest', str(pdd_files['test']), '-v', '--tb=short'],
-                                            capture_output=True, text=True, timeout=300,
-                                            stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
-                                        )
-                                    else:
-                                        # Use shell command for non-Python
-                                        test_result = subprocess.run(
-                                            test_cmd,
-                                            shell=True,
-                                            capture_output=True, text=True, timeout=300,
-                                            stdin=subprocess.DEVNULL, env=clean_env,
-                                            cwd=str(pdd_files['test'].parent),
-                                            start_new_session=True
-                                        )
-                                    error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
-                                else:
-                                    # No test command available - trigger agentic fallback with context
-                                    error_content = f"No test command available for {language}. Please run tests manually and provide error output."
-                            except Exception as e:
-                                error_content = f"Test execution error: {e}"
-                            error_file_path.write_text(error_content)
-                            result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=str(pdd_files['test']), error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
-                        elif operation == 'update':
-                            result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
-                        else:
-                            errors.append(f"Unknown operation {operation}")
-                            result = {'success': False}
-
-                        # Result parsing
-                        if isinstance(result, dict):
-                            success = result.get('success', False)
-                            current_cost_ref[0] += result.get('cost', 0.0)
-                        elif isinstance(result, tuple) and len(result) >= 3:
-                            if operation == 'test': success = pdd_files['test'].exists()
-                            else: success = bool(result[0])
-                            cost = result[-2] if len(result) >= 2 and isinstance(result[-2], (int, float)) else 0.0
-                            current_cost_ref[0] += cost
-                        else:
-                            success = result is not None
-
-                    except Exception as e:
-                        errors.append(f"Exception during '{operation}': {e}")
-                        success = False
                     
-                    # Log update
-                    duration = time.time() - op_start_time
-                    actual_cost = 0.0
-                    model_name = "unknown"
-                    if success:
-                        if isinstance(result, dict):
-                             actual_cost = result.get('cost', 0.0)
-                             model_name = result.get('model', 'unknown')
-                        elif isinstance(result, tuple) and len(result) >= 3:
-                             actual_cost = result[-2] if len(result) >= 2 else 0.0
-                             model_name = result[-1] if len(result) >= 1 else 'unknown'
-                        last_model_name = str(model_name)
-                        operations_completed.append(operation)
-                        _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name))
-                    
-                    update_sync_log_entry(log_entry, {'success': success, 'cost': actual_cost, 'model': model_name, 'error': errors[-1] if errors and not success else None}, duration)
-                    append_sync_log(basename, language, log_entry)
-
-                    # Post-operation checks (simplified)
-                    if success and operation == 'crash':
-                        # Re-run example
-                        try:
-                             # Use clean env without TUI-specific vars
-                             clean_env = os.environ.copy()
-                             for var in ['FORCE_COLOR', 'COLUMNS']:
-                                 clean_env.pop(var, None)
-                             # Get language-appropriate run command
-                             example_path = str(pdd_files['example'])
-                             run_cmd = get_run_command_for_file(example_path)
-                             if run_cmd:
-                                 cmd_parts = run_cmd.split()
-                             else:
-                                 cmd_parts = ['python', example_path]
-                             # Use error-detection runner that handles server-style examples
-                             returncode, stdout, stderr = _run_example_with_error_detection(
-                                 cmd_parts,
-                                 env=clean_env,
-                                 cwd=str(pdd_files['example'].parent),
-                                 timeout=60
-                             )
-                             # Include test_hash for staleness detection
-                             test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
-                             report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
-                             save_run_report(asdict(report), basename, language)
-                        except:
-                             pass
-                    
-                    if success and operation == 'fix':
-                        # Re-run tests to update run_report after successful fix
-                        # This prevents infinite loop by updating the state machine
-                        if pdd_files['test'].exists():
-                            _execute_tests_and_create_run_report(
-                                pdd_files['test'],
-                                basename,
-                                language,
-                                target_coverage,
-                                code_file=pdd_files.get("code"),
-                            )
-                    
-                    if not success:
-                        errors.append(f"Operation '{operation}' failed.")
-                        break
+                        if not success:
+                            errors.append(f"Operation '{operation}' failed.")
+                            break
 
         except BaseException as e:
             errors.append(f"An unexpected error occurred in the orchestrator: {type(e).__name__}: {e}")
@@ -1150,53 +1596,68 @@ def sync_orchestration(
             'skipped_operations': skipped_operations,
             'total_cost': current_cost_ref[0],
             'total_time': time.time() - start_time,
-            'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items()},
+            'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items() if p != 'test_files'},
             'errors': errors,
             'error': "; ".join(errors) if errors else None,  # Add this line
             'model_name': last_model_name,
         }
 
-    # Instantiate and run Textual App
-    app = SyncApp(
-        basename=basename,
-        budget=budget,
-        worker_func=sync_worker_logic,
-        function_name_ref=current_function_name_ref,
-        cost_ref=current_cost_ref,
-        prompt_path_ref=prompt_path_ref,
-        code_path_ref=code_path_ref,
-        example_path_ref=example_path_ref,
-        tests_path_ref=tests_path_ref,
-        prompt_color_ref=prompt_box_color_ref,
-        code_color_ref=code_box_color_ref,
-        example_color_ref=example_box_color_ref,
-        tests_color_ref=tests_box_color_ref,
-        stop_event=stop_event
-    )
+    # Detect headless mode (no TTY, CI environment, or quiet mode)
+    headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
 
-    # Store app reference so worker can access request_confirmation
-    app_ref[0] = app
+    if headless:
+        # Set PDD_FORCE to also skip API key prompts in headless mode
+        os.environ['PDD_FORCE'] = '1'
+        # Run worker logic directly without TUI in headless mode
+        if not quiet:
+            print(f"Running sync in headless mode (CI/non-TTY environment)...")
+        result = sync_worker_logic()
+        # No TUI app, so no worker_exception to check
+        worker_exception = None
+    else:
+        # Instantiate and run Textual App
+        app = SyncApp(
+            basename=basename,
+            budget=budget,
+            worker_func=sync_worker_logic,
+            function_name_ref=current_function_name_ref,
+            cost_ref=current_cost_ref,
+            prompt_path_ref=prompt_path_ref,
+            code_path_ref=code_path_ref,
+            example_path_ref=example_path_ref,
+            tests_path_ref=tests_path_ref,
+            prompt_color_ref=prompt_box_color_ref,
+            code_color_ref=code_box_color_ref,
+            example_color_ref=example_box_color_ref,
+            tests_color_ref=tests_box_color_ref,
+            stop_event=stop_event,
+            progress_callback_ref=progress_callback_ref
+        )
 
-    result = app.run()
-    
-    # Show exit animation if not quiet
-    if not quiet:
+        # Store app reference so worker can access request_confirmation
+        app_ref[0] = app
+
+        result = app.run()
+
+        # Show exit animation if not quiet
         from .sync_tui import show_exit_animation
         show_exit_animation()
-    
-    # Check for worker exception that might have caused a crash
-    if app.worker_exception:
-        print(f"\n[Error] Worker thread crashed with exception: {app.worker_exception}", file=sys.stderr)
-        
+
+        worker_exception = app.worker_exception
+
+    # Check for worker exception that might have caused a crash (TUI mode only)
+    if not headless and worker_exception:
+        print(f"\n[Error] Worker thread crashed with exception: {worker_exception}", file=sys.stderr)
+
         if hasattr(app, 'captured_logs') and app.captured_logs:
              print("\n[Captured Logs (last 20 lines)]", file=sys.stderr)
              for line in app.captured_logs[-20:]: # Print last 20 lines
                  print(f"  {line}", file=sys.stderr)
-        
+
         import traceback
         # Use trace module to print the stored exception's traceback if available
-        if hasattr(app.worker_exception, '__traceback__'):
-            traceback.print_exception(type(app.worker_exception), app.worker_exception, app.worker_exception.__traceback__, file=sys.stderr)
+        if hasattr(worker_exception, '__traceback__'):
+            traceback.print_exception(type(worker_exception), worker_exception, worker_exception.__traceback__, file=sys.stderr)
 
     if result is None:
         return {

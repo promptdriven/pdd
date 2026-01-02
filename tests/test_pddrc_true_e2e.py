@@ -12,6 +12,18 @@ from pathlib import Path
 from click.testing import CliRunner
 
 
+@pytest.fixture(autouse=True)
+def set_pdd_path(monkeypatch):
+    """Set PDD_PATH to the pdd package directory for all tests in this module.
+
+    This is required because construct_paths uses PDD_PATH to find the language_format.csv
+    file for language detection.
+    """
+    import pdd
+    pdd_package_dir = Path(pdd.__file__).parent
+    monkeypatch.setenv("PDD_PATH", str(pdd_package_dir))
+
+
 class TestPddrcTrueE2E:
     """
     TRUE end-to-end tests - real pddrc files, real construct_paths.

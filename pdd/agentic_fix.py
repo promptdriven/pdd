@@ -130,10 +130,41 @@ _MULTI_FILE_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
+
+def _is_suspicious_path(path: str) -> bool:
+    """
+    Reject paths that look like LLM artifacts or template variables.
+
+    This defends against:
+    - Single/double character filenames (e.g., 'C', 'E', 'T' from agent misbehavior)
+    - Template variables like {path}, {code_abs} captured by regex
+    - Other LLM-generated garbage patterns
+
+    Returns True if the path should be rejected.
+    """
+    if not path:
+        return True
+    # Get the basename for validation
+    base_name = Path(path).name
+    # Reject single or double character filenames (too short to be legitimate)
+    if len(base_name) <= 2:
+        return True
+    # Reject template variable patterns like {path}, {code_abs}
+    if '{' in base_name or '}' in base_name:
+        return True
+    # Reject paths that are just dots like "..", "..."
+    if base_name.strip('.') == '':
+        return True
+    return False
+
+
 def _extract_files_from_output(*blobs: str) -> Dict[str, str]:
     """
     Parse stdout/stderr blobs and collect all emitted file blocks into {path: content}.
     Returns an empty dict if none found.
+
+    Note: Suspicious paths (single-char, template variables) are rejected to prevent
+    LLM artifacts from being written to disk.
     """
     out: Dict[str, str] = {}
     for blob in blobs:
@@ -143,6 +174,9 @@ def _extract_files_from_output(*blobs: str) -> Dict[str, str]:
             path = (m.group(1) or "").strip()
             body = m.group(2) or ""
             if path and body != "":
+                if _is_suspicious_path(path):
+                    _info(f"[yellow]Skipping suspicious path from LLM output: {path!r}[/yellow]")
+                    continue
                 out[path] = body
     return out
 
@@ -242,6 +276,17 @@ def _sanitized_env_common() -> dict:
     env["LINES"] = env.get("LINES", "40")
     return env
 
+def _sanitized_env_for_anthropic(use_cli_auth: bool = False) -> dict:
+    """
+    Like _sanitized_env_common, plus:
+    - optionally remove ANTHROPIC_API_KEY to force subscription auth via Claude CLI
+    """
+    env = _sanitized_env_common()
+    if use_cli_auth:
+        # Remove API key so Claude CLI uses subscription auth instead
+        env.pop("ANTHROPIC_API_KEY", None)
+    return env
+
 def _sanitized_env_for_openai() -> dict:
     """
     Like _sanitized_env_common, plus:
@@ -333,7 +378,7 @@ def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         prompt_file.unlink(missing_ok=True)
 
 def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    """Subprocess runner for Anthropic commands with common sanitized env."""
+    """Subprocess runner for Anthropic commands with subscription auth (removes API key)."""
     return subprocess.run(
         args,
         capture_output=True,
@@ -341,7 +386,7 @@ def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subproc
         check=False,
         timeout=timeout,
         cwd=str(cwd),
-        env=_sanitized_env_common(),
+        env=_sanitized_env_for_anthropic(use_cli_auth=True),
     )
 
 def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
@@ -538,10 +583,16 @@ def _normalize_target_path(
 ) -> Optional[Path]:
     """
     Resolve an emitted path to a safe file path we should write:
+    - reject suspicious paths (single-char, template variables)
     - make path absolute under project root
     - allow direct match, primary-file match (with/without _fixed), or basename search
     - create new files only if allow_new is True
     """
+    # Early rejection of suspicious paths (defense against LLM artifacts)
+    if _is_suspicious_path(emitted_path):
+        _info(f"[yellow]Skipping suspicious path: {emitted_path!r}[/yellow]")
+        return None
+
     p = Path(emitted_path)
     if not p.is_absolute():
         p = (project_root / emitted_path).resolve()
@@ -620,6 +671,35 @@ def _post_apply_verify_or_testcmd(
             return _run_testcmd(testcmd, cwd)
     return False
 
+def _snapshot_mtimes(root: Path) -> Dict[Path, float]:
+    """Record mtimes of all files in root."""
+    snapshot = {}
+    try:
+        for p in root.rglob("*"):
+            if ".git" in p.parts or "__pycache__" in p.parts:
+                continue
+            if p.is_file():
+                snapshot[p] = p.stat().st_mtime
+    except Exception:
+        pass
+    return snapshot
+
+def _detect_mtime_changes(root: Path, snapshot: Dict[Path, float]) -> List[str]:
+    """Return list of changed/new file paths."""
+    changes = []
+    try:
+        for p in root.rglob("*"):
+            if ".git" in p.parts or "__pycache__" in p.parts:
+                continue
+            if p.is_file():
+                if p not in snapshot:
+                    changes.append(str(p))
+                elif p.stat().st_mtime != snapshot[p]:
+                    changes.append(str(p))
+    except Exception:
+        pass
+    return changes
+
 def _try_harvest_then_verify(
     provider: str,
     code_path: Path,
@@ -661,6 +741,9 @@ def _try_harvest_then_verify(
     _info(f"[cyan]Executing {provider.capitalize()} with harvest-only instructions: {harvest_file.resolve()}[/cyan]")
     _print_head("Harvest-only instruction preview", harvest_instr)
 
+    # Snapshot mtimes before agent run
+    mtime_snapshot = _snapshot_mtimes(cwd)
+
     try:
         # Provider-specific variant runners with shorter time budgets
         if provider == "openai":
@@ -681,6 +764,10 @@ def _try_harvest_then_verify(
 
     _print_head(f"{provider.capitalize()} harvest stdout", res.stdout or "")
     _print_head(f"{provider.capitalize()} harvest stderr", res.stderr or "")
+
+    # Detect direct changes by agent
+    direct_changes = _detect_mtime_changes(cwd, mtime_snapshot)
+    changed_files.extend(direct_changes)
 
     allow_new = True
 
@@ -713,7 +800,7 @@ def _try_harvest_then_verify(
                 newest = code_path.read_text(encoding="utf-8")
                 _print_diff(code_snapshot, newest, code_path)
                 ok = _post_apply_verify_or_testcmd(
-                    provider, unit_test_file, cwd,
+                    provider, unit_test_file, working_dir,
                     verify_cmd=verify_cmd, verify_enabled=verify_enabled,
                     stdout=res.stdout or "", stderr=res.stderr or ""
                 )
@@ -722,6 +809,21 @@ def _try_harvest_then_verify(
                 except Exception:
                     pass
                 return ok
+        
+        # If no output blocks, but direct changes occurred, we should verify
+        if direct_changes:
+            _info("[cyan]No output markers found, but detected file changes. Verifying...[/cyan]")
+            ok = _post_apply_verify_or_testcmd(
+                provider, unit_test_file, cwd,
+                verify_cmd=verify_cmd, verify_enabled=verify_enabled,
+                stdout=res.stdout or "", stderr=res.stderr or ""
+            )
+            try:
+                harvest_file.unlink()
+            except Exception:
+                pass
+            return ok
+
         _info("[yellow]Harvest-only attempt did not include the required markers.[/yellow]")
         try:
             harvest_file.unlink()
@@ -752,6 +854,11 @@ def run_agentic_fix(
     code_file: str,
     unit_test_file: str,
     error_log_file: str,
+    verify_cmd: Optional[str] = None,
+    cwd: Optional[Path] = None,
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Main entrypoint for agentic fallback:
@@ -761,6 +868,14 @@ def run_agentic_fix(
     - Applies changes locally and verifies locally
     - Returns (success, message, est_cost, used_model, changed_files)
     """
+    global _IS_VERBOSE, _IS_QUIET
+    if verbose:
+        _IS_VERBOSE = True
+        _IS_QUIET = False
+    elif quiet:
+        _IS_QUIET = True
+        _IS_VERBOSE = False
+
     _always("[bold yellow]Standard fix failed. Initiating agentic fallback (AGENT-ONLY)...[/bold yellow]")
 
     instruction_file: Optional[Path] = None
@@ -769,8 +884,9 @@ def run_agentic_fix(
     changed_files: List[str] = []  # Track all files changed by agents
 
     try:
-        cwd = Path.cwd()
-        _info(f"[cyan]Project root (cwd): {cwd}[/cyan]")
+        # Use explicit cwd if provided, otherwise fall back to current directory
+        working_dir = Path(cwd) if cwd else Path.cwd()
+        _info(f"[cyan]Project root (cwd): {working_dir}[/cyan]")
 
         # Load provider table and filter to those with API keys present in the environment
         csv_path = find_llm_csv_path()
@@ -787,8 +903,14 @@ def run_agentic_fix(
             api_key_name = provider_df.iloc[0]["api_key"]
             if not api_key_name:
                 continue
-            if os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY")):
-                present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
+            # Check CLI availability first (subscription auth), then API key
+            has_cli_auth = provider == "anthropic" and shutil.which("claude")
+            has_api_key = os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY"))
+            if has_cli_auth or has_api_key:
+                if has_cli_auth:
+                    present_keys.append("claude-cli-auth")
+                else:
+                    present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
                 if provider not in seen:
                     available_agents.append(provider)
                     seen.add(provider)
@@ -801,9 +923,23 @@ def run_agentic_fix(
 
         # Read input artifacts that feed into the prompt
         prompt_content = Path(prompt_file).read_text(encoding="utf-8")
-        code_path = Path(code_file).resolve()
+
+        # Resolve relative paths against working_dir, not Path.cwd()
+        code_path_input = Path(code_file)
+        if not code_path_input.is_absolute():
+            code_path = (working_dir / code_path_input).resolve()
+        else:
+            code_path = code_path_input.resolve()
+
+        test_path_input = Path(unit_test_file)
+        if not test_path_input.is_absolute():
+            test_path = (working_dir / test_path_input).resolve()
+        else:
+            test_path = test_path_input.resolve()
+
         orig_code = code_path.read_text(encoding="utf-8")
-        test_content = Path(unit_test_file).read_text(encoding="utf-8")
+        orig_test = test_path.read_text(encoding="utf-8")
+        test_content = orig_test  # Alias for prompt template compatibility
 
         # Read error log if it exists, otherwise we'll populate it via preflight
         error_log_path = Path(error_log_file)
@@ -811,19 +947,35 @@ def run_agentic_fix(
 
         # --- Preflight: populate error_content if empty so the agent sees fresh failures ---
         # This makes run_agentic_fix self-sufficient even if the caller forgot to write the error log.
-        if not (error_content or "").strip():
+        # Also detect useless content patterns like empty XML tags (e.g., "<history></history>")
+        def _is_useless_error_content(content: str) -> bool:
+            """Check if error content is empty or useless (e.g., empty XML tags)."""
+            stripped = (content or "").strip()
+            if not stripped:
+                return True
+            # Detect empty XML-like tags with no actual error content
+            import re
+            # Remove all XML-like empty tags and whitespace
+            cleaned = re.sub(r"<[^>]+>\s*</[^>]+>", "", stripped).strip()
+            if not cleaned:
+                return True
+            # Check if content lacks any traceback or error keywords
+            error_indicators = ["Error", "Exception", "Traceback", "failed", "FAILED", "error:"]
+            return not any(ind in content for ind in error_indicators)
+
+        if _is_useless_error_content(error_content):
             try:
                 lang = get_language(os.path.splitext(code_path)[1])
                 pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
                 if pre_cmd:
-                    pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(cwd))
+                    pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(working_dir))
                     pre = subprocess.run(
                         ["bash", "-lc", pre_cmd],
                         capture_output=True,
                         text=True,
                         check=False,
                         timeout=_VERIFY_TIMEOUT,
-                        cwd=str(cwd),
+                        cwd=str(working_dir),
                     )
                 else:
                     # Use language-appropriate run command from language_format.csv
@@ -835,7 +987,7 @@ def run_agentic_fix(
                             text=True,
                             check=False,
                             timeout=_VERIFY_TIMEOUT,
-                            cwd=str(cwd),
+                            cwd=str(working_dir),
                         )
                     else:
                         # Fallback: run directly with Python interpreter
@@ -845,7 +997,7 @@ def run_agentic_fix(
                             text=True,
                             check=False,
                             timeout=_VERIFY_TIMEOUT,
-                            cwd=str(cwd),
+                            cwd=str(working_dir),
                         )
                 error_content = (pre.stdout or "") + "\n" + (pre.stderr or "")
                 try:
@@ -864,7 +1016,13 @@ def run_agentic_fix(
 
         env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)               # "auto"/"0"/"1"/None
         verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
-        verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None) or default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
+        
+        # If verify_cmd arg is provided, it overrides env var and default
+        if verify_cmd is None:
+            verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None)
+        
+        if verify_cmd is None:
+             verify_cmd = default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
 
         # Load primary prompt template
         primary_prompt_template = load_prompt_template("agentic_fix_primary_LLM")
@@ -883,7 +1041,7 @@ def run_agentic_fix(
             error_content=error_content,
             verify_cmd=verify_cmd or "No verification command provided.",
         )
-        instruction_file = Path("agentic_fix_instructions.txt")
+        instruction_file = working_dir / "agentic_fix_instructions.txt"
         instruction_file.write_text(primary_instr, encoding="utf-8")
         _info(f"[cyan]Instruction file: {instruction_file.resolve()} ({instruction_file.stat().st_size} bytes)[/cyan]")
         _print_head("Instruction preview", primary_instr)
@@ -915,50 +1073,29 @@ def run_agentic_fix(
             if _IS_VERBOSE:
                 _verbose(f"[cyan]CLI binary: {binary} -> {cli_path}[/cyan]")
                 if cmd:
-                    _verbose(f"Executing (cwd={cwd}): {' '.join(cmd)}")
+                    _verbose(f"Executing (cwd={working_dir}): {' '.join(cmd)}")
 
             # Skip if the provider CLI is not available on PATH
             if cli_path == "NOT-IN-PATH":
                 _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
                 continue
 
-            # First, the strict/fast "harvest-only" attempt for the three main providers
-            if provider in ("google", "openai", "anthropic"):
-                est_cost += _AGENT_COST_PER_CALL
-                try:
-                    if try_harvest_then_verify(
-                        provider,
-                        code_path,
-                        unit_test_file,
-                        orig_code,
-                        prompt_content,
-                        test_content,
-                        error_content,
-                        cwd,
-                        verify_cmd=verify_cmd,
-                        verify_enabled=verify_enabled,
-                        changed_files=changed_files,
-                    ):
-                        try:
-                            instruction_file.unlink()
-                        except Exception:
-                            pass
-                        return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
-                except subprocess.TimeoutExpired:
-                    _info(f"[yellow]{provider.capitalize()} harvest attempt timed out, moving on...[/yellow]")
-                _info("[yellow]Harvest-first attempt did not pass; trying primary instruction path...[/yellow]")
-
-            # Primary attempt (more permissive)
+            # PRIMARY-FIRST: Try the full agent approach first (allows exploration, debugging)
+            _info(f"[cyan]Trying primary approach with {provider.capitalize()}...[/cyan]")
             est_cost += _AGENT_COST_PER_CALL
+            
+            # Snapshot mtimes before agent run
+            mtime_snapshot = _snapshot_mtimes(working_dir)
+            
             try:
                 if provider == "openai":
-                    res = _run_openai_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_openai_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
                 elif provider == "anthropic":
-                    res = _run_anthropic_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_anthropic_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
                 elif provider == "google":
-                    res = _run_google_variants(primary_instr, cwd, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_google_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
                 else:
-                    res = _run_cli(cmd, cwd, _AGENT_CALL_TIMEOUT)
+                    res = _run_cli(cmd, working_dir, _AGENT_CALL_TIMEOUT)
             except subprocess.TimeoutExpired:
                 _info(f"[yellow]{provider.capitalize()} agent timed out after {_AGENT_CALL_TIMEOUT}s. Trying next...[/yellow]")
                 continue
@@ -966,11 +1103,15 @@ def run_agentic_fix(
             _print_head(f"{provider.capitalize()} stdout", res.stdout or "")
             _print_head(f"{provider.capitalize()} stderr", res.stderr or "")
 
+            # Detect direct changes by agent
+            direct_changes = _detect_mtime_changes(working_dir, mtime_snapshot)
+            changed_files.extend(direct_changes)
+
             # Parse emitted changes (multi-file preferred)
             multi = _extract_files_from_output(res.stdout or "", res.stderr or "")
             if multi:
                 _info("[cyan]Detected multi-file corrected content (primary attempt). Applying...[/cyan]")
-                applied = _apply_file_map(multi, cwd, code_path, allow_new)
+                applied = _apply_file_map(multi, working_dir, code_path, allow_new)
                 changed_files.extend([str(p) for p in applied])
             else:
                 # Single-file fallback or Gemini code fence
@@ -990,12 +1131,20 @@ def run_agentic_fix(
 
             # Show diff (verbose) and decide whether to verify
             new_code = code_path.read_text(encoding="utf-8")
+            new_test = test_path.read_text(encoding="utf-8")
             _print_diff(orig_code, new_code, code_path)
+            if new_test != orig_test:
+                _print_diff(orig_test, new_test, test_path)
+                if str(test_path) not in changed_files:
+                    changed_files.append(str(test_path))
 
-            proceed_to_verify = (res.returncode == 0) or (new_code != orig_code) or bool(multi)
+            # Proceed to verify if: agent returned 0, OR either file changed, OR markers found, OR direct changes
+            code_changed = new_code != orig_code
+            test_changed = new_test != orig_test
+            proceed_to_verify = (res.returncode == 0) or code_changed or test_changed or bool(multi) or bool(direct_changes)
             if proceed_to_verify:
                 ok = _post_apply_verify_or_testcmd(
-                    provider, unit_test_file, cwd,
+                    provider, unit_test_file, working_dir,
                     verify_cmd=verify_cmd, verify_enabled=verify_enabled,
                     stdout=res.stdout or "", stderr=res.stderr or ""
                 )
@@ -1006,6 +1155,32 @@ def run_agentic_fix(
                     except Exception:
                         pass
                     return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
+
+            # PRIMARY FAILED - Try harvest as a quick fallback before moving to next provider
+            if provider in ("google", "openai", "anthropic"):
+                _info("[yellow]Primary attempt did not pass; trying harvest fallback...[/yellow]")
+                est_cost += _AGENT_COST_PER_CALL
+                try:
+                    if _try_harvest_then_verify(
+                        provider,
+                        code_path,
+                        unit_test_file,
+                        orig_code,
+                        prompt_content,
+                        test_content,
+                        error_content,
+                        working_dir,
+                        verify_cmd=verify_cmd,
+                        verify_enabled=verify_enabled,
+                        changed_files=changed_files,
+                    ):
+                        try:
+                            instruction_file.unlink()
+                        except Exception:
+                            pass
+                        return True, f"Agentic fix successful with {provider.capitalize()} (harvest fallback).", est_cost, used_model, changed_files
+                except subprocess.TimeoutExpired:
+                    _info(f"[yellow]{provider.capitalize()} harvest fallback timed out.[/yellow]")
 
             # Prepare for next iteration/provider: update baseline code snapshot
             orig_code = new_code

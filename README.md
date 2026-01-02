@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.87-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.95-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.87
+Current version: 0.0.95
 
 To check your installed version, run:
 ```
@@ -466,7 +466,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 
 These options can be used with any command:
 
-- `--force`: Overwrite existing files without asking for confirmation (commonly used with `sync`).
+- `--force`: Skip all interactive prompts (file overwrites, API key requests). Useful for CI/automation.
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
   - 0.0: Cheapest available model
   - 0.5: Default base model
@@ -660,7 +660,7 @@ Options:
 - `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $20.0)
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
-- `--target-coverage FLOAT`: Desired code coverage percentage (default is 0.0, meaning no coverage target)
+- `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
 
 **Real-time Progress Animation**:
@@ -1314,10 +1314,10 @@ Arguments:
 - `CODE_FILE`: The filename of the code file to be tested.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`.
+- `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_1.py`) will be created instead of overwriting.
 - `--language`: Specify the programming language. Defaults to the language specified by the prompt file name.
 - `--coverage-report PATH`: Path to the coverage report file for existing tests. When provided, generates additional tests to improve coverage.
-- `--existing-tests PATH`: Path to the existing unit test file. Required when using --coverage-report.
+- `--existing-tests PATH [PATH...]`: Path(s) to the existing unit test file(s). Required when using --coverage-report. Multiple paths can be provided.
 - `--target-coverage FLOAT`: Desired code coverage percentage to achieve (default is 90.0).
 - `--merge`: When used with --existing-tests, merges new tests with existing test file instead of creating a separate file.
 
@@ -1346,9 +1346,9 @@ could influence the output of the `pdd test` command when run in the same direct
 pdd [GLOBAL OPTIONS] test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
-2. Generate additional tests to improve coverage:
+2. Generate additional tests to improve coverage (with multiple existing test files):
 ```
-pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
+pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --existing-tests tests/test_calculator_edge_cases.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
 ```
 
 3. Improve coverage and merge with existing tests:
@@ -1465,11 +1465,11 @@ pdd [GLOBAL OPTIONS] fix [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FI
 Arguments:
 - `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
 - `CODE_FILE`: The filename of the code file to be fixed.
-- `UNIT_TEST_FILE`: The filename of the unit test file.
+- `UNIT_TEST_FILES`: The filename(s) of the unit test file(s). Multiple files can be provided, and each will be processed individually.
 - `ERROR_FILE`: The filename containing the unit test runtime error messages. Optional and does not need to exist when used with the `--loop` command.
 
 Options:
-- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_TEST_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. **Warning: If multiple `UNIT_TEST_FILES` are provided along with this option, only the fixed content of the last processed test file will be saved to this location, overwriting previous results. For individual fixed files, omit this option.**
 - `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.log`. If an environment variable `PDD_FIX_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--loop`: Enable iterative fixing process.
@@ -1481,8 +1481,8 @@ Options:
 When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
 Outputs:
-- Fixed unit test file
-- Fixed code file
+- Fixed unit test file(s).
+- Fixed code file.
 - Results file containing the LLM model's output with unit test results.
 - Print out of results when using '--loop' containing:
   - Success status (boolean)
@@ -1492,9 +1492,9 @@ Outputs:
 
 Example:
 ```
-pdd [GLOBAL OPTIONS] fix --output-test tests/test_factorial_calculator_fixed.py --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py errors.log
+pdd [GLOBAL OPTIONS] fix --output-code src/factorial_calculator_fixed.py --output-results results/factorial_fix_results.log factorial_calculator_python.prompt src/factorial_calculator.py tests/test_factorial_calculator.py tests/test_factorial_calculator_edge_cases.py errors.log
 ```
-In this example, `factorial_calculator_python.prompt` is the prompt file that originally generated the code under test.
+In this example, `pdd fix` will be run for each test file, and the fixed test files will be saved as `tests/test_factorial_calculator_fixed.py` and `tests/test_factorial_calculator_edge_cases_fixed.py`.
 
 
 #### Agentic Fallback Mode
@@ -1606,6 +1606,28 @@ pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv s
 
 Update prompts based on code changes. This command operates in two primary modes:
 
+**Agentic Prompt Optimization (Default)**
+
+The `update` command uses an agentic AI (Claude Code, Gemini, or Codex) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+
+1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
+2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
+3. **Remove Duplication**: Eliminates redundant content that duplicates included files
+4. **Validate**: Ensures the prompt is human-readable and can reliably regenerate the code
+
+This produces prompts that are more concise while remaining clear to developers and reliable for code generation.
+
+**Prerequisites**: Requires one of these CLI tools installed and configured:
+- `claude` (Anthropic Claude Code)
+- `gemini` (Google Gemini CLI)
+- `codex` (OpenAI Codex CLI)
+
+If no agentic CLI is available, the command automatically falls back to the legacy 2-stage LLM update process.
+
+**Test-Aware Updates**: When tests exist for a module (e.g., `test_my_module.py`, `test_my_module_1.py`), the agentic update automatically discovers and considers them. Behaviors verified by tests don't need to be explicitly specified in the prompt, resulting in more compact prompts.
+
+**Modes:**
+
 1.  **Repository-Wide Mode (Default)**: When run with no file arguments, `pdd update` scans the entire repository. It finds all code/prompt pairs, creates any missing prompt files, and updates all of them based on the latest Git changes. This is the easiest way to keep your entire project in sync.
 
 2.  **Single-File Mode**: When you provide file arguments, the command operates on a specific file. There are three distinct use cases for this mode:
@@ -1657,11 +1679,21 @@ Options:
 - `--output LOCATION`: Specify where to save the updated prompt file. **If not specified, the original prompt file is overwritten to maintain it as the authoritative source of truth.** If an environment variable `PDD_UPDATE_OUTPUT_PATH` is set, it will be used only when `--output` is explicitly omitted and you want a different default location.
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
+- `--simple`: Use the legacy 2-stage LLM update process instead of the default agentic mode. Useful when agentic CLIs are not available or for faster updates.
 
 Example (overwrite original prompt - default behavior):
 ```
 pdd [GLOBAL OPTIONS] update factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
 # This overwrites factorial_calculator_python.prompt in place
+```
+
+Example (agentic vs simple mode):
+```bash
+# Default: Agentic mode (uses claude/gemini/codex for intelligent optimization)
+pdd update --git my_module_python.prompt src/my_module.py
+
+# Legacy: Simple 2-stage LLM update (faster, no agentic CLI required)
+pdd update --simple --git my_module_python.prompt src/my_module.py
 ```
 
 
@@ -1784,7 +1816,7 @@ Arguments:
 - `DESIRED_OUTPUT_FILE`: File containing the desired (correct) output of the program.
 
 Options:
-- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`.
+- `--output LOCATION`: Specify where to save the generated unit test. The default file name is `test_<basename>_bug.<language_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_bug_1.py`) will be created instead of overwriting.
 - `--language`: Specify the programming language for the unit test (default is "Python").
 
 Example:

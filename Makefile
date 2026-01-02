@@ -37,6 +37,7 @@ help:
 	@echo "  make public-diff ITEM=path   - Show diff between public clone file and local file (uses same ITEM rules)"
 	@echo "  make sync-public             - Fetch public remote and list commits missing locally"
 	@echo "Fixing & Maintenance:"
+	@echo "  make update [MODULE=name]    - Update prompt based on code changes (uses git)"
 	@echo "  make fix [MODULE=name]       - Fix prompts command"
 	@echo "  make crash MODULE=name       - Fix crashes in code"
 	@echo "  make detect CHANGE_FILE=path  - Detect which prompts need changes based on a description file"
@@ -99,7 +100,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -401,6 +402,29 @@ else
 	done
 endif
 
+# Update prompt based on code changes
+update:
+ifdef MODULE
+	@echo "Updating prompt for module: $(MODULE)"
+	$(eval PY_FILE := $(PDD_DIR)/$(MODULE).py)
+	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
+
+	@if [ ! -f "$(PY_FILE)" ]; then \
+		echo "Error: Code file $(PY_FILE) not found."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(PY_PROMPT)" ]; then \
+		echo "Error: Prompt file $(PY_PROMPT) not found."; \
+		exit 1; \
+	fi
+
+	@echo "Updating $(PY_PROMPT) based on changes in $(PY_FILE)"
+	conda run -n pdd --no-capture-output pdd --verbose update --git $(PY_PROMPT) $(PY_FILE)
+else
+	@echo "Running repository-wide prompt update"
+	conda run -n pdd --no-capture-output pdd --verbose update --directory pdd --extensions py
+endif
+
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
@@ -571,6 +595,8 @@ release: check-deps
 	else \
 		echo "Bumping version with commitizen"; \
 		python -m commitizen bump --increment PATCH --yes; \
+		echo "Pushing to origin before publishing"; \
+		git push origin main --tags; \
 		echo "Publishing new version"; \
 		$(MAKE) publish; \
 	fi
@@ -713,7 +739,10 @@ publish-public:
 	fi
 	@echo "Committing and pushing updates in public repo"
 	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git fetch origin && git rebase origin/main && \
+		CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
+		(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
+		git push && git push --tags; \
 		else \
 			echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
 		fi
@@ -845,7 +874,10 @@ publish-public-cap:
 	fi
 	@echo "Committing and pushing updates in CAP public repo"
 	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && git commit -m "Bump version" && git push; \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && git commit -m "Bump version" && git fetch origin && git rebase origin/main && \
+		CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
+		(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
+		git push && git push --tags; \
 		else \
 			echo "Skip commit: $(PUBLIC_PDD_CAP_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE)."; \
 		fi

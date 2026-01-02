@@ -20,10 +20,13 @@ OUTPUT_DIR = "output"
 # --- Test Fixture ---
 
 @pytest.fixture
-def setup_test_environment(tmp_path, mocker):
+def setup_test_environment(tmp_path, mocker, monkeypatch):
     """Sets up a temporary environment for testing fix_verification_errors_loop."""
+    # Change cwd to tmp_path so .pdd/backups is created there
+    monkeypatch.chdir(tmp_path)
+
     # Create directories
-    pdd_dir = tmp_path / "pdd"
+    pdd_dir = tmp_path / ".pdd"
     pdd_dir.mkdir()
     output_path = tmp_path / OUTPUT_DIR
     output_path.mkdir()
@@ -70,6 +73,11 @@ sys.exit(0)
     # Mock dependencies
     mock_fixer = mocker.patch('pdd.fix_verification_errors_loop.fix_verification_errors', autospec=True)
     mock_runner = mocker.patch('pdd.fix_verification_errors_loop._run_program', autospec=True)
+    # Mock agentic fallback to prevent real API calls during tests
+    mock_agentic_verify = mocker.patch(
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
+        return_value=(False, "Mocked agentic verify - not executed in test", 0.0, None, [])
+    )
     # Mock console print for verbose checks if needed
     # Corrected: Pass the actual console object to spy, not a string path.
     mock_console_print = mocker.spy(pdd.fix_verification_errors_loop.console, 'print')
@@ -104,6 +112,7 @@ sys.exit(0)
         "code_content_fixed": code_content_fixed,
         "mock_fixer": mock_fixer,
         "mock_runner": mock_runner,
+        "mock_agentic_verify": mock_agentic_verify,
         "mock_console_print": mock_console_print,
         "default_args": default_args,
     }
@@ -236,8 +245,10 @@ def test_success_first_attempt(setup_test_environment):
     assert any("Kept modified code" in a.text for a in actions if a.text)
     assert log_root.find("FinalActions/Action").text == "Process finished successfully."
 
-    # Check backup file was created for iteration 1
-    backup_code_file = env["output_path"] / "code_module_iteration_1.py"
+    # Check backup file was created for iteration 1 in .pdd/backups/
+    backup_dirs = list((env["tmp_path"] / ".pdd" / "backups" / "code_module").glob("*"))
+    assert len(backup_dirs) == 1, f"Expected 1 backup dir, found {backup_dirs}"
+    backup_code_file = backup_dirs[0] / "code_1.py"
     assert backup_code_file.exists()
     assert backup_code_file.read_text(encoding="utf-8") == env["code_content_initial"] # Backup holds state *before* fix
 
@@ -292,7 +303,9 @@ def run():
     # The best iteration is attempt 1 (1 issue). The backup for attempt 1 was made *before* the fix,
     # so it contains the *initial* code. The function should restore from this backup.
     # The backup path is stored in best_iteration['code_backup']
-    best_backup_path = env["output_path"] / "code_module_iteration_1.py"
+    backup_dirs = list((env["tmp_path"] / ".pdd" / "backups" / "code_module").glob("*"))
+    assert len(backup_dirs) == 1, f"Expected 1 backup dir, found {backup_dirs}"
+    best_backup_path = backup_dirs[0] / "code_1.py"
     assert best_backup_path.exists()
     assert best_backup_path.read_text(encoding="utf-8") == env["code_content_initial"]
     # Check the final state of the main code file
@@ -369,12 +382,13 @@ def run():
     # assert final_actions.find("Action[contains(text(), 'Loop stopped as no changes were suggested')]') is not None # Original potentially failing line
     # assert final_actions.find("Action[contains(text(), 'Restored Best Iteration 1')]') is not None # Original potentially failing line
 
-    # Check backups exist
-    assert (env["output_path"] / "code_module_iteration_1.py").exists()
-    assert (env["output_path"] / "code_module_iteration_2.py").exists()
+    # Check backups exist in .pdd/backups/
+    backup_dir = backup_dirs[0]  # Already defined above
+    assert (backup_dir / "code_1.py").exists()
+    assert (backup_dir / "code_2.py").exists()
     # Check content of backups
-    assert (env["output_path"] / "code_module_iteration_1.py").read_text(encoding="utf-8") == env["code_content_initial"]
-    assert (env["output_path"] / "code_module_iteration_2.py").read_text(encoding="utf-8") == code_content_attempt1_fix
+    assert (backup_dir / "code_1.py").read_text(encoding="utf-8") == env["code_content_initial"]
+    assert (backup_dir / "code_2.py").read_text(encoding="utf-8") == code_content_attempt1_fix
 
 
 def test_budget_exceeded_in_loop(setup_test_environment):
@@ -1115,9 +1129,9 @@ def test_non_python_target_bypasses_loop(setup_test_environment, mocker):
         )
     )
 
-    # Mock _safe_run_agentic_fix (called for non-Python targets)
+    # Mock _safe_run_agentic_verify (called for non-Python targets)
     mock_agentic = mocker.patch(
-        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
         return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(go_code_file)])
     )
 
@@ -1132,8 +1146,10 @@ def test_non_python_target_bypasses_loop(setup_test_environment, mocker):
     mock_agentic.assert_called_once_with(
         prompt_file=str(prompt_file),
         code_file=str(go_code_file),
-        unit_test_file=env["default_args"]["verification_program"],
-        error_log_file=env["default_args"]["verification_log_file"],
+        program_file=env["default_args"]["verification_program"],
+        verification_log_file=env["default_args"]["verification_log_file"],
+        verbose=False,
+        cwd=env["tmp_path"],
     )
 
     # Verify fix_verification_errors (main loop fixer) was NOT called
@@ -1185,9 +1201,9 @@ def test_agentic_fallback_invoked_on_python_loop_failure(setup_test_environment,
         }
     ]
 
-    # Mock _safe_run_agentic_fix (called at end of failed loop)
+    # Mock _safe_run_agentic_verify (called at end of failed loop)
     mock_agentic = mocker.patch(
-        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
         return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(env["code_file"])])
     )
 
@@ -1204,8 +1220,10 @@ def test_agentic_fallback_invoked_on_python_loop_failure(setup_test_environment,
     mock_agentic.assert_called_once_with(
         prompt_file=str(prompt_file),
         code_file=str(env["code_file"]),
-        unit_test_file=env["default_args"]["verification_program"],
-        error_log_file=env["default_args"]["verification_log_file"],
+        program_file=env["default_args"]["verification_program"],
+        verification_log_file=env["default_args"]["verification_log_file"],
+        verbose=False,
+        cwd=env["tmp_path"],
     )
 
     # Verify result shows success from agentic fallback
@@ -1252,9 +1270,9 @@ def test_agentic_fallback_not_invoked_when_disabled(setup_test_environment, mock
         }
     ]
 
-    # Mock _safe_run_agentic_fix to verify it's NOT called
+    # Mock _safe_run_agentic_verify to verify it's NOT called
     mock_agentic = mocker.patch(
-        'pdd.fix_verification_errors_loop._safe_run_agentic_fix',
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
         return_value=(True, "Fixed by agent", 0.05, "agentic-cli", [str(env["code_file"])])
     )
 
@@ -1267,3 +1285,64 @@ def test_agentic_fallback_not_invoked_when_disabled(setup_test_environment, mock
     assert result["success"] is False
     assert result["total_cost"] == 0.001 + 0.002  # Only initial + attempt
     assert result["model_name"] == 'model-fixer'  # Last model used
+
+
+def test_max_attempts_zero_skips_loop_triggers_agentic(setup_test_environment, mocker):
+    """Test that max_attempts=0 skips the normal LLM loop and goes straight to agentic fallback.
+
+    When max_attempts=0:
+    - Validation should NOT reject it (unlike negative values)
+    - Normal LLM fix loop should be skipped entirely
+    - Agentic fallback should be triggered directly
+    """
+    env = setup_test_environment
+
+    # Runner for initial check only - loop should not run
+    env["mock_runner"].side_effect = [
+        (1, "Running with test_arg\nVERIFICATION_FAILURE: Got INITIAL_BUG"),  # Initial run fails
+    ]
+
+    # Fixer should not be called at all since loop is skipped
+    env["mock_fixer"].side_effect = []
+
+    # Mock agentic fallback to succeed
+    mock_agentic = mocker.patch(
+        'pdd.fix_verification_errors_loop._safe_run_agentic_verify',
+        return_value=(True, "Fixed by agentic mode", 0.05, "agentic-cli", [str(env["code_file"])])
+    )
+
+    # Set max_attempts=0 - should be valid and skip loop
+    env["default_args"]["max_attempts"] = 0
+    env["default_args"]["agentic_fallback"] = True
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Verify the normal fixer was never called (loop skipped)
+    env["mock_fixer"].assert_not_called()
+
+    # Verify agentic fallback was called
+    mock_agentic.assert_called_once()
+
+    # Verify result shows success from agentic mode
+    assert result["success"] is True
+    assert result["total_attempts"] == 0  # No normal LLM attempts
+    assert result["model_name"] == "agentic-cli"
+
+
+def test_max_attempts_negative_still_rejected(setup_test_environment):
+    """Test that negative max_attempts values are still rejected.
+
+    Only max_attempts=0 should be valid (for agentic-only mode).
+    Negative values like -1 should still return failure with error message.
+    """
+    env = setup_test_environment
+
+    # Set max_attempts=-1 - should be rejected
+    env["default_args"]["max_attempts"] = -1
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    # Should fail with appropriate error
+    assert result["success"] is False
+    assert result["total_attempts"] == 0
+    assert result["total_cost"] == 0.0

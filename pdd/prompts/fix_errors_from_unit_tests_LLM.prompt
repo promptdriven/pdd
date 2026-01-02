@@ -9,6 +9,14 @@
 % This prompt is run iteratively. Here are the current errors and past potential fix attempts, if any, from the unit test and verification program run(s): <errors>{errors}</errors>
 
 % If the verfication program fails to run, the code_under_test and unit_test are unchanged from the previous iteration.
+
+% IMPORTANT: The original prompt is the authoritative specification for what the code should do.
+% When analyzing errors:
+%   - If the code doesn't match the prompt specification, fix the CODE
+%   - If the unit_test expects behavior not specified in the prompt, fix the TEST
+%   - Never add functionality to the code that isn't specified in the prompt
+%   - Tests should verify prompt-specified behavior, not arbitrary expectations
+
 <pdd>
 <examples>
     <example_1>

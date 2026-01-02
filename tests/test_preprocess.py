@@ -14,6 +14,9 @@ import z3
 from z3 import String, StringVal, If, And, Or, Not, BoolVal, Implies, Length, PrefixOf, SubString, IndexOf
 import re
 
+# Store the original PDD_PATH to restore after tests
+_original_pdd_path = os.environ.get('PDD_PATH')
+
 # Helper function to mock environment variable
 def set_pdd_path(path: str) -> None:
     """Set the PDD_PATH environment variable to the specified path."""
@@ -246,8 +249,10 @@ def test_web_second_pass_executes_after_deferral() -> None:
 
 # Ensure to clean up the environment variable after tests
 def teardown_module(module) -> None:
-    """Clean up the environment variable after tests."""
-    if 'PDD_PATH' in os.environ:
+    """Restore the original PDD_PATH environment variable after tests."""
+    if _original_pdd_path is not None:
+        os.environ['PDD_PATH'] = _original_pdd_path
+    elif 'PDD_PATH' in os.environ:
         del os.environ['PDD_PATH']
 
 def test_double_curly_brackets_in_javascript() -> None:

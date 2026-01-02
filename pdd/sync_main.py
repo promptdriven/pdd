@@ -1,7 +1,7 @@
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 from rich.console import Console
@@ -21,8 +21,14 @@ from .construct_paths import (
 )
 from .sync_orchestration import sync_orchestration
 
-# A simple regex for basename validation to prevent path traversal or other injection
-VALID_BASENAME_CHARS = re.compile(r"^[a-zA-Z0-9_-]+$")
+# Regex for basename validation supporting subdirectory paths (e.g., 'core/cloud')
+# Allows: alphanumeric, underscore, hyphen, and forward slash for subdirectory paths
+# Structure inherently prevents:
+#   - Path traversal (..) - dot not in character class
+#   - Leading slash (/abs) - must start with [a-zA-Z0-9_-]+
+#   - Trailing slash (path/) - must end with [a-zA-Z0-9_-]+
+#   - Double slash (a//b) - requires characters between slashes
+VALID_BASENAME_CHARS = re.compile(r"^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$")
 
 
 def _validate_basename(basename: str) -> None:
@@ -32,7 +38,7 @@ def _validate_basename(basename: str) -> None:
     if not VALID_BASENAME_CHARS.match(basename):
         raise click.UsageError(
             f"Basename '{basename}' contains invalid characters. "
-            "Only alphanumeric, underscore, and hyphen are allowed."
+            "Only alphanumeric, underscore, hyphen, and forward slash (for subdirectories) are allowed."
         )
 
 
@@ -41,18 +47,28 @@ def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
     Detects all available languages for a given basename by finding
     matching prompt files in the prompts directory.
     Excludes runtime languages (LLM) as they cannot form valid development units.
+
+    Supports subdirectory basenames like 'core/cloud':
+    - For basename 'core/cloud', searches in prompts/core/ for cloud_*.prompt files
+    - The stem comparison only uses the filename part ('cloud'), not the path ('core/cloud')
     """
     development_languages = []
     if not prompts_dir.is_dir():
         return []
 
+    # For subdirectory basenames, extract just the name part for stem comparison
+    if '/' in basename:
+        name_part = basename.rsplit('/', 1)[1]  # 'cloud' from 'core/cloud'
+    else:
+        name_part = basename
+
     pattern = f"{basename}_*.prompt"
     for prompt_file in prompts_dir.glob(pattern):
-        # stem is 'basename_language'
+        # stem is the filename without extension (e.g., 'cloud_python')
         stem = prompt_file.stem
-        # Ensure the file starts with the exact basename followed by an underscore
-        if stem.startswith(f"{basename}_"):
-            potential_language = stem[len(basename) + 1 :]
+        # Ensure the file starts with the exact name part followed by an underscore
+        if stem.startswith(f"{name_part}_"):
+            potential_language = stem[len(name_part) + 1 :]
             try:
                 if _is_known_language(potential_language):
                     # Exclude runtime languages (LLM) as they cannot form valid development units
@@ -79,8 +95,8 @@ def _detect_languages(basename: str, prompts_dir: Path) -> List[str]:
 def sync_main(
     ctx: click.Context,
     basename: str,
-    max_attempts: int,
-    budget: float,
+    max_attempts: Optional[int],
+    budget: Optional[float],
     skip_verify: bool,
     skip_tests: bool,
     target_coverage: float,
@@ -93,8 +109,8 @@ def sync_main(
     Args:
         ctx: The Click context object.
         basename: The base name for the prompt file.
-        max_attempts: Maximum number of fix attempts.
-        budget: Maximum total cost for the sync process.
+        max_attempts: Maximum number of fix attempts. If None, uses .pddrc value or default (3).
+        budget: Maximum total cost for the sync process. If None, uses .pddrc value or default (20.0).
         skip_verify: Skip the functional verification step.
         skip_tests: Skip unit test generation and fixing.
         target_coverage: Desired code coverage percentage.
@@ -118,15 +134,20 @@ def sync_main(
     local = ctx.obj.get("local", False)
     context_override = ctx.obj.get("context", None)
 
-    # 2. Validate inputs
-    _validate_basename(basename)
-    if budget <= 0:
-        raise click.BadParameter("Budget must be a positive number.", param_hint="--budget")
-    if max_attempts <= 0:
-        raise click.BadParameter("Max attempts must be a positive integer.", param_hint="--max-attempts")
+    # Default values for max_attempts, budget, target_coverage when not specified via CLI or .pddrc
+    DEFAULT_MAX_ATTEMPTS = 3
+    DEFAULT_BUDGET = 20.0
+    DEFAULT_TARGET_COVERAGE = 90.0
 
-    if not quiet and budget < 1.0:
-        console.log(f"[yellow]Warning:[/] Budget of ${budget:.2f} is low. Complex operations may exceed this limit.")
+    # 2. Validate inputs (basename only - budget/max_attempts validated after config resolution)
+    _validate_basename(basename)
+
+    # Validate CLI-specified values if provided (not None)
+    # Note: max_attempts=0 is valid (skips LLM loop, goes straight to agentic mode)
+    if budget is not None and budget <= 0:
+        raise click.BadParameter("Budget must be a positive number.", param_hint="--budget")
+    if max_attempts is not None and max_attempts < 0:
+        raise click.BadParameter("Max attempts must be a non-negative integer.", param_hint="--max-attempts")
 
     # 3. Use construct_paths in 'discovery' mode to find the prompts directory.
     try:
@@ -197,12 +218,19 @@ def sync_main(
         return {}, 0.0, ""
 
     # 6. Main Sync Workflow
+    # Determine display values for summary panel (use CLI values or defaults for display)
+    display_budget = budget if budget is not None else DEFAULT_BUDGET
+    display_max_attempts = max_attempts if max_attempts is not None else DEFAULT_MAX_ATTEMPTS
+
+    if not quiet and display_budget < 1.0:
+        console.log(f"[yellow]Warning:[/] Budget of ${display_budget:.2f} is low. Complex operations may exceed this limit.")
+
     if not quiet:
         summary_panel = Panel(
             f"Basename: [bold cyan]{basename}[/bold cyan]\n"
             f"Languages: [bold green]{', '.join(languages)}[/bold green]\n"
-            f"Budget: [bold yellow]${budget:.2f}[/bold yellow]\n"
-            f"Max Attempts: [bold blue]{max_attempts}[/bold blue]",
+            f"Budget: [bold yellow]${display_budget:.2f}[/bold yellow]\n"
+            f"Max Attempts: [bold blue]{display_max_attempts}[/bold blue]",
             title="PDD Sync Starting",
             expand=False,
         )
@@ -212,13 +240,15 @@ def sync_main(
     total_cost = 0.0
     primary_model = ""
     overall_success = True
-    remaining_budget = budget
+    # remaining_budget will be set from resolved config on first language iteration
+    remaining_budget: Optional[float] = None
 
     for lang in languages:
         if not quiet:
             rprint(f"\n[bold]🚀 Syncing for language: [green]{lang}[/green]...[/bold]")
 
-        if remaining_budget <= 0:
+        # Check budget exhaustion (after first iteration when remaining_budget is set)
+        if remaining_budget is not None and remaining_budget <= 0:
             if not quiet:
                 rprint(f"[yellow]Budget exhausted. Skipping sync for '{lang}'.[/yellow]")
             overall_success = False
@@ -232,13 +262,15 @@ def sync_main(
             command_options = {
                 "basename": basename,
                 "language": lang,
-                "max_attempts": max_attempts,
-                "budget": budget,
                 "target_coverage": target_coverage,
                 "time": time_param,
             }
-            # Only pass strength/temperature if explicitly set by user (not CLI defaults)
+            # Only pass values if explicitly set by user (not CLI defaults)
             # This allows .pddrc values to take precedence when user doesn't pass CLI flags
+            if max_attempts is not None:
+                command_options["max_attempts"] = max_attempts
+            if budget is not None:
+                command_options["budget"] = budget
             if strength != DEFAULT_STRENGTH:
                 command_options["strength"] = strength
             if temperature != 0.0:  # 0.0 is the CLI default for temperature
@@ -256,10 +288,38 @@ def sync_main(
             )
 
             # Extract all parameters directly from the resolved configuration
+            # Priority: CLI value > .pddrc value > hardcoded default
             final_strength = resolved_config.get("strength", strength)
             final_temp = resolved_config.get("temperature", temperature)
-            final_max_attempts = resolved_config.get("max_attempts", max_attempts)
-            final_target_coverage = resolved_config.get("target_coverage", target_coverage)
+
+            # For target_coverage, max_attempts and budget: CLI > .pddrc > hardcoded default
+            # If CLI value is provided (not None), use it. Otherwise, use .pddrc or default.
+            # Issue #194: target_coverage was not being handled consistently with the others
+            if target_coverage is not None:
+                final_target_coverage = target_coverage
+            else:
+                final_target_coverage = resolved_config.get("target_coverage") or DEFAULT_TARGET_COVERAGE
+
+            if max_attempts is not None:
+                final_max_attempts = max_attempts
+            else:
+                final_max_attempts = resolved_config.get("max_attempts") or DEFAULT_MAX_ATTEMPTS
+
+            if budget is not None:
+                final_budget = budget
+            else:
+                final_budget = resolved_config.get("budget") or DEFAULT_BUDGET
+
+            # Validate the resolved values
+            # Note: max_attempts=0 is valid (skips LLM loop, goes straight to agentic mode)
+            if final_budget <= 0:
+                raise click.BadParameter("Budget must be a positive number.", param_hint="--budget")
+            if final_max_attempts < 0:
+                raise click.BadParameter("Max attempts must be a non-negative integer.", param_hint="--max-attempts")
+
+            # Initialize remaining_budget from first resolved config if not set yet
+            if remaining_budget is None:
+                remaining_budget = final_budget
 
             # Update ctx.obj with resolved values so sub-commands inherit them
             ctx.obj["strength"] = final_strength

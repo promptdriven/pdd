@@ -1,5 +1,9 @@
 def hello():
     """
-    Prints the greeting 'hello' to the standard output.
+    Prints "hello" to the console.
+
+    Example:
+        >>> hello()
+        hello
     """
     print("hello")

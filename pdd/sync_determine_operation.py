@@ -55,9 +55,39 @@ META_DIR = get_meta_dir()
 LOCKS_DIR = get_locks_dir()
 
 # Export constants for other modules
-__all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision', 
+__all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision',
            'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
            '_check_example_success_history']
+
+
+def _safe_basename(basename: str) -> str:
+    """Sanitize basename for use in metadata filenames.
+
+    Replaces '/' with '_' to prevent path interpretation when the basename
+    contains subdirectory components (e.g., 'core/cloud' -> 'core_cloud').
+    """
+    return basename.replace('/', '_')
+
+
+def _extract_name_part(basename: str) -> tuple:
+    """Extract directory and name parts from a subdirectory basename.
+
+    For subdirectory basenames like 'core/cloud', separates the directory
+    prefix from the actual name so that filename patterns can be applied
+    correctly.
+
+    Args:
+        basename: The full basename, possibly containing subdirectory path.
+
+    Returns:
+        Tuple of (dir_prefix, name_part):
+        - 'core/cloud' -> ('core/', 'cloud')
+        - 'calculator' -> ('', 'calculator')
+    """
+    if '/' in basename:
+        dir_part, name_part = basename.rsplit('/', 1)
+        return dir_part + '/', name_part
+    return '', basename
 
 
 @dataclass
@@ -69,7 +99,8 @@ class Fingerprint:
     prompt_hash: Optional[str]
     code_hash: Optional[str]
     example_hash: Optional[str]
-    test_hash: Optional[str]
+    test_hash: Optional[str]  # Keep for backward compat (primary test file)
+    test_files: Optional[Dict[str, str]] = None  # Bug #156: {"test_foo.py": "hash1", ...}
 
 
 @dataclass
@@ -81,6 +112,7 @@ class RunReport:
     tests_failed: int
     coverage: float
     test_hash: Optional[str] = None  # Hash of test file when tests were run (for staleness detection)
+    test_files: Optional[Dict[str, str]] = None  # Bug #156: {"test_foo.py": "hash1", ...}
 
 
 @dataclass
@@ -100,7 +132,7 @@ class SyncLock:
     def __init__(self, basename: str, language: str):
         self.basename = basename
         self.language = language
-        self.lock_file = get_locks_dir() / f"{basename}_{language}.lock"
+        self.lock_file = get_locks_dir() / f"{_safe_basename(basename)}_{language}.lock"
         self.fd = None
         self.current_pid = os.getpid()
     
@@ -244,9 +276,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger.info(f"output_paths: {output_paths}")
                 
                 # Extract directory configuration from resolved_config
-                test_dir = resolved_config.get('test_output_path', 'tests/')
-                example_dir = resolved_config.get('example_output_path', 'examples/')
-                code_dir = resolved_config.get('generate_output_path', './')
+                # Note: construct_paths sets tests_dir, examples_dir, code_dir keys
+                test_dir = resolved_config.get('tests_dir', 'tests/')
+                example_dir = resolved_config.get('examples_dir', 'examples/')
+                code_dir = resolved_config.get('code_dir', './')
                 
                 logger.info(f"Extracted dirs - test: {test_dir}, example: {example_dir}, code: {code_dir}")
                 
@@ -258,23 +291,35 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if code_dir and not code_dir.endswith('/'):
                     code_dir = code_dir + '/'
                 
-                # Construct the full paths
-                test_path = f"{test_dir}test_{basename}.{extension}"
-                example_path = f"{example_dir}{basename}_example.{extension}"
-                code_path = f"{code_dir}{basename}.{extension}"
-                
+                # Extract directory and name parts for subdirectory basename support
+                dir_prefix, name_part = _extract_name_part(basename)
+
+                # Construct the full paths (preserving subdirectory structure)
+                test_path = f"{test_dir}{dir_prefix}test_{name_part}.{extension}"
+                example_path = f"{example_dir}{dir_prefix}{name_part}_example.{extension}"
+                code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
+
                 logger.debug(f"Final paths: test={test_path}, example={example_path}, code={code_path}")
-                
+
                 # Convert to Path objects
                 test_path = Path(test_path)
                 example_path = Path(example_path)
                 code_path = Path(code_path)
-                
+
+                # Bug #156: Find all matching test files
+                test_dir_path = test_path.parent
+                test_stem = f"test_{name_part}"
+                if test_dir_path.exists():
+                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
+                else:
+                    matching_test_files = [test_path] if test_path.exists() else []
+
                 result = {
                     'prompt': Path(prompt_path),
                     'code': code_path,
                     'example': example_path,
-                    'test': test_path
+                    'test': test_path,
+                    'test_files': matching_test_files or [test_path]  # Bug #156
                 }
                 logger.debug(f"get_pdd_file_paths returning (prompt missing): test={test_path}")
                 return result
@@ -284,11 +329,19 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
+                dir_prefix, name_part = _extract_name_part(basename)
+                fallback_test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
+                # Bug #156: Find matching test files even in fallback
+                if Path('.').exists():
+                    fallback_matching = sorted(Path('.').glob(f"{dir_prefix}test_{name_part}*.{extension}"))
+                else:
+                    fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
                 return {
                     'prompt': Path(prompt_path),
-                    'code': Path(f"{basename}.{extension}"),
-                    'example': Path(f"{basename}_example.{extension}"),
-                    'test': Path(f"test_{basename}.{extension}")
+                    'code': Path(f"{dir_prefix}{name_part}.{extension}"),
+                    'example': Path(f"{dir_prefix}{name_part}_example.{extension}"),
+                    'test': fallback_test_path,
+                    'test_files': fallback_matching or [fallback_test_path]  # Bug #156
                 }
         
         input_file_paths = {
@@ -317,7 +370,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             code_dir = resolved_config.get('generate_output_path', './')
             if code_dir and not code_dir.endswith('/'):
                 code_dir = code_dir + '/'
-            code_path = f"{code_dir}{basename}.{extension}"
+            dir_prefix, name_part = _extract_name_part(basename)
+            code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
         
         # Get configured paths for example and test files using construct_paths
         # Note: construct_paths requires files to exist, so we need to handle the case
@@ -333,24 +387,32 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             
             try:
                 # Get example path using example command
+                # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
+                # Pass basename in command_options to preserve subdirectory structure
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                    force=True, quiet=True, command="example", command_options={},
-                    context_override=context_override
+                    force=True, quiet=True, command="example",
+                    command_options={"basename": basename},
+                    context_override=context_override,
+                    path_resolution_mode="cwd"
                 )
-                example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
-                
+                dir_prefix, name_part = _extract_name_part(basename)
+                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
+
                 # Get test path using test command - handle case where test file doesn't exist yet
+                # Pass basename in command_options to preserve subdirectory structure
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                        force=True, quiet=True, command="test", command_options={},
-                        context_override=context_override
+                        force=True, quiet=True, command="test",
+                        command_options={"basename": basename},
+                        context_override=context_override,
+                        path_resolution_mode="cwd"
                     )
-                    test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
                 except FileNotFoundError:
                     # Test file doesn't exist yet - create default path
-                    test_path = Path(f"test_{basename}.{get_extension(language)}")
+                    test_path = Path(f"{dir_prefix}test_{name_part}.{get_extension(language)}")
                 
             finally:
                 # Clean up temporary file if we created it
@@ -368,23 +430,30 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # Improved fallback: try to use construct_paths with just prompt_file to get proper directory configs
             try:
                 # Get configured directories by using construct_paths with just the prompt file
+                # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
+                # Pass basename in command_options to preserve subdirectory structure
                 _, _, example_output_paths, _ = construct_paths(
                     input_file_paths={"prompt_file": prompt_path},
-                    force=True, quiet=True, command="example", command_options={},
-                    context_override=context_override
+                    force=True, quiet=True, command="example",
+                    command_options={"basename": basename},
+                    context_override=context_override,
+                    path_resolution_mode="cwd"
                 )
-                example_path = Path(example_output_paths.get('output', f"{basename}_example.{get_extension(language)}"))
-                
+                dir_prefix, name_part = _extract_name_part(basename)
+                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
+
                 try:
                     _, _, test_output_paths, _ = construct_paths(
                         input_file_paths={"prompt_file": prompt_path},
-                        force=True, quiet=True, command="test", command_options={},
-                        context_override=context_override
+                        force=True, quiet=True, command="test",
+                        command_options={"basename": basename},
+                        context_override=context_override,
+                        path_resolution_mode="cwd"
                     )
-                    test_path = Path(test_output_paths.get('output', f"test_{basename}.{get_extension(language)}"))
+                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
                 except Exception:
                     # If test path construction fails, use default naming
-                    test_path = Path(f"test_{basename}.{get_extension(language)}")
+                    test_path = Path(f"{dir_prefix}test_{name_part}.{get_extension(language)}")
                 
             except Exception:
                 # Final fallback to deriving from code path if all else fails
@@ -401,21 +470,43 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         
         # Keep paths as they are (absolute or relative as returned by construct_paths)
         # This ensures consistency with how construct_paths expects them
+
+        # Bug #156: Find all matching test files
+        test_dir = test_path.parent
+        _, name_part_for_glob = _extract_name_part(basename)
+        test_stem = f"test_{name_part_for_glob}"
+        extension = get_extension(language)
+        if test_dir.exists():
+            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
+        else:
+            matching_test_files = [test_path] if test_path.exists() else []
+
         return {
             'prompt': Path(prompt_path),
             'code': code_path,
             'example': example_path,
-            'test': test_path
+            'test': test_path,
+            'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
-        
+
     except Exception as e:
         # Fallback to simple naming if construct_paths fails
         extension = get_extension(language)
+        dir_prefix, name_part = _extract_name_part(basename)
+        test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
+        # Bug #156: Try to find matching test files even in fallback
+        test_dir = Path('.')
+        test_stem = f"{dir_prefix}test_{name_part}"
+        if test_dir.exists():
+            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
+        else:
+            matching_test_files = [test_path] if test_path.exists() else []
         return {
             'prompt': Path(prompts_dir) / f"{basename}_{language}.prompt",
-            'code': Path(f"{basename}.{extension}"),
-            'example': Path(f"{basename}_example.{extension}"),
-            'test': Path(f"test_{basename}.{extension}")
+            'code': Path(f"{dir_prefix}{name_part}.{extension}"),
+            'example': Path(f"{dir_prefix}{name_part}_example.{extension}"),
+            'test': test_path,
+            'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
 
 
@@ -438,7 +529,7 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
     """Reads and validates the JSON fingerprint file."""
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
-    fingerprint_file = meta_dir / f"{basename}_{language}.json"
+    fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language}.json"
     
     if not fingerprint_file.exists():
         return None
@@ -454,7 +545,8 @@ def read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]:
             prompt_hash=data.get('prompt_hash'),
             code_hash=data.get('code_hash'),
             example_hash=data.get('example_hash'),
-            test_hash=data.get('test_hash')
+            test_hash=data.get('test_hash'),
+            test_files=data.get('test_files')  # Bug #156
         )
     except (json.JSONDecodeError, KeyError, IOError):
         return None
@@ -464,7 +556,7 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
     """Reads and validates the JSON run report file."""
     meta_dir = get_meta_dir()
     meta_dir.mkdir(parents=True, exist_ok=True)
-    run_report_file = meta_dir / f"{basename}_{language}_run.json"
+    run_report_file = meta_dir / f"{_safe_basename(basename)}_{language}_run.json"
     
     if not run_report_file.exists():
         return None
@@ -479,19 +571,28 @@ def read_run_report(basename: str, language: str) -> Optional[RunReport]:
             tests_passed=data['tests_passed'],
             tests_failed=data['tests_failed'],
             coverage=data['coverage'],
-            test_hash=data.get('test_hash')  # Optional for backward compatibility
+            test_hash=data.get('test_hash'),  # Optional for backward compatibility
+            test_files=data.get('test_files')  # Bug #156
         )
     except (json.JSONDecodeError, KeyError, IOError):
         return None
 
 
-def calculate_current_hashes(paths: Dict[str, Path]) -> Dict[str, Optional[str]]:
+def calculate_current_hashes(paths: Dict[str, Any]) -> Dict[str, Any]:
     """Computes the hashes for all current files on disk."""
     # Return hash keys that match what the fingerprint expects
-    return {
-        f"{file_type}_hash": calculate_sha256(file_path)
-        for file_type, file_path in paths.items()
-    }
+    hashes = {}
+    for file_type, file_path in paths.items():
+        if file_type == 'test_files':
+            # Bug #156: Calculate hashes for all test files
+            hashes['test_files'] = {
+                f.name: calculate_sha256(f)
+                for f in file_path
+                if isinstance(f, Path) and f.exists()
+            }
+        elif isinstance(file_path, Path):
+            hashes[f"{file_type}_hash"] = calculate_sha256(file_path)
+    return hashes
 
 
 def get_git_diff(file_path: Path) -> str:
@@ -521,6 +622,7 @@ def estimate_operation_cost(operation: str, language: str = "python") -> float:
         'crash': 0.40,
         'verify': 0.35,
         'test': 0.60,
+        'test_extend': 0.60,  # Same cost as test - generates additional tests
         'fix': 0.45,
         'update': 0.25,
         'analyze_conflict': 0.20,
@@ -705,41 +807,70 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
         if not run_report or run_report.exit_code != 0:
             return False
 
-        # Check that run_report corresponds to current test file (staleness detection)
-        # If test file changed since run_report was created, we can't trust the results
-        if not skip_tests and 'test' in paths and paths['test'].exists():
-            current_test_hash = calculate_sha256(paths['test'])
-            if run_report.test_hash and current_test_hash != run_report.test_hash:
-                # run_report was created for a different version of the test file
-                return False
-            if not run_report.test_hash:
-                # Legacy run_report without test_hash - check fingerprint timestamp as fallback
-                fingerprint = read_fingerprint(basename, language)
-                if fingerprint:
-                    # If fingerprint is newer than run_report, run_report might be stale
-                    from datetime import datetime
-                    try:
-                        fp_time = datetime.fromisoformat(fingerprint.timestamp.replace('Z', '+00:00'))
-                        rr_time = datetime.fromisoformat(run_report.timestamp.replace('Z', '+00:00'))
-                        if fp_time > rr_time:
-                            return False  # run_report predates fingerprint, might be stale
-                    except (ValueError, AttributeError):
-                        pass  # If timestamps can't be parsed, skip this check
+        # Check that run_report corresponds to current test files (staleness detection)
+        # If any test file changed since run_report was created, we can't trust the results
+        if not skip_tests:
+            # Bug #156: Check ALL test files, not just the primary one
+            if 'test_files' in paths and run_report.test_files:
+                # New multi-file comparison
+                current_test_hashes = {
+                    f.name: calculate_sha256(f)
+                    for f in paths['test_files']
+                    if f.exists()
+                }
+                stored_test_hashes = run_report.test_files
+
+                # Check if any test file changed or new ones added/removed
+                if set(current_test_hashes.keys()) != set(stored_test_hashes.keys()):
+                    return False  # Test files added or removed
+
+                for fname, current_hash in current_test_hashes.items():
+                    if stored_test_hashes.get(fname) != current_hash:
+                        return False  # Test file content changed
+            elif 'test' in paths and paths['test'].exists():
+                # Backward compat: single file check
+                current_test_hash = calculate_sha256(paths['test'])
+                if run_report.test_hash and current_test_hash != run_report.test_hash:
+                    # run_report was created for a different version of the test file
+                    return False
+                if not run_report.test_hash:
+                    # Legacy run_report without test_hash - check fingerprint timestamp as fallback
+                    fingerprint = read_fingerprint(basename, language)
+                    if fingerprint:
+                        # If fingerprint is newer than run_report, run_report might be stale
+                        from datetime import datetime
+                        try:
+                            fp_time = datetime.fromisoformat(fingerprint.timestamp.replace('Z', '+00:00'))
+                            rr_time = datetime.fromisoformat(run_report.timestamp.replace('Z', '+00:00'))
+                            if fp_time > rr_time:
+                                return False  # run_report predates fingerprint, might be stale
+                        except (ValueError, AttributeError):
+                            pass  # If timestamps can't be parsed, skip this check
 
         # Check verify has been done (unless skip_verify)
         # Without this, workflow would be "complete" after crash even though verify hasn't run
+        # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_verify:
             fingerprint = read_fingerprint(basename, language)
-            if fingerprint and fingerprint.command not in ['verify', 'test', 'fix', 'update']:
-                return False
+            if fingerprint:
+                # If command starts with 'skip:', the operation was skipped, not completed
+                if fingerprint.command.startswith('skip:'):
+                    return False
+                if fingerprint.command not in ['verify', 'test', 'fix', 'update']:
+                    return False
 
         # CRITICAL FIX: Check tests have been run (unless skip_tests)
         # Without this, workflow would be "complete" after verify even though tests haven't run
         # This prevents false positive success when skip_verify=True but tests are still required
+        # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_tests:
             fp = read_fingerprint(basename, language)
-            if fp and fp.command not in ['test', 'fix', 'update']:
-                return False
+            if fp:
+                # If command starts with 'skip:', the operation was skipped, not completed
+                if fp.command.startswith('skip:'):
+                    return False
+                if fp.command not in ['test', 'fix', 'update']:
+                    return False
 
     return True
 
@@ -803,7 +934,7 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     
     # Strategy 2b: Look for historical run reports with exit_code == 0
     # Check all run report files in the meta directory that match the pattern
-    run_report_pattern = f"{basename}_{language}_run"
+    run_report_pattern = f"{_safe_basename(basename)}_{language}_run"
     for file in meta_dir.glob(f"{run_report_pattern}*.json"):
         try:
             with open(file, 'r') as f:
@@ -882,9 +1013,51 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
     
     # Read fingerprint early since we need it for crash verification
     fingerprint = read_fingerprint(basename, language)
-    
+
+    # Check if auto-deps just completed - ALWAYS regenerate code after auto-deps
+    # This must be checked early, before any run_report processing, because:
+    # 1. Old run_report (if exists) is stale and should be ignored
+    # 2. auto-deps updates dependencies but doesn't regenerate code
+    if fingerprint and fingerprint.command == 'auto-deps':
+        paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
+        return SyncDecision(
+            operation='generate',
+            reason='Auto-deps completed - regenerate code with updated prompt',
+            confidence=0.90,
+            estimated_cost=estimate_operation_cost('generate'),
+            details={
+                'decision_type': 'heuristic',
+                'previous_command': 'auto-deps',
+                'code_exists': paths['code'].exists() if paths.get('code') else False,
+                'regenerate_after_autodeps': True
+            }
+        )
+
     run_report = read_run_report(basename, language)
-    if run_report:
+    # Only process runtime signals (crash/fix/test) if we have a fingerprint
+    # Without a fingerprint, run_report is stale/orphaned and should be ignored
+    if run_report and fingerprint:
+        # Check for prompt changes FIRST - prompt changes take priority over runtime signals
+        # If the user modified the prompt, we need to regenerate regardless of runtime state
+        if fingerprint:
+            paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
+            current_prompt_hash = calculate_sha256(paths['prompt'])
+            if current_prompt_hash and current_prompt_hash != fingerprint.prompt_hash:
+                prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore') if paths['prompt'].exists() else ""
+                has_deps = check_for_dependencies(prompt_content)
+                return SyncDecision(
+                    operation='auto-deps' if has_deps else 'generate',
+                    reason='Prompt changed - regenerating (takes priority over runtime signals)',
+                    confidence=0.95,
+                    estimated_cost=estimate_operation_cost('generate'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'prompt_changed': True,
+                        'previous_command': fingerprint.command,
+                        'runtime_state_ignored': True
+                    }
+                )
+
         # Check if we just completed a crash operation and need verification FIRST
         # This takes priority over test failures because we need to verify the crash fix worked
         # BUT only proceed to verify if exit_code == 0 (crash fix succeeded)
@@ -1000,6 +1173,23 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                         'target_coverage': target_coverage,
                         'tests_skipped': True,
                         'skip_tests': True
+                    }
+                )
+            elif run_report.tests_failed == 0 and run_report.tests_passed > 0:
+                # Tests pass but coverage is below target
+                # Return 'test_extend' to signal we need to ADD more tests, not regenerate
+                return SyncDecision(
+                    operation='test_extend',
+                    reason=f'Tests pass ({run_report.tests_passed} passed) but coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}% - extending tests',
+                    confidence=0.85,
+                    estimated_cost=estimate_operation_cost('test'),
+                    details={
+                        'decision_type': 'heuristic',
+                        'current_coverage': run_report.coverage,
+                        'target_coverage': target_coverage,
+                        'tests_passed': run_report.tests_passed,
+                        'tests_failed': run_report.tests_failed,
+                        'extend_tests': True
                     }
                 )
             else:
@@ -1185,8 +1375,9 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             
             # Check if example has been crash-tested and verified before allowing test generation
             run_report = read_run_report(basename, language)
-            if not run_report:
+            if not run_report and not skip_verify:
                 # No run report exists - need to test the example first
+                # But if skip_verify is True, skip crash/verify and go to test generation
                 return SyncDecision(
                     operation='crash',
                     reason='Example exists but needs runtime testing before test generation',
@@ -1200,8 +1391,9 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                         'workflow_stage': 'crash_validation'
                     }
                 )
-            elif run_report.exit_code != 0:
+            elif run_report and run_report.exit_code != 0 and not skip_verify:
                 # Example crashed - fix it before proceeding
+                # But if skip_verify is True, skip crash fix and proceed
                 return SyncDecision(
                     operation='crash',
                     reason='Example crashes - fix runtime errors before test generation',
