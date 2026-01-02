@@ -38,12 +38,7 @@ import sys
 from click.testing import CliRunner
 
 # Import the CLI entry point from the pdd.core.cli module
-try:
-    from pdd.core.cli import cli, PDDCLI
-except ImportError:
-    # Fallback for demonstration if package is not installed
-    print("Error: pdd.core.cli module not found. Ensure the package is in your PYTHONPATH.")
-    sys.exit(1)
+from pdd.core.cli import cli, PDDCLI
 
 
 def example_show_help():
@@ -125,7 +120,7 @@ def example_invoke_with_global_options():
             Default: False
     
     Returns:
-        click.testing.Result: The result object containing all parsed options
+        dict: The context object containing all parsed options
     """
     runner = CliRunner()
     
@@ -187,6 +182,9 @@ def example_cost_tracking_setup():
         - input_files: List of input files involved
         - output_files: List of output files generated/modified
     
+    Args:
+        None
+    
     Returns:
         str: Path to the cost tracking CSV file
     """
@@ -215,12 +213,23 @@ def example_context_override():
     The --context option allows overriding automatic context detection
     to use a specific context from .pddrc configuration.
     
+    Context settings can include:
+        - generate_output_path: Where generated code files are saved
+        - test_output_path: Where test files are saved
+        - example_output_path: Where example files are saved
+        - default_language: Default programming language
+        - target_coverage: Default test coverage target (percentage)
+        - strength: Default AI model strength (0.0-1.0)
+        - temperature: Default AI model temperature
+        - budget: Default budget for iterative commands (in USD)
+        - max_attempts: Default maximum attempts for fixing operations
+    
     Returns:
         tuple: (exit_code, output_text)
     """
     runner = CliRunner()
     
-    # This will fail validation if 'default' context doesn't exist
+    # This will fail validation if 'backend' context doesn't exist
     # but demonstrates the usage pattern
     result = runner.invoke(cli, [
         '--context', 'default',
@@ -239,7 +248,13 @@ def example_core_dump_flag():
     """
     Demonstrate the --core-dump flag for debug bundles.
     
-    When --core-dump is set, PDD captures CLI command, logs, and metadata.
+    When --core-dump is set, PDD captures:
+        - Full CLI command and arguments
+        - Relevant logs and internal trace information
+        - Prompt files, generated code, and key metadata
+    
+    The core dump is saved to .pdd/core_dumps/ directory and can be
+    attached to bug reports for maintainers to reproduce issues.
     
     Returns:
         tuple: (exit_code, output_text)
@@ -262,6 +277,20 @@ def example_pddcli_class_usage():
     """
     Demonstrate the PDDCLI custom Click Group class.
     
+    PDDCLI extends click.Group with:
+    
+    1. Custom help formatting (format_help method):
+       - Adds "Generate Suite" section with related commands
+       - Shows generate, test, and example commands together
+    
+    2. Centralized error handling (invoke method):
+       - Catches exceptions and routes to handle_error()
+       - Writes core dumps even on failure
+       - Returns appropriate exit codes:
+         - 0: Success
+         - 1: General error
+         - 2: Usage error (invalid arguments)
+    
     Returns:
         type: The PDDCLI class for inspection
     """
@@ -279,6 +308,10 @@ def example_pddcli_class_usage():
 def main():
     """
     Run all CLI examples.
+    
+    This demonstrates the complete functionality of the PDD CLI module
+    including help display, version info, global options, and special
+    flags like --list-contexts and --core-dump.
     """
     print("\n" + "="*60)
     print("PDD CLI Module Examples")
