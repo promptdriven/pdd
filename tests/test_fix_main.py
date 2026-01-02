@@ -59,6 +59,9 @@ def test_fix_main_without_loop(
     and saves the outputs correctly.
     """
     # Arrange
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
+
     # Configure the mock Path to return real Path objects for output paths,
     # but allow controlling exists() for error.log
     from pathlib import Path as RealPath
@@ -486,6 +489,8 @@ def test_fix_main_success_is_false_when_no_updates(
     This tests the actual logic: success = update_unit_test or update_code
     """
     # Arrange
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -552,6 +557,9 @@ def test_fix_main_success_when_only_code_updated(
     Test that success is True when only update_code=True (update_unit_test=False)
     AND the tests pass after validation.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
+
     from pathlib import Path as RealPath
 
     # Use real Path objects but wrap to track exists() calls
@@ -631,6 +639,8 @@ def test_fix_main_does_not_write_empty_files(
     Test that fix_main does NOT write files when fixed content is empty.
     Spec: 'Write fixed files only when the corresponding fixed content is non-empty.'
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -741,6 +751,8 @@ def test_fix_main_passes_time_to_fix_errors_from_unit_tests(
     """
     Test that the time parameter from context is passed to fix_errors_from_unit_tests.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_ctx.obj['time'] = 90
     mock_path.return_value.exists.return_value = True
 
@@ -786,6 +798,8 @@ def test_fix_main_passes_verbose_to_fix_errors_from_unit_tests(
     """
     Test that verbose parameter is passed to fix_errors_from_unit_tests.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_ctx.obj['verbose'] = True
     mock_path.return_value.exists.return_value = True
 
@@ -875,6 +889,8 @@ def test_fix_main_non_loop_mode_includes_error_file_in_input_paths(
     """
     Test that in non-loop mode, error_file IS included in input_file_paths.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -964,6 +980,8 @@ def test_fix_main_non_loop_always_has_one_attempt(
     """
     Test that in non-loop mode, attempts is always 1 regardless of success.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -1026,6 +1044,8 @@ def test_fix_main_non_loop_should_not_report_success_without_test_validation(
     Evidence from issue: model="" and actual_cost=0.0 with success=true
     indicates no LLM was actually invoked, yet success was claimed.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
 
     mock_construct_paths.return_value = (
@@ -1104,6 +1124,8 @@ def test_fix_main_non_loop_success_requires_test_validation_both_flags_true(
     The log evidence shows model="" and actual_cost=0.0 with success=true,
     meaning the system claimed success without any LLM invocation at all.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
     mock_ctx.obj['quiet'] = True  # Suppress output for cleaner test
 
@@ -1173,6 +1195,8 @@ def test_fix_main_non_loop_success_when_tests_pass_after_fix(
     Test that success=True when the LLM suggests a fix AND tests pass after validation.
     This is the positive case: the fix actually works.
     """
+    # Force local execution to prevent cloud path from being taken
+    mock_ctx.obj['local'] = True
     mock_path.return_value.exists.return_value = True
     mock_ctx.obj['quiet'] = True
 
