@@ -1,195 +1,210 @@
 #!/usr/bin/env python3
 """
-Example usage of the pdd.core.cloud module.
+Example usage of the CloudConfig module.
 
-This module demonstrates how to use the centralized cloud configuration for PDD CLI commands.
-It covers:
-1. Retrieving cloud base URLs and specific endpoint URLs.
-2. Handling environment variable overrides for custom cloud deployments.
-3. Authenticating with the cloud service using JWT tokens (simulated).
-4. Checking if cloud features are enabled based on API keys.
+This script demonstrates how to use the centralized cloud configuration
+for PDD CLI commands. It covers:
+1. Retrieving cloud endpoint URLs.
+2. Handling environment variable overrides.
+3. Checking if cloud features are enabled.
+4. Retrieving JWT tokens for authentication.
 
 File structure (relative to project root):
     pdd/
         core/
-            cloud.py          # The module being demonstrated
+            cloud_config.py   # The module being demonstrated
     context/
         core/
-            cloud_example.py  # This example file
+            cloud_config_example.py  # This example file
 """
 
+import asyncio
 import os
 import sys
-from pathlib import Path
+from unittest.mock import patch, MagicMock
 
-# Ensure the pdd package is in the python path
-# This allows importing from pdd.core.cloud even if running this script directly
-current_dir = Path(__file__).resolve().parent
-project_root = current_dir.parents[2]  # Adjust based on file depth
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-from rich.console import Console
+# Ensure the project root is in sys.path so we can import the module
+# This allows running the example directly from the context/core directory
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # Import the CloudConfig class and constants from the module
-from pdd.core.cloud import (
-    CloudConfig,
-    CLOUD_ENDPOINTS,
-    PDD_CLOUD_URL_ENV,
-    PDD_JWT_TOKEN_ENV,
-    FIREBASE_API_KEY_ENV,
-    GITHUB_CLIENT_ID_ENV,
-)
+# Note: Adjust the import path based on your actual package structure
+try:
+    from pdd.core.cloud_config import (
+        CloudConfig,
+        CLOUD_ENDPOINTS,
+        PDD_CLOUD_URL_ENV,
+        PDD_JWT_TOKEN_ENV,
+        FIREBASE_API_KEY_ENV,
+        GITHUB_CLIENT_ID_ENV,
+    )
+except ImportError:
+    # Fallback for when running in a flat directory structure during testing
+    try:
+        from cloud_config import (
+            CloudConfig,
+            CLOUD_ENDPOINTS,
+            PDD_CLOUD_URL_ENV,
+            PDD_JWT_TOKEN_ENV,
+            FIREBASE_API_KEY_ENV,
+            GITHUB_CLIENT_ID_ENV,
+        )
+    except ImportError:
+        print("Error: Could not import CloudConfig. Please ensure the module is in the python path.")
+        sys.exit(1)
 
-console = Console()
+
+def print_header(title: str) -> None:
+    """Helper to print a styled header."""
+    print("\n" + "=" * 60)
+    print(f" {title}")
+    print("=" * 60)
 
 
-def example_url_configuration():
+def example_url_configuration() -> None:
     """
-    Demonstrate how to retrieve cloud URLs.
-    
-    This shows:
-    - Getting the default base URL.
-    - Getting specific endpoint URLs (e.g., for generating code).
-    - How environment variables override these URLs (useful for local testing).
+    Demonstrates how to retrieve base URLs and specific endpoint URLs.
+    Shows how environment variables can override defaults.
     """
-    console.print("[bold blue]=== URL Configuration Example ===[/bold blue]")
+    print_header("1. URL Configuration")
 
-    # 1. Default Configuration
-    # By default, this points to the production cloud functions
+    # 1. Default Behavior
+    print("--- Default Configuration ---")
     base_url = CloudConfig.get_base_url()
-    console.print(f"Default Base URL: [green]{base_url}[/green]")
-
-    generate_url = CloudConfig.get_endpoint_url("generateCode")
-    console.print(f"Generate Endpoint: [green]{generate_url}[/green]")
-
-    # 2. Custom Configuration (e.g., Local Emulator)
-    # We simulate setting the environment variable for a local emulator
-    console.print("\n[dim]Simulating local emulator environment...[/dim]")
-    original_url_env = os.environ.get(PDD_CLOUD_URL_ENV)
+    print(f"Default Base URL: {base_url}")
     
-    try:
-        # Set a custom URL (like a local firebase emulator)
-        os.environ[PDD_CLOUD_URL_ENV] = "http://127.0.0.1:5001/pdd-project/us-central1"
+    gen_url = CloudConfig.get_endpoint_url("generateCode")
+    print(f"Generate Endpoint: {gen_url}")
+
+    # 2. Overriding with Environment Variable (e.g., for local emulator)
+    print("\n--- Custom Configuration (Emulator) ---")
+    emulator_url = "http://127.0.0.1:5001/my-project/us-central1"
+    
+    # We use patch.dict to simulate setting the environment variable safely
+    with patch.dict(os.environ, {PDD_CLOUD_URL_ENV: emulator_url}):
+        custom_base = CloudConfig.get_base_url()
+        print(f"Custom Base URL:   {custom_base}")
         
-        local_base = CloudConfig.get_base_url()
-        console.print(f"Local Base URL: [yellow]{local_base}[/yellow]")
+        sync_url = CloudConfig.get_endpoint_url("syncState")
+        print(f"Sync Endpoint:     {sync_url}")
         
-        # The endpoint builder appends the correct path to the custom base
-        local_sync = CloudConfig.get_endpoint_url("syncState")
-        console.print(f"Local Sync Endpoint: [yellow]{local_sync}[/yellow]")
-        
-    finally:
-        # Cleanup: Restore original environment
-        if original_url_env:
-            os.environ[PDD_CLOUD_URL_ENV] = original_url_env
-        else:
-            if PDD_CLOUD_URL_ENV in os.environ:
-                del os.environ[PDD_CLOUD_URL_ENV]
-    console.print()
+        # Verify it constructed the path correctly
+        expected_sync = f"{emulator_url}{CLOUD_ENDPOINTS['syncState']}"
+        assert sync_url == expected_sync
+        print("✅ URL construction verified correctly.")
 
 
-def example_authentication_flow():
+def example_cloud_enabled_check() -> None:
     """
-    Demonstrate how to retrieve authentication tokens.
-    
-    This shows:
-    - Checking for a pre-injected token (CI/Testing scenario).
-    - How the system behaves when auth is missing (simulated).
-    
-    Note: We do not demonstrate the interactive device flow here to avoid 
-    blocking execution, but we show how to trigger it.
+    Demonstrates checking if cloud features are enabled based on API keys.
     """
-    console.print("[bold blue]=== Authentication Flow Example ===[/bold blue]")
+    print_header("2. Cloud Enabled Check")
 
-    # 1. CI/Testing Scenario (Pre-injected Token)
-    # This is the fastest path and avoids user interaction
-    console.print("[dim]Simulating CI environment with injected token...[/dim]")
+    # Case 1: Missing keys
+    with patch.dict(os.environ, {}, clear=True):
+        is_enabled = CloudConfig.is_cloud_enabled()
+        print(f"With no env vars: Cloud Enabled? {is_enabled}")
+
+    # Case 2: Keys present
+    mock_env = {
+        FIREBASE_API_KEY_ENV: "dummy_firebase_key",
+        GITHUB_CLIENT_ID_ENV: "dummy_github_id"
+    }
+    with patch.dict(os.environ, mock_env):
+        is_enabled = CloudConfig.is_cloud_enabled()
+        print(f"With keys present: Cloud Enabled? {is_enabled}")
+
+
+def example_jwt_token_handling() -> None:
+    """
+    Demonstrates retrieving the JWT token.
+    1. Shows priority of PDD_JWT_TOKEN_ENV (CI/Testing mode).
+    2. Shows fallback to device flow (mocked).
+    """
+    print_header("3. JWT Token Handling")
+
+    # Scenario A: Token injected via Environment Variable (CI/Testing)
+    print("--- Scenario A: Token from Environment ---")
+    test_token = "eyJhbGciOiJIUzI1NiJ9.test_payload.signature"
     
-    original_token = os.environ.get(PDD_JWT_TOKEN_ENV)
-    dummy_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_payload.signature"
-    
-    try:
-        os.environ[PDD_JWT_TOKEN_ENV] = dummy_token
+    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: test_token}):
+        token = CloudConfig.get_jwt_token(verbose=True)
+        print(f"Retrieved Token: {token[:15]}... (truncated)")
         
-        # verbose=True prints status messages to the console
-        token = CloudConfig.get_jwt_token(verbose=True, app_name="Example Script")
-        
-        if token == dummy_token:
-            console.print("[success]Successfully retrieved injected token![/success]")
+        if token == test_token:
+            print("✅ Successfully retrieved token from environment.")
         else:
-            console.print("[error]Failed to retrieve injected token.[/error]")
+            print("❌ Failed to retrieve token from environment.")
+
+    # Scenario B: Interactive Device Flow (Mocked)
+    print("\n--- Scenario B: Interactive Device Flow ---")
+    
+    # We need API keys present for the device flow to trigger
+    env_vars = {
+        FIREBASE_API_KEY_ENV: "valid_key",
+        GITHUB_CLIENT_ID_ENV: "valid_id"
+    }
+    
+    # We mock the async device_flow_get_token function to avoid actual network calls
+    with patch.dict(os.environ, env_vars):
+        # We must patch where it is imported IN CloudConfig, not where it is defined
+        # Assuming CloudConfig imports it as 'device_flow_get_token'
+        with patch('pdd.core.cloud_config.device_flow_get_token') as mock_flow:
+            # Setup the mock to return a future (since it's awaited in asyncio.run)
+            future = asyncio.Future()
+            future.set_result("device_flow_generated_token_123")
+            mock_flow.return_value = future
             
-    finally:
-        # Cleanup
-        if original_token:
-            os.environ[PDD_JWT_TOKEN_ENV] = original_token
-        else:
-            if PDD_JWT_TOKEN_ENV in os.environ:
-                del os.environ[PDD_JWT_TOKEN_ENV]
+            # Call the method
+            token = CloudConfig.get_jwt_token(verbose=True, app_name="Example App")
+            
+            print(f"Retrieved Token: {token}")
+            if token == "device_flow_generated_token_123":
+                print("✅ Successfully retrieved token via device flow mock.")
+            else:
+                print("❌ Failed to retrieve token via device flow.")
 
-    # 2. Missing Credentials Scenario
-    # If we clear environment variables, we can see how it handles missing config
-    console.print("\n[dim]Simulating missing API keys...[/dim]")
-    
-    # Save original keys
-    orig_firebase = os.environ.get(FIREBASE_API_KEY_ENV)
-    orig_github = os.environ.get(GITHUB_CLIENT_ID_ENV)
-    
-    # Temporarily unset keys to force a failure state for demonstration
-    if FIREBASE_API_KEY_ENV in os.environ: del os.environ[FIREBASE_API_KEY_ENV]
-    if GITHUB_CLIENT_ID_ENV in os.environ: del os.environ[GITHUB_CLIENT_ID_ENV]
-    
-    try:
-        # This should fail gracefully and return None because keys are missing
-        # and interactive auth cannot proceed without them.
+
+def example_error_handling() -> None:
+    """
+    Demonstrates how the configuration handles missing keys during auth.
+    """
+    print_header("4. Error Handling")
+
+    print("--- Missing API Keys ---")
+    # Ensure environment is empty of keys
+    with patch.dict(os.environ, {}, clear=True):
+        # This should fail gracefully and return None, printing an error to console
         token = CloudConfig.get_jwt_token(verbose=True)
         
         if token is None:
-            console.print("[info]Auth correctly returned None when keys are missing.[/info]")
+            print("✅ Correctly returned None when API keys are missing.")
         else:
-            console.print(f"[error]Unexpectedly got token: {token}[/error]")
-            
-    finally:
-        # Restore keys
-        if orig_firebase: os.environ[FIREBASE_API_KEY_ENV] = orig_firebase
-        if orig_github: os.environ[GITHUB_CLIENT_ID_ENV] = orig_github
-    console.print()
+            print(f"❌ Unexpectedly returned a token: {token}")
 
 
-def example_feature_flags():
+def main() -> None:
     """
-    Demonstrate checking if cloud features are enabled.
-    
-    Cloud features are considered 'enabled' if the necessary API keys
-    (Firebase and GitHub) are present in the environment.
+    Run all examples.
     """
-    console.print("[bold blue]=== Feature Flag Example ===[/bold blue]")
-
-    # 1. Check status
-    is_enabled = CloudConfig.is_cloud_enabled()
+    print("Running CloudConfig Examples...")
     
-    if is_enabled:
-        console.print("[success]Cloud features are ENABLED.[/success]")
-        console.print("API keys for Firebase and GitHub were found in environment.")
-    else:
-        console.print("[warning]Cloud features are DISABLED.[/warning]")
-        console.print("Missing API keys. Cloud commands will likely fail or fallback to local mode.")
-    
-    # 2. List available endpoints
-    console.print("\n[dim]Available Cloud Endpoints:[/dim]")
-    for name, path in CLOUD_ENDPOINTS.items():
-        console.print(f"  - {name}: {path}")
-    console.print()
-
-
-def main():
-    """Run all cloud configuration examples."""
-    console.print("[bold]PDD Cloud Configuration Examples[/bold]\n")
-    
+    # 1. URL Configuration
     example_url_configuration()
-    example_authentication_flow()
-    example_feature_flags()
+    
+    # 2. Cloud Enabled Check
+    example_cloud_enabled_check()
+    
+    # 3. JWT Token Handling
+    # Note: This uses mocks to simulate the async device flow
+    example_jwt_token_handling()
+
+    # 4. Error Handling
+    example_error_handling()
+
+    print("\nAll examples completed.")
 
 
 if __name__ == "__main__":

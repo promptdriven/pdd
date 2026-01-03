@@ -1,200 +1,143 @@
 import os
+import sys
 import click
-import textwrap                 #  ← added
 from pathlib import Path
-from typing import Tuple, Dict, Any
+from rich import print as rich_print
 
-# Assume 'pdd' package is installed or accessible in the Python path.
-# The example script is likely in a different directory than the 'pdd' package.
-from pdd.fix_verification_main import fix_verification_main
+# Adjust the path to ensure we can import the module
+# Assuming the module is in a package structure like 'pdd.fix_verification_main'
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Define default values matching the module's defaults for clarity
-DEFAULT_MAX_ATTEMPTS = 3
-DEFAULT_BUDGET = 5.0
-DEFAULT_STRENGTH = 0.5
-DEFAULT_TEMPERATURE = 0.0
-
-def create_dummy_context(params: Dict[str, Any]) -> click.Context:
-    """Creates a dummy Click context object for testing purposes."""
-    # A minimal context setup is needed. We mainly care about ctx.params.
-    ctx = click.Context(click.Command('dummy'))
-    ctx.obj = params
-    return ctx
-
-def run_fix_verification_example():
-    """
-    Demonstrates how to use the fix_verification_main function.
-    This example simulates calling the function as if invoked by the Click CLI,
-    showing both single-pass and loop verification modes.
-    """
-    print("[bold blue]=== Running fix_verification_main Example ===[/bold blue]\n")
-
-    # --- 1. Setup: Create necessary directories and input files ---
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-
-    prompt_content = "Create a Python module 'calculator.py' with a function 'add(a, b)' that returns the sum of two integers."
-    # Intentionally buggy code (subtracts instead of adds) –‑ outer quotes
-    #   switched to triple single quotes so the inner triple double quotes are
-    #   perfectly legal.
-    code_content_buggy = textwrap.dedent('''\
-# calculator.py
-def add(a: int, b: int) -> int:
-    """Returns the difference of two integers (intentionally wrong)."""
-    return a - b
-''')
-
-    # Program to run the code and produce output for verification
-    program_content = textwrap.dedent("""\
-import calculator
-import sys
-
-if len(sys.argv) != 3:
-    print("Usage: python program.py <num1> <num2>")
-    sys.exit(1)
-
-a = int(sys.argv[1])
-b = int(sys.argv[2])
-
-result = calculator.add(a, b)
-print(f"Input: ({a}, {b})")
-print(f"Result: {result}")  # Output will be judged by LLM against the prompt
-""")
-    # Verification program for the loop mode (simple assertion)
-    verification_program_content = textwrap.dedent("""\
-import calculator
-import sys
-
-print("Running verification program...")
+# Import the function to be demonstrated
+# Note: In a real package, this would be: from pdd.fix_verification_main import fix_verification_main
 try:
-    assert calculator.add(5, 3) == 8, "Verification Failed: 5 + 3 != 8"
-    assert calculator.add(-1, 1) == 0, "Verification Failed: -1 + 1 != 0"
-    print("Verification Succeeded!")
-    sys.exit(0)  # Exit code 0 indicates success
-except AssertionError as e:
-    print(e)
-    sys.exit(1)  # Non‑zero exit code indicates failure
-""")
-
-    prompt_file = output_dir / "calc.prompt"
-    code_file = output_dir / "calculator.py"
-    program_file = output_dir / "run_calculator.py"
-    verification_program_file = output_dir / "verify_calculator.py"
-
-    prompt_file.write_text(prompt_content)
-    code_file.write_text(code_content_buggy)
-    program_file.write_text(program_content)
-    verification_program_file.write_text(verification_program_content)
-
-    print(f"Created example files in: {output_dir.absolute()}")
-    print(f"  - Prompt: {prompt_file.name}")
-    print(f"  - Code (buggy): {code_file.name}")
-    print(f"  - Program: {program_file.name}")
-    print(f"  - Verification Program: {verification_program_file.name}\n")
-
-    # --- 2. Define common parameters and context ---
-    # These would typically come from global Click options
-    global_params = {
-        'strength': DEFAULT_STRENGTH,
-        'temperature': DEFAULT_TEMPERATURE,
-        'force': True,  # Allow overwriting output files in the example
-        'quiet': False, # Show output during the run
-        'verbose': True # Enable verbose logging for demonstration
-    }
-    ctx = create_dummy_context(global_params)
-
-    # Define output paths
-    output_results_single = output_dir / "verify_results_single.log"
-    output_code_single = output_dir / "calculator_verified_single.py"
-    output_program_single = output_dir / "run_calculator_verified_single.py"
-    output_results_loop = output_dir / "verify_results_loop.log"
-    output_code_loop = output_dir / "calculator_verified_loop.py"
-    output_program_loop = output_dir / "run_calculator_verified_loop.py"
-
-    # --- 3. Run in Single Pass Mode (loop=False) ---
-    print("[bold cyan]--- Running Single Pass Verification (loop=False) ---[/bold cyan]")
-    # In single pass, the LLM judges the output of `program_file` against the prompt.
-    # It might propose fixes based on discrepancies found.
-    # `verification_program` is not used here.
+    from pdd.fix_verification_main import fix_verification_main
+except ImportError:
+    # Fallback for standalone testing if not installed as a package
     try:
-        success, final_program, final_code, attempts, total_cost, model_name = fix_verification_main(
-            ctx=ctx,
-            prompt_file=str(prompt_file),
-            code_file=str(code_file), # Start with the buggy code
-            program_file=str(program_file),
-            output_results=str(output_results_single),
-            output_code=str(output_code_single),
-            output_program=str(output_program_single),
-            loop=False,
-            verification_program=None, # Not needed for single pass
-            max_attempts=1, # Ignored when loop=False, but set for clarity
-            budget=0.0      # Ignored when loop=False, but set for clarity
-        )
+        from fix_verification_main import fix_verification_main
+    except ImportError:
+        rich_print("[red]Error: Could not import fix_verification_main. Ensure it is in the python path.[/red]")
+        sys.exit(1)
 
-        print("\n[bold green]--- Single Pass Results ---[/bold green]")
-        print(f"Success Status: {success}")
-        print(f"Attempts Made: {attempts}") # Should be 1 for single pass
-        print(f"Total Cost (USD): ${total_cost:.6f}")
-        print(f"Model Used: {model_name}")
-        print(f"Final Program Content (first ~100 chars): {final_program[:100]}...")
-        print(f"Final Code Content (first ~100 chars): {final_code[:100]}...")
-        print(f"Results Log Saved To: {output_results_single if output_results_single.exists() else 'N/A'}")
-        print(f"Verified Code Saved To: {output_code_single if success and output_code_single.exists() else 'N/A'}")
-        print(f"Verified Program Saved To: {output_program_single if success and output_program_single.exists() else 'N/A'}")
 
-    except Exception as e:
-        print(f"[bold red]Error during single pass verification:[/bold red] {e}")
+def create_dummy_files(base_dir: Path) -> tuple[Path, Path, Path]:
+    """Creates dummy files for the example.
+    
+    Args:
+        base_dir: The base directory to create the dummy files in.
+        
+    Returns:
+        A tuple containing paths to the prompt file, code file, and program file.
+    """
+    base_dir.mkdir(exist_ok=True)
 
-    # --- 4. Run in Loop Mode (loop=True) ---
-    print("\n[bold cyan]--- Running Iterative Verification (loop=True) ---[/bold cyan]")
-    # Reset code file to buggy version for the loop test
-    code_file.write_text(code_content_buggy)
-    print(f"Reset {code_file.name} to buggy version for loop test.")
+    # 1. Create a dummy prompt file
+    prompt_file = base_dir / "calculator_python.prompt"
+    prompt_file.write_text("Create a calculator module with an add function.", encoding="utf-8")
 
-    # In loop mode, the function repeatedly runs `program_file`, uses the LLM
-    # to check output against the prompt, potentially fixes `code_file` and/or
-    # `program_file`, and then runs `verification_program` to confirm the fix.
-    # This continues until success, max_attempts, or budget is reached.
-    loop_max_attempts = 3
-    loop_budget = 0.10 # Set a small budget (in USD) for the example
+    # 2. Create a dummy code file (with a bug)
+    code_file = base_dir / "calculator.py"
+    code_content = """
+def add(a, b):
+    # Intentional bug: subtraction instead of addition
+    return a - b
+"""
+    code_file.write_text(code_content, encoding="utf-8")
 
-    try:
-        success_loop, final_program_loop, final_code_loop, attempts_loop, total_cost_loop, model_name_loop = fix_verification_main(
-            ctx=ctx,
-            prompt_file=str(prompt_file),
-            code_file=str(code_file), # Start with the buggy code
-            program_file=str(program_file),
-            output_results=str(output_results_loop),
-            output_code=str(output_code_loop),
-            output_program=str(output_program_loop),
-            loop=True,
-            verification_program=str(verification_program_file), # Required for loop
-            max_attempts=loop_max_attempts,
-            budget=loop_budget
-        )
+    # 3. Create a dummy verification program
+    program_file = base_dir / "verify_calculator.py"
+    program_content = """
+import sys
+import calculator
 
-        print("\n[bold green]--- Loop Results ---[/bold green]")
-        print(f"Success Status: {success_loop}")
-        print(f"Attempts Made: {attempts_loop} (Max: {loop_max_attempts})")
-        print(f"Total Cost (USD): ${total_cost_loop:.6f} (Budget: ${loop_budget:.2f})")
-        print(f"Model Used: {model_name_loop}")
-        print(f"Final Program Content (first ~100 chars): {final_program_loop[:100]}...")
-        print(f"Final Code Content (first ~100 chars): {final_code_loop[:100]}...")
-        print(f"Results Log Saved To: {output_results_loop if output_results_loop.exists() else 'N/A'}")
-        print(f"Verified Code Saved To: {output_code_loop if success_loop and output_code_loop.exists() else 'N/A'}")
-        print(f"Verified Program Saved To: {output_program_loop if success_loop and output_program_loop.exists() else 'N/A'}")
-
-        # Optionally, display the final fixed code if successful
-        if success_loop and output_code_loop.exists():
-             print("\n[bold magenta]Final Code Content (Loop):[/bold magenta]")
-             print(output_code_loop.read_text())
-
-    except Exception as e:
-        print(f"[bold red]Error during loop verification:[/bold red] {e}")
-
-    print("\n[bold blue]=== Example Finished ===[/bold blue]")
+def test_add():
+    result = calculator.add(5, 3)
+    expected = 8
+    print(f"Testing add(5, 3)... Result: {result}, Expected: {expected}")
+    if result != expected:
+        print("FAILURE: Result does not match expected value.")
+        sys.exit(1)
+    else:
+        print("SUCCESS: Test passed.")
 
 if __name__ == "__main__":
-    # Use Rich for pretty printing in the example output
-    from rich import print
-    run_fix_verification_example()
+    test_add()
+"""
+    program_file.write_text(program_content, encoding="utf-8")
+
+    return prompt_file, code_file, program_file
+
+
+def main() -> None:
+    """Main function to demonstrate the fix_verification_main module."""
+    # Setup paths
+    base_dir = Path("example_verification_env")
+    prompt_path, code_path, program_path = create_dummy_files(base_dir)
+    
+    # Define output paths
+    output_results = base_dir / "verification_results.log"
+    output_code = base_dir / "calculator_fixed.py"
+    output_program = base_dir / "verify_calculator_fixed.py"
+
+    # Mock a Click Context
+    # The function expects a Click context with an 'obj' dictionary for global settings
+    ctx = click.Context(click.Command("verify"))
+    ctx.obj = {
+        'verbose': True,
+        'quiet': False,
+        'force': True,
+        'strength': 0.5,
+        'temperature': 0.0,
+        'time': 0.5,
+        'local': True,  # Force local execution for this example
+        'context': None,
+        'confirm_callback': None
+    }
+
+    rich_print("[bold blue]Running fix_verification_main Example[/bold blue]")
+    rich_print(f"Prompt: {prompt_path}")
+    rich_print(f"Code: {code_path}")
+    rich_print(f"Program: {program_path}")
+
+    try:
+        # Call the main verification function
+        # We are running in single-pass mode (loop=False)
+        success, final_prog, final_code, attempts, cost, model = fix_verification_main(
+            ctx=ctx,
+            prompt_file=str(prompt_path),
+            code_file=str(code_path),
+            program_file=str(program_path),
+            output_results=str(output_results),
+            output_code=str(output_code),
+            output_program=str(output_program),
+            loop=False,
+            verification_program=None,  # Not needed for single pass
+            max_attempts=1,
+            budget=1.0,
+            agentic_fallback=False
+        )
+
+        rich_print("\n[bold green]Execution Finished[/bold green]")
+        rich_print(f"Success: {success}")
+        rich_print(f"Attempts: {attempts}")
+        rich_print(f"Total Cost: ${cost:.4f}")
+        rich_print(f"Model: {model}")
+        
+        if success:
+            rich_print("\n[bold]Fixed Code Content:[/bold]")
+            rich_print(final_code)
+        else:
+            rich_print("\n[yellow]Verification failed or no fixes proposed.[/yellow]")
+
+    except Exception as e:
+        rich_print(f"[bold red]An error occurred during execution:[/bold red] {e}")
+    finally:
+        # Cleanup (optional)
+        # import shutil
+        # shutil.rmtree(base_dir)
+        pass
+
+
+if __name__ == "__main__":
+    main()
