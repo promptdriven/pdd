@@ -1,3 +1,13 @@
+## v0.0.100 (2026-01-02)
+
+### Feat
+
+- Add cloud execution support for pdd crash and pdd verify commands
+
+### Fix
+
+- Address valid Copilot suggestions - fix patch target and remove outdated comment
+
 ## v0.0.99 (2026-01-01)
 
 ### Feat
