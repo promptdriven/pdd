@@ -1,0 +1,55 @@
+% You are an expert Python engineer building a Textual TUI for PDD sync.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+A Textual-based Terminal User Interface that wraps the sync worker function,
+providing animated feedback, log output, and modal dialogs for user interaction.
+
+% Requirements
+
+1. **SyncApp** - Main Textual App class:
+   - Constructor accepts: basename, budget, worker_func, shared state refs for
+     function_name, cost, paths (prompt/code/example/tests), colors, stop_event,
+     and optional progress_callback_ref
+   - Logo animation phase: particles form logo, hold, then expand to box perimeter
+   - Main animation phase: renders sync status using sync_animation module
+   - Progress bar for file processing (hidden when not in use)
+   - RichLog widget for captured stdout/stderr output
+
+2. **Worker Thread Execution**:
+   - Run worker_func in @work(thread=True) decorated method
+   - Redirect stdout/stderr to RichLog via ThreadSafeRedirector
+   - Redirect stdin to TUI input modals via TUIStdinRedirector
+   - Set FORCE_COLOR=1, TERM=xterm-256color, COLUMNS=<log_width> during execution
+   - Restore original environment variables on completion
+   - Handle EOFError from cancelled input, BaseException for other errors
+   - Always exit app with worker result dict (success, total_cost, errors, etc.)
+
+3. **ThreadSafeRedirector** - Stdout/stderr capture:
+   - Buffer writes, flush on newlines
+   - Handle carriage returns for progress bar updates (keep content after last \r)
+   - Convert ANSI codes to Rich Text via Text.from_ansi()
+   - Dim lines matching log timestamp pattern (YYYY-MM-DD HH:MM:SS)
+   - Use app.call_from_thread() for thread-safe widget updates
+
+4. **Modal Dialogs**:
+   - ConfirmScreen: Yes/No with keyboard bindings (y/n/enter/escape)
+   - InputScreen: Text input with optional password masking, focus on mount
+   - request_confirmation() and request_input() methods: thread-safe, block worker
+     until user responds via threading.Event, 5-minute timeout
+
+5. **TUIStdinRedirector** - Stdin replacement:
+   - readline() requests input via TUI modal
+   - Capture prompt text from stdout writes not ending in newline
+   - Detect password fields (api/key in prompt text)
+   - Raise EOFError if input cancelled or TUI unavailable
+
+6. **show_exit_animation()** - Standalone function:
+   - Display centered logo in Rich Panel, sleep 1 second, clear console
+
+% Dependencies
+- textual (App, ModalScreen, widgets, bindings, work decorator)
+- rich (Console, Panel, Text, Style, Align)
+- Reuse: sync_animation (AnimationState, _render_animation_frame, colors)
+- Reuse: logo_animation (ASCII_LOGO_ART, particle functions, timing constants)
