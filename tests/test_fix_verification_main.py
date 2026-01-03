@@ -25,6 +25,7 @@ def mock_context(tmp_path):
         'force': False,
         'quiet': False,
         'verbose': False,
+        'local': True,  # Force local execution to avoid cloud API calls in tests
     }
     # params usually holds command-specific parameters, leave empty for this command
     ctx.params = {}
