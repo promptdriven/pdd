@@ -18,12 +18,24 @@ def crash_main(
 
 % Requirements:
     1. Use `resolve_effective_config` from `.config_resolution` with `param_overrides` for strength/temperature.
-    2. **Loop mode**: Use `fix_code_loop` (pass `prompt_file`, `agentic_fallback`). Map its return order `(success, final_program, final_code, ...)` to ours.
-    3. **Non-loop mode**: Use `fix_code_module_errors` → `(update_program, update_code, fixed_program, fixed_code, _, cost, model)`. Set `success=True`, `attempts=1`.
+    2. **Loop mode**: Use `fix_code_loop` (pass `prompt_file`, `agentic_fallback`, `use_cloud`). Map its return order `(success, final_program, final_code, ...)` to ours.
+    3. **Non-loop mode**: Use Cloud vs Local Execution Strategy (see below), then `fix_code_module_errors` → `(update_program, update_code, fixed_program, fixed_code, _, cost, model)`. Set `success=True`, `attempts=1`.
     4. Track modifications by comparing final vs original. Empty string = not updated, fall back to original.
-    5. Exceptions: return `(False, "", "", 0, 0.0, error_string)` instead of sys.exit. Re-raise `click.Abort`.
+    5. Exceptions: return `(False, "", "", 0, 0.0, error_string)` instead of sys.exit. Re-raise `click.Abort` and `click.UsageError`.
     6. Pass `context_override` and `confirm_callback` to `construct_paths`.
     7. Use `from rich import print as rprint` (overrides preamble). Create parent dirs before writing. Print status/cost/save-locations unless `quiet`; add diagnostics if `verbose`.
+
+% Cloud vs Local Execution Strategy:
+%  1. If `ctx.obj.get('local')` is True, use local execution directly.
+%  2. For single-pass mode (loop=False): attempt cloud first via `CloudConfig.get_jwt_token()`.
+%     - POST to `CloudConfig.get_endpoint_url("crashCode")` with JSON payload:
+%       `{ "programContent": <program>, "promptContent": <prompt>, "codeContent": <code>, "errorContent": <error>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "time": <time>, "verbose": <verbose>, "programPath": <path>, "codePath": <path> }`
+%     - Expected response: `{ "fixedCode", "fixedProgram", "updateCode", "updateProgram", "analysis", "totalCost", "modelName" }`
+%     - Request timeout: 400 seconds.
+%  3. For loop mode: use hybrid approach. Pass `use_cloud=True` to `fix_code_loop` for cloud LLM calls while keeping local program execution.
+%     - If `ctx.obj.get('local')` is True, pass `use_cloud=False` to force local execution.
+%  4. Handle errors: 401/402/403/400 are non-recoverable (raise `click.UsageError`); 5xx errors fall back to local.
+%  5. If verbose is True, print execution info using Rich panels.
 
 <examples>
    <construct_paths_example>

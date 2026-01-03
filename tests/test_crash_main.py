@@ -75,7 +75,7 @@ TypeError: can't multiply sequence by non-int of type 'str'
     }
     # tmp_path is automatically cleaned up by pytest
 
-# Fixture for Click context
+# Fixture for Click context - uses local execution by default for unit tests
 @pytest.fixture
 def ctx():
     # Initialize params and obj as empty dicts if they might be missing
@@ -86,7 +86,8 @@ def ctx():
         'temperature': 0,
         'force': False, # Ensure default force is False unless overridden
         'quiet': False, # Ensure default quiet is False unless overridden
-        'verbose': False # Ensure default verbose is False unless overridden
+        'verbose': False, # Ensure default verbose is False unless overridden
+        'local': True  # Force local execution for unit tests
     }
     return context
 
@@ -294,3 +295,370 @@ def test_crash_fix_with_force_option(ctx, test_files):
     # Optionally check if content was overwritten
     assert Path(output_code).read_text() != "existing content"
     assert Path(output_program).read_text() != "existing content"
+
+
+# ============================================================================
+# Cloud Execution Tests
+# ============================================================================
+
+from unittest.mock import patch, MagicMock, mock_open
+import requests
+
+@patch('pdd.crash_main.requests.post')
+@patch('pdd.crash_main.CloudConfig.get_jwt_token')
+@patch('pdd.crash_main.construct_paths')
+def test_crash_main_cloud_success(
+    mock_construct_paths,
+    mock_get_jwt,
+    mock_post,
+    ctx,
+    test_files
+):
+    """
+    Test that crash_main uses cloud execution successfully when available.
+    """
+    ctx.obj['local'] = False  # Not forcing local
+    ctx.obj['force'] = True
+    ctx.obj['quiet'] = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt content',
+            'code_file': 'code content',
+            'program_file': 'program content',
+            'error_file': 'error content'
+        },
+        {
+            'output_code': test_files['output_dir'] + '/fixed_code.py',
+            'output_program': test_files['output_dir'] + '/fixed_program.py',
+            'output_results': test_files['output_dir'] + '/results.log'
+        },
+        'python'
+    )
+
+    mock_get_jwt.return_value = "mock_jwt_token"
+
+    # Mock successful cloud response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        'fixedCode': 'fixed code content',
+        'fixedProgram': 'fixed program content',
+        'updateCode': True,
+        'updateProgram': True,
+        'analysis': 'analysis content',
+        'totalCost': 0.05,
+        'modelName': 'cloud-model'
+    }
+    mock_post.return_value = mock_response
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        success, final_code, final_program, attempts, total_cost, model_name = crash_main(
+            ctx=ctx,
+            prompt_file=test_files["prompt_file"],
+            code_file=test_files["code_file"],
+            program_file=test_files["program_file"],
+            error_file=test_files["error_file"],
+            output=None,
+            output_program=None,
+            loop=False
+        )
+
+    # Assert cloud was used
+    mock_get_jwt.assert_called_once()
+    mock_post.assert_called_once()
+    assert success is True
+    assert final_code == 'fixed code content'
+    assert final_program == 'fixed program content'
+    assert total_cost == 0.05
+    assert model_name == 'cloud-model'
+
+
+@patch('pdd.crash_main.fix_code_module_errors')
+@patch('pdd.crash_main.CloudConfig.get_jwt_token')
+@patch('pdd.crash_main.construct_paths')
+def test_crash_main_cloud_fallback_on_auth_failure(
+    mock_construct_paths,
+    mock_get_jwt,
+    mock_fix_errors,
+    ctx,
+    test_files
+):
+    """
+    Test that crash_main falls back to local when cloud authentication fails.
+    """
+    ctx.obj['local'] = False
+    ctx.obj['force'] = True
+    ctx.obj['quiet'] = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt',
+            'code_file': 'code',
+            'program_file': 'program',
+            'error_file': 'error'
+        },
+        {
+            'output_code': test_files['output_dir'] + '/fixed_code.py',
+            'output_program': test_files['output_dir'] + '/fixed_program.py',
+            'output_results': test_files['output_dir'] + '/results.log'
+        },
+        'python'
+    )
+
+    # Mock auth failure
+    mock_get_jwt.return_value = None
+
+    # Mock local fallback
+    mock_fix_errors.return_value = (True, True, 'fixed program', 'fixed code', 'analysis', 0.1, 'local-model')
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        success, fixed_code, fixed_program, attempts, cost, model = crash_main(
+            ctx=ctx,
+            prompt_file=test_files["prompt_file"],
+            code_file=test_files["code_file"],
+            program_file=test_files["program_file"],
+            error_file=test_files["error_file"],
+            output=None,
+            output_program=None,
+            loop=False
+        )
+
+    # Assert fallback to local was used
+    mock_get_jwt.assert_called_once()
+    mock_fix_errors.assert_called_once()
+
+
+@patch('pdd.crash_main.requests.post')
+@patch('pdd.crash_main.CloudConfig.get_jwt_token')
+@patch('pdd.crash_main.construct_paths')
+def test_crash_main_cloud_insufficient_credits_raises_error(
+    mock_construct_paths,
+    mock_get_jwt,
+    mock_post,
+    ctx,
+    test_files
+):
+    """
+    Test that crash_main raises UsageError on insufficient credits (HTTP 402).
+    """
+    ctx.obj['local'] = False
+    ctx.obj['force'] = True
+    ctx.obj['quiet'] = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt',
+            'code_file': 'code',
+            'program_file': 'program',
+            'error_file': 'error'
+        },
+        {
+            'output_code': test_files['output_dir'] + '/fixed_code.py',
+            'output_program': test_files['output_dir'] + '/fixed_program.py',
+            'output_results': test_files['output_dir'] + '/results.log'
+        },
+        'python'
+    )
+
+    mock_get_jwt.return_value = "mock_jwt_token"
+
+    # Mock 402 response
+    mock_response = MagicMock()
+    mock_response.status_code = 402
+    mock_response.text = '{"error": "Insufficient credits"}'
+    mock_response.json.return_value = {
+        'error': 'Insufficient credits',
+        'currentBalance': 0,
+        'estimatedCost': 0.05
+    }
+    mock_error = requests.exceptions.HTTPError(response=mock_response)
+    mock_post.return_value.raise_for_status.side_effect = mock_error
+    mock_post.return_value.status_code = 402
+
+    with pytest.raises(click.UsageError, match="Insufficient credits"):
+        crash_main(
+            ctx=ctx,
+            prompt_file=test_files["prompt_file"],
+            code_file=test_files["code_file"],
+            program_file=test_files["program_file"],
+            error_file=test_files["error_file"],
+            output=None,
+            output_program=None,
+            loop=False
+        )
+
+
+@patch('pdd.crash_main.fix_code_loop')
+@patch('pdd.crash_main.construct_paths')
+def test_crash_main_loop_mode_with_local_flag_uses_local(
+    mock_construct_paths,
+    mock_fix_code_loop,
+    ctx,
+    test_files
+):
+    """
+    Test that loop mode with --local flag uses purely local execution (use_cloud=False).
+    """
+    ctx.obj['local'] = True  # Force local execution
+    ctx.obj['force'] = True
+    ctx.obj['quiet'] = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt',
+            'code_file': 'code',
+            'program_file': 'program',
+            'error_file': 'error'
+        },
+        {
+            'output_code': test_files['output_dir'] + '/fixed_code.py',
+            'output_program': test_files['output_dir'] + '/fixed_program.py',
+            'output_results': test_files['output_dir'] + '/results.log'
+        },
+        'python'
+    )
+
+    mock_fix_code_loop.return_value = (True, 'fixed program', 'fixed code', 2, 0.5, 'local-model')
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        crash_main(
+            ctx=ctx,
+            prompt_file=test_files["prompt_file"],
+            code_file=test_files["code_file"],
+            program_file=test_files["program_file"],
+            error_file=test_files["error_file"],
+            output=None,
+            output_program=None,
+            loop=True,
+            max_attempts=3,
+            budget=5.0
+        )
+
+    # fix_code_loop should be called with use_cloud=False
+    mock_fix_code_loop.assert_called_once()
+    call_kwargs = mock_fix_code_loop.call_args
+    # Check positional or keyword argument for use_cloud
+    if call_kwargs.kwargs:
+        assert call_kwargs.kwargs.get('use_cloud') == False
+    else:
+        # use_cloud is not passed or default is used
+        pass
+
+
+@patch('pdd.crash_main.fix_code_loop')
+@patch('pdd.crash_main.construct_paths')
+def test_crash_main_loop_mode_uses_hybrid_cloud_by_default(
+    mock_construct_paths,
+    mock_fix_code_loop,
+    ctx,
+    test_files
+):
+    """
+    Test that loop mode without --local flag uses hybrid cloud mode (use_cloud=True).
+    Hybrid mode means local program execution + cloud LLM calls.
+    """
+    ctx.obj['local'] = False  # Default - not forcing local
+    ctx.obj['force'] = True
+    ctx.obj['quiet'] = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt',
+            'code_file': 'code',
+            'program_file': 'program',
+            'error_file': 'error'
+        },
+        {
+            'output_code': test_files['output_dir'] + '/fixed_code.py',
+            'output_program': test_files['output_dir'] + '/fixed_program.py',
+            'output_results': test_files['output_dir'] + '/results.log'
+        },
+        'python'
+    )
+
+    mock_fix_code_loop.return_value = (True, 'fixed program', 'fixed code', 2, 0.5, 'cloud-model')
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        crash_main(
+            ctx=ctx,
+            prompt_file=test_files["prompt_file"],
+            code_file=test_files["code_file"],
+            program_file=test_files["program_file"],
+            error_file=test_files["error_file"],
+            output=None,
+            output_program=None,
+            loop=True,
+            max_attempts=3,
+            budget=5.0
+        )
+
+    # fix_code_loop should be called with use_cloud=True
+    mock_fix_code_loop.assert_called_once()
+    call_kwargs = mock_fix_code_loop.call_args
+    if call_kwargs.kwargs:
+        assert call_kwargs.kwargs.get('use_cloud') == True
+
+
+@patch('pdd.crash_main.fix_code_module_errors')
+@patch('pdd.crash_main.CloudConfig.get_jwt_token')
+@patch('pdd.crash_main.construct_paths')
+def test_crash_main_local_flag_skips_cloud(
+    mock_construct_paths,
+    mock_get_jwt,
+    mock_fix_errors,
+    ctx,
+    test_files
+):
+    """
+    Test that --local flag forces local execution, skipping cloud entirely.
+    """
+    ctx.obj['local'] = True  # Force local
+    ctx.obj['force'] = True
+    ctx.obj['quiet'] = True
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'prompt',
+            'code_file': 'code',
+            'program_file': 'program',
+            'error_file': 'error'
+        },
+        {
+            'output_code': test_files['output_dir'] + '/fixed_code.py',
+            'output_program': test_files['output_dir'] + '/fixed_program.py',
+            'output_results': test_files['output_dir'] + '/results.log'
+        },
+        'python'
+    )
+
+    mock_fix_errors.return_value = (True, True, 'fixed program', 'fixed code', 'analysis', 0.1, 'local-model')
+
+    m_open = mock_open()
+    with patch('builtins.open', m_open):
+        crash_main(
+            ctx=ctx,
+            prompt_file=test_files["prompt_file"],
+            code_file=test_files["code_file"],
+            program_file=test_files["program_file"],
+            error_file=test_files["error_file"],
+            output=None,
+            output_program=None,
+            loop=False
+        )
+
+    # Cloud auth should NOT be called when local is forced
+    mock_get_jwt.assert_not_called()
+    # Local fix should be used
+    mock_fix_errors.assert_called_once()

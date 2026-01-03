@@ -1,121 +1,160 @@
-# Import necessary modules
-from pathlib import Path
-from pdd.fix_verification_errors_loop import fix_verification_errors_loop
-
-# --- Define Example Inputs ---
-
-# 1. program_file: Path to the Python program that exercises the code_file.
-program_file = Path("output/program.py")
-program_code = """
-import calculator_module  # The code module to be verified/fixed
+import os
 import sys
+import shutil
+from pathlib import Path
+from rich.console import Console
 
-if len(sys.argv) != 3:
-    print("Usage: python program.py <num1> <num2>")
+# Ensure the 'pdd' package is in the Python path
+# This allows us to import the module we want to demonstrate
+current_dir = Path(__file__).resolve().parent
+pdd_root = current_dir.parent  # Adjust this based on your actual project structure
+if str(pdd_root) not in sys.path:
+    sys.path.insert(0, str(pdd_root))
+
+try:
+    # Import the function to demonstrate
+    # Note: Adjust the import path based on where the module is located in your package
+    from pdd.fix_verification_errors_loop import fix_verification_errors_loop
+except ImportError:
+    print("Error: Could not import 'fix_verification_errors_loop'. Ensure the 'pdd' package is installed or in PYTHONPATH.")
     sys.exit(1)
 
-a = int(sys.argv[1])
-b = int(sys.argv[2])
+# Initialize console for pretty printing
+console = Console()
 
-print(f"Running calculator_module.add_numbers({{a}}, {{b}})")
-result = calculator_module.add_numbers(a, b)
 
-expected = a + b
-print(f"Expected result: {{expected}}")
-print(f"Actual result: {{result}}")
+def setup_demo_environment(work_dir: Path) -> tuple[Path, Path, Path, str]:
+    """
+    Creates a temporary environment with:
+    1. A buggy code file (calculator.py)
+    2. A verification program (verify_calc.py)
+    3. A prompt file (calculator.prompt)
 
-if result == expected:
-    print("VERIFICATION_SUCCESS: Result matches expectation.")
-else:
-    print("VERIFICATION_FAILURE: Result does not match expectation.")
+    Args:
+        work_dir: The directory to create the demo environment in.
+
+    Returns:
+        A tuple containing paths to the code file, verify file, prompt file,
+        and the prompt content string.
+    """
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Create the buggy code file
+    # It implements subtraction instead of addition
+    code_content = """
+def add(a: int, b: int) -> int:
+    # Bug: Incorrectly subtracts instead of adds
+    return a - b
 """
+    code_file = work_dir / "calculator.py"
+    code_file.write_text(code_content, encoding="utf-8")
 
-# Write the program code to a file
-program_file.write_text(program_code)
+    # 2. Create the verification program
+    # This script runs the code and asserts the expected behavior
+    verify_content = """
+import sys
+from calculator import add
 
-# 2. code_file: Path to the code file being tested/verified.
-code_file = Path("output/calculator_module.py")
-buggy_code_module = """
-def add_numbers(a: int, b: int) -> int:
-    '''Calculates the sum of two integers.'''
-    result = a - b  # Intentional bug: subtraction instead of addition
-    return result
-"""
-
-# Write the buggy code to a file
-code_file.write_text(buggy_code_module)
-
-# 3. prompt: The original prompt used to generate the code.
-prompt = "Create a Python module named 'calculator_module.py' containing a function `add_numbers(a: int, b: int) -> int` that returns the sum of the two integer inputs."
-
-# 4. verification_program: Path to a secondary verification program.
-verification_program = Path("output/verification_program.py")
-verification_program_code = """
-import calculator_module
-
-def verify_code():
-    # This function can perform basic checks on the calculator_module
-    assert calculator_module.add_numbers(1, 2) == 3, "Test failed: 1 + 2 should equal 3"
-    print("Verification passed.")
+def verify():
+    print("Running verification for calculator.add(5, 3)...")
+    result = add(5, 3)
+    expected = 8
+    
+    print(f"Result: {result}")
+    print(f"Expected: {expected}")
+    
+    if result != expected:
+        print("VERIFICATION_FAILURE: Result does not match expected value.")
+        sys.exit(1)
+    
+    print("VERIFICATION_SUCCESS")
+    sys.exit(0)
 
 if __name__ == "__main__":
-    verify_code()
+    verify()
 """
+    verify_file = work_dir / "verify_calc.py"
+    verify_file.write_text(verify_content, encoding="utf-8")
 
-# Write the verification program code to a file
-verification_program.write_text(verification_program_code)
+    # 3. Create the prompt file
+    # Describes the intended behavior
+    prompt_content = """
+Create a Python module 'calculator.py' with a function 'add(a, b)' that returns the sum of two integers.
+"""
+    prompt_file = work_dir / "calculator.prompt"
+    prompt_file.write_text(prompt_content, encoding="utf-8")
 
-# 5. strength: Float controlling LLM capability/model selection.
-strength = 0.5  # Example: Use a mid-range model
+    return code_file, verify_file, prompt_file, prompt_content
 
-# 6. temperature: Float controlling LLM randomness.
-temperature = 0.0  # Example: Aim for deterministic fixes
 
-# 7. max_attempts: Maximum number of fix attempts.
-max_attempts = 5
+def main() -> None:
+    """
+    Main function to demonstrate the fix_verification_errors_loop.
 
-# 8. budget: Maximum cost allowed for the fixing process (in dollars).
-budget = 10.0  # Example budget
+    Sets up a demo environment with a buggy calculator module and runs
+    the fix loop to automatically correct the code.
+    """
+    # Define a temporary working directory for the demo
+    demo_dir = Path("demo_fix_loop_env")
 
-# 9. verification_log_file: Path for the verification log file.
-verification_log_file = "output/verification.log"
+    console.print(f"[bold blue]Setting up demo environment in {demo_dir}...[/bold blue]")
+    code_file, verify_file, prompt_file, prompt_text = setup_demo_environment(demo_dir)
 
-# 10. output_code_path: Optional path to save the successfully fixed code.
-output_code_path = Path("output/calculator_module_fixed.py")
+    console.print("[bold]Initial State:[/bold]")
+    console.print(f"Code File ({code_file}):\n[dim]{code_file.read_text()}[/dim]")
+    console.print(f"Verification Program ({verify_file}):\n[dim]{verify_file.read_text()}[/dim]")
 
-# 11. output_program_path: Optional path to save the successfully fixed program.
-# (Note: fix_verification_errors_loop itself does not modify the program based on this path,
-# but it passes it down to fix_verification_errors, which might use it if it modifies the program content)
-output_program_path = Path("output/program_fixed.py")
+    # Define parameters for the fix loop
+    max_attempts = 3
+    budget = 0.50  # USD
+    strength = 0.5
+    temperature = 0.2
 
-# 12. verbose: Enable detailed logging.
-verbose = True
+    console.print("\n[bold green]Starting fix_verification_errors_loop...[/bold green]")
 
-# 13. program_args: List of arguments to pass to the program file.
-program_args = ["5", "3"] # Example arguments
+    # Invoke the function
+    # Note: This requires a configured LLM environment (e.g., OPENAI_API_KEY) to actually run the fix.
+    # If no API key is present, it might fail gracefully or trigger agentic fallback depending on config.
+    try:
+        result = fix_verification_errors_loop(
+            program_file=str(verify_file),      # The program that exercises the code
+            code_file=str(code_file),           # The code to be fixed
+            prompt=prompt_text,                 # The intent
+            prompt_file=str(prompt_file),       # Path to prompt file (for context/fallback)
+            verification_program=str(verify_file),  # Secondary verification (same as program here)
+            strength=strength,
+            temperature=temperature,
+            max_attempts=max_attempts,
+            budget=budget,
+            verification_log_file=str(demo_dir / "verification.log"),
+            verbose=True,                       # Enable detailed logging to stdout
+            agentic_fallback=True,              # Enable fallback if standard fix fails
+            use_cloud=False                     # Use local execution (set True for cloud API)
+        )
 
-# --- Execute the Function ---
-results = fix_verification_errors_loop(
-    program_file=str(program_file),
-    code_file=str(code_file),
-    prompt=prompt,
-    verification_program=str(verification_program),
-    strength=strength,
-    temperature=temperature,
-    max_attempts=max_attempts,
-    budget=budget,
-    verification_log_file=verification_log_file,
-    output_code_path=str(output_code_path),
-    output_program_path=str(output_program_path),
-    verbose=verbose,
-    program_args=program_args # Pass the arguments here
-)
+        console.print("\n[bold blue]--- Loop Execution Finished ---[/bold blue]")
 
-# --- Display Results ---
-print("Results:")
-print(f"Success: {results['success']}")
-print(f"Final Program:\n{results['final_program']}")
-print(f"Final Code:\n{results['final_code']}")
-print(f"Total Attempts: {results['total_attempts']}")
-print(f"Total Cost: ${results['total_cost']:.2f}")
-print(f"Model Name: {results['model_name']}")
+        if result["success"]:
+            console.print("[bold green]SUCCESS: The code was fixed![/bold green]")
+            console.print(f"Total Attempts: {result['total_attempts']}")
+            console.print(f"Total Cost: ${result['total_cost']:.4f}")
+            console.print(f"Model Used: {result['model_name']}")
+
+            console.print("\n[bold]Fixed Code Content:[/bold]")
+            console.print(result["final_code"])
+        else:
+            console.print("[bold red]FAILURE: Could not fix the code within constraints.[/bold red]")
+            console.print(f"Status Message: {result['statistics'].get('status_message')}")
+
+    except Exception as e:
+        console.print(f"[bold red]An error occurred during execution: {e}[/bold red]")
+        # This might happen if LLM keys are missing in the environment
+
+    # Cleanup (optional)
+    # shutil.rmtree(demo_dir)
+
+
+if __name__ == "__main__":
+    main()
