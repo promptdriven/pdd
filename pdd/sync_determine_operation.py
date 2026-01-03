@@ -324,7 +324,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     
     try:
         # Use construct_paths to get configuration-aware paths
-        prompt_filename = f"{basename}_{language}.prompt"
+        # Extract just the name part from basename to avoid double-prefixing
+        # e.g., basename='backend/utils/credit_helpers' -> name_part='credit_helpers'
+        _, name_part = _extract_name_part(basename)
+        prompt_filename = f"{name_part}_{language}.prompt"
         prompt_path = str(Path(prompts_dir) / prompt_filename)
         logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
         
