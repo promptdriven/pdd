@@ -5,7 +5,8 @@ Agentic bug investigation entry point.
 
 This module serves as the CLI entry point for the agentic bug investigation workflow.
 It parses a GitHub issue URL, fetches the issue content and comments using the `gh` CLI,
-sets up a temporary workspace, and invokes the orchestrator to run the investigation.
+sets up the environment, and invokes the orchestrator to run the investigation process.
+It also supports a legacy manual mode via argument inspection.
 """
 
 import json
@@ -14,19 +15,19 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
+# Internal imports
 from .agentic_bug_orchestrator import run_agentic_bug_orchestrator
-from .agentic_common import get_available_agents
+from .bug_main import bug_main
 
-# Optional globals from package root; ignore if not present.
-try:  # pragma: no cover - purely optional integration
-    from . import DEFAULT_STRENGTH, DEFAULT_TIME  # type: ignore[unused-ignore]
-except Exception:  # pragma: no cover - defensive import
-    DEFAULT_STRENGTH = None  # type: ignore[assignment]
-    DEFAULT_TIME = None  # type: ignore[assignment]
+# Optional globals from package root
+try:  # pragma: no cover
+    from . import DEFAULT_STRENGTH
+except Exception:  # pragma: no cover
+    DEFAULT_STRENGTH = None
 
 console = Console()
 
@@ -48,18 +49,19 @@ def _parse_github_url(url: str) -> Optional[Tuple[str, str, int]]:
     - github.com/{owner}/{repo}/issues/{number}
 
     Args:
-        url: The GitHub issue URL string.
+        url: The URL string to parse.
 
     Returns:
-        A tuple of (owner, repo, issue_number) if successful, else None.
+        Tuple of (owner, repo, issue_number) if successful, else None.
     """
-    # Normalize protocol
-    if not url.startswith("http"):
-        url = "https://" + url.lstrip("/")
-
-    pattern = r"github\.com/([^/]+)/([^/]+)/issues/(\d+)"
-    match = re.search(pattern, url)
-
+    # Remove protocol and www if present
+    clean_url = url.replace("https://", "").replace("http://", "").replace("www.", "")
+    
+    # Regex for github.com/owner/repo/issues/number
+    # Allows for optional trailing slash or query params (though query params usually follow ?)
+    pattern = r"^github\.com/([^/]+)/([^/]+)/issues/(\d+)"
+    match = re.match(pattern, clean_url)
+    
     if match:
         owner, repo, number_str = match.groups()
         try:
@@ -69,9 +71,9 @@ def _parse_github_url(url: str) -> Optional[Tuple[str, str, int]]:
     return None
 
 
-def _fetch_issue_data(owner: str, repo: str, number: int) -> Tuple[Optional[Dict[str, Any]], str]:
+def _fetch_issue_data(owner: str, repo: str, number: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    Fetch issue details using `gh api`.
+    Fetch issue metadata and content using `gh api`.
 
     Args:
         owner: Repository owner.
@@ -81,72 +83,91 @@ def _fetch_issue_data(owner: str, repo: str, number: int) -> Tuple[Optional[Dict
     Returns:
         (data_dict, error_message)
         - data_dict: JSON response from GitHub API if successful.
-        - error_message: Error description if failed.
+        - error_message: Error string if failed.
     """
     cmd = [
         "gh", "api",
         f"repos/{owner}/{repo}/issues/{number}",
         "--header", "Accept: application/vnd.github+json"
     ]
+    
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return json.loads(result.stdout), ""
+        return json.loads(result.stdout), None
     except subprocess.CalledProcessError as e:
-        return None, f"Failed to fetch issue: {e.stderr.strip()}"
+        err_msg = e.stderr.strip() or str(e)
+        return None, f"Failed to fetch issue: {err_msg}"
     except json.JSONDecodeError:
-        return None, "Failed to parse GitHub API response."
+        return None, "Failed to parse GitHub API response"
     except Exception as e:
         return None, str(e)
 
 
 def _fetch_comments(comments_url: str) -> str:
     """
-    Fetch comments for the issue to provide full context.
+    Fetch comments for an issue to provide full context.
 
     Args:
-        comments_url: The API URL for the issue's comments.
+        comments_url: API URL for comments (provided in issue metadata).
 
     Returns:
-        A formatted string containing all comments, or an empty string on failure.
+        Concatenated string of comments formatted as "User: Comment".
     """
-    # The comments_url from the API is usually full absolute URL like:
-    # https://api.github.com/repos/owner/repo/issues/1/comments
-    # `gh api` handles full URLs gracefully.
+    # The comments_url from API is full URL like https://api.github.com/repos/...
+    # gh api expects path relative to api root or full URL.
     cmd = ["gh", "api", comments_url]
+    
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         comments_data = json.loads(result.stdout)
         
         formatted_comments = []
         for comment in comments_data:
-            user = comment.get("user", {}).get("login", "unknown")
+            user = comment.get("user", {}).get("login", "Unknown")
             body = comment.get("body", "")
             formatted_comments.append(f"--- Comment by {user} ---\n{body}\n")
-        
+            
         return "\n".join(formatted_comments)
     except Exception:
-        # If comments fail to load, we proceed with just the issue body
+        # If comments fail, we proceed with just the issue body
         return ""
 
 
-def _clone_repo(owner: str, repo: str, target_dir: Path) -> bool:
+def _ensure_repo_context(owner: str, repo: str, cwd: Path, quiet: bool = False) -> bool:
     """
-    Clone the repository into the target directory.
-
+    Ensure the current working directory contains the repository.
+    If not, clone it into the current directory.
+    
     Args:
-        owner: Repository owner.
-        repo: Repository name.
-        target_dir: Directory to clone into.
-
+        owner: Repo owner.
+        repo: Repo name.
+        cwd: Current working directory.
+        quiet: Suppress output.
+        
     Returns:
-        True if successful, False otherwise.
+        True if successful (exists or cloned), False otherwise.
     """
-    repo_url = f"https://github.com/{owner}/{repo}.git"
-    cmd = ["git", "clone", repo_url, str(target_dir)]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
+    # Check if .git exists
+    if (cwd / ".git").exists():
         return True
-    except subprocess.CalledProcessError:
+        
+    # Attempt clone
+    repo_url = f"https://github.com/{owner}/{repo}.git"
+    if not quiet:
+        console.print(f"[blue]Cloning {repo_url} into {cwd}...[/blue]")
+        
+    try:
+        # Clone into current directory (.)
+        subprocess.run(["git", "clone", repo_url, "."], cwd=cwd, check=True, capture_output=True, text=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        if not quiet:
+            err = e.stderr.strip() if e.stderr else str(e)
+            console.print(f"[red]Failed to clone repository: {err}[/red]")
+        return False
+    except Exception as e:
+        if not quiet:
+            console.print(f"[red]Error during clone: {e}[/red]")
         return False
 
 
@@ -155,34 +176,69 @@ def run_agentic_bug(
     *,
     verbose: bool = False,
     quiet: bool = False,
+    # Legacy/Manual mode arguments (handled via *args in a real CLI, but here explicit for type safety if called directly)
+    manual_args: Optional[Tuple[str, str, str, str, str]] = None
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Run the agentic bug investigation workflow for a given GitHub issue.
+    Entry point for the agentic bug investigation.
 
-    Steps:
-    1. Validates `gh` CLI availability.
-    2. Parses the issue URL.
-    3. Fetches issue metadata and content via GitHub API.
-    4. Clones the repository to a temporary workspace.
-    5. Invokes the orchestrator to run the investigation steps.
+    Parses the GitHub issue, fetches context, and invokes the orchestrator.
+    
+    If `manual_args` is provided (simulating the --manual flag logic from a CLI wrapper),
+    it delegates to the legacy `bug_main` logic.
 
     Args:
-        issue_url: The full URL to the GitHub issue.
-        verbose: If True, print detailed logs.
-        quiet: If True, suppress all non-essential output.
+        issue_url: The GitHub issue URL to investigate.
+        verbose: Enable verbose logging.
+        quiet: Suppress informational logging.
+        manual_args: Optional tuple of (prompt_file, code_file, program_file, current_out, desired_out)
+                     to trigger legacy manual mode.
 
     Returns:
-        A 5-tuple:
-            (success, message, total_cost, model_used, changed_files)
+        (success, message, total_cost, model_used, changed_files)
     """
-    # 1. Check prerequisites
+    # 1. Handle Legacy Manual Mode
+    if manual_args:
+        if not quiet:
+            console.print("[blue]Running in manual mode (legacy)...[/blue]")
+        
+        prompt_file, code_file, program_file, current_out, desired_out = manual_args
+        
+        # Mock context for bug_main
+        class MockContext:
+            obj = {
+                'force': True,
+                'quiet': quiet,
+                'strength': DEFAULT_STRENGTH,
+                'temperature': 0
+            }
+        
+        try:
+            # bug_main returns (unit_test_content, cost, model)
+            # It writes the test file to disk as a side effect if 'output' arg is used,
+            # but here we just capture the return.
+            # We need to adapt the return signature to match run_agentic_bug.
+            unit_test, cost, model = bug_main(
+                ctx=MockContext(),  # type: ignore
+                prompt_file=prompt_file,
+                code_file=code_file,
+                program_file=program_file,
+                current_output=current_out,
+                desired_output=desired_out,
+                language='Python'
+            )
+            return True, "Manual test generation successful", cost, model, []
+        except Exception as e:
+            return False, f"Manual mode failed: {e}", 0.0, "", []
+
+    # 2. Validate Environment
     if not _check_gh_cli():
-        msg = "gh CLI not found. Please install GitHub CLI to use this feature."
+        msg = "gh CLI not found. Please install GitHub CLI."
         if not quiet:
             console.print(f"[red]{msg}[/red]")
         return False, msg, 0.0, "", []
 
-    # 2. Parse URL
+    # 3. Parse URL
     parsed = _parse_github_url(issue_url)
     if not parsed:
         msg = f"Invalid GitHub URL: {issue_url}"
@@ -191,88 +247,71 @@ def run_agentic_bug(
         return False, msg, 0.0, "", []
 
     owner, repo, issue_number = parsed
-
     if not quiet:
-        console.print(f"[blue]Fetching issue #{issue_number} from {owner}/{repo}...[/blue]")
+        console.print(f"[blue]Investigating {owner}/{repo} issue #{issue_number}[/blue]")
 
-    # 3. Fetch Issue Data
-    issue_data, error_msg = _fetch_issue_data(owner, repo, issue_number)
-    if not issue_data:
-        msg = f"Issue not found: {error_msg}"
+    # 4. Fetch Issue Data
+    issue_data, error = _fetch_issue_data(owner, repo, issue_number)
+    if error or not issue_data:
+        msg = f"Issue not found or API error: {error}"
         if not quiet:
             console.print(f"[red]{msg}[/red]")
         return False, msg, 0.0, "", []
 
-    # Extract fields
-    title = issue_data.get("title", "")
-    body = issue_data.get("body", "") or ""
-    author = issue_data.get("user", {}).get("login", "unknown")
-    comments_url = issue_data.get("comments_url", "")
-    
-    # Fetch comments for context
-    comments_text = _fetch_comments(comments_url) if comments_url else ""
-    
-    full_issue_content = (
-        f"Title: {title}\n"
-        f"Author: {author}\n"
-        f"Description:\n{body}\n\n"
-        f"Comments:\n{comments_text}"
-    )
-
-    # 4. Setup Workspace & Clone Repo
-    # We use a temporary directory to avoid messing with the user's current working directory
-    # unless we are already inside the target repo. For safety, we'll assume a fresh clone is best
-    # for an isolated agentic run, or the orchestrator can handle existing dirs.
-    # Here, we create a temp dir.
-    
-    with tempfile.TemporaryDirectory(prefix=f"pdd_bug_{issue_number}_") as temp_dir_str:
-        temp_dir = Path(temp_dir_str)
+    # 5. Extract Metadata
+    try:
+        issue_title = issue_data.get("title", "")
+        issue_body = issue_data.get("body", "") or ""
+        issue_author = issue_data.get("user", {}).get("login", "unknown")
+        comments_url = issue_data.get("comments_url", "")
         
+        # Fetch comments for context
+        comments_text = _fetch_comments(comments_url) if comments_url else ""
+        
+        full_content = (
+            f"Title: {issue_title}\n"
+            f"Author: {issue_author}\n"
+            f"Description:\n{issue_body}\n\n"
+            f"Comments:\n{comments_text}"
+        )
+    except Exception as e:
+        msg = f"Failed to process issue data: {e}"
         if not quiet:
-            console.print(f"[blue]Cloning repository to temporary workspace: {temp_dir}[/blue]")
-        
-        if not _clone_repo(owner, repo, temp_dir):
-            msg = "Failed to clone repository."
-            if not quiet:
-                console.print(f"[red]{msg}[/red]")
-            return False, msg, 0.0, "", []
+            console.print(f"[red]{msg}[/red]")
+        return False, msg, 0.0, "", []
 
-        # The clone creates a subdirectory with the repo name. We need to find it.
-        # Usually `git clone url dir` puts it IN dir if dir is empty, or creates subdir?
-        # `git clone url target_dir` puts contents INTO target_dir if it's empty? 
-        # Actually `git clone url path` puts the repo IN `path`.
-        # So the root of the repo is `temp_dir`.
-        
-        # 5. Invoke Orchestrator
+    # 6. Prepare Workspace (Repo Context)
+    cwd = Path.cwd()
+    if not _ensure_repo_context(owner, repo, cwd, quiet=quiet):
+        msg = "Failed to clone repository"
         if not quiet:
-            console.print(f"[green]Starting agentic investigation for: {title}[/green]")
+            console.print(f"[red]{msg}[/red]")
+        return False, msg, 0.0, "", []
 
-        try:
-            success, message, cost, model, changed_files = run_agentic_bug_orchestrator(
-                issue_url=issue_url,
-                issue_content=full_issue_content,
-                repo_owner=owner,
-                repo_name=repo,
-                issue_number=issue_number,
-                issue_author=author,
-                issue_title=title,
-                cwd=temp_dir,
-                verbose=verbose,
-                quiet=quiet
-            )
-            
-            # Since we ran in a temp dir, the changed files are there. 
-            # In a real scenario, we might want to copy them back or push a PR.
-            # The orchestrator usually handles PR creation (step 9), so local files might be ephemeral.
-            # We return the paths relative to the repo root.
-            
-            return success, message, cost, model, changed_files
+    # 7. Invoke Orchestrator
+    if not quiet:
+        console.print(f"[green]Starting agentic workflow for: '{issue_title}'[/green]")
 
-        except Exception as e:
-            msg = f"Orchestrator failed with exception: {e}"
-            if not quiet:
-                console.print(f"[red]{msg}[/red]")
-                if verbose:
-                    import traceback
-                    console.print(traceback.format_exc())
-            return False, msg, 0.0, "", []
+    try:
+        success, message, cost, model, changed_files = run_agentic_bug_orchestrator(
+            issue_url=issue_url,
+            issue_content=full_content,
+            repo_owner=owner,
+            repo_name=repo,
+            issue_number=issue_number,
+            issue_author=issue_author,
+            issue_title=issue_title,
+            cwd=cwd,
+            verbose=verbose,
+            quiet=quiet
+        )
+        return success, message, cost, model, changed_files
+
+    except Exception as e:
+        msg = f"Orchestrator failed: {e}"
+        if not quiet:
+            console.print(f"[red]{msg}[/red]")
+            if verbose:
+                import traceback
+                console.print(traceback.format_exc())
+        return False, msg, 0.0, "", []
