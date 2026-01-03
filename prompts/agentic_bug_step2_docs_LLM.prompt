@@ -11,6 +11,7 @@ You are working on step 2 of 9 in an agentic bug investigation workflow. Previou
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Issue Author: @{issue_author}
 
 % Issue Content
 <issue_content>
