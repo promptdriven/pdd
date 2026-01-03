@@ -289,6 +289,85 @@ contexts:
             os.chdir(original_cwd)
 
 
+class TestPromptDiscoveryWithCategory:
+    """Template discovery should handle category paths from context patterns."""
+
+    @pytest.fixture
+    def frontend_components_pddrc(self, tmp_path):
+        pddrc_content = """
+version: "1.0"
+contexts:
+  frontend-components:
+    paths:
+      - "frontend/components/**"
+    defaults:
+      default_language: "typescriptreact"
+      outputs:
+        prompt:
+          path: "prompts/frontend/components/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/components/{category}/{name}/{name}.tsx"
+        example:
+          path: "context/frontend/{name}_example.tsx"
+
+  default:
+    defaults:
+      default_language: "python"
+"""
+        pddrc_file = tmp_path / ".pddrc"
+        pddrc_file.write_text(pddrc_content)
+
+        prompt_path = (
+            tmp_path
+            / "prompts"
+            / "frontend"
+            / "components"
+            / "marketplace"
+            / "AssetCard_typescriptreact.prompt"
+        )
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text("# AssetCard prompt")
+
+        return tmp_path
+
+    def test_sync_main_finds_prompt_with_category_context_prefix(self, frontend_components_pddrc):
+        from pdd.sync_main import _find_prompt_in_contexts
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(frontend_components_pddrc)
+
+            result = _find_prompt_in_contexts("frontend/components/marketplace/AssetCard")
+            assert result is not None
+
+            context_name, prompt_path, language = result
+            assert context_name == "frontend-components"
+            assert language == "typescriptreact"
+            assert prompt_path.exists()
+            assert str(prompt_path).endswith(
+                "prompts/frontend/components/marketplace/AssetCard_typescriptreact.prompt"
+            )
+        finally:
+            os.chdir(original_cwd)
+
+    def test_sync_main_detect_languages_with_category_context_prefix(self, frontend_components_pddrc):
+        from pdd.sync_main import _detect_languages_with_context
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(frontend_components_pddrc)
+
+            languages = _detect_languages_with_context(
+                basename="frontend/components/marketplace/AssetCard",
+                prompts_dir=Path("prompts"),
+                context_name="frontend-components",
+            )
+
+            assert "typescriptreact" in languages
+        finally:
+            os.chdir(original_cwd)
+
+
 class TestPathResolutionBug:
     """Test that paths are resolved relative to .pddrc location, not CWD."""
 
