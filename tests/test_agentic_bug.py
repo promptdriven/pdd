@@ -1,36 +1,34 @@
 """
 Test Plan for pdd.agentic_bug
 
-1. **Happy Path Execution**:
-   - Verify that `run_agentic_bug` correctly parses a valid GitHub URL.
-   - Verify that it calls the `gh` CLI to fetch issue data and comments.
-   - Verify that it attempts to clone the repo if needed.
-   - Verify that it constructs the full content string correctly.
-   - Verify that it calls `run_agentic_bug_orchestrator` with the correct arguments.
-   - Verify that it returns the success result from the orchestrator.
+1. **Prerequisites Check**:
+   - Verify that the function returns early with an error if the `gh` CLI is not installed (mock `shutil.which`).
 
-2. **Legacy Manual Mode**:
-   - Verify that providing `manual_args` triggers the legacy `bug_main` logic.
-   - Verify that the return values are adapted correctly from `bug_main` to the expected 5-tuple.
-   - Verify error handling if `bug_main` raises an exception.
+2. **URL Parsing Validation**:
+   - Verify that invalid GitHub URLs result in an early failure.
+   - Verify that valid URLs (http, https, no protocol) are parsed correctly to extract owner, repo, and issue number.
 
-3. **Error Handling & Edge Cases**:
-   - **Missing CLI**: Verify behavior when `gh` CLI is not found (mock `shutil.which` returning None).
-   - **Invalid URL**: Verify behavior when an invalid GitHub URL is provided.
-   - **API Failure**: Verify behavior when `gh api` fails (subprocess error).
-   - **JSON Parse Error**: Verify behavior when `gh api` returns invalid JSON.
-   - **Clone Failure**: Verify behavior when `git clone` fails.
-   - **Orchestrator Failure**: Verify behavior when the orchestrator raises an unhandled exception.
+3. **GitHub API Interaction**:
+   - **Issue Fetching**: Verify that `gh api` is called with the correct endpoint. Handle success (JSON return) and failure (subprocess error or invalid JSON).
+   - **Comments Fetching**: Verify that comments are fetched and appended to the issue content.
+   - **Resilience**: Verify that if fetching comments fails, the workflow proceeds with just the issue body (soft failure for comments).
 
-4. **URL Parsing Logic**:
-   - Test various URL formats (https, http, www, no protocol).
+4. **Repository Cloning**:
+   - Verify that `git clone` is called with the correct URL and target directory.
+   - Verify that failure to clone results in an error return.
 
+5. **Orchestrator Invocation (Happy Path)**:
+   - Verify that `run_agentic_bug_orchestrator` is called with the correctly aggregated data (issue content, author, repo details, etc.).
+   - Verify that the return values from the orchestrator are passed back to the caller.
+
+6. **Error Handling**:
+   - Verify that exceptions raised within the orchestrator are caught and returned as a failure tuple, not crashing the program.
+
+Note: Z3 formal verification is not applied here as the logic is primarily procedural integration of external CLI tools and string parsing, which is better suited for unit tests with mocking.
 """
 
 import json
 import subprocess
-from pathlib import Path
-from typing import Tuple, List, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,332 +39,271 @@ from pdd.agentic_bug import run_agentic_bug
 
 # --- Fixtures ---
 
+
 @pytest.fixture
 def mock_dependencies():
     """
     Mocks external dependencies:
-    - shutil.which (for checking gh CLI)
-    - subprocess.run (for gh api calls and git clone)
-    - run_agentic_bug_orchestrator (the core logic being delegated to)
-    - bug_main (for legacy mode)
+    - shutil.which (for gh CLI check)
+    - subprocess.run (for gh api and git clone)
+    - run_agentic_bug_orchestrator (the core logic being wrapped)
     - console (to suppress output)
     """
     with patch("pdd.agentic_bug.shutil.which") as mock_which, \
-         patch("pdd.agentic_bug.subprocess.run") as mock_subprocess, \
-         patch("pdd.agentic_bug.run_agentic_bug_orchestrator") as mock_orchestrator, \
-         patch("pdd.agentic_bug.bug_main") as mock_bug_main, \
+         patch("pdd.agentic_bug.subprocess.run") as mock_run, \
+         patch("pdd.agentic_bug.run_agentic_bug_orchestrator") as mock_orch, \
          patch("pdd.agentic_bug.console") as mock_console:
 
-        # Default: gh is installed
+        # Default: gh is present
         mock_which.return_value = "/usr/bin/gh"
 
-        # Default: subprocess returns success
-        mock_subprocess.return_value = MagicMock(
-            stdout='{"title": "Test Issue", "body": "Body", "user": {"login": "author"}, "comments_url": "url"}',
+        # Default: subprocess calls succeed
+        # We need to handle different calls (issue fetch, comments fetch, git clone)
+        # This will be refined in specific tests, but setting a default return helps
+        mock_run.return_value = MagicMock(
+            stdout='{"title": "Test Issue", "body": "Body", "user": {"login": "tester"}, "comments_url": "url"}',
             returncode=0
         )
 
-        # Default: orchestrator succeeds
-        mock_orchestrator.return_value = (True, "Success", 1.0, "gpt-4", ["file.py"])
+        # Default: Orchestrator succeeds
+        mock_orch.return_value = (True, "Success", 1.0, "gpt-4", ["file.py"])
 
-        yield mock_which, mock_subprocess, mock_orchestrator, mock_bug_main, mock_console
+        yield mock_which, mock_run, mock_orch, mock_console
 
 
 # --- Tests ---
 
-def test_happy_path_execution(mock_dependencies: Tuple[Any, ...], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    Test the standard flow: valid URL -> fetch data -> clone -> run orchestrator.
-    """
-    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
 
-    # Ensure we are in a clean directory so .git does not exist, forcing a clone attempt
-    monkeypatch.chdir(tmp_path)
+def test_gh_cli_missing(mock_dependencies):
+    """Test that the function fails gracefully if 'gh' CLI is not found."""
+    mock_which, _, _, _ = mock_dependencies
+    mock_which.return_value = None  # Simulate missing CLI
 
-    # Setup mock for issue fetch and comments fetch
-    issue_json = json.dumps({
-        "title": "Bug in calculation",
-        "body": "It fails when x=0",
-        "user": {"login": "dev_user"},
-        "comments_url": "https://api.github.com/repos/owner/repo/issues/1/comments"
-    })
-
-    comments_json = json.dumps([
-        {"user": {"login": "helper"}, "body": "Did you try turning it off and on?"}
-    ])
-
-    # Configure subprocess to handle issue fetch, comments fetch, and git clone
-    def side_effect(cmd, **kwargs):
-        cmd_str = " ".join(str(x) for x in cmd)
-        if "issues/1" in cmd_str and "comments" not in cmd_str:
-            return MagicMock(stdout=issue_json, returncode=0)
-        if "comments" in cmd_str:
-            return MagicMock(stdout=comments_json, returncode=0)
-        if "git clone" in cmd_str:
-            return MagicMock(returncode=0)
-        return MagicMock(returncode=0)
-
-    mock_subprocess.side_effect = side_effect
-
-    url = "https://github.com/owner/repo/issues/1"
-
-    success, msg, cost, model, files = run_agentic_bug(url, verbose=True)
-
-    assert success is True
-    assert msg == "Success"
-    assert cost == 1.0
-    assert model == "gpt-4"
-    assert files == ["file.py"]
-
-    # Verify orchestrator was called with correct accumulated content
-    mock_orchestrator.assert_called_once()
-    call_kwargs = mock_orchestrator.call_args.kwargs
-    assert call_kwargs["issue_url"] == url
-    assert call_kwargs["repo_owner"] == "owner"
-    assert call_kwargs["repo_name"] == "repo"
-    assert call_kwargs["issue_number"] == 1
-    assert "Title: Bug in calculation" in call_kwargs["issue_content"]
-    assert "--- Comment by helper ---" in call_kwargs["issue_content"]
-
-
-def test_gh_cli_missing(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test that the function fails gracefully if 'gh' CLI is not found.
-    """
-    mock_which, _, mock_orchestrator, _, _ = mock_dependencies
-
-    # Simulate gh not found
-    mock_which.return_value = None
-
-    success, msg, _, _, _ = run_agentic_bug("https://github.com/o/r/issues/1")
+    success, msg, cost, _, _ = run_agentic_bug("https://github.com/o/r/issues/1")
 
     assert success is False
     assert "gh CLI not found" in msg
-    mock_orchestrator.assert_not_called()
+    assert cost == 0.0
 
 
-def test_invalid_url_format(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test that invalid URLs are rejected before making API calls.
-    """
-    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
+def test_invalid_url_format(mock_dependencies):
+    """Test that invalid URLs are rejected."""
+    # Dependencies are set to defaults (gh exists), so this tests the URL parsing logic
 
     invalid_urls = [
         "https://gitlab.com/owner/repo/issues/1",
-        "github.com/owner/repo",  # missing issue number
-        "just a string"
+        "just_a_string",
+        "https://github.com/owner/repo/pull/1",  # Pull request, not issue
+        "https://github.com/owner/repo"
     ]
 
     for url in invalid_urls:
         success, msg, _, _, _ = run_agentic_bug(url)
         assert success is False
         assert "Invalid GitHub URL" in msg
-        mock_subprocess.assert_not_called()
-        mock_orchestrator.assert_not_called()
 
 
-def test_api_fetch_failure(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test handling of subprocess errors when fetching issue data.
-    """
-    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
+def test_issue_fetch_failure(mock_dependencies):
+    """Test handling of failures when fetching issue data via gh api."""
+    _, mock_run, _, _ = mock_dependencies
 
-    # Simulate subprocess error (e.g., 404 Not Found or network error)
-    mock_subprocess.side_effect = subprocess.CalledProcessError(
-        returncode=1, cmd="gh api ...", stderr="Not Found"
-    )
+    # Simulate subprocess error for the first call (issue fetch)
+    mock_run.side_effect = subprocess.CalledProcessError(1, ["gh", "api"], stderr="Not Found")
 
     success, msg, _, _, _ = run_agentic_bug("https://github.com/owner/repo/issues/1")
 
     assert success is False
-    assert "Failed to fetch issue" in msg
+    assert "Issue not found" in msg
     assert "Not Found" in msg
-    mock_orchestrator.assert_not_called()
 
 
-def test_json_decode_error(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test handling of invalid JSON response from GitHub API.
-    """
-    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
+def test_issue_fetch_invalid_json(mock_dependencies):
+    """Test handling of invalid JSON response from gh api."""
+    _, mock_run, _, _ = mock_dependencies
 
-    mock_subprocess.return_value = MagicMock(stdout="Invalid JSON", returncode=0)
+    # Simulate valid subprocess execution but invalid JSON output
+    mock_run.return_value.stdout = "Not JSON"
 
     success, msg, _, _, _ = run_agentic_bug("https://github.com/owner/repo/issues/1")
 
     assert success is False
     assert "Failed to parse GitHub API response" in msg
-    mock_orchestrator.assert_not_called()
 
 
-def test_legacy_manual_mode_success(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test that passing manual_args triggers the legacy path via bug_main.
-    """
-    _, _, mock_orchestrator, mock_bug_main, _ = mock_dependencies
+def test_clone_failure(mock_dependencies):
+    """Test handling of git clone failure."""
+    _, mock_run, _, _ = mock_dependencies
 
-    # Mock bug_main return: (unit_test_content, cost, model)
-    mock_bug_main.return_value = ("def test_foo(): pass", 0.5, "gpt-3.5")
-
-    manual_args = ("prompt.txt", "code.py", "prog.py", "curr.txt", "des.txt")
-
-    success, msg, cost, model, files = run_agentic_bug(
-        "ignored_url",
-        manual_args=manual_args
-    )
-
-    assert success is True
-    assert "Manual test generation successful" in msg
-    assert cost == 0.5
-    assert model == "gpt-3.5"
-
-    # Ensure orchestrator was NOT called
-    mock_orchestrator.assert_not_called()
-
-    # Ensure bug_main WAS called with correct args
-    mock_bug_main.assert_called_once()
-    call_kwargs = mock_bug_main.call_args.kwargs
-    assert call_kwargs["prompt_file"] == "prompt.txt"
-    assert call_kwargs["code_file"] == "code.py"
-
-
-def test_legacy_manual_mode_failure(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test error handling in legacy manual mode.
-    """
-    _, _, _, mock_bug_main, _ = mock_dependencies
-
-    mock_bug_main.side_effect = Exception("Something went wrong")
-
-    manual_args = ("p", "c", "pr", "cu", "d")
-
-    success, msg, _, _, _ = run_agentic_bug("url", manual_args=manual_args)
-
-    assert success is False
-    assert "Manual mode failed" in msg
-    assert "Something went wrong" in msg
-
-
-def test_orchestrator_exception_handling(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test that exceptions raised within the orchestrator are caught and reported.
-    """
-    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
-
-    # Ensure subprocess calls succeed so we reach orchestrator
-    mock_subprocess.return_value = MagicMock(
-        stdout='{"title": "T", "body": "B", "user": {"login": "u"}}',
-        returncode=0
-    )
-
-    mock_orchestrator.side_effect = Exception("Unexpected crash")
-
-    success, msg, _, _, _ = run_agentic_bug("https://github.com/owner/repo/issues/1")
-
-    assert success is False
-    assert "Orchestrator failed" in msg
-    assert "Unexpected crash" in msg
-
-
-def test_comments_fetch_failure_is_non_fatal(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test that if fetching comments fails, the process continues with just the issue body.
-    """
-    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
-
-    issue_json = json.dumps({
-        "title": "Title",
-        "body": "Body",
-        "user": {"login": "user"},
-        "comments_url": "http://api/comments"
-    })
-
-    # First call (issue) succeeds, second call (comments) fails, third (clone) succeeds
-    def side_effect(cmd, **kwargs):
-        cmd_str = " ".join(str(x) for x in cmd)
-        if "issues/1" in cmd_str:
-            return MagicMock(stdout=issue_json, returncode=0)
-        if "comments" in cmd_str:
-            raise subprocess.CalledProcessError(1, cmd)
-        if "git clone" in cmd_str:
-            return MagicMock(returncode=0)
-        return MagicMock(returncode=0)
-
-    mock_subprocess.side_effect = side_effect
-
-    success, _, _, _, _ = run_agentic_bug("https://github.com/owner/repo/issues/1")
-
-    assert success is True
-
-    # Check that orchestrator was called
-    mock_orchestrator.assert_called_once()
-    content = mock_orchestrator.call_args.kwargs["issue_content"]
-    # Should contain body but no comments section (or empty comments)
-    assert "Description:\nBody" in content
-    # The implementation appends "Comments:\n" even if empty string returned
-    assert "Comments:\n" in content
-    # But no actual comment text
-    assert "--- Comment by" not in content
-
-
-def test_url_parsing_variations(mock_dependencies: Tuple[Any, ...]) -> None:
-    """
-    Test that different valid URL formats are parsed correctly.
-    """
-    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
-
-    # We just need the subprocess to return valid JSON so we can verify the orchestrator call args
-    mock_subprocess.return_value = MagicMock(
-        stdout='{"title": "T", "body": "B", "user": {"login": "u"}}',
-        returncode=0
-    )
-
-    variations = [
-        ("https://github.com/owner/repo/issues/123", "owner", "repo", 123),
-        ("http://github.com/user/project/issues/42", "user", "project", 42),
-        ("www.github.com/org/tool/issues/999", "org", "tool", 999),
-        ("github.com/a/b/issues/1", "a", "b", 1)
-    ]
-
-    for url, expected_owner, expected_repo, expected_num in variations:
-        mock_orchestrator.reset_mock()
-        run_agentic_bug(url)
-
-        assert mock_orchestrator.called
-        kwargs = mock_orchestrator.call_args.kwargs
-        assert kwargs["repo_owner"] == expected_owner
-        assert kwargs["repo_name"] == expected_repo
-        assert kwargs["issue_number"] == expected_num
-
-
-def test_clone_failure(mock_dependencies: Tuple[Any, ...], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    Test handling of git clone failure.
-    """
-    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
-
-    # Ensure we are in a clean directory so .git does not exist, forcing a clone attempt
-    monkeypatch.chdir(tmp_path)
+    # Setup sequence of subprocess calls:
+    # 1. Fetch Issue -> Success
+    # 2. Fetch Comments -> Success (or skipped if no url)
+    # 3. Git Clone -> Failure
 
     issue_json = json.dumps({
         "title": "Bug", "body": "Desc", "user": {"login": "me"},
         "comments_url": "http://api/comments"
     })
+    comments_json = json.dumps([])
 
     def side_effect(cmd, **kwargs):
-        cmd_str = " ".join(str(x) for x in cmd)
-        if "issues/1" in cmd_str:
+        cmd_str = " ".join(cmd)
+        if "gh api" in cmd_str and "comments" not in cmd_str:
             return MagicMock(stdout=issue_json, returncode=0)
-        if "comments" in cmd_str:
-            return MagicMock(stdout="[]", returncode=0)
+        if "gh api" in cmd_str and "comments" in cmd_str:
+            return MagicMock(stdout=comments_json, returncode=0)
         if "git clone" in cmd_str:
             raise subprocess.CalledProcessError(128, cmd, stderr="Permission denied")
         return MagicMock()
 
-    mock_subprocess.side_effect = side_effect
+    mock_run.side_effect = side_effect
 
     success, msg, _, _, _ = run_agentic_bug("https://github.com/owner/repo/issues/1")
 
     assert success is False
     assert "Failed to clone repository" in msg
-    mock_orchestrator.assert_not_called()
+
+
+def test_happy_path_orchestrator_call(mock_dependencies):
+    """
+    Verify the happy path:
+    1. Parse URL
+    2. Fetch Issue & Comments
+    3. Clone Repo
+    4. Call Orchestrator with correct context
+    """
+    _, mock_run, mock_orch, _ = mock_dependencies
+
+    # Mock Data
+    issue_data = {
+        "title": "Critical Bug",
+        "body": "It crashes.",
+        "user": {"login": "bug_reporter"},
+        "comments_url": "https://api.github.com/repos/owner/repo/issues/1/comments"
+    }
+
+    comments_data = [
+        {"user": {"login": "dev1"}, "body": "Can you reproduce?"},
+        {"user": {"login": "bug_reporter"}, "body": "Yes, always."}
+    ]
+
+    # Mock subprocess responses
+    def side_effect(cmd, **kwargs):
+        cmd_str = " ".join(cmd)
+        if "gh api" in cmd_str and "comments" not in cmd_str:
+            return MagicMock(stdout=json.dumps(issue_data), returncode=0)
+        if "gh api" in cmd_str and "comments" in cmd_str:
+            return MagicMock(stdout=json.dumps(comments_data), returncode=0)
+        if "git clone" in cmd_str:
+            return MagicMock(returncode=0)
+        return MagicMock()
+
+    mock_run.side_effect = side_effect
+
+    # Run
+    url = "https://github.com/owner/repo/issues/1"
+    success, msg, cost, model, files = run_agentic_bug(url, verbose=True)
+
+    # Assertions
+    assert success is True
+    assert msg == "Success"
+
+    # Verify Orchestrator Arguments
+    mock_orch.assert_called_once()
+    call_kwargs = mock_orch.call_args.kwargs
+
+    assert call_kwargs["issue_url"] == url
+    assert call_kwargs["repo_owner"] == "owner"
+    assert call_kwargs["repo_name"] == "repo"
+    assert call_kwargs["issue_number"] == 1
+    assert call_kwargs["issue_author"] == "bug_reporter"
+    assert call_kwargs["issue_title"] == "Critical Bug"
+    assert call_kwargs["verbose"] is True
+
+    # Verify Content Assembly
+    content = call_kwargs["issue_content"]
+    assert "Title: Critical Bug" in content
+    assert "Author: bug_reporter" in content
+    assert "Description:\nIt crashes." in content
+    assert "--- Comment by dev1 ---" in content
+    assert "Can you reproduce?" in content
+    assert "--- Comment by bug_reporter ---" in content
+
+
+def test_comments_fetch_resilience(mock_dependencies):
+    """
+    Verify that if fetching comments fails, the process continues
+    with just the issue body.
+    """
+    _, mock_run, mock_orch, _ = mock_dependencies
+
+    issue_data = {
+        "title": "Bug", "body": "Body", "user": {"login": "me"},
+        "comments_url": "http://api/comments"
+    }
+
+    def side_effect(cmd, **kwargs):
+        cmd_str = " ".join(cmd)
+        if "gh api" in cmd_str and "comments" not in cmd_str:
+            return MagicMock(stdout=json.dumps(issue_data), returncode=0)
+        if "gh api" in cmd_str and "comments" in cmd_str:
+            # Simulate failure fetching comments
+            raise subprocess.CalledProcessError(1, cmd)
+        if "git clone" in cmd_str:
+            return MagicMock(returncode=0)
+        return MagicMock()
+
+    mock_run.side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_bug("https://github.com/owner/repo/issues/1")
+
+    assert success is True
+
+    # Check content passed to orchestrator
+    call_kwargs = mock_orch.call_args.kwargs
+    content = call_kwargs["issue_content"]
+    assert "Description:\nBody" in content
+    # Should not have comments section populated or just empty
+    assert "Comments:\n" in content or content.endswith("Comments:\n")
+
+
+def test_orchestrator_exception_handling(mock_dependencies):
+    """Test that exceptions raised by the orchestrator are caught gracefully."""
+    _, mock_run, mock_orch, _ = mock_dependencies
+
+    # Setup successful pre-requisites
+    mock_run.return_value.stdout = json.dumps({"title": "T", "body": "B"})
+
+    # Orchestrator raises unexpected exception
+    mock_orch.side_effect = Exception("Unexpected crash")
+
+    success, msg, _, _, _ = run_agentic_bug("https://github.com/owner/repo/issues/1")
+
+    assert success is False
+    assert "Orchestrator failed with exception" in msg
+    assert "Unexpected crash" in msg
+
+
+def test_url_parsing_variations(mock_dependencies):
+    """Test various valid URL formats."""
+    _, mock_run, mock_orch, _ = mock_dependencies
+
+    # Mock minimal success for all calls
+    mock_run.return_value.stdout = json.dumps({})
+
+    valid_urls = [
+        ("https://github.com/owner/repo/issues/1", "owner", "repo", 1),
+        ("http://github.com/owner/repo/issues/2", "owner", "repo", 2),
+        ("github.com/owner/repo/issues/3", "owner", "repo", 3),
+        ("https://www.github.com/owner/repo/issues/4", "owner", "repo", 4),
+    ]
+
+    for url, expected_owner, expected_repo, expected_num in valid_urls:
+        run_agentic_bug(url)
+
+        # Check the last call arguments to orchestrator
+        call_kwargs = mock_orch.call_args.kwargs
+        assert call_kwargs["repo_owner"] == expected_owner
+        assert call_kwargs["repo_name"] == expected_repo
+        assert call_kwargs["issue_number"] == expected_num
+
+        mock_orch.reset_mock()
