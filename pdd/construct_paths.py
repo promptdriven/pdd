@@ -125,6 +125,46 @@ def _match_path_to_contexts(
     return 'default' if 'default' in contexts else None
 
 
+def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Optional[str]:
+    """Detect context by matching a sync basename against prompts_dir prefixes or paths patterns."""
+    if not basename:
+        return None
+
+    contexts = config.get('contexts', {})
+    matches = []
+
+    for context_name, context_config in contexts.items():
+        if context_name == 'default':
+            continue
+
+        defaults = context_config.get('defaults', {})
+        prompts_dir = defaults.get('prompts_dir', '')
+        if prompts_dir:
+            normalized = prompts_dir.rstrip('/')
+            prefix = normalized
+            if normalized == 'prompts':
+                prefix = ''
+            elif normalized.startswith('prompts/'):
+                prefix = normalized[len('prompts/'):]
+
+            if prefix and (basename == prefix or basename.startswith(prefix + '/')):
+                matches.append((context_name, len(prefix)))
+                continue
+
+        for path_pattern in context_config.get('paths', []):
+            pattern_base = path_pattern.rstrip('/**').rstrip('/*')
+            if fnmatch.fnmatch(basename, path_pattern) or \
+               basename.startswith(pattern_base + '/') or \
+               basename == pattern_base:
+                matches.append((context_name, len(pattern_base)))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda item: item[1], reverse=True)
+    return matches[0][0]
+
+
 def _get_relative_basename(input_path: str, pattern: str) -> str:
     """
     Compute basename relative to the matched pattern base.
@@ -203,12 +243,16 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
     """
     # Find repo root if not provided
     if repo_root is None:
-        try:
-            import git
-            repo = git.Repo(file_path, search_parent_directories=True)
-            repo_root = repo.working_tree_dir
-        except:
-            repo_root = os.getcwd()
+        pddrc_path = _find_pddrc_file(Path(file_path).parent)
+        if pddrc_path:
+            repo_root = str(pddrc_path.parent)
+        else:
+            try:
+                import git
+                repo = git.Repo(file_path, search_parent_directories=True)
+                repo_root = repo.working_tree_dir
+            except:
+                repo_root = os.getcwd()
 
     # Make file_path relative to repo_root for matching
     file_path_abs = os.path.abspath(file_path)
@@ -673,7 +717,15 @@ def construct_paths(
                     else:
                         context = _detect_context(Path.cwd(), pddrc_config, None)
                 else:
-                    context = _detect_context(Path.cwd(), pddrc_config, None)
+                    basename_hint = command_options.get("basename")
+                    if basename_hint:
+                        detected_context = _detect_context_from_basename(basename_hint, pddrc_config)
+                        if detected_context:
+                            context = detected_context
+                        else:
+                            context = _detect_context(Path.cwd(), pddrc_config, None)
+                    else:
+                        context = _detect_context(Path.cwd(), pddrc_config, None)
 
             # Get context-specific configuration
             context_config = _get_context_config(pddrc_config, context)
