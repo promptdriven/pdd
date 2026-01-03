@@ -431,9 +431,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     command="sync",
                     command_options={"basename": basename, "language": language},
                     context_override=context_override,
-                    path_resolution_mode="config_base"
+                    path_resolution_mode="cwd"
                 )
-                
+
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.info(f"resolved_config: {resolved_config}")
@@ -565,7 +565,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             command="sync",  # Use sync command to get more tolerant path handling
             command_options={"basename": basename, "language": language},
             context_override=context_override,
-            path_resolution_mode="config_base"
+            path_resolution_mode="cwd"
         )
 
         # Issue #237: Check for 'outputs' config for template-based path generation
@@ -629,7 +629,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     force=True, quiet=True, command="example",
                     command_options={"basename": basename},
                     context_override=context_override,
-                    path_resolution_mode="config_base"
+                    path_resolution_mode="cwd"
                 )
                 dir_prefix, name_part = _extract_name_part(basename)
                 example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
@@ -642,7 +642,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         force=True, quiet=True, command="test",
                         command_options={"basename": basename},
                         context_override=context_override,
-                        path_resolution_mode="config_base"
+                        path_resolution_mode="cwd"
                     )
                     test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
                 except FileNotFoundError:
@@ -672,7 +672,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     force=True, quiet=True, command="example",
                     command_options={"basename": basename},
                     context_override=context_override,
-                    path_resolution_mode="config_base"
+                    path_resolution_mode="cwd"
                 )
                 dir_prefix, name_part = _extract_name_part(basename)
                 example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
@@ -683,7 +683,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         force=True, quiet=True, command="test",
                         command_options={"basename": basename},
                         context_override=context_override,
-                        path_resolution_mode="config_base"
+                        path_resolution_mode="cwd"
                     )
                     test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
                 except Exception:

@@ -58,13 +58,13 @@ contexts:
 
     def test_code_path_uses_generate_output_path_directly(self, backend_utils_project):
         """
-        FAILING TEST: code path should use generate_output_path directly.
+        Regression test: code path should use generate_output_path directly.
 
         When syncing "backend/utils/credit_helpers" with config:
             generate_output_path: "backend/functions/utils/"
 
         Expected: backend/functions/utils/credit_helpers.py
-        Actual:   backend/utils/credit_helpers.py (WRONG - uses dir_prefix)
+        Previously broken: backend/utils/credit_helpers.py (was using dir_prefix)
         """
         from pdd.sync_determine_operation import get_pdd_file_paths
 
@@ -93,13 +93,13 @@ contexts:
 
     def test_example_path_uses_example_output_path_directly(self, backend_utils_project):
         """
-        FAILING TEST: example path should use example_output_path directly.
+        Regression test: example path should use example_output_path directly.
 
         When syncing "backend/utils/credit_helpers" with config:
             example_output_path: "context/"
 
         Expected: context/credit_helpers_example.py
-        Actual:   context/backend/utils/credit_helpers_example.py (WRONG)
+        Previously broken: context/backend/utils/credit_helpers_example.py
         """
         from pdd.sync_determine_operation import get_pdd_file_paths
 
@@ -128,13 +128,13 @@ contexts:
 
     def test_test_path_uses_test_output_path_directly(self, backend_utils_project):
         """
-        FAILING TEST: test path should use test_output_path directly.
+        Regression test: test path should use test_output_path directly.
 
         When syncing "backend/utils/credit_helpers" with config:
             test_output_path: "backend/tests/"
 
         Expected: backend/tests/test_credit_helpers.py
-        Actual:   backend/tests/backend/utils/test_credit_helpers.py (WRONG)
+        Previously broken: backend/tests/backend/utils/test_credit_helpers.py
         """
         from pdd.sync_determine_operation import get_pdd_file_paths
 
