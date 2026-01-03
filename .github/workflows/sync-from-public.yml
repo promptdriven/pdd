@@ -54,9 +54,12 @@ jobs:
         run: pip install -e .
 
       - name: Add remote and fetch
+        env:
+          CAP_TOKEN: ${{ secrets.CAP_REPO_TOKEN }}
         run: |
           if [[ "${{ steps.source.outputs.name }}" == "public-cap" ]]; then
-            git remote add ${{ steps.source.outputs.name }} https://x-access-token:${{ secrets.CAP_REPO_TOKEN }}@github.com/promptdriven/pdd_cap.git 2>/dev/null || true
+            git config --global url."https://x-access-token:${CAP_TOKEN}@github.com/".insteadOf "https://github.com/"
+            git remote add ${{ steps.source.outputs.name }} https://github.com/promptdriven/pdd_cap.git 2>/dev/null || true
           else
             git remote add ${{ steps.source.outputs.name }} ${{ steps.source.outputs.url }} 2>/dev/null || true
           fi
