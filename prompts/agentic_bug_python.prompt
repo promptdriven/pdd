@@ -15,10 +15,10 @@ CLI entry point for the agentic bug investigation workflow. Fetches a GitHub iss
    - `https://www.github.com/{owner}/{repo}/issues/{number}`
    - `github.com/{owner}/{repo}/issues/{number}`
 5. Fetch issue content via `gh api repos/{owner}/{repo}/issues/{number}` (requires `gh` CLI)
-6. Extract from issue: title, body, labels, state, comments_url, user.login (as issue_author)
+6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
 7. Fetch comments via `gh api {comments_url}` to get full context
 8. Clone/checkout the repository to a temp directory if not already in it
-9. Call orchestrator: `run_agentic_bug_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, ...)`
+9. Call orchestrator: `run_agentic_bug_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ...)`
 10. Return aggregated results from orchestrator
 
 % Manual Mode (legacy)
