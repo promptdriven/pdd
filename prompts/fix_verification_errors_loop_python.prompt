@@ -1,4 +1,4 @@
-% Write function "fix_verification_errors_loop" that iteratively fixes code errors by comparing program execution output against the original prompt's intent.
+% Write function "fix_verification_errors_loop" that iteratively fixes code errors by comparing program execution output against the original prompt's intent, with hybrid cloud support for LLM calls.
 
 <include>context/python_preamble.prompt</include>
 
@@ -20,6 +20,7 @@ def fix_verification_errors_loop(
     program_args: Optional[list[str]] = None,
     llm_time: float = DEFAULT_TIME,
     agentic_fallback: bool = True,
+    use_cloud: bool = False,     # Hybrid cloud: LLM calls via cloud verifyCode endpoint, local program execution
 ) -> Dict[str, Any]:  # Returns: success, final_program, final_code, total_attempts, total_cost, model_name, statistics
 
 % Dependencies:
@@ -29,6 +30,9 @@ def fix_verification_errors_loop(
 <agentic_verify_example><include>context/agentic_verify_example.py</include></agentic_verify_example>
 <agentic_langtest_example><include>context/agentic_langtest_example.py</include></agentic_langtest_example>
 <get_language_example><include>context/get_language_example.py</include></get_language_example>
+
+% Helpers:
+  - `cloud_verify_fix(program, prompt, code, output, strength, temperature, time_param, verbose, language)`: Call cloud verifyCode endpoint for LLM verification fix. Returns dict with fixed_code, fixed_program, explanation, verification_issues_count, total_cost, model_name. Falls back to local on cloud failure.
 
 % Algorithm:
 1. Non-Python targets (.py check): bypass loop, use get_language()/default_verify_cmd_for(), invoke run_agentic_verify

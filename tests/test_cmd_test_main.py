@@ -1225,6 +1225,8 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
         "force": True,
         "quiet": False,
         "local": False,  # Use cloud
+        "strength": 0.25,  # Use lowest strength for faster cloud response
+        "temperature": 0.0,
     }
 
     result = cmd_test_main(

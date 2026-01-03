@@ -1,5 +1,5 @@
 
-% Goal: Write a function `fix_code_loop` that attempts to fix errors in a code module through multiple LLM-driven iterations, with verbose mode and agentic fallback for non-Python or stuck scenarios.
+% Goal: Write a function `fix_code_loop` that attempts to fix errors in a code module through multiple LLM-driven iterations, with verbose mode, hybrid cloud support, and agentic fallback for non-Python or stuck scenarios.
 
 <include>context/python_preamble.prompt</include>
 
@@ -15,16 +15,19 @@
     code_file: str, prompt: str, verification_program: str,
     strength: float, temperature: float, max_attempts: int, budget: float,
     error_log_file: str, verbose: bool = False, time: float = DEFAULT_TIME,
-    prompt_file: str = "", agentic_fallback: bool = True
+    prompt_file: str = "", agentic_fallback: bool = True,
+    use_cloud: bool = False
   ) -> Tuple[bool, str, str, int, float, Optional[str]]
   # Returns: (success, final_program, final_code, total_attempts, total_cost, model_name)
   # On failure: success=False, final_program="", final_code="" (even if originals restored)
+  # Hybrid Cloud: When use_cloud=True, LLM fix calls go to cloud crashCode endpoint while local program execution stays local.
 
 % Helpers
   - `_normalize_agentic_result(result)`: Normalize 2/3/4/5-tuple from run_agentic_crash to 5-tuple.
   - `_safe_run_agentic_crash(*, prompt_file, code_file, program_file, crash_log_file, cwd=None)`: Wrapper that returns failure if prompt_file empty. Maps verification_program → program_file, error_log_file → crash_log_file. Pass `cwd=Path(prompt_file).parent` when calling.
   - `run_process_with_output(cmd_args, timeout=300)`: Subprocess with threaded byte-by-byte streaming capture. Returns (returncode, stdout, stderr).
   - `ProcessResult`: Simple class holding returncode, stdout, stderr.
+  - `cloud_crash_fix(program, prompt, code, errors, strength, temperature, time, verbose, program_path, code_path, language)`: Call cloud crashCode endpoint for LLM crash fix. Returns (update_program, update_code, fixed_program, fixed_code, analysis, cost, model_name). Falls back to local on cloud failure.
 
 % Process
   0. Validate files: code_file missing → FileNotFoundError; verification_program missing → return failure. Non-Python: run default_verify_cmd_for, trigger agentic fallback on failure or return success.
