@@ -1928,7 +1928,16 @@ contexts:
             (tmp_path / "examples").mkdir()
             
             # Mock construct_paths to return configured paths
-            def mock_construct_paths(input_file_paths, force, quiet, command, command_options, context_override=None):
+            def mock_construct_paths(
+                input_file_paths,
+                force,
+                quiet,
+                command,
+                command_options,
+                context_override=None,
+                path_resolution_mode=None,
+                **_ignored,
+            ):
                 # Simulate what construct_paths would return with .pddrc configuration
                 return (
                     {
@@ -1962,6 +1971,53 @@ contexts:
             
         finally:
             os.chdir(original_cwd)
+
+    def test_get_pdd_file_paths_uses_context_relative_basename_for_templates(self, tmp_path, monkeypatch):
+        pddrc_content = """version: "1.0"
+contexts:
+  frontend-components:
+    paths:
+      - "frontend/components/**"
+    defaults:
+      default_language: "typescriptreact"
+      outputs:
+        prompt:
+          path: "prompts/frontend/components/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/components/{category}/{name}/{name}.tsx"
+        example:
+          path: "context/frontend/{name}_example.tsx"
+  default:
+    defaults:
+      default_language: "python"
+"""
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        prompt_path = (
+            tmp_path
+            / "prompts"
+            / "frontend"
+            / "components"
+            / "marketplace"
+            / "AssetCard_typescriptreact.prompt"
+        )
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text("Generate AssetCard component", encoding="utf-8")
+
+        repo_root = Path(__file__).resolve().parents[1]
+        monkeypatch.setenv("PDD_PATH", str(repo_root))
+        monkeypatch.chdir(tmp_path)
+
+        paths = get_pdd_file_paths(
+            basename="frontend/components/marketplace/AssetCard",
+            language="typescriptreact",
+            prompts_dir="prompts",
+            context_override="frontend-components",
+        )
+
+        assert paths["prompt"].resolve() == prompt_path.resolve()
+        assert paths["code"].as_posix() == "frontend/src/components/marketplace/AssetCard/AssetCard.tsx"
+        assert paths["example"].as_posix() == "context/frontend/AssetCard_example.tsx"
     
     def test_get_pdd_file_paths_fallback_without_construct_paths(self, tmp_path, monkeypatch):
         """Test that paths use configured directories even without .pddrc when prompt is missing.
