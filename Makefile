@@ -846,6 +846,9 @@ publish-public-cap:
 	@echo "Copying VS Code extension to CAP public repo"
 	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/utils
 	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_CAP_REPO_DIR)/utils/
+	@echo "Copying python preamble to CAP public repo"
+	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/context
+	@cp context/python_preamble.prompt $(PUBLIC_PDD_CAP_REPO_DIR)/context/
 	@echo "Copying selected top-level files to CAP public repo (if present): $(PUBLIC_ROOT_FILES)"
 	@set -e; for f in $(PUBLIC_ROOT_FILES); do \
 		if [ -f "$$f" ]; then \
