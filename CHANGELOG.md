@@ -2,11 +2,20 @@
 
 ### Feat
 
-- Add cloud execution support for pdd crash and pdd verify commands
+- **Cloud Execution for `pdd crash` and `pdd verify` Commands (PR #218):** Added cloud-first execution with automatic local fallback for both commands. Uses JWT authentication via `CloudConfig.get_jwt_token()` and posts to the `crashCode` and `verifyCode` endpoints. Supports hybrid mode for loop iterations—local program execution with cloud LLM calls. Set `PDD_CLOUD_ONLY=1` or `PDD_NO_LOCAL_FALLBACK=1` to disable fallback. Non-recoverable errors (401/402/403/400) raise `UsageError`; recoverable errors (5xx, timeouts) fall back to local.
+
+### Docs
+
+- Updated `crash_main_python.prompt` and `fix_verification_main_python.prompt` with cloud execution strategy documentation.
+
+### Tests
+
+- Added 374+ lines of tests in `test_crash_main.py` covering cloud success paths, fallback scenarios, and hybrid loop mode.
+- Added 221+ lines of tests in `test_fix_main.py` for cloud execution coverage.
 
 ### Fix
 
-- Address valid Copilot suggestions - fix patch target and remove outdated comment
+- Fixed patch target in test mocking and removed outdated comment.
 
 ## v0.0.99 (2026-01-01)
 
