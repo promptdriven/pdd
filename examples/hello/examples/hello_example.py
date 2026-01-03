@@ -1,30 +1,55 @@
-import sys
-import os
+#!/usr/bin/env python3
+"""
+Example usage of the hello module.
 
-# Add the src directory to the system path to allow importing the hello module
-# This ensures the example is portable and can find the module relative to this script's location
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_path = os.path.join(current_dir, "..", "src")
-sys.path.append(src_path)
+This script demonstrates how to use the hello() function which prints
+a greeting message to the console.
 
+File Structure (relative to project root):
+    - Module location: same directory or Python path
+    - Example location: same directory or examples folder
+
+Functions demonstrated:
+    hello() -> None
+        Prints the string "hello" to the console.
+        
+        Parameters:
+            None
+            
+        Returns:
+            None - This function only produces console output.
+            
+        Side Effects:
+            Outputs "hello" followed by a newline to stdout.
+"""
+
+# Import the hello function
+# If the module is in the same directory or Python path:
 from hello import hello
 
-def run_example():
-    """
-    Demonstrates the usage of the hello function from the hello module.
 
-    Input Parameters:
-        None
-
-    Output:
-        Prints "hello" to the standard output.
+def main() -> None:
     """
-    print("--- Running hello() example ---")
+    Main function demonstrating the usage of hello().
     
-    # Call the imported function
+    The hello() function takes no arguments and returns nothing.
+    It simply prints the word "hello" to the console.
+    """
+    
+    # Basic usage - call hello() to print "hello"
+    print("Calling hello():")
     hello()
+    
+    # The function can be called multiple times
+    print("\nCalling hello() three times:")
+    for i in range(3):
+        hello()
+    
+    # Since hello() returns None, we can verify this
+    print("\nVerifying return value:")
+    result = hello()
+    print(f"Return value: {result}")  # Will print: Return value: None
 
-    print("--- Example completed ---")
 
 if __name__ == "__main__":
-    run_example()
+    main()
