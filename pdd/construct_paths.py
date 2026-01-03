@@ -231,7 +231,26 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
 
     contexts = config.get('contexts', {})
 
-    # Use shared helper with specificity matching for file-based detection
+    # First, try to match against prompts_dir for each context
+    # This allows prompt files to be detected even when paths pattern only matches code files
+    prompts_dir_matches = []
+    for context_name, context_config in contexts.items():
+        if context_name == 'default':
+            continue
+        prompts_dir = context_config.get('defaults', {}).get('prompts_dir', '')
+        if prompts_dir:
+            prompts_dir_normalized = prompts_dir.rstrip('/')
+            if relative_path.startswith(prompts_dir_normalized + '/') or relative_path == prompts_dir_normalized:
+                # Track match with specificity (length of prompts_dir)
+                prompts_dir_matches.append((context_name, len(prompts_dir_normalized)))
+
+    # Return most specific prompts_dir match if any
+    if prompts_dir_matches:
+        prompts_dir_matches.sort(key=lambda x: x[1], reverse=True)
+        matched_context = prompts_dir_matches[0][0]
+        return matched_context, _get_context_config(config, matched_context)
+
+    # Fall back to existing paths pattern matching
     context_name = _match_path_to_contexts(relative_path, contexts, use_specificity=True, is_absolute=False)
     return context_name, _get_context_config(config, context_name)
 
