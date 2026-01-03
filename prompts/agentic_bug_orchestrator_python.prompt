@@ -7,7 +7,7 @@ Write the `pdd/agentic_bug_orchestrator.py` module.
 Orchestrator for the 9-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
 % Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 9 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -65,6 +65,45 @@ The orchestrator must parse step output to detect stop conditions:
 - If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
 - This applies to all steps - only the specific hard stop patterns above terminate the workflow
 - Steps should post their findings to GitHub even on partial failure
+
+% Console Output
+
+The orchestrator must provide real-time feedback to the user via rich console output:
+
+1. **Header** (at start):
+   ```
+   🔍 Investigating issue #{issue_number}: "{issue_title}"
+   ```
+
+2. **Step progress** (before each step):
+   ```
+   [Step N/9] {step_description}...
+   ```
+
+3. **Agentic output** (during each step):
+   - Stream or display the output from `run_agentic_task()` so the user can see what the agent is doing
+   - Use `verbose` flag to control detail level
+
+4. **Step result** (after each step):
+   ```
+     → {brief_result}
+   ```
+   Examples: "No duplicates found", "Confirmed bug", "Needs More Info (stopping)"
+
+5. **Hard stop message** (if workflow terminates early):
+   ```
+   ⏹️  Investigation stopped at Step N: {reason}
+   ```
+
+6. **Final summary** (at end):
+   ```
+   ✅ Investigation complete  (or ❌ Investigation failed)
+      Total cost: ${total_cost:.4f}
+      Files changed: {comma_separated_list}
+      PR created: #{pr_number}  (if applicable)
+   ```
+
+Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
 
 % Dependencies
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
