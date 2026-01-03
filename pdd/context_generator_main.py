@@ -166,6 +166,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                         console.print("[yellow]Cloud execution failed. Falling back to local.[/yellow]")
                     is_local = True
         if is_local:
+            # Compute file path info if not already computed (when --local flag is used from start)
             source_file_path = str(Path(code_file).resolve())
             example_file_path = str(Path(resolved_output).resolve()) if resolved_output else ""
             module_name = Path(code_file).stem
