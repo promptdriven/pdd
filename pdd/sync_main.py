@@ -1,6 +1,6 @@
+import fnmatch
 import re
 import time
-import fnmatch
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
