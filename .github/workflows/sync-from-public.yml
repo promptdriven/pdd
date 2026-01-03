@@ -55,7 +55,11 @@ jobs:
 
       - name: Add remote and fetch
         run: |
-          git remote add ${{ steps.source.outputs.name }} ${{ steps.source.outputs.url }} 2>/dev/null || true
+          if [[ "${{ steps.source.outputs.name }}" == "public-cap" ]]; then
+            git remote add ${{ steps.source.outputs.name }} https://x-access-token:${{ secrets.CAP_REPO_TOKEN }}@github.com/promptdriven/pdd_cap.git 2>/dev/null || true
+          else
+            git remote add ${{ steps.source.outputs.name }} ${{ steps.source.outputs.url }} 2>/dev/null || true
+          fi
           git fetch ${{ steps.source.outputs.name }} main
 
       - name: Find changed files
