@@ -46,17 +46,23 @@ You are working on step 5 of 9 in an agentic bug investigation workflow. Previou
    - Search GitHub issues, StackOverflow, or forums for related problems
    - Note any relevant version constraints or breaking changes
 
-3. **Identify the root cause**
+3. **Analyze repository history**
+   - Use `git log` and `git blame` on affected files to identify when problematic code was introduced
+   - Search for related PRs that modified this code: `gh pr list --search "keyword" --state all`
+   - Review PR discussions for context on why changes were made
+   - Check closed issues for similar (not just duplicate) problems that provide historical insight
+   - Look for recent commits that might correlate with the bug's first appearance
+
+4. **Identify the root cause**
    - What condition triggers the bug?
    - Is it a logic error, edge case, race condition, or incorrect assumption?
-   - When was this code introduced? (use git blame/log if helpful)
 
-4. **Run experiments**
+5. **Run experiments**
    - Add debug output or modify code temporarily to verify hypotheses
    - Test edge cases and boundary conditions
    - Confirm your understanding of why the bug occurs
 
-5. **Document the root cause**
+6. **Document the root cause**
    - Explain the bug in clear terms
    - Identify the specific line(s) or logic that need to change
    - Note any related issues or implications
@@ -92,6 +98,11 @@ problematic_code_snippet()
 - **Search terms:** [key terms searched]
 - **Sources checked:** [GitHub, StackOverflow, docs, etc.]
 - **Relevant findings:** [any related issues, known bugs, or workarounds found]
+
+### Repository History
+- **Relevant commits:** [commits that introduced or modified the problematic code]
+- **Related PRs:** [PRs that touch the affected code path, with discussion context]
+- **Similar past issues:** [closed issues with related symptoms or fixes]
 
 ### Experiments Performed
 1. [What you tested and what it revealed]
