@@ -303,7 +303,6 @@ def fix_verification_main(
     try:
         if loop:
             # Determine if loop should use cloud for LLM calls (hybrid mode)
-            # Default to local execution until cloud is ready for production
             # Only use cloud if explicitly requested via PDD_CLOUD_ONLY or PDD_NO_LOCAL_FALLBACK
             use_cloud_for_loop = False
             if cloud_only and not is_local_execution_preferred:
