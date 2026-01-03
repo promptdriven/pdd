@@ -2784,3 +2784,64 @@ contexts:
         # paths pattern should still match code files
         assert context_name == "backend-utils", \
             f"Expected 'backend-utils' from paths pattern but got '{context_name}'"
+
+
+class TestSyncDiscoveryBasenameContextDetection:
+    """Sync discovery should infer context from basename prefixes and patterns."""
+
+    def test_construct_paths_sync_basename_prompts_dir_context(self, tmp_path, monkeypatch):
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      prompts_dir: "prompts/backend/utils"
+      generate_output_path: "backend/functions/utils/"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        monkeypatch.chdir(tmp_path)
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths={},
+            force=False,
+            quiet=True,
+            command="sync",
+            command_options={"basename": "backend/utils/credit_helpers", "language": "python"},
+        )
+
+        assert resolved_config["_matched_context"] == "backend-utils"
+        assert resolved_config["prompts_dir"] == "prompts/backend/utils"
+        assert Path(resolved_config["code_dir"]).as_posix().endswith("backend/functions/utils")
+
+    def test_construct_paths_sync_basename_paths_pattern_context(self, tmp_path, monkeypatch):
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  frontend-components:
+    paths:
+      - "frontend/components/**"
+    defaults:
+      generate_output_path: "frontend/src/components/"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        monkeypatch.chdir(tmp_path)
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths={},
+            force=False,
+            quiet=True,
+            command="sync",
+            command_options={"basename": "frontend/components/marketplace/AssetCard", "language": "typescriptreact"},
+        )
+
+        assert resolved_config["_matched_context"] == "frontend-components"
+        assert resolved_config["prompts_dir"] == "prompts"
+        assert Path(resolved_config["code_dir"]).as_posix().endswith("frontend/src/components")
