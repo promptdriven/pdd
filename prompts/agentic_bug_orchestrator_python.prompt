@@ -108,6 +108,7 @@ Use `quiet` flag to suppress all output except errors. Use `verbose` flag to sho
 % Dependencies
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>
 
 % Deliverables
 - Code: `pdd/agentic_bug_orchestrator.py`
