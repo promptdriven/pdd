@@ -11,6 +11,7 @@ import sys
 import json
 import hashlib
 import subprocess
+import fnmatch
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
@@ -31,7 +32,13 @@ except ImportError:
     HAS_MSVCRT = False
 
 # Import PDD internal modules
-from pdd.construct_paths import construct_paths
+from pdd.construct_paths import (
+    _detect_context,
+    _find_pddrc_file,
+    _get_relative_basename,
+    _load_pddrc_config,
+    construct_paths,
+)
 from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
 from pdd.get_language import get_language
@@ -243,6 +250,69 @@ def get_extension(language: str) -> str:
     return extensions.get(language.lower(), language.lower())
 
 
+def _resolve_prompts_root(prompts_dir: str) -> Path:
+    """Resolve prompts root relative to the .pddrc location when available."""
+    prompts_root = Path(prompts_dir)
+    pddrc_path = _find_pddrc_file()
+    if pddrc_path and not prompts_root.is_absolute():
+        prompts_root = pddrc_path.parent / prompts_root
+
+    parts = prompts_root.parts
+    if "prompts" in parts:
+        prompt_index = parts.index("prompts")
+        prompts_root = Path(*parts[: prompt_index + 1])
+
+    return prompts_root
+
+
+def _relative_basename_for_context(basename: str, context_name: Optional[str]) -> str:
+    """Strip context-specific prefixes from basename when possible."""
+    if not context_name:
+        return basename
+
+    pddrc_path = _find_pddrc_file()
+    if not pddrc_path:
+        return basename
+
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except ValueError:
+        return basename
+
+    contexts = config.get("contexts", {})
+    context_config = contexts.get(context_name, {})
+    defaults = context_config.get("defaults", {})
+
+    matches = []
+
+    prompts_dir = defaults.get("prompts_dir", "")
+    if prompts_dir:
+        normalized = prompts_dir.rstrip("/")
+        prefix = normalized
+        if normalized == "prompts":
+            prefix = ""
+        elif normalized.startswith("prompts/"):
+            prefix = normalized[len("prompts/"):]
+
+        if prefix and (basename == prefix or basename.startswith(prefix + "/")):
+            relative = basename[len(prefix) + 1 :] if basename != prefix else basename.split("/")[-1]
+            matches.append((len(prefix), relative))
+
+    for pattern in context_config.get("paths", []):
+        pattern_base = pattern.rstrip("/**").rstrip("/*")
+        if fnmatch.fnmatch(basename, pattern) or \
+           basename.startswith(pattern_base + "/") or \
+           basename == pattern_base:
+            relative = _get_relative_basename(basename, pattern)
+            matches.append((len(pattern_base), relative))
+
+    if not matches:
+        return basename
+
+    matches.sort(key=lambda item: item[0], reverse=True)
+    return matches[0][1]
+
+
 def _generate_paths_from_templates(
     basename: str,
     language: str,
@@ -324,11 +394,27 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     
     try:
         # Use construct_paths to get configuration-aware paths
-        # Extract just the name part from basename to avoid double-prefixing
-        # e.g., basename='backend/utils/credit_helpers' -> name_part='credit_helpers'
-        _, name_part = _extract_name_part(basename)
-        prompt_filename = f"{name_part}_{language}.prompt"
-        prompt_path = str(Path(prompts_dir) / prompt_filename)
+        prompts_root = _resolve_prompts_root(prompts_dir)
+        prompt_filename = f"{basename}_{language}.prompt"
+        prompt_path = str(prompts_root / prompt_filename)
+        pddrc_path = _find_pddrc_file()
+        if pddrc_path:
+            try:
+                config = _load_pddrc_config(pddrc_path)
+                context_name = context_override or _detect_context(Path.cwd(), config, None)
+                context_config = config.get('contexts', {}).get(context_name or '', {})
+                prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
+                if prompts_dir_config:
+                    normalized = prompts_dir_config.rstrip('/')
+                    prefix = normalized
+                    if normalized == 'prompts':
+                        prefix = ''
+                    elif normalized.startswith('prompts/'):
+                        prefix = normalized[len('prompts/'):]
+                    if prefix and not (basename == prefix or basename.startswith(prefix + '/')):
+                        prompt_path = str(prompts_root / prefix / prompt_filename)
+            except ValueError:
+                pass
         logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
         
         # Check if prompt file exists - if not, we still need configuration-aware paths
@@ -344,7 +430,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     quiet=True,
                     command="sync",
                     command_options={"basename": basename, "language": language},
-                    context_override=context_override
+                    context_override=context_override,
+                    path_resolution_mode="config_base"
                 )
                 
                 import logging
@@ -356,8 +443,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 outputs_config = resolved_config.get('outputs')
                 if outputs_config:
                     logger.info(f"Using template-based paths from outputs config")
+                    context_name = context_override or resolved_config.get('_matched_context')
+                    basename_for_templates = _relative_basename_for_context(basename, context_name)
                     result = _generate_paths_from_templates(
-                        basename=basename,
+                        basename=basename_for_templates,
                         language=language,
                         extension=extension,
                         outputs_config=outputs_config,
@@ -475,7 +564,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             quiet=True,
             command="sync",  # Use sync command to get more tolerant path handling
             command_options={"basename": basename, "language": language},
-            context_override=context_override
+            context_override=context_override,
+            path_resolution_mode="config_base"
         )
 
         # Issue #237: Check for 'outputs' config for template-based path generation
@@ -484,8 +574,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         if outputs_config:
             extension = get_extension(language)
             logger.info(f"Using template-based paths from outputs config (prompt exists)")
+            context_name = context_override or resolved_config.get('_matched_context')
+            basename_for_templates = _relative_basename_for_context(basename, context_name)
             result = _generate_paths_from_templates(
-                basename=basename,
+                basename=basename_for_templates,
                 language=language,
                 extension=extension,
                 outputs_config=outputs_config,
@@ -537,7 +629,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     force=True, quiet=True, command="example",
                     command_options={"basename": basename},
                     context_override=context_override,
-                    path_resolution_mode="cwd"
+                    path_resolution_mode="config_base"
                 )
                 dir_prefix, name_part = _extract_name_part(basename)
                 example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
@@ -550,7 +642,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         force=True, quiet=True, command="test",
                         command_options={"basename": basename},
                         context_override=context_override,
-                        path_resolution_mode="cwd"
+                        path_resolution_mode="config_base"
                     )
                     test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
                 except FileNotFoundError:
@@ -580,7 +672,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     force=True, quiet=True, command="example",
                     command_options={"basename": basename},
                     context_override=context_override,
-                    path_resolution_mode="cwd"
+                    path_resolution_mode="config_base"
                 )
                 dir_prefix, name_part = _extract_name_part(basename)
                 example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
@@ -591,7 +683,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         force=True, quiet=True, command="test",
                         command_options={"basename": basename},
                         context_override=context_override,
-                        path_resolution_mode="cwd"
+                        path_resolution_mode="config_base"
                     )
                     test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
                 except Exception:
@@ -644,8 +736,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
         else:
             matching_test_files = [test_path] if test_path.exists() else []
+        prompts_root = _resolve_prompts_root(prompts_dir)
         return {
-            'prompt': Path(prompts_dir) / f"{basename}_{language}.prompt",
+            'prompt': prompts_root / f"{basename}_{language}.prompt",
             'code': Path(f"{dir_prefix}{name_part}.{extension}"),
             'example': Path(f"{dir_prefix}{name_part}_example.{extension}"),
             'test': test_path,
