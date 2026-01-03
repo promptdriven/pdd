@@ -1395,7 +1395,7 @@ Options:
 
 #### XML-like Tags
 
-PDD supports the following XML-like tags in prompt files:
+PDD supports the following XML-like tags in prompt files. Note: XML-like tags (`<include>`, `<include-many>`, `<shell>`, `<web>`) are left untouched inside fenced code blocks (``` or ~~~) or inline backticks so documentation examples remain literal.
 
 1. **`include`**: Includes the content of the specified file in the prompt. The tag is replaced directly with the file content.
    ```xml
