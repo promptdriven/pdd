@@ -383,10 +383,38 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # Extract directory and name parts for subdirectory basename support
                 dir_prefix, name_part = _extract_name_part(basename)
 
-                # Construct the full paths (preserving subdirectory structure)
-                test_path = f"{test_dir}{dir_prefix}test_{name_part}.{extension}"
-                example_path = f"{example_dir}{dir_prefix}{name_part}_example.{extension}"
-                code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
+                # Get explicit config paths (these are the SOURCE OF TRUTH when configured)
+                # These should be used directly, NOT combined with dir_prefix
+                generate_output_path = resolved_config.get('generate_output_path', '')
+                example_output_path = resolved_config.get('example_output_path', '')
+                test_output_path = resolved_config.get('test_output_path', '')
+
+                # Construct paths: use explicit config paths directly when configured,
+                # otherwise fall back to old behavior with dir_prefix for backwards compat
+
+                # Code path
+                if generate_output_path and generate_output_path.endswith('/'):
+                    # Explicit complete directory - use directly with just filename
+                    code_path = f"{generate_output_path}{name_part}.{extension}"
+                else:
+                    # Old behavior - use code_dir + dir_prefix
+                    code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
+
+                # Example path
+                if example_output_path and example_output_path.endswith('/'):
+                    # Explicit complete directory - use directly with just filename
+                    example_path = f"{example_output_path}{name_part}_example.{extension}"
+                else:
+                    # Old behavior - use example_dir + dir_prefix
+                    example_path = f"{example_dir}{dir_prefix}{name_part}_example.{extension}"
+
+                # Test path
+                if test_output_path and test_output_path.endswith('/'):
+                    # Explicit complete directory - use directly with just filename
+                    test_path = f"{test_output_path}test_{name_part}.{extension}"
+                else:
+                    # Old behavior - use test_dir + dir_prefix
+                    test_path = f"{test_dir}{dir_prefix}test_{name_part}.{extension}"
 
                 logger.debug(f"Final paths: test={test_path}, example={example_path}, code={code_path}")
 
@@ -472,11 +500,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         if not code_path:
             # Fallback to constructing from basename with configuration
             extension = get_extension(language)
-            code_dir = resolved_config.get('generate_output_path', './')
-            if code_dir and not code_dir.endswith('/'):
-                code_dir = code_dir + '/'
+            generate_output_path = resolved_config.get('generate_output_path', '')
             dir_prefix, name_part = _extract_name_part(basename)
-            code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
+
+            # Use explicit config path directly when configured (ending with /)
+            if generate_output_path and generate_output_path.endswith('/'):
+                code_path = f"{generate_output_path}{name_part}.{extension}"
+            else:
+                # Old behavior - use path + dir_prefix
+                code_dir = generate_output_path or './'
+                if not code_dir.endswith('/'):
+                    code_dir = code_dir + '/'
+                code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
         
         # Get configured paths for example and test files using construct_paths
         # Note: construct_paths requires files to exist, so we need to handle the case
