@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Dict, Tuple, Any, Optional
 from xml.sax.saxutils import escape
 import time
+
+import requests
 
 from rich.console import Console
 
@@ -30,6 +33,78 @@ from .python_env_detector import detect_host_python_executable
 from .get_language import get_language
 from .agentic_langtest import default_verify_cmd_for
 from .agentic_verify import run_agentic_verify
+
+# Cloud configuration
+try:
+    from .core.cloud import CloudConfig
+    CLOUD_AVAILABLE = True
+except ImportError:
+    CLOUD_AVAILABLE = False
+    CloudConfig = None
+
+# Cloud request timeout for verify fix
+CLOUD_REQUEST_TIMEOUT = 400  # seconds
+
+
+def cloud_verify_fix(
+    program: str,
+    prompt: str,
+    code: str,
+    output: str,
+    strength: float,
+    temperature: float,
+    time_param: float,
+    verbose: bool,
+    language: str = "python",
+) -> Dict[str, Any]:
+    """
+    Call cloud verifyCode endpoint for LLM verification fix.
+
+    Returns:
+        Dict with keys: fixed_code, fixed_program, explanation, verification_issues_count, total_cost, model_name
+    """
+    if not CLOUD_AVAILABLE or CloudConfig is None:
+        raise RuntimeError("Cloud configuration not available")
+
+    jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+    if not jwt_token:
+        raise RuntimeError("Cloud authentication failed - no JWT token")
+
+    payload = {
+        "programContent": program,
+        "promptContent": prompt,
+        "codeContent": code,
+        "outputContent": output,
+        "language": language,
+        "strength": strength,
+        "temperature": temperature,
+        "time": time_param if time_param is not None else 0.25,
+        "verbose": verbose,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Content-Type": "application/json"
+    }
+    cloud_url = CloudConfig.get_endpoint_url("verifyCode")
+
+    response = requests.post(
+        cloud_url,
+        json=payload,
+        headers=headers,
+        timeout=CLOUD_REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+
+    response_data = response.json()
+    return {
+        "fixed_code": response_data.get("fixedCode", code),
+        "fixed_program": response_data.get("fixedProgram", program),
+        "explanation": response_data.get("explanation", ""),
+        "verification_issues_count": response_data.get("issuesCount", 0),
+        "total_cost": float(response_data.get("totalCost", 0.0)),
+        "model_name": response_data.get("modelName", "cloud_model"),
+    }
 
 def _normalize_agentic_result(result):
     """
@@ -156,10 +231,16 @@ def fix_verification_errors_loop(
     program_args: Optional[list[str]] = None,
     llm_time: float = DEFAULT_TIME, # Add time parameter
     agentic_fallback: bool = True,
+    use_cloud: bool = False,
 ) -> Dict[str, Any]:
     """
     Attempts to fix errors in a code file based on program execution output
     against the prompt's intent, iterating multiple times with secondary verification.
+
+    Hybrid Cloud Support:
+        When use_cloud=True, the LLM fix calls are routed to the cloud verifyCode endpoint
+        while local program execution stays local. This allows the loop to pass local
+        verification results to the cloud for analysis and fixes.
 
     Args:
         program_file: Path to the Python program exercising the code.
@@ -178,6 +259,7 @@ def fix_verification_errors_loop(
         program_args: Optional list of command-line arguments for the program_file.
         llm_time: Time parameter for fix_verification_errors calls (default: DEFAULT_TIME).
         agentic_fallback: Enable agentic fallback if the primary fix mechanism fails.
+        use_cloud: If True, use cloud LLM for fix calls while keeping verification execution local.
 
     Returns:
         A dictionary containing:
@@ -422,16 +504,46 @@ def fix_verification_errors_loop(
             if verbose:
                 console.print("Running initial assessment with fix_verification_errors...")
             # Use actual strength/temp for realistic initial assessment
-            initial_fix_result = fix_verification_errors(
-                program=initial_program_content,
-                prompt=prompt,
-                code=initial_code_content,
-                output=initial_output,
-                strength=strength,
-                temperature=temperature,
-                verbose=verbose,
-                time=llm_time # Pass time
-            )
+            # Use cloud or local based on use_cloud parameter
+            if use_cloud:
+                try:
+                    initial_fix_result = cloud_verify_fix(
+                        program=initial_program_content,
+                        prompt=prompt,
+                        code=initial_code_content,
+                        output=initial_output,
+                        strength=strength,
+                        temperature=temperature,
+                        time_param=llm_time,
+                        verbose=verbose,
+                        language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                    )
+                    if verbose:
+                        console.print(f"[cyan]Cloud verify fix completed.[/cyan]")
+                except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
+                    # Cloud failed - fall back to local
+                    console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
+                    initial_fix_result = fix_verification_errors(
+                        program=initial_program_content,
+                        prompt=prompt,
+                        code=initial_code_content,
+                        output=initial_output,
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=verbose,
+                        time=llm_time
+                    )
+            else:
+                initial_fix_result = fix_verification_errors(
+                    program=initial_program_content,
+                    prompt=prompt,
+                    code=initial_code_content,
+                    output=initial_output,
+                    strength=strength,
+                    temperature=temperature,
+                    verbose=verbose,
+                    time=llm_time # Pass time
+                )
             # 3e: Add cost
             initial_cost = initial_fix_result.get('total_cost', 0.0)
             total_cost += initial_cost
@@ -613,7 +725,7 @@ def fix_verification_errors_loop(
             stats['status_message'] = f'Error creating backups on attempt {current_attempt}'
             break # Don't proceed without backups
 
-        # 4e: Call fix_verification_errors
+        # 4e: Call fix_verification_errors (cloud or local based on use_cloud parameter)
         iteration_log_xml += f'  <InputsToFixer>\n'
         iteration_log_xml += f'    <Program>{escape(program_contents)}</Program>\n'
         iteration_log_xml += f'    <Code>{escape(code_contents)}</Code>\n'
@@ -625,16 +737,46 @@ def fix_verification_errors_loop(
         try:
             if verbose:
                 console.print("Calling fix_verification_errors...")
-            fix_result = fix_verification_errors(
-                program=program_contents,
-                prompt=prompt,
-                code=code_contents,
-                output=program_output,
-                strength=strength,
-                temperature=temperature,
-                verbose=verbose,
-                time=llm_time # Pass time
-            )
+            # Use cloud or local based on use_cloud parameter
+            if use_cloud:
+                try:
+                    fix_result = cloud_verify_fix(
+                        program=program_contents,
+                        prompt=prompt,
+                        code=code_contents,
+                        output=program_output,
+                        strength=strength,
+                        temperature=temperature,
+                        time_param=llm_time,
+                        verbose=verbose,
+                        language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                    )
+                    if verbose:
+                        console.print(f"[cyan]Cloud verify fix completed.[/cyan]")
+                except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
+                    # Cloud failed - fall back to local
+                    console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
+                    fix_result = fix_verification_errors(
+                        program=program_contents,
+                        prompt=prompt,
+                        code=code_contents,
+                        output=program_output,
+                        strength=strength,
+                        temperature=temperature,
+                        verbose=verbose,
+                        time=llm_time
+                    )
+            else:
+                fix_result = fix_verification_errors(
+                    program=program_contents,
+                    prompt=prompt,
+                    code=code_contents,
+                    output=program_output,
+                    strength=strength,
+                    temperature=temperature,
+                    verbose=verbose,
+                    time=llm_time # Pass time
+                )
 
             # 4f: Add cost
             attempt_cost = fix_result.get('total_cost', 0.0)

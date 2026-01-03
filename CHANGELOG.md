@@ -1,23 +1,28 @@
+## v0.0.100 (2026-01-02)
+
+### Feat
+
+- Add cloud execution support for pdd crash and pdd verify commands
+
+### Fix
+
+- Address valid Copilot suggestions - fix patch target and remove outdated comment
+
 ## v0.0.99 (2026-01-01)
 
 ### Feat
 
-- Add cloud hybrid mode support for pdd fix command
-- Add additional Bash commands for Git operations in settings
-- Add WebFetch support for GitHub domain in settings
-- Enhance examples_dir determination in construct_paths
-- Add extensible output path templates for different project layouts (#237)
-- Enhance cloud execution and release process checks
+- **Cloud Hybrid Mode for `pdd fix` Command (PR #214, #217):** Added cloud execution support for fix command with hybrid mode—LLM calls go to the cloud while test execution stays local. Includes single-pass cloud fix mode with automatic fallback and iterative cloud hybrid mode with cumulative cost tracking. Added `fixCode` to CLOUD_ENDPOINTS.
+
+- **Extensible Output Path Templates (Issue #237):** Fixed construct_paths to use prompt file path for context detection, resolving bugs where example paths were generated incorrectly (e.g., `context/credit_helpers_example.py` instead of `context/backend/credit_helpers_example.py`).
+
+- **Strict JSON Schema Mode for LLM Responses:** Changed `llm_invoke.py` from loose `json_object` mode to strict `json_schema` mode, preventing CodeFix validation errors when LLM omits required fields.
 
 ### Fix
 
-- Update test to check for write calls instead of any open calls
-- Revert cmd_test_main_example.py to origin/main
-- make test uses absolute PDD_PATH
-- ignore directives inside code spans
-- Improve examples_dir determination in construct_paths
-- Ensure outputs config is used when prompt file exists in path generation
-- Handle keychain write failure (-25299) when storing rotated refresh token
+- **Keychain Write Failure Handling:** Handle `-25299` keychain error when storing rotated refresh tokens.
+- **Code Spans Directive Fix (PR #212):** Ignore directives inside code spans during preprocessing.
+- **Construct Paths Fixes:** Multiple fixes for `examples_dir` determination and outputs config usage in path generation.
 
 ## v0.0.98 (2025-12-31)
 
