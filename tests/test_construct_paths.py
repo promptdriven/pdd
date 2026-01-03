@@ -2663,3 +2663,124 @@ def test_examples_dir_uses_root_of_outputs_example_path_not_parent(tmpdir):
     assert resolved_config["examples_dir"] == "context", \
         f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent). " \
         "examples_dir should use root of outputs.example.path, not parent directory."
+
+
+class TestPromptsDirContextDetection:
+    """
+    TDD Tests for detecting context from prompts_dir configuration.
+
+    Bug: When .pddrc has a context with prompts_dir configured (legacy style),
+    but the paths pattern doesn't match the prompt file location,
+    context detection fails and falls back to 'default'.
+
+    Example:
+        backend-utils:
+          paths: ["backend/functions/utils/**"]   # Matches CODE files
+          defaults:
+            prompts_dir: "prompts/backend/utils"  # Where PROMPTS live
+
+    When syncing, prompt file is at prompts/backend/utils/foo.prompt
+    but paths pattern only matches backend/functions/utils/**, so context
+    detection falls back to 'default' instead of 'backend-utils'.
+    """
+
+    @pytest.fixture
+    def pddrc_with_prompts_dir(self, tmp_path):
+        """Create .pddrc where paths pattern differs from prompts_dir."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      prompts_dir: "prompts/backend/utils"
+      generate_output_path: "backend/functions/utils/"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+        # Create prompt file
+        prompt_dir = tmp_path / "prompts" / "backend" / "utils"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "credit_helpers_python.prompt").write_text("test prompt")
+        return tmp_path
+
+    def test_detect_context_from_prompts_dir(self, pddrc_with_prompts_dir):
+        """
+        FAILING TEST: Context should be detected from prompts_dir.
+
+        When prompt file is at prompts/backend/utils/credit_helpers_python.prompt
+        and backend-utils context has prompts_dir: "prompts/backend/utils",
+        context should be detected as "backend-utils" even though
+        paths pattern "backend/functions/utils/**" doesn't match.
+        """
+        from pdd.construct_paths import detect_context_for_file
+
+        prompt_path = pddrc_with_prompts_dir / "prompts" / "backend" / "utils" / "credit_helpers_python.prompt"
+
+        context_name, config = detect_context_for_file(
+            str(prompt_path),
+            repo_root=str(pddrc_with_prompts_dir)
+        )
+
+        assert context_name == "backend-utils", \
+            f"Expected 'backend-utils' but got '{context_name}'. " \
+            f"Context detection should match prompts_dir, not just paths patterns."
+
+    def test_most_specific_prompts_dir_wins(self, tmp_path):
+        """More specific prompts_dir should take precedence."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  backend:
+    paths:
+      - "backend/**"
+    defaults:
+      prompts_dir: "prompts/backend"
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      prompts_dir: "prompts/backend/utils"
+''')
+        prompt_dir = tmp_path / "prompts" / "backend" / "utils"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "foo.prompt").write_text("test")
+
+        from pdd.construct_paths import detect_context_for_file
+
+        context_name, _ = detect_context_for_file(
+            str(prompt_dir / "foo.prompt"),
+            repo_root=str(tmp_path)
+        )
+
+        # backend-utils (prompts/backend/utils) is more specific than backend (prompts/backend)
+        assert context_name == "backend-utils", \
+            f"Expected 'backend-utils' (more specific) but got '{context_name}'"
+
+    def test_paths_pattern_still_works(self, tmp_path):
+        """Existing paths pattern matching should still work for code files."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      prompts_dir: "prompts/backend/utils"
+''')
+        code_dir = tmp_path / "backend" / "functions" / "utils"
+        code_dir.mkdir(parents=True)
+        (code_dir / "helper.py").write_text("# code")
+
+        from pdd.construct_paths import detect_context_for_file
+
+        context_name, _ = detect_context_for_file(
+            str(code_dir / "helper.py"),
+            repo_root=str(tmp_path)
+        )
+
+        # paths pattern should still match code files
+        assert context_name == "backend-utils", \
+            f"Expected 'backend-utils' from paths pattern but got '{context_name}'"
