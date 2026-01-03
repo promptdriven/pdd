@@ -58,11 +58,13 @@ jobs:
           CAP_TOKEN: ${{ secrets.CAP_REPO_TOKEN }}
         run: |
           if [[ "${{ steps.source.outputs.name }}" == "public-cap" ]]; then
-            git config --global url."https://x-access-token:${CAP_TOKEN}@github.com/".insteadOf "https://github.com/"
-            git remote add ${{ steps.source.outputs.name }} https://github.com/promptdriven/pdd_cap.git 2>/dev/null || true
+            echo "CAP_TOKEN length: ${#CAP_TOKEN}"
+            echo "Setting up auth for pdd_cap..."
+            git remote add ${{ steps.source.outputs.name }} "https://x-access-token:${CAP_TOKEN}@github.com/promptdriven/pdd_cap.git" 2>/dev/null || true
           else
             git remote add ${{ steps.source.outputs.name }} ${{ steps.source.outputs.url }} 2>/dev/null || true
           fi
+          git remote -v
           git fetch ${{ steps.source.outputs.name }} main
 
       - name: Find changed files
