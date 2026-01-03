@@ -68,23 +68,40 @@ jobs:
           REMOTE="${{ steps.source.outputs.name }}"
           TRIGGER_SHA="${{ steps.source.outputs.trigger_sha }}"
 
-          # Base patterns (both repos)
-          PATTERNS=(
-            'pdd/*.py'
-            'pdd/commands/*.py'
-            'pdd/core/*.py'
-            'tests/test_*.py'
-            'tests/conftest.py'
-            'README.md'
-            'requirements.txt'
-            'pyproject.toml'
-            'docs/*.md'
-          )
+          # Read patterns from .sync-config.yml
+          PATTERNS=()
 
-          # Add prompts for pdd_cap
-          if [[ "${{ steps.source.outputs.include_prompts }}" == "true" ]]; then
-            PATTERNS+=('pdd/prompts/')
-          fi
+          # Parse shared patterns (lines after "shared:" until next section or EOF)
+          IN_SHARED=false
+          IN_CAP=false
+          while IFS= read -r line; do
+            # Detect section headers
+            if [[ "$line" =~ ^shared: ]]; then
+              IN_SHARED=true
+              IN_CAP=false
+              continue
+            elif [[ "$line" =~ ^cap_only: ]]; then
+              IN_SHARED=false
+              IN_CAP=true
+              continue
+            elif [[ "$line" =~ ^[a-z_]+: ]]; then
+              IN_SHARED=false
+              IN_CAP=false
+              continue
+            fi
+
+            # Extract pattern from "  - pattern" lines
+            if [[ "$line" =~ ^[[:space:]]*-[[:space:]](.+)$ ]]; then
+              pattern="${BASH_REMATCH[1]}"
+              if $IN_SHARED; then
+                PATTERNS+=("$pattern")
+              elif $IN_CAP && [[ "${{ steps.source.outputs.include_prompts }}" == "true" ]]; then
+                PATTERNS+=("$pattern")
+              fi
+            fi
+          done < .sync-config.yml
+
+          echo "Using patterns: ${PATTERNS[*]}"
 
           # Only sync files from the specific triggering commit
           # This prevents reverting private-only changes

@@ -1,0 +1,40 @@
+# Sync configuration for bidirectional sync between private and public repos
+# Used by:
+#   - .github/workflows/sync-from-public.yml (pulling FROM public)
+#   - Makefile publish-public targets (pushing TO public)
+
+# Files synced for both pdd and pdd_cap repos
+shared:
+  # Python source files
+  - pdd/*.py
+  - pdd/commands/*.py
+  - pdd/core/*.py
+
+  # Tests
+  - tests/test_*.py
+  - tests/__init__.py
+  - tests/conftest.py
+
+  # Root config files
+  - README.md
+  - requirements.txt
+  - pyproject.toml
+  - pytest.ini
+  - .gitignore
+  - Makefile
+  - LICENSE
+  - CHANGELOG.md
+  - CONTRIBUTING.md
+  - .env.example
+  - SETUP_WITH_GEMINI.md
+  - pdd-local.sh
+  - .pddrc
+
+  # Documentation
+  - docs/*.md
+  - docs/goldilocks_prompt.jpeg
+  - docs/videos/*.gif
+
+# Files synced ONLY for pdd_cap repo (includes prompts)
+cap_only:
+  - pdd/prompts/
