@@ -2014,6 +2014,10 @@ PDD automatically detects the appropriate context based on:
 - `budget`: Default budget for iterative commands
 - `max_attempts`: Default maximum attempts for fixing operations
 
+**Path Behavior**:
+- Paths ending with `/` are treated as explicit directories and do **not** preserve subdirectory basenames (e.g., `commands/analysis` -> `pdd/analysis.py`).
+- Paths without trailing `/` preserve subdirectory basenames when the path is an existing directory (e.g., `commands/analysis` -> `pdd/commands/analysis.py`).
+
 **Usage Examples**:
 ```bash
 # Auto-detect context from current directory
