@@ -1,0 +1,169 @@
+---
+name: generic/generate_pddrc
+description: Generate a .pddrc configuration file from architecture.json to define project contexts and settings
+version: 1.0.0
+tags: [config, template, pddrc, generic]
+language: yaml
+output: .pddrc
+variables:
+  ARCHITECTURE_FILE:
+    required: true
+    type: path
+    description: Architecture JSON file that defines the project structure and modules.
+    example_paths: [architecture.json, apps/backend/architecture.json]
+usage:
+  generate:
+    - name: Generate .pddrc from architecture
+      command: pdd generate --template generic/generate_pddrc -e ARCHITECTURE_FILE=app/architecture.json --output app/.pddrc
+
+discover:
+  enabled: false
+---
+
+Purpose: Generate a `.pddrc` configuration file that defines project contexts based on the architecture structure, enabling PDD to automatically apply appropriate settings for different parts of the codebase.
+
+<ARCHITECTURE_FILE><include>${ARCHITECTURE_FILE}</include></ARCHITECTURE_FILE>
+
+CONTEXT: You are generating a .pddrc configuration file for a project. The .pddrc file enables PDD to automatically detect which part of the codebase you're working in and apply appropriate settings.
+
+WHAT IS A .pddrc FILE?
+
+A .pddrc file is a YAML configuration that defines "contexts" - different areas of your codebase with their own settings. When you run PDD commands, it automatically detects which context you're in based on file paths and applies the right configuration.
+
+Key concepts:
+- **Contexts**: Named configurations for different parts of your codebase (backend, frontend, api, shared, etc.)
+- **Path patterns**: Glob patterns that match files in each context (e.g., "backend/**", "frontend/**")
+- **Defaults**: Settings applied when working in that context (output paths, language, coverage targets, LLM parameters)
+- **Context detection**: PDD searches contexts in order and uses the first match
+
+CONFIGURATION STRUCTURE:
+
+```yaml
+version: "1.0"
+
+contexts:
+  # Context name (descriptive identifier)
+  backend:
+    # Glob patterns to match files in this context
+    paths: ["backend/**", "src/backend/**", "api/**"]
+    
+    # Settings applied when working in this context
+    defaults:
+      generate_output_path: "backend/src/"      # Where generated code goes
+      test_output_path: "backend/tests/"        # Where test files go
+      example_output_path: "backend/examples/"  # Where example files go
+      default_language: "python"                # Primary language
+      target_coverage: 90.0                     # Test coverage target (%)
+      strength: 0.75                            # LLM generation strength (0-1)
+      temperature: 0.0                          # LLM temperature (0-1)
+      budget: 10.0                              # Cost budget per operation ($)
+      max_attempts: 3                           # Max retry attempts
+```
+
+INSTRUCTIONS:
+
+1. **Analyze the architecture.json** to understand the project structure:
+   - Look at the `filepath` field in each module to identify directory patterns
+   - Look at the `tags` field to identify layers (backend, frontend, api, database, etc.)
+   - Group modules by their architectural layer or functional area
+   - Identify the primary language from `filename` patterns (e.g., _Python.prompt, _TypeScriptReact.prompt)
+
+2. **Create contexts** for each distinct layer/area:
+   - Use descriptive names: backend, frontend, api, shared, config, docs, tests, utils
+   - Order from most specific to most general (PDD stops at first match)
+   - Each context should have clear, non-overlapping path patterns
+
+3. **Generate path patterns** from the architecture:
+   - Extract directory prefixes from `filepath` fields
+   - Create glob patterns like "backend/**", "frontend/**"
+   - Include common variations: "src/backend/**", "apps/backend/**"
+   - Be specific enough to avoid conflicts
+
+4. **Set appropriate defaults** for each context:
+   - **generate_output_path**: Infer from filepath patterns (e.g., "backend/src/" if files are in backend/src/)
+   - **test_output_path**: Usually "tests/" or "__tests__/" relative to the context
+   - **example_output_path**: Usually "examples/" relative to the context
+   - **default_language**: Infer from prompt filenames (Python, TypeScript, TypeScriptReact, etc.)
+   - **target_coverage**: 
+     * Backend/API: 90-95% (critical business logic)
+     * Frontend: 80-85% (UI components)
+     * Shared/Utils: 85-90% (reusable code)
+     * Config/Docs: 70-75% (less critical)
+   - **strength**: 0.75 (standard), 1.0 for critical code
+   - **temperature**: 0.0 (deterministic) or 0.2 (slightly creative)
+   - **budget**: 10.0 (standard)
+   - **max_attempts**: 3 (standard)
+
+5. **Always include a "default" context** as the final fallback:
+   - This catches any files not matched by other contexts
+   - Use conservative settings
+
+6. **Add helpful comments**:
+   - Header describing the project
+   - Comment for each context explaining its purpose
+   - Reference to the architecture.json file
+
+OUTPUT REQUIREMENTS:
+
+1. Output ONLY the YAML content for the .pddrc file
+2. Do NOT include markdown code fences, explanations, or commentary
+3. Use proper YAML formatting with 2-space indentation
+4. Start with a header comment describing the project
+5. Include the version field: `version: "1.0"`
+6. Order contexts from most specific to most general
+7. Ensure all path patterns are valid glob patterns
+8. Make sure the "default" context comes last
+
+EXAMPLE OUTPUT STRUCTURE (adapt to your actual architecture):
+
+```yaml
+# .pddrc - PDD Configuration
+# Generated from architecture.json
+# Defines contexts for automatic configuration based on file location
+
+version: "1.0"
+
+contexts:
+  # Backend API and business logic
+  backend:
+    paths: ["backend/**", "src/backend/**", "api/**"]
+    defaults:
+      generate_output_path: "backend/src/"
+      test_output_path: "backend/tests/"
+      example_output_path: "backend/examples/"
+      default_language: "python"
+      target_coverage: 90.0
+      strength: 0.75
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
+  # Frontend UI components
+  frontend:
+    paths: ["frontend/**", "src/frontend/**", "web/**"]
+    defaults:
+      generate_output_path: "frontend/src/"
+      test_output_path: "frontend/__tests__/"
+      example_output_path: "frontend/examples/"
+      default_language: "typescript"
+      target_coverage: 85.0
+      strength: 0.75
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
+  # Default fallback
+  default:
+    defaults:
+      generate_output_path: "./"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 80.0
+      strength: 0.75
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+```
+
+CRITICAL: Do NOT include the example above in your output. Analyze the ACTUAL architecture.json and generate contexts that match the REAL project structure. Output only the YAML content, no markdown fences or explanations.
