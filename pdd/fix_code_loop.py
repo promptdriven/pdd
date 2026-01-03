@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 import shutil
 import subprocess
@@ -6,6 +7,8 @@ import sys
 import threading
 from pathlib import Path
 from typing import Tuple, Optional, Union, List
+
+import requests
 
 # Try to import DEFAULT_TIME, with fallback
 try:
@@ -90,6 +93,83 @@ except ImportError:
     # Fallback if Rich is not available
     def rprint(*args, **kwargs):
         print(*args)
+
+# Cloud configuration
+try:
+    from .core.cloud import CloudConfig
+    CLOUD_AVAILABLE = True
+except ImportError:
+    CLOUD_AVAILABLE = False
+    CloudConfig = None
+
+# Cloud request timeout for crash fix
+CLOUD_REQUEST_TIMEOUT = 400  # seconds
+
+def cloud_crash_fix(
+    program: str,
+    prompt: str,
+    code: str,
+    errors: str,
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+    program_path: str = "",
+    code_path: str = "",
+    language: str = "python",
+) -> Tuple[bool, bool, str, str, str, float, Optional[str]]:
+    """
+    Call cloud crashCode endpoint for LLM crash fix.
+
+    Returns:
+        Tuple of (update_program, update_code, fixed_program, fixed_code, analysis, cost, model_name)
+    """
+    if not CLOUD_AVAILABLE or CloudConfig is None:
+        raise RuntimeError("Cloud configuration not available")
+
+    jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+    if not jwt_token:
+        raise RuntimeError("Cloud authentication failed - no JWT token")
+
+    payload = {
+        "programContent": program,
+        "promptContent": prompt,
+        "codeContent": code,
+        "errorContent": errors,
+        "language": language,
+        "strength": strength,
+        "temperature": temperature,
+        "time": time if time is not None else 0.25,
+        "verbose": verbose,
+        "programPath": program_path,
+        "codePath": code_path,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Content-Type": "application/json"
+    }
+    cloud_url = CloudConfig.get_endpoint_url("crashCode")
+
+    response = requests.post(
+        cloud_url,
+        json=payload,
+        headers=headers,
+        timeout=CLOUD_REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+
+    response_data = response.json()
+    fixed_code = response_data.get("fixedCode", "")
+    fixed_program = response_data.get("fixedProgram", "")
+    update_code = response_data.get("updateCode", False)
+    update_program = response_data.get("updateProgram", False)
+    analysis = response_data.get("analysis", "")
+    cost = float(response_data.get("totalCost", 0.0))
+    model_name = response_data.get("modelName", "cloud_model")
+
+    return update_program, update_code, fixed_program, fixed_code, analysis, cost, model_name
+
 
 # Use relative import for internal modules
 try:
@@ -211,9 +291,15 @@ def fix_code_loop(
     time: float = DEFAULT_TIME,
     prompt_file: str = "",
     agentic_fallback: bool = True,
+    use_cloud: bool = False,
 ) -> Tuple[bool, str, str, int, float, Optional[str]]:
     """
     Attempts to fix errors in a code module through multiple iterations.
+
+    Hybrid Cloud Support:
+        When use_cloud=True, the LLM fix calls are routed to the cloud crashCode endpoint
+        while local verification program execution stays local. This allows the loop to
+        pass local verification results to the cloud for analysis and fixes.
 
     Args:
         code_file: Path to the code file being tested.
@@ -228,6 +314,7 @@ def fix_code_loop(
         time: Time limit for the LLM calls (default: DEFAULT_TIME).
         prompt_file: Path to the prompt file.
         agentic_fallback: Enable agentic fallback if the primary fix mechanism fails.
+        use_cloud: If True, use cloud LLM for fix calls while keeping verification execution local.
 
     Returns:
         Tuple containing the following in order:
@@ -475,7 +562,7 @@ def fix_code_loop(
         # Temporarily close the XML structure for the LLM call
         error_context_for_llm = history_log + attempt_log_entry + "  </attempt>\n</history>\n"
 
-        # Call fix_code_module_errors
+        # Call fix (cloud or local based on use_cloud parameter)
         rprint("Attempting to fix errors using LLM...")
         update_program, update_code, fixed_program, fixed_code = False, False, "", ""
         program_code_fix, cost, model_name_iter = "", 0.0, None
@@ -485,22 +572,63 @@ def fix_code_loop(
         # For simplicity, we assume fix_code_module_errors prints directly using `rprint`
 
         try:
-            # Note: The example signature for fix_code_module_errors returns 7 values
-            (update_program, update_code, fixed_program, fixed_code,
-             program_code_fix, cost, model_name_iter) = fix_code_module_errors(
-                program=current_program,
-                prompt=prompt,
-                code=current_code,
-                errors=error_context_for_llm, # Pass the structured history
-                strength=strength,
-                temperature=temperature,
-                time=time, # Pass time
-                verbose=verbose,
-                program_path=verification_program,  # Pass file path for LLM context
-                code_path=code_file,                # Pass file path for LLM context
-            )
-            if model_name_iter:
-                 model_name = model_name_iter # Update model name if returned
+            if use_cloud:
+                # Use cloud LLM for fix - local verification results passed via error_context_for_llm
+                try:
+                    (update_program, update_code, fixed_program, fixed_code,
+                     program_code_fix, cost, model_name_iter) = cloud_crash_fix(
+                        program=current_program,
+                        prompt=prompt,
+                        code=current_code,
+                        errors=error_context_for_llm,
+                        strength=strength,
+                        temperature=temperature,
+                        time=time,
+                        verbose=verbose,
+                        program_path=verification_program,
+                        code_path=code_file,
+                        language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                    )
+                    if model_name_iter:
+                        model_name = model_name_iter
+                    if verbose:
+                        rprint(f"[cyan]Cloud crash fix completed. Cost: ${cost:.4f}[/cyan]")
+                except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
+                    # Cloud failed - fall back to local
+                    rprint(f"[yellow]Cloud crash fix failed: {cloud_err}. Falling back to local.[/yellow]")
+                    (update_program, update_code, fixed_program, fixed_code,
+                     program_code_fix, cost, model_name_iter) = fix_code_module_errors(
+                        program=current_program,
+                        prompt=prompt,
+                        code=current_code,
+                        errors=error_context_for_llm,
+                        strength=strength,
+                        temperature=temperature,
+                        time=time,
+                        verbose=verbose,
+                        program_path=verification_program,
+                        code_path=code_file,
+                    )
+                    if model_name_iter:
+                        model_name = model_name_iter
+            else:
+                # Local LLM fix
+                # Note: The example signature for fix_code_module_errors returns 7 values
+                (update_program, update_code, fixed_program, fixed_code,
+                 program_code_fix, cost, model_name_iter) = fix_code_module_errors(
+                    program=current_program,
+                    prompt=prompt,
+                    code=current_code,
+                    errors=error_context_for_llm, # Pass the structured history
+                    strength=strength,
+                    temperature=temperature,
+                    time=time, # Pass time
+                    verbose=verbose,
+                    program_path=verification_program,  # Pass file path for LLM context
+                    code_path=code_file,                # Pass file path for LLM context
+                )
+                if model_name_iter:
+                     model_name = model_name_iter # Update model name if returned
 
         except Exception as e:
             rprint(f"[bold red]Error calling fix_code_module_errors: {e}[/bold red]")

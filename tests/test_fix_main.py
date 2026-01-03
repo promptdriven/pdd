@@ -2066,3 +2066,224 @@ def test_fix_error_loop_cloud_fallback_to_local(mock_pytest, mock_cloud_fix, moc
         mock_cloud_fix.assert_called()
         # Local fallback should have been used
         mock_local_fix.assert_called()
+
+
+# ============================================================================
+# E2E Cloud Tests
+# ============================================================================
+
+def _has_cloud_credentials() -> bool:
+    """Check if cloud credentials (API keys) are available for E2E testing."""
+    import os
+    return bool(
+        os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY") and
+        os.environ.get("GITHUB_CLIENT_ID")
+    )
+
+
+def _has_cloud_jwt_token() -> bool:
+    """Check if a JWT token is available (either injected or via stored refresh token)."""
+    import os
+    # First check for env var (fast path)
+    if os.environ.get("PDD_JWT_TOKEN"):
+        return True
+    # Check for stored refresh token (requires keyring)
+    try:
+        import keyring
+        token = keyring.get_password("firebase-auth-PDD Code Generator", "refresh_token")
+        return bool(token)
+    except Exception:
+        return False
+
+
+requires_cloud_e2e = pytest.mark.skipif(
+    not (_has_cloud_credentials() and _has_cloud_jwt_token()),
+    reason="Cloud E2E tests require credentials (API keys) and auth token (PDD_JWT_TOKEN or stored refresh token)"
+)
+
+
+@requires_cloud_e2e
+def test_fix_main_cloud_e2e_non_loop(tmp_path, capsys):
+    """
+    E2E test that fix_main (non-loop mode) successfully uses cloud execution.
+    This test requires valid cloud credentials and makes real API calls.
+    """
+    import os
+    import click
+
+    # Set PDD_CLOUD_ONLY to prevent silent fallback to local
+    os.environ['PDD_CLOUD_ONLY'] = '1'
+
+    try:
+        # Create test files in tmp_path
+        prompt_file = tmp_path / "prompt.txt"
+        prompt_file.write_text("Write a function that calculates the sum of a list")
+
+        code_file = tmp_path / "sum_list.py"
+        code_file.write_text("""
+def sum_list(numbers):
+    total = 0
+    for n in numbers:
+        total += n
+    return total
+""")
+
+        unit_test_file = tmp_path / "test_sum_list.py"
+        unit_test_file.write_text("""
+from sum_list import sum_list
+
+def test_sum_list():
+    # This test has a bug - wrong expected value
+    assert sum_list([1, 2, 3]) == 10  # Should be 6
+""")
+
+        error_file = tmp_path / "error.log"
+        error_file.write_text("""
+FAILED test_sum_list.py::test_sum_list - AssertionError: assert 6 == 10
+""")
+
+        output_test = tmp_path / "test_sum_list_fixed.py"
+        output_code = tmp_path / "sum_list_fixed.py"
+
+        # Create context for cloud execution
+        ctx = click.Context(click.Command('fix'))
+        ctx.params = {}
+        ctx.obj = {
+            'strength': 0.25,  # Use lowest strength for faster cloud response
+            'temperature': 0,
+            'force': True,
+            'quiet': False,
+            'verbose': True,
+            'local': False,  # Enable cloud execution
+            'time': None,
+            'context': None,
+            'confirm_callback': None
+        }
+
+        success, fixed_test, fixed_code, attempts, cost, model = fix_main(
+            ctx=ctx,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            unit_test_file=str(unit_test_file),
+            error_file=str(error_file),
+            output_test=str(output_test),
+            output_code=str(output_code),
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+        # Capture output to check for cloud success
+        captured = capsys.readouterr()
+
+        # Assertions
+        assert cost > 0, f"Expected cost > 0 for cloud execution, got {cost}"
+        assert attempts == 1, f"Expected attempts == 1 in non-loop mode, got {attempts}"
+        assert "Cloud Success" in captured.out, f"Expected 'Cloud Success' in output, got: {captured.out[:500]}"
+
+    finally:
+        # Clean up environment variable
+        os.environ.pop('PDD_CLOUD_ONLY', None)
+
+
+@requires_cloud_e2e
+def test_fix_main_cloud_e2e_loop(tmp_path, capsys):
+    """
+    E2E test that fix_main (loop mode) successfully uses hybrid cloud execution.
+    This test requires valid cloud credentials and makes real API calls.
+    """
+    import os
+    import click
+
+    # Set PDD_CLOUD_ONLY to prevent silent fallback to local
+    os.environ['PDD_CLOUD_ONLY'] = '1'
+
+    try:
+        # Create test files in tmp_path
+        prompt_file = tmp_path / "prompt.txt"
+        prompt_file.write_text("Write a function that calculates factorial")
+
+        code_file = tmp_path / "factorial.py"
+        code_file.write_text("""
+def factorial(n):
+    if n == 0:
+        return 1
+    return n * factorial(n - 1)
+""")
+
+        unit_test_file = tmp_path / "test_factorial.py"
+        unit_test_file.write_text("""
+from factorial import factorial
+
+def test_factorial():
+    assert factorial(5) == 120
+    assert factorial(0) == 1
+    assert factorial(-1) == 1  # Bug: negative numbers not handled
+""")
+
+        # Create verification program
+        verification_file = tmp_path / "verify_factorial.py"
+        verification_file.write_text("""
+import subprocess
+import sys
+
+result = subprocess.run(
+    [sys.executable, "-m", "pytest", "test_factorial.py", "-v"],
+    capture_output=True,
+    text=True,
+    cwd=str(__file__).rsplit('/', 1)[0]
+)
+sys.exit(result.returncode)
+""")
+
+        output_test = tmp_path / "test_factorial_fixed.py"
+        output_code = tmp_path / "factorial_fixed.py"
+
+        # Create context for cloud execution
+        ctx = click.Context(click.Command('fix'))
+        ctx.params = {}
+        ctx.obj = {
+            'strength': 0.25,  # Use lowest strength for faster cloud response
+            'temperature': 0,
+            'force': True,
+            'quiet': False,
+            'verbose': True,
+            'local': False,  # Enable hybrid cloud mode
+            'time': None,
+            'context': None,
+            'confirm_callback': None
+        }
+
+        success, fixed_test, fixed_code, attempts, cost, model = fix_main(
+            ctx=ctx,
+            prompt_file=str(prompt_file),
+            code_file=str(code_file),
+            unit_test_file=str(unit_test_file),
+            error_file=None,  # Loop mode generates errors
+            output_test=str(output_test),
+            output_code=str(output_code),
+            output_results=None,
+            loop=True,
+            verification_program=str(verification_file),
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False
+        )
+
+        # Capture output to check for cloud usage
+        captured = capsys.readouterr()
+
+        # Assertions
+        assert isinstance(success, bool), f"Expected success to be bool, got {type(success)}"
+        assert cost > 0, f"Expected cost > 0 for cloud execution, got {cost}"
+        assert attempts >= 1, f"Expected at least 1 attempt, got {attempts}"
+        # In loop mode with cloud, we should see cloud-related output
+        assert "cloud" in captured.out.lower() or "Cloud" in captured.out, \
+            f"Expected cloud-related output, got: {captured.out[:500]}"
+
+    finally:
+        # Clean up environment variable
+        os.environ.pop('PDD_CLOUD_ONLY', None)
