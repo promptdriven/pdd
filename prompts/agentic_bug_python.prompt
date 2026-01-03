@@ -27,8 +27,9 @@ When `--manual` flag is used, accept 5 positional arguments instead:
 - Use existing `generate_failing_test()` logic for backward compatibility
 
 % Dependencies
-<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.agentic_bug_orchestrator><include>context/agentic_bug_orchestrator_example.py</include></pdd.agentic_bug_orchestrator>
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.bug_main><include>context/bug_main_example.py</include></pdd.bug_main>
 
 % Error Handling
 - Return `(False, "gh CLI not found", 0.0, "", [])` if `gh` command not available
