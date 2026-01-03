@@ -39,17 +39,24 @@ You are working on step 5 of 9 in an agentic bug investigation workflow. Previou
    - Trace the execution flow that leads to the error
    - Understand the data flow and transformations
 
-2. **Identify the root cause**
+2. **Research external sources**
+   - Search for the error message or symptoms online
+   - Check if the issue relates to a known bug in dependencies
+   - Look for similar issues in library/framework documentation
+   - Search GitHub issues, StackOverflow, or forums for related problems
+   - Note any relevant version constraints or breaking changes
+
+3. **Identify the root cause**
    - What condition triggers the bug?
    - Is it a logic error, edge case, race condition, or incorrect assumption?
    - When was this code introduced? (use git blame/log if helpful)
 
-3. **Run experiments**
+4. **Run experiments**
    - Add debug output or modify code temporarily to verify hypotheses
    - Test edge cases and boundary conditions
    - Confirm your understanding of why the bug occurs
 
-4. **Document the root cause**
+5. **Document the root cause**
    - Explain the bug in clear terms
    - Identify the specific line(s) or logic that need to change
    - Note any related issues or implications
@@ -80,6 +87,11 @@ Your comment should follow this format:
 problematic_code_snippet()
 ```
 - **Why it fails:** [Explanation]
+
+### External Research
+- **Search terms:** [key terms searched]
+- **Sources checked:** [GitHub, StackOverflow, docs, etc.]
+- **Relevant findings:** [any related issues, known bugs, or workarounds found]
 
 ### Experiments Performed
 1. [What you tested and what it revealed]
