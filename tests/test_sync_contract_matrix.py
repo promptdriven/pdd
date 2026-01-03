@@ -86,3 +86,48 @@ def test_contract_smoke_template_pipeline(contract_smoke_project: Path) -> None:
     assert paths["prompt"].resolve() == expected_prompt.resolve()
     assert paths["code"].resolve() == expected_code.resolve()
     assert paths["example"].resolve() == expected_example.resolve()
+
+
+@pytest.fixture()
+def subdirectory_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Create a project with .pddrc at root and a subdirectory with its own prompt."""
+    repo_root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("PDD_PATH", str(repo_root))
+
+    # Create .pddrc at project root (similar to real pdd repo)
+    pddrc_path = tmp_path / ".pddrc"
+    pddrc_path.write_text(
+        """version: "1.0"
+contexts:
+  examples:
+    paths: ["examples/**"]
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+""",
+        encoding="utf-8",
+    )
+
+    # Create subdirectory with its own prompt (like examples/hello/)
+    subdir = tmp_path / "examples" / "hello"
+    subdir.mkdir(parents=True, exist_ok=True)
+    (subdir / "hello_python.prompt").write_text("Create hello function")
+    (subdir / "src").mkdir()
+    (subdir / "tests").mkdir()
+    (subdir / "examples").mkdir()
+
+    # Change to subdirectory (simulating `cd examples/hello && pdd sync hello`)
+    monkeypatch.chdir(subdir)
+    return subdir
+
+
+def test_subdirectory_paths_resolve_relative_to_cwd(subdirectory_project: Path) -> None:
+    """When running from a subdirectory, paths should be CWD-relative."""
+    # Use absolute path for prompts_dir to mirror how sync_main passes it at runtime
+    # (sync_main calls _normalize_prompts_root which often returns absolute paths)
+    paths = get_pdd_file_paths("hello", "python", prompts_dir=str(subdirectory_project))
+
+    # Critical: code path should NOT point to project root's src/
+    project_root = subdirectory_project.parent.parent
+    assert not str(paths["code"].resolve()).startswith(str(project_root / "src"))

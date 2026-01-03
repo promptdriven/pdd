@@ -2708,7 +2708,7 @@ contexts:
 
     def test_detect_context_from_prompts_dir(self, pddrc_with_prompts_dir):
         """
-        FAILING TEST: Context should be detected from prompts_dir.
+        Regression test: Context should be detected from prompts_dir.
 
         When prompt file is at prompts/backend/utils/credit_helpers_python.prompt
         and backend-utils context has prompts_dir: "prompts/backend/utils",
