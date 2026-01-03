@@ -151,7 +151,7 @@ def example_jwt_token_handling() -> None:
     with patch.dict(os.environ, env_vars):
         # We must patch where it is imported IN CloudConfig, not where it is defined
         # Assuming CloudConfig imports it as 'device_flow_get_token'
-        with patch('pdd.core.cloud_config.device_flow_get_token') as mock_flow:
+        with patch('pdd.core.cloud.device_flow_get_token') as mock_flow:
             # Setup the mock to return a future (since it's awaited in asyncio.run)
             future = asyncio.Future()
             future.set_result("device_flow_generated_token_123")
