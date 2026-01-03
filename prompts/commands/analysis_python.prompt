@@ -8,7 +8,10 @@
 % Requirements
   1. **detect**: Validate >= 2 files (last is change file). Call `detect_change_main`. Options: `--output`.
   2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
-  3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files. Call `bug_main`. Options: `--manual`, `--output`, `--language`.
+  3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
+     - Agentic mode (first arg is URL): Call `run_agentic_bug(issue_url, verbose=..., quiet=...)`.
+     - Manual mode (`--manual` flag): Call `bug_main(ctx, prompt_file, code_file, program_file, current_output, desired_output, ...)`.
+     Options: `--manual`, `--output`, `--language`.
   4. **crash**: Takes 4 positional files (prompt, code, program, error). Call `crash_main`. Options: `--output`, `--output-program`, `--loop`, `--max-attempts`, `--budget`.
   5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
 
@@ -22,6 +25,9 @@
   <bug_main_example>
   <include>context/bug_main_example.py</include>
   </bug_main_example>
+  <run_agentic_bug_example>
+  <include>context/agentic_bug_example.py</include>
+  </run_agentic_bug_example>
   <crash_main_example>
   <include>context/crash_main_example.py</include>
   </crash_main_example>
