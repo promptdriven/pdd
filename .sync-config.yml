@@ -28,7 +28,6 @@ shared:
   - CONTRIBUTING.md
   - .env.example
   - SETUP_WITH_GEMINI.md
-  - ONBOARDING.md
   - pdd-local.sh
   - .pddrc
 
