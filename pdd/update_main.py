@@ -47,17 +47,19 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     language = get_language(os.path.splitext(code_file_path)[1])
     language = language.lower() if language else "unknown"
 
-    # Extract the filename without extension and directory
-    code_filename = os.path.basename(code_file_path)
-    base_name, _ = os.path.splitext(code_filename)
+    # Get absolute path of code file for proper path manipulation
+    code_file_abs_path = os.path.abspath(code_file_path)
 
-    # Determine the output directory
+    # Determine the output directory and repo root
     if output_dir:
         # Use the custom output directory (absolute path)
         prompts_dir = os.path.abspath(output_dir)
+        # When output_dir is specified, use simple basename extraction
+        code_filename = os.path.basename(code_file_path)
+        base_name, _ = os.path.splitext(code_filename)
+        rel_dir = ""
     else:
         # Find the repository root (where the code file is located)
-        code_file_abs_path = os.path.abspath(code_file_path)
         code_dir = os.path.dirname(code_file_abs_path)
 
         # For repository mode, find the actual repo root
@@ -78,9 +80,45 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
         else:
             prompts_dir = os.path.join(repo_root, prompts_dir_config)
 
-    # Construct the prompt filename in the determined directory
+        # Preserve subdirectory structure from repo root to code file
+        rel_path = os.path.relpath(code_file_abs_path, repo_root)
+        rel_dir = os.path.dirname(rel_path)
+        base_name = os.path.splitext(os.path.basename(rel_path))[0]
+
+        # Skip the top-level directory to avoid redundant nesting
+        # Most projects structure: package_name/module/file.py
+        # Result: prompts/module/file_python.prompt
+        # Examples:
+        #   pdd/commands/generate.py -> prompts/commands/generate_python.prompt
+        #   mylib/utils/helper.py -> prompts/utils/helper_python.prompt
+        # TODO: Make this configurable via .pddrc for edge cases (monorepos, etc.)
+        rel_dir_parts = rel_dir.split(os.sep) if rel_dir else []
+        if len(rel_dir_parts) > 1:
+            # Skip the first component (top-level package/directory)
+            rel_dir = os.sep.join(rel_dir_parts[1:])
+        elif len(rel_dir_parts) == 1:
+            # Only one level of nesting, don't preserve any subdirectory
+            rel_dir = ""
+
+        # Handle context-specific prompts_dir to avoid double-nesting
+        # If prompts_dir ends with the same directory as the start of rel_dir,
+        # it means the prompts_dir is already scoped to that context
+        prompts_dir_basename = os.path.basename(prompts_dir)
+        rel_dir_parts_adjusted = rel_dir.split(os.sep) if rel_dir else []
+        if rel_dir_parts_adjusted and rel_dir_parts_adjusted[0] == prompts_dir_basename:
+            # Remove the first component to avoid double-nesting
+            rel_dir = os.sep.join(rel_dir_parts_adjusted[1:]) if len(rel_dir_parts_adjusted) > 1 else ""
+
+    # Construct the prompt path preserving subdirectory structure
     prompt_filename = f"{base_name}_{language}.prompt"
-    prompt_path_str = os.path.join(prompts_dir, prompt_filename)
+    if rel_dir:
+        # Create subdirectory in prompts folder
+        prompt_subdir = os.path.join(prompts_dir, rel_dir)
+        prompt_path_str = os.path.join(prompt_subdir, prompt_filename)
+        # Update prompts_dir to point to the subdirectory for directory creation later
+        prompts_dir = prompt_subdir
+    else:
+        prompt_path_str = os.path.join(prompts_dir, prompt_filename)
     prompt_path = Path(prompt_path_str)
 
     # Ensure prompts directory exists

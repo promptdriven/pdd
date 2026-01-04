@@ -368,10 +368,11 @@ def temp_git_repo(tmp_path, mock_get_language_for_repo):
 def test_create_and_find_prompt_code_pairs(temp_git_repo):
     """
     Test that the helper function correctly finds code files and creates missing prompts.
+    Top-level directory (src/) is skipped to avoid redundant nesting per issue #254.
     """
     repo_path_str = str(temp_git_repo)
 
-    # Prompts for module1 and module2 should not exist yet in the prompts directory
+    # Files in src/ skip the top-level "src" directory
     module1_prompt_path = temp_git_repo / "prompts" / "module1_python.prompt"
     module2_prompt_path = temp_git_repo / "prompts" / "module2_javascript.prompt"
     existing_prompt_path = temp_git_repo / "prompts" / "existing_module_python.prompt"
@@ -387,7 +388,7 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     assert module2_prompt_path.exists()
     assert module2_prompt_path.read_text() == ""
     assert existing_prompt_path.exists()
-    assert existing_prompt_path.read_text() == "Existing prompt."
+    assert existing_prompt_path.read_text() == "Existing prompt."  # Existing file is not recreated
 
     # Assert that the returned pairs are correct
     expected_pairs = [
@@ -475,9 +476,16 @@ contexts:
     # Initialize git repo
     git.Repo.init(repo_path)
 
+    # Mock get_language to return "python" for .py files
+    def mock_get_language(ext):
+        if ext == ".py":
+            return "python"
+        return None
+
     # Mock update_prompt to avoid actual LLM calls
     with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
-         patch("pdd.update_main.get_available_agents") as mock_agents:
+         patch("pdd.update_main.get_available_agents") as mock_agents, \
+         patch("pdd.update_main.get_language", mock_get_language):
         mock_update_prompt.return_value = ("generated prompt", 0.01, "mock-model")
         mock_agents.return_value = []
 
@@ -495,6 +503,8 @@ contexts:
         )
 
     # Assert: Prompt should be saved to prompts/backend/, not prompts/
+    # Since backend/ is only one level deep and prompts_dir is "prompts/backend",
+    # the file should be directly in prompts/backend/
     expected_prompt_path = repo_path / "prompts" / "backend" / "some_module_python.prompt"
     wrong_prompt_path = repo_path / "prompts" / "some_module_python.prompt"
 
@@ -503,3 +513,68 @@ contexts:
         f"Wrong path exists: {wrong_prompt_path.exists()}"
     assert not wrong_prompt_path.exists(), \
         f"Prompt was created at wrong path {wrong_prompt_path} instead of {expected_prompt_path}"
+
+
+def test_resolve_prompt_code_pair_preserves_subdirectory_structure(tmp_path, monkeypatch):
+    """Regression test for issue #254: preserve subdirectory structure."""
+    from pdd.update_main import resolve_prompt_code_pair
+
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+    commands_dir = repo_path / "pdd" / "commands"
+    commands_dir.mkdir(parents=True)
+    code_file = commands_dir / "generate.py"
+    code_file.write_text("def generate(): pass")
+
+    monkeypatch.chdir(repo_path)
+    git.Repo.init(repo_path)
+
+    def mock_get_language(ext):
+        return "python" if ext == ".py" else None
+
+    with patch("pdd.update_main.get_language", mock_get_language):
+        prompt_path, _ = resolve_prompt_code_pair(str(code_file), quiet=True)
+
+    expected = repo_path / "prompts" / "commands" / "generate_python.prompt"
+    wrong = repo_path / "prompts" / "generate_python.prompt"
+
+    assert prompt_path == str(expected)
+    assert expected.exists()
+    assert not wrong.exists()
+
+
+def test_update_main_regeneration_mode_preserves_subdirectory_structure(tmp_path, monkeypatch):
+    """Integration test for issue #254: regeneration mode preserves subdirectory structure."""
+    from pdd.update_main import update_main
+
+    repo_path = tmp_path / "test_repo"
+    repo_path.mkdir()
+    commands_dir = repo_path / "pdd" / "commands"
+    commands_dir.mkdir(parents=True)
+    code_file = commands_dir / "generate.py"
+    code_file.write_text("def generate(): pass")
+
+    monkeypatch.chdir(repo_path)
+    git.Repo.init(repo_path)
+
+    def mock_get_language(ext):
+        return "python" if ext == ".py" else None
+
+    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
+         patch("pdd.update_main.get_available_agents") as mock_agents, \
+         patch("pdd.update_main.get_language", mock_get_language):
+        mock_update_prompt.return_value = ("generated prompt", 0.01, "mock-model")
+        mock_agents.return_value = []
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
+
+        update_main(ctx=ctx, input_prompt_file=None, modified_code_file=str(code_file),
+                    input_code_file=None, output=None, use_git=False)
+
+    expected = repo_path / "prompts" / "commands" / "generate_python.prompt"
+    wrong = repo_path / "prompts" / "generate_python.prompt"
+
+    assert expected.exists()
+    assert not wrong.exists()
+    assert expected.read_text() == "generated prompt"
