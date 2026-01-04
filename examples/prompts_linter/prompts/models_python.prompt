@@ -1,0 +1,48 @@
+You are an expert Python developer specializing in Pydantic v2 data modeling. Your goal is to implement the `src/utils/models.py` module, which serves as the central definition for all domain entities in the PDD Prompt Linter.
+
+This module is the foundation of the application's type safety, defining the structures for Issues, Reports, LLM interactions, and Fix suggestions. It must be robust, strictly typed, and easy to serialize/deserialize.
+
+Requirements
+1.  **Pydantic v2 Usage**: All models must inherit from `pydantic.BaseModel`. Use `Field` for descriptions and validation constraints where appropriate.
+2.  **Enums**: Define string-based Enums for:
+    *   `Severity`: `info`, `warning`, `error`.
+    *   `RuleCategory`: `modularity`, `anatomy`, `contracts`, `context`, `determinism`, `abstraction`, `attention`.
+    *   `LLMProvider`: `openai`, `anthropic`, `google`, `auto`, `custom`.
+3.  **Issue Model**: Create an `Issue` model representing a single linting finding.
+    *   Fields: `rule_id` (str), `line_number` (optional int), `severity` (Severity enum), `category` (RuleCategory enum), `description` (str), `fix_suggestion` (optional str).
+4.  **Report Model**: Create a `Report` model representing the full analysis of a prompt.
+    *   Fields: `filepath` (str), `score` (int, 0-100), `issues` (List[Issue]), `summary` (str), `llm_analysis` (optional dict or model).
+    *   Include a method or property to check if the report is "clean" (no errors).
+5.  **LLM Contract Models**: Define models for the structured JSON output expected from the LLM.
+    *   `LLMFixSuggestion`: `title`, `rationale`, `priority`.
+    *   `LLMSuggestionDetail`: `rule_id`, `title`, `rationale`, `before`, `after`, `priority`.
+    *   `LLMResponse`: `guide_alignment_summary`, `top_fixes` (List[LLMFixSuggestion]), `suggestions` (List[LLMSuggestionDetail]).
+6.  **Serialization**: Ensure all models can be easily dumped to JSON (using `model_dump_json`) for the CLI and API responses.
+7.  **Validation**: Use Pydantic validators if necessary to ensure scores are within 0-100 range.
+
+Dependencies
+<pydantic_docs>
+  <include>[File not found: context/pydantic_v2_example.py]</include>
+</pydantic_docs>
+
+Instructions
+-   Import `BaseModel`, `Field`, `validator` (or `field_validator`), and `Enum` from `pydantic` (and `typing`).
+-   **Severity Enum**: Ensure it is compatible with string comparison (inherit from `str, Enum`).
+-   **Issue Model**:
+    -   `rule_id` should be short (e.g., "MOD001").
+    -   `description` should be human-readable.
+-   **Report Model**:
+    -   The `score` field must be an integer between 0 and 100. Add a validator to enforce this if Pydantic's `Field(ge=0, le=100)` isn't sufficient for your preference, though `Field` is preferred for schema generation.
+    -   `issues` defaults to an empty list.
+-   **LLMResponse Model**:
+    -   This model strictly mirrors the JSON schema defined in the "LLM Output Contract" section of the PRD.
+    -   It is critical that this model is resilient; if the LLM returns extra fields, configured the model to ignore them (`extra='ignore'`).
+-   Do not include any business logic (like running rules or calling APIs) in this file. It is purely for data definitions.
+
+Deliverable
+-   `src/utils/models.py`: A complete Python file containing all Enums and Pydantic models.
+
+Implementation assumptions (explicit)
+-   We are using Pydantic v2.x.
+-   The `LLMResponse` model will be used to validate raw JSON strings returned by the LLM provider.
+-   No circular dependencies exist; this module is at the bottom of the dependency graph.

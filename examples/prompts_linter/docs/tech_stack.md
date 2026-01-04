@@ -1,85 +1,93 @@
-# PDD Prompt Linter — Tech Stack (No-LLM, No-Autofix)
+# PDD Prompt Linter — Technical Stack
 
-This document defines a simple, readable tech stack for a modular prompt-linting tool with a backend + CLI + a lightweight UI.
+## 1. Runtime
+- Python 3.11+
 
-## Non-Negotiable Constraints
+---
 
-- The tool must be **fully deterministic**.
-- The tool must **not query/call any LLMs** or AI services.
-- The tool must **not modify prompt files** (no autofix, no rewriting).
+## 2. Dependencies
 
-## Backend
+CLI / Output:
+- Typer
+- Rich
 
-- **Language:** Python
-- **Framework:** FastAPI
-- **Lint engine:** Pure Python (static rules + heuristics)
-- **Models / validation:** Pydantic
-- **Testing:** PyTest
+Core:
+- Pydantic v2
 
-## CLI
+Backend:
+- FastAPI
+- Uvicorn
 
-- **Language:** Python
-- **CLI framework:** Typer (or argparse for minimal deps)
-- **Distribution:** `pipx`-friendly package + console script `pddl`
+Frontend:
+- Streamlit
 
-## UI (Streamlit)
+LLM:
+- LiteLLM (provider-agnostic)
+- httpx (if needed)
 
-- **Framework:** Streamlit (Python)
-- **Purpose:** Thin UI for linting prompts without using the CLI
-- **Behavior:**
-  - paste/upload prompt text
-  - optional toggle for resolving includes (token estimation)
-  - calls backend `POST /lint`
-  - renders findings + copyable suggestion snippets
-  - allows downloading JSON report
+---
 
-## API
+## 3. Authentication
 
-- **Type:** REST
-- **Endpoint:** `POST /lint`
-- **Response:** structured JSON findings (`summary` + `findings`)
+No tool-owned environment variables.
 
-## Data Storage (Keep Simple)
+Provider-standard keys only:
+- OPENAI_API_KEY
+- ANTHROPIC_API_KEY
+- GOOGLE_API_KEY
 
-- **MVP default:** none (stateless)
-- **Optional:** Postgres (only if you want to store lint history, suppressions, or metrics)
-  - ORM: SQLAlchemy
-  - Local dev alternative: SQLite
+If no keys exist, run heuristics only.
 
-## Authentication (Optional)
+---
 
-- **MVP default:** none (local dev / internal)
-- If you deploy publicly:
-  - **Provider:** Firebase Auth
-  - **API Auth:** JWT tokens
+## 4. Source Layout (thin wrappers + shared pipeline)
 
-## Infrastructure
-
-- **Backend hosting:** Cloud Run (Google Cloud)
-- **UI hosting (Streamlit):**
-  - run as a separate Cloud Run service, or
-  - run locally for internal use
-- **Database (optional):** Cloud SQL (Postgres)
-
-## Observability
-
-- **Logging:** Cloud Logging (or stdout for local dev)
-- **Tracing:** OpenTelemetry (optional)
-
-## Repo Layout (practical & readable)
-
-````
-
-pdd-prompt-linter/
-backend/        # FastAPI + lint engine + rules
-cli/            # CLI wrapper
-ui/             # Streamlit app
-shared/         # rubric + prompt fixtures/examples
-
+```text
+src/
+  cli/
+    main.py              # parse args -> utils.pipeline.lint_file / lint_text
+  backend/
+    api.py               # FastAPI -> utils.pipeline.lint_text
+  frontend/
+    streamlit_app.py     # UI -> backend or utils.pipeline
+  utils/
+    pipeline.py          # orchestrator (single source of logic)
+    rules.py             # all Guide-derived heuristics
+    llm.py               # provider detect + cheap model + JSON validation + fallback
+    report.py            # render text/json/md
+    fix.py               # prompt rewrite scaffold
+    models.py            # Pydantic schemas: Issue, Report, LLMResponse
+    helpers.py           # tag detection, ratio heuristics, small text utils
 ```
 
-## Dev Defaults
+---
 
-- Backend: `uvicorn backend.app.main:app --reload`
-- UI: `streamlit run ui/streamlit_app.py`
-- Tests: `pytest -q`
+## 5. Testing
+
+* Heuristics: deterministic unit tests
+* LLM: mocked calls only (no network in CI)
+* Required failure tests:
+
+  * no keys -> heuristics
+  * timeout -> heuristics
+  * invalid JSON -> heuristics
+  * model not found -> fallback -> heuristics
+
+---
+
+## 6. Defaults
+
+* LLM ON by default (if keys exist)
+* Cheap model defaults (internal mapping)
+* Token cap: 800
+* Timeout: 20s
+* Retries: 2
+
+---
+
+## 7. Security posture
+
+* Treat prompt input as untrusted
+* Never execute `<shell>` or fetch `<web>`
+* Validate LLM output strictly
+* Use atomic writes when `--in-place` is used

@@ -1,0 +1,40 @@
+The `frontend_streamlit` module serves as the interactive graphical user interface (GUI) for the PDD Prompt Linter. It is a Single Page Application (SPA) built with Streamlit that allows users to input prompt text, configure LLM settings, trigger the linting process, and visualize the resulting analysis report and suggested fixes. This module acts as a thin presentation layer, delegating all business logic and orchestration to the `utils.pipeline` module.
+
+Requirements
+1.  **Page Configuration**: The application must initialize with a "wide" layout and the title "PDD Prompt Linter".
+2.  **Sidebar Settings**: Implement a sidebar for configuration that includes:
+    -   **LLM Provider**: A selection (Auto, OpenAI, Anthropic, Google, Custom).
+    -   **Model Name**: An optional text input for specific model overrides.
+    -   **API Key**: A password-masked input field. Note: The app should not store this persistently, only pass it to the pipeline for the session.
+3.  **Input Methods**: Provide two mutually exclusive ways to input prompt text:
+    -   A file uploader (accepting `.txt`, `.md`, `.prompt`).
+    -   A large text area for direct pasting.
+    -   *Logic*: If a file is uploaded, its content takes precedence over the text area.
+4.  **Execution Control**: Include a primary "Lint Prompt" button. The linting process must run within a `st.spinner` context to indicate progress.
+5.  **Orchestration Integration**: The app must call `utils.pipeline.lint_text()` to perform the actual work. It must not implement any linting rules or LLM interaction logic directly.
+6.  **State Management**: Store the resulting `Report` object in `st.session_state`. This ensures that interacting with UI elements (like expanding details) does not re-run the expensive linting operation.
+7.  **Report Visualization**:
+    -   **Score**: Display the overall score (0-100) prominently using `st.metric`.
+    -   **Summary**: Display the executive summary of the analysis.
+    -   **Issues**: List all detected issues. Use `st.error` for high severity and `st.warning` for medium/low severity. Use expanders to hide detailed rationales if the list is long.
+8.  **Fix Presentation**: If the report includes a "Fixed Prompt" (rewritten scaffold), display it in a code block, ideally with a "Copy" button (native to Streamlit code blocks).
+
+Dependencies
+<utils.pipeline><include>examples/pipeline_example.py</include></utils.pipeline>
+<utils.models><include>examples/models_example.py</include></utils.models>
+
+Instructions
+-   **Imports**: Import `streamlit` as `st` and `lint_text` from `utils.pipeline`.
+-   **Layout**: Use `st.columns` to create a dashboard-like feel for the score and key metrics at the top of the results.
+-   **Error Handling**: Wrap the pipeline call in a `try/except` block. If the pipeline raises an exception (e.g., API connection error), display it using `st.error` and do not crash the app.
+-   **Input Handling**: When reading from the file uploader, ensure the bytes are decoded to a string (utf-8) before passing to the pipeline.
+-   **Configuration Passing**: Collect the sidebar inputs into a dictionary or arguments matching the signature of `lint_text`. If the API key is empty, pass `None` (the pipeline handles fallback to heuristics).
+-   **Tabs**: Consider using `st.tabs` to separate the "Analysis Report" from the "Refactored Prompt" if a fix is generated, to keep the UI clean.
+
+Deliverable
+-   `src/frontend/streamlit_app.py`
+
+Implementation assumptions (explicit)
+-   The `utils.pipeline.lint_text` function accepts `text` (str) and optional kwargs for `llm_provider`, `llm_model`, and `api_key`.
+-   The `Report` object returned by the pipeline has attributes: `score` (int), `summary` (str), `issues` (list of Issue objects), and `fixed_text` (str/None).
+-   The `Issue` object has attributes: `severity` (str), `rule_id` (str), `description` (str), and `rationale` (str).
