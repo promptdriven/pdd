@@ -1,0 +1,12 @@
+{
+  "pdd_version": "0.0.99",
+  "timestamp": "2026-01-03T05:08:15.834524+00:00",
+  "command": "fix",
+  "prompt_hash": "db707df17f1dd3ba8b11df54fb1a35ffc14535013869f49f7c365595543a9d60",
+  "code_hash": "c00553f0a21c1466c5222fa55b235cd84e0ddae8d6b889216d6b363d32f2982f",
+  "example_hash": "99ed69d9088094db35843f1a69364195459d089b9f8f522481cce8da244b58ec",
+  "test_hash": "b648bd9fc06c9286fc3403954029c6dd49521e9ada2cd251c38e172e79c3e4d2",
+  "test_files": {
+    "test_agentic_bug_orchestrator.py": "b648bd9fc06c9286fc3403954029c6dd49521e9ada2cd251c38e172e79c3e4d2"
+  }
+}
