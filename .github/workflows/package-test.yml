@@ -8,6 +8,7 @@ on:
 
 jobs:
   test-package-install:
+    if: github.event.pull_request.draft != true
     name: Test Package Installation
     runs-on: ubuntu-latest
 
@@ -51,6 +52,7 @@ jobs:
           fi
 
   test-sync:
+    if: github.event.pull_request.draft != true
     name: Test PDD Sync
     runs-on: ubuntu-latest
 
