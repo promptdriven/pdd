@@ -49,12 +49,13 @@ def mock_dependencies():
     with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
          patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
          patch("pdd.agentic_bug_orchestrator.console") as mock_console:
-        
+
         # Default behavior: successful run, generic output
-        mock_run.return_value = (True, "Step output", 0.1, "gpt-4", [])
+        # Note: run_agentic_task returns 4 values: (success, output, cost, provider)
+        mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
         # Default behavior: return a simple format string
         mock_load.return_value = "Prompt for {issue_number}"
-        
+
         yield mock_run, mock_load, mock_console
 
 
@@ -83,18 +84,19 @@ def test_happy_path_execution(mock_dependencies, default_args):
     Test that all 9 steps execute successfully when no stop conditions are met.
     """
     mock_run, mock_load, _ = mock_dependencies
-    
-    # Setup mock to return specific files for step 7 to avoid hard stop
+
+    # Setup mock to return FILES_CREATED in step 7 output to avoid hard stop
     def side_effect_run(*args, **kwargs):
         label = kwargs.get('label', '')
         if label == 'step7':
-            return (True, "Generated test", 0.1, "gpt-4", ["test_file.py"])
-        return (True, f"Output for {label}", 0.1, "gpt-4", [])
+            # Step 7 outputs FILES_CREATED line which is parsed by orchestrator
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
-    
+
     success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
-    
+
     assert success is True
     assert "Investigation complete" in msg
     assert mock_run.call_count == 9
@@ -109,12 +111,12 @@ def test_hard_stop_step_1_duplicate(mock_dependencies, default_args):
     Test early exit at Step 1 if issue is a duplicate.
     """
     mock_run, _, _ = mock_dependencies
-    
+
     # Mock step 1 output to trigger hard stop
-    mock_run.return_value = (True, "This looks like a Duplicate of #42", 0.05, "claude", [])
-    
+    mock_run.return_value = (True, "This looks like a Duplicate of #42", 0.05, "claude")
+
     success, msg, cost, _, _ = run_agentic_bug_orchestrator(**default_args)
-    
+
     assert success is False
     assert "Stopped at step 1" in msg
     assert "Issue is a duplicate" in msg
@@ -130,8 +132,8 @@ def test_hard_stop_step_2_not_a_bug(mock_dependencies, default_args):
     
     # Step 1 passes, Step 2 fails
     mock_run.side_effect = [
-        (True, "Step 1 ok", 0.1, "model", []),
-        (True, "Analysis: Feature Request (Not a Bug)", 0.1, "model", [])
+        (True, "Step 1 ok", 0.1, "model"),
+        (True, "Analysis: Feature Request (Not a Bug)", 0.1, "model")
     ]
     
     success, msg, cost, _, _ = run_agentic_bug_orchestrator(**default_args)
@@ -150,9 +152,9 @@ def test_hard_stop_step_3_needs_info(mock_dependencies, default_args):
     
     # Steps 1-2 pass, Step 3 fails
     mock_run.side_effect = [
-        (True, "Step 1 ok", 0.1, "model", []),
-        (True, "Step 2 ok", 0.1, "model", []),
-        (True, "Cannot proceed. Needs More Info from user.", 0.1, "model", [])
+        (True, "Step 1 ok", 0.1, "model"),
+        (True, "Step 2 ok", 0.1, "model"),
+        (True, "Cannot proceed. Needs More Info from user.", 0.1, "model")
     ]
     
     success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
@@ -170,12 +172,12 @@ def test_hard_stop_step_7_no_file_generated(mock_dependencies, default_args):
     mock_run, _, _ = mock_dependencies
     
     # Steps 1-6 pass generic
-    # Step 7 returns empty file list
+    # Step 7 returns no FILES_CREATED line
     def side_effect(*args, **kwargs):
         label = kwargs.get('label', '')
         if label == 'step7':
-            return (True, "I could not generate a test.", 0.1, "model", [])  # Empty files list
-        return (True, "ok", 0.1, "model", [])
+            return (True, "I could not generate a test.", 0.1, "model")  # No FILES_CREATED line
+        return (True, "ok", 0.1, "model")
 
     mock_run.side_effect = side_effect
     
@@ -197,10 +199,10 @@ def test_hard_stop_step_8_verification_failed(mock_dependencies, default_args):
     def side_effect(*args, **kwargs):
         label = kwargs.get('label', '')
         if label == 'step7':
-            return (True, "Generated test", 0.1, "model", ["test.py"])
+            return (True, "Generated test\nFILES_CREATED: test.py", 0.1, "model")
         if label == 'step8':
-            return (True, "FAIL: Test does not work as expected", 0.1, "model", [])
-        return (True, "ok", 0.1, "model", [])
+            return (True, "FAIL: Test does not work as expected", 0.1, "model")
+        return (True, "ok", 0.1, "model")
 
     mock_run.side_effect = side_effect
     
@@ -224,10 +226,10 @@ def test_soft_failure_continuation(mock_dependencies, default_args):
     def side_effect(*args, **kwargs):
         label = kwargs.get('label', '')
         if label == 'step1':
-            return (False, "Agent had a hiccup but produced output", 0.1, "model", [])
+            return (False, "Agent had a hiccup but produced output", 0.1, "model")
         if label == 'step7':
-            return (True, "Generated test", 0.1, "model", ["test.py"])
-        return (True, "ok", 0.1, "model", [])
+            return (True, "Generated test\nFILES_CREATED: test.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
 
     mock_run.side_effect = side_effect
     
@@ -294,10 +296,10 @@ def test_context_accumulation(mock_dependencies, default_args):
     def side_effect_run(*args, **kwargs):
         label = kwargs.get('label', '')
         if label == 'step1':
-            return (True, step1_out, 0.1, "model", [])
+            return (True, step1_out, 0.1, "model")
         if label == 'step7':
-            return (True, "gen", 0.1, "model", ["f.py"])
-        return (True, "ok", 0.1, "model", [])
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
         
     mock_run.side_effect = side_effect_run
     
@@ -324,11 +326,10 @@ def test_file_accumulation(mock_dependencies, default_args):
     
     def side_effect(*args, **kwargs):
         label = kwargs.get('label', '')
-        if label == 'step4':
-            return (True, "repro", 0.1, "model", ["repro.py"])
         if label == 'step7':
-            return (True, "gen", 0.1, "model", ["test.py", "repro.py"])  # repro.py repeated
-        return (True, "ok", 0.1, "model", [])
+            # Only Step 7 reports files via FILES_CREATED
+            return (True, "gen\nFILES_CREATED: test.py, repro.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
         
     mock_run.side_effect = side_effect
     

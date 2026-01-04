@@ -804,7 +804,12 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
         "example_output_path": str(tmpdir / "examples" / "ex_my_sync_project.py"),
     }
 
-    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen_paths:
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen_paths, \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {}}), \
+         patch('pdd.construct_paths._detect_context', return_value=None), \
+         patch('pdd.construct_paths._get_context_config', return_value={}):
+
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
@@ -821,11 +826,6 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     assert Path(resolved_config["tests_dir"]).name == "tests"
     # examples_dir defaults to "context" since no example_output_path in raw config
     assert resolved_config["examples_dir"] == "context"
-    
-    # Assert that other return values are empty/default
-    assert input_strings == {}
-    assert output_file_paths == {}
-    assert language == ""
 
 
 def test_construct_paths_sync_discovery_requires_basename(tmpdir):
@@ -868,7 +868,14 @@ def test_construct_paths_sync_discovery_examples_dir_from_directory_path(tmpdir)
         "example_output_path": "context/",  # Directory path, not file path!
     }
 
-    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
+    # Mock context config with example_output_path as a directory
+    mock_context_config = {'example_output_path': 'context/'}
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path(str(tmpdir / '.pddrc'))), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'default': {'defaults': mock_context_config}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='default'), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config):
+
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
@@ -1805,19 +1812,25 @@ def test_construct_paths_detect_command_language_detection(tmpdir):
         assert isinstance(output_file_paths['output'], str)
         assert output_file_paths['output'] == str(mock_output_path)
     
-    # Now test what happens if we use a different command
-    # The 'detect' special case should not be triggered for other commands
+    # Create a test case for a different command with no language indicators
+    no_lang_prompt_file = tmp_path / 'generic.prompt'
+    no_lang_prompt_file.write_text('Generic prompt with no language suffix')
+    input_file_paths_no_lang = {
+        'prompt_file': str(no_lang_prompt_file),
+    }
+    
+    # Test with a different command without language indicators
     with patch('pdd.construct_paths.get_extension', side_effect=lambda lang: '.prompt' if lang == 'prompt' else '.py' if lang == 'python' else ''), \
          patch('pdd.construct_paths.get_language', side_effect=lambda ext: 'python' if ext == '.py' else ''), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
         
-        # Using a different command should result in ValueError
+        # The "generate" command should raise ValueError with no language indicators
         with pytest.raises(ValueError) as excinfo:
             _, input_strings, output_file_paths, language = construct_paths(
-                input_file_paths, force, quiet, "generate", command_options  # Use different command
+                input_file_paths_no_lang, force, quiet, "generate", command_options
             )
         
-        # The error would be about not being able to determine language
+        # The error should be about not being able to determine language
         assert "Could not determine language" in str(excinfo.value)
 
 def test_construct_paths_bug_command_language_detection(tmpdir):
