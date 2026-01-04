@@ -1,161 +1,117 @@
 # PDD Prompt Linter
 
-The PDD Prompt Linter is a tool designed to analyze LLM prompts against Prompt-Driven Development (PDD) best practices. It provides automated feedback on prompt structure, clarity, and potential issues, helping developers write more effective and reliable prompts.
+A linting tool built using Prompt-Driven Development (PDD) to analyze and validate prompts. This project demonstrates how PDD can generate a complete, working application from specification documents.
 
 ## Features
 
-- **Multi-Interface**: Access the linter via CLI, REST API, or a Streamlit UI.
-- **Rule-Based Analysis**: Validates prompts against a registry of PDD rules (e.g., clear instructions, structured sections).
-- **Include Resolution**: (Experimental) Automatically resolves `<include>` tags to estimate final token counts.
-- **Automated Suggestions**: Provides actionable feedback and suggested edits for identified issues.
-
----
+- **Rule-Based Validation**: Checks prompts against PDD best practices
+- **Multiple Interfaces**: CLI, REST API, and Streamlit UI
+- **Automated Suggestions**: Provides actionable feedback for identified issues
+- **100% PDD-Generated**: All code generated from prompts using PDD
 
 ## Prerequisites
 
-- **Python 3.12+**
-- Required libraries:
-  ```bash
-  pip install fastapi uvicorn typer streamlit requests pydantic pytest
-  ```
+```bash
+pip install pdd-cli
+```
 
-## Running the Tool
-
-### 1. Command Line Interface (CLI)
-The CLI allows you to lint files directly from your terminal.
+Or install from source:
 
 ```bash
-# Set PYTHONPATH to include the src directory
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-
-# Lint a file
-python src/cli/pddl.py lint examples/models_findings_example.py
-
-# List all available rules
-python src/cli/pddl.py rules
-
-# Explain a specific rule
-python src/cli/pddl.py explain PDD001
+cd /path/to/pdd
+pip install -e .
 ```
 
-### 2. Backend API
-Run the FastAPI server to provide linting services to other applications or the UI.
+## Installation
 
 ```bash
-# Set PYTHONPATH to include the src directory
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-
-# Start the server
-python src/backend/app/main.py
+pip install typer rich pydantic fastapi uvicorn streamlit litellm httpx
 ```
-The API will be available at `http://localhost:8000`. You can view the interactive documentation at `http://localhost:8000/docs`.
 
-### 3. Streamlit UI
-A web-based interface for interactive linting.
+## Usage
+
+### CLI Interface
+
+**Basic linting:**
+```bash
+python -m src.cli.cli prompts/my_prompt.prompt
+```
+
+**Enable AI analysis** (set API key first):
+```bash
+export OPENAI_API_KEY="sk-..."  # or ANTHROPIC_API_KEY, GOOGLE_API_KEY
+python -m src.cli.cli prompts/my_prompt.prompt
+```
+
+**Common options:**
+```bash
+# JSON/Markdown output
+python -m src.cli.cli --format json prompts/my_prompt.prompt
+
+# Filter severity
+python -m src.cli.cli --severity-threshold error prompts/my_prompt.prompt
+
+# Auto-fix (display fixed prompt)
+python -m src.cli.cli --fix prompts/my_prompt.prompt
+
+# Auto-fix (save to specific file)
+python -m src.cli.cli --fix --fix-output output/fixed_prompt.prompt prompts/my_prompt.prompt
+
+# Auto-fix (overwrite original file)
+python -m src.cli.cli --fix --in-place prompts/my_prompt.prompt
+
+# Save report to file
+python -m src.cli.cli --output report.txt prompts/my_prompt.prompt
+```
+
+**LLM options:**
+```bash
+# Disable AI (heuristics only)
+python -m src.cli.cli --no-llm prompts/my_prompt.prompt
+
+# Use specific model
+python -m src.cli.cli --llm-model gpt-4 prompts/my_prompt.prompt
+```
+
+**CI/CD:**
+```bash
+python -m src.cli.cli --fail-on error prompts/my_prompt.prompt
+```
+
+### REST API
 
 ```bash
-# Ensure the Backend API is running first (see above)
+# Start server
+python -m src.backend.backend_api
 
-# Start the Streamlit app
-streamlit run src/ui/streamlit_app.py
+# Lint via API
+curl -X POST http://localhost:8000/lint \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Your prompt here", "config": {"use_llm": true}}'
 ```
 
----
-
-## Testing
-
-Run the test suite using `pytest`.
+### Streamlit UI
 
 ```bash
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src
-pytest
+python -m streamlit run src/frontend/frontend_streamlit.py
+# Opens at http://localhost:8501
 ```
 
----
+## Development Workflow with PDD
 
-## Troubleshooting & Manual Fixes
+### Step 1: Create Specification Documents
 
-During the PDD implementation process, several manual fixes were applied to bridge gaps between generated modules and ensure system integration:
+Create your project specification and tech stack in the `docs/` directory:
 
-### 1. Model Mismatch in Rule Helper
-The generated `pdd_rules.py` initially used an incorrect schema for creating findings.
-- **Problem**: `ValidationError` when creating `SuggestedEdit` and `Finding` objects.
-- **Fix**: Updated `_create_finding` to use the `Evidence` model and the correct `SuggestedEdit` fields (`kind`, `snippet`).
-
-### 2. Rule Registration in API
-The API was returning empty reports because the rules were never loaded into the registry.
-- **Problem**: `LintEngine` accessed `default_registry`, but no rules were registered because `pdd_rules.py` was never imported.
-- **Fix**: Added `import src.backend.rules.pdd_rules` to `src/backend/app/main.py` to trigger the `@registry.register_rule` decorators.
-
-### 3. Import Path Consistency
-Standardized all internal imports to use the `src.` prefix (e.g., `from src.backend...`) to ensure compatibility when running from the project root.
-
----
-
-## Functional Error Fixing with PDD
-
-Beyond initial generation, the `pdd fix` command can be used to resolve functional bugs identified during testing. This workflow ensures that the implementation aligns with the original prompt specification and passes all unit tests.
-
-### Case Study: Streamlit UI Score Display
-A bug was identified where the Streamlit UI consistently showed a score of `0/100`, even when the backend API reported a higher score.
-
-**Workflow:**
-1.  **Reproduce**: Update or add unit tests (`tests/test_ui_streamlit.py`) to simulate the incorrect behavior and assert the expected outcome.
-2.  **Confirm Failure**: Run the tests and capture the failure details.
-    ```bash
-    pytest tests/test_ui_streamlit.py > errors.log 2>&1
-    ```
-3.  **Apply Automated Fix**: Use the `pdd fix` command, providing the prompt, the failing code, the unit test, and the error log.
-    ```bash
-    pdd --force fix \
-      --output-test tests/test_ui_streamlit.py \
-      --output-code src/ui/streamlit_app.py \
-      prompts/ui_streamlit_Python.prompt \
-      src/ui/streamlit_app.py \
-      tests/test_ui_streamlit.py \
-      errors.log
-    ```
-4.  **Verify**: Run the tests again to ensure the code now correctly parses the API response and displays the expected data.
-
----
-
-## PDD Commands Execution Plan
-
-This document outlines the step-by-step commands to generate the PDD Prompt Linter project using the PDD CLI.
-
-### 1. Project Initialization
-
-Initialize the project configuration and documentation.
-
-#### 1.1 Create .pddrc
-Create the project configuration file `.pddrc` in the root directory:
-
-```yaml
-# .pddrc
-version: "1.0"
-
-contexts:
-  default:
-    defaults:
-      generate_output_path: "src/"
-      test_output_path: "tests/"
-      example_output_path: "examples/"
-      target_coverage: 10.0
-      strength: 0.75
-      temperature: 0.0
-      budget: 10.0
-      max_attempts: 3
+```bash
+mkdir -p docs
 ```
 
-#### 1.2 Create Documentation
-Ensure the following documentation files exist in the `docs/` directory. These are inputs for the architecture generation.
+**`docs/specs.md`**: Product requirements document defining what the tool should do
 
-- `docs/specs.md`: The Product Requirements Document (PRD).
-- `docs/tech_stack.md`: The Technology Stack definition.
+**`docs/tech_stack.md`**: Technology choices and framework decisions
 
-### 2. Architecture Generation
-
-Generate the `architecture.json` file from the product requirements and tech stack documentation.
+### Step 2: Generate Architecture
 
 ```bash
 pdd --force generate --template architecture/architecture_json \
@@ -164,267 +120,280 @@ pdd --force generate --template architecture/architecture_json \
   --output architecture.json
 ```
 
-### 3. Environment Setup
+### Step 3: Project Setup
 
-Create the necessary directory structure to match the architecture.
+Create `.pddrc` to configure output paths.
 
+**Option 1: Generate from architecture** (recommended):
 ```bash
-mkdir -p prompts
-mkdir -p src/backend/models
-mkdir -p src/backend/rules
-mkdir -p src/backend/core
-mkdir -p src/backend/app
-mkdir -p src/cli
-mkdir -p src/ui
-mkdir -p examples
-mkdir -p tests
+pdd generate --template generic/generate_pddrc \
+  -e ARCHITECTURE_FILE=architecture.json \
+  --output .pddrc
 ```
 
-### 4. Prompt Generation
+**Option 2: Create manually**:
+```yaml
+version: "1.0"
 
-Generate the `.prompt` specification files for each module using the `architecture.json` and the `generic/generate_prompt` template.
+contexts:
+  utils:
+    paths: ["*models*", "*helpers*", "*rules*", "*llm*", "*fix*", "*report*", "*pipeline*"]
+    defaults:
+      generate_output_path: "src/utils/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 85.0
 
-#### 4.1 Models (Priority 1)
+  cli:
+    paths: ["*cli*"]
+    defaults:
+      generate_output_path: "src/cli/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 85.0
+
+  backend:
+    paths: ["*backend*", "*api*"]
+    defaults:
+      generate_output_path: "src/backend/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 85.0
+
+  frontend:
+    paths: ["*frontend*", "*streamlit*"]
+    defaults:
+      generate_output_path: "src/frontend/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 80.0
+
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 80.0
+```
+
+Create directory structure:
+
 ```bash
+mkdir -p src/utils src/cli src/backend src/frontend prompts tests examples
+```
+
+### Step 4: Generate Prompts
+
+**Determine the order**: The sequence for generating prompts should follow the dependency order in `architecture.json`. Modules with no dependencies come first, followed by modules that depend on them.
+
+**Tip**: Ask an LLM to analyze your architecture.json and determine the correct sequence:
+```bash
+# Example prompt to an LLM:
+# "Based on this architecture.json file, what is the dependency order 
+# for generating modules? List them from foundation modules (no dependencies)
+# to higher-level modules."
+```
+
+Generate prompts for each module in dependency order:
+
+```bash
+# Generate prompts for all modules (example order: models → helpers → rules → llm → ...)
 pdd --force generate --template generic/generate_prompt \
-  -e MODULE=models_findings \
-  -e LANG_OR_FRAMEWORK=Python \
+  -e MODULE=models \
+  -e LANG_OR_FRAMEWORK=python \
   -e ARCHITECTURE_FILE=architecture.json \
   -e PRD_FILE=docs/specs.md \
   -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/models_findings_Python.prompt
-```
+  --output prompts/models_python.prompt
 
-#### 4.2 Rules Registry (Priority 2)
-```bash
 pdd --force generate --template generic/generate_prompt \
-  -e MODULE=rules_registry \
-  -e LANG_OR_FRAMEWORK=Python \
+  -e MODULE=helpers \
+  -e LANG_OR_FRAMEWORK=python \
   -e ARCHITECTURE_FILE=architecture.json \
   -e PRD_FILE=docs/specs.md \
   -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/rules_registry_Python.prompt
-```
+  --output prompts/helpers_python.prompt
 
-#### 4.3 Parser (Priority 3)
-```bash
 pdd --force generate --template generic/generate_prompt \
-  -e MODULE=parser \
-  -e LANG_OR_FRAMEWORK=Python \
+  -e MODULE=rules \
+  -e LANG_OR_FRAMEWORK=python \
   -e ARCHITECTURE_FILE=architecture.json \
   -e PRD_FILE=docs/specs.md \
   -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/parser_Python.prompt
+  --output prompts/rules_python.prompt
+
+# Continue for all modules: llm, fix, report, pipeline, cli, etc.
 ```
 
-#### 4.4 Include Resolver (Priority 4)
+### Step 5: Generate Code (Traditional Approach)
+
+The traditional PDD workflow requires running separate commands for each step:
+
 ```bash
-pdd --force generate --template generic/generate_prompt \
-  -e MODULE=include_resolver \
-  -e LANG_OR_FRAMEWORK=Python \
-  -e ARCHITECTURE_FILE=architecture.json \
-  -e PRD_FILE=docs/specs.md \
-  -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/include_resolver_Python.prompt
+# Generate code
+pdd --force generate --output src/utils/models.py prompts/models_python.prompt
+
+# Generate example
+pdd --force example prompts/models_python.prompt src/utils/models.py \
+  --output examples/models_example.py
+
+# Generate tests
+pdd --force test prompts/models_python.prompt src/utils/models.py \
+  --output tests/test_models.py
+
+# Run tests
+pytest tests/test_models.py
 ```
 
-#### 4.5 Lint Engine (Priority 5)
+### Step 5 (Better): Use `pdd sync` Instead
+
+**`pdd sync` does all of the above in a single command:**
+
 ```bash
-pdd --force generate --template generic/generate_prompt \
-  -e MODULE=lint_engine \
-  -e LANG_OR_FRAMEWORK=Python \
-  -e ARCHITECTURE_FILE=architecture.json \
-  -e PRD_FILE=docs/specs.md \
-  -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/lint_engine_Python.prompt
+pdd sync models
 ```
 
-#### 4.6 PDD Rules (Priority 6)
+This single command:
+- Generates code in `src/utils/models.py`
+- Generates tests in `tests/test_models.py`
+- Generates examples in `examples/models_example.py`
+- Runs tests and automatically fixes errors
+- Ensures everything works together
+
+**Generate all modules in dependency order:**
+
+The order matters! Use the same dependency sequence you determined from `architecture.json` (ask an LLM if unsure). Generate foundation modules first, then modules that depend on them.
+
 ```bash
-pdd --force generate --template generic/generate_prompt \
-  -e MODULE=pdd_rules \
-  -e LANG_OR_FRAMEWORK=Python \
-  -e ARCHITECTURE_FILE=architecture.json \
-  -e PRD_FILE=docs/specs.md \
-  -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/pdd_rules_Python.prompt
+# Example dependency order (yours may differ based on architecture.json):
+# Foundation modules (no dependencies)
+pdd sync models
+pdd sync helpers
+pdd sync rules
+
+# Modules depending on foundation
+pdd sync llm
+pdd sync fix
+pdd sync report
+pdd sync pipeline
+
+# Interface layers (depend on core modules)
+pdd sync cli
+pdd sync backend_api
+pdd sync frontend_streamlit
 ```
 
-#### 4.7 API (Priority 7)
+Each `pdd sync` command:
+- Reads the module's prompt file
+- Generates implementation code
+- Generates comprehensive tests
+- Generates usage examples
+- Runs tests and automatically fixes any errors
+- Ensures ~85%+ test coverage
+
+**Result**: A complete, working application generated entirely from specifications.
+
+Command to check if all unit tests are passing: `pytest tests/`
+
+## Fixing Bugs with PDD
+
+### Approach 1: Add Test and Use `pdd sync`
+
+The simplest approach to fix bugs is to add a failing test and run `pdd sync`:
+
+1. **Add a test** that captures the bug:
+```python
+# tests/test_cli.py
+def test_lint_command_handles_missing_file():
+    """Test that lint command gracefully handles missing files."""
+    result = runner.invoke(app, ["lint", "nonexistent.prompt"])
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+```
+
+2. **Run `pdd sync`**:
 ```bash
-pdd --force generate --template generic/generate_prompt \
-  -e MODULE=api_main \
-  -e LANG_OR_FRAMEWORK=Python \
-  -e ARCHITECTURE_FILE=architecture.json \
-  -e PRD_FILE=docs/specs.md \
-  -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/api_main_Python.prompt
+pdd sync cli
 ```
 
-#### 4.8 CLI (Priority 8)
+`pdd sync` will:
+- Detect the failing test
+- Analyze the code and prompt
+- Regenerate the code to fix the issue
+- Re-run tests to verify
+
+If `pdd sync` doesn't fully resolve the issue, proceed to Approach 2.
+
+### Approach 2: Use `pdd fix` for Targeted Fixes
+
+When `pdd sync` doesn't work or you want more targeted changes, use `pdd fix`:
+
+1. **Add or update a test** that captures the bug:
+```python
+# tests/test_cli.py
+def test_lint_command_handles_missing_file():
+    """Test that lint command gracefully handles missing files."""
+    result = runner.invoke(app, ["lint", "nonexistent.prompt"])
+    assert result.exit_code == 1
+    assert "not found" in result.output.lower()
+```
+
+2. **Run the test to capture the failure**:
 ```bash
-pdd --force generate --template generic/generate_prompt \
-  -e MODULE=cli_pddl \
-  -e LANG_OR_FRAMEWORK=Python \
-  -e ARCHITECTURE_FILE=architecture.json \
-  -e PRD_FILE=docs/specs.md \
-  -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/cli_pddl_Python.prompt
+pytest tests/test_cli.py > cli_fix_results.log 2>&1
 ```
 
-#### 4.9 UI (Priority 9)
+3. **Apply automated fix** using `pdd fix`:
 ```bash
-pdd --force generate --template generic/generate_prompt \
-  -e MODULE=ui_streamlit \
-  -e LANG_OR_FRAMEWORK=Python \
-  -e ARCHITECTURE_FILE=architecture.json \
-  -e PRD_FILE=docs/specs.md \
-  -e TECH_STACK_FILE=docs/tech_stack.md \
-  --output prompts/ui_streamlit_Python.prompt
+pdd --force fix \
+  --output-test tests/test_cli.py \
+  --output-code src/cli/cli.py \
+  prompts/cli_python.prompt \
+  src/cli/cli.py \
+  tests/test_cli.py \
+  cli_fix_results.log
 ```
 
-### 5. Module Implementation
-
-Generate code, examples, and tests for each module in dependency order.
-
-#### 5.1 models_findings
+4. **Verify the fix**:
 ```bash
-# Generate Code
-pdd --force generate --output src/backend/models/findings.py prompts/models_findings_Python.prompt
-
-# Generate Example
-pdd --force example prompts/models_findings_Python.prompt src/backend/models/findings.py --output examples/models_findings_example.py
-
-# Generate Tests
-pdd --force test prompts/models_findings_Python.prompt src/backend/models/findings.py --output tests/test_findings.py
-
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_findings.py
-
-# Fix if needed (example)
-# pdd --force fix --output-test tests/test_findings.py --output-code src/backend/models/findings.py prompts/models_findings_Python.prompt src/backend/models/findings.py tests/test_findings.py errors.log
+pytest tests/test_cli.py
 ```
 
-#### 5.2 rules_registry
+## Adding New Features
+
+To add new features or update functionality:
+
+1. **Update the prompt** with new requirements or clarifications:
+```python
+# prompts/cli_python.prompt
+# Add to the requirements:
+# - Support linting multiple files at once
+# - Add --format flag for output formatting (json, text, html)
+```
+
+2. **Run `pdd sync` to regenerate**:
 ```bash
-# Generate Code
-pdd --force generate --output src/backend/rules/registry.py prompts/rules_registry_Python.prompt
-
-# Generate Example
-pdd --force example prompts/rules_registry_Python.prompt src/backend/rules/registry.py --output examples/rules_registry_example.py
-
-# Generate Tests
-pdd --force test prompts/rules_registry_Python.prompt src/backend/rules/registry.py --output tests/test_registry.py
-
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_registry.py
+pdd --force sync cli
 ```
 
-#### 5.3 parser
+3. **Verify the changes**:
 ```bash
-# Generate Code
-pdd --force generate --output src/backend/core/parser.py prompts/parser_Python.prompt
-
-# Generate Example
-pdd --force example prompts/parser_Python.prompt src/backend/core/parser.py --output examples/parser_example.py
-
-# Generate Tests
-pdd --force test prompts/parser_Python.prompt src/backend/core/parser.py --output tests/test_parser.py
-
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_parser.py
+pytest tests/test_cli.py
 ```
 
-#### 5.4 include_resolver
-```bash
-# Generate Code
-pdd --force generate --output src/backend/core/include_resolver.py prompts/include_resolver_Python.prompt
+`pdd sync` regenerates code, tests, and examples, ensuring everything stays consistent with the updated prompt. New tests will be generated automatically for the new features.
 
-# Generate Example
-pdd --force example prompts/include_resolver_Python.prompt src/backend/core/include_resolver.py --output examples/include_resolver_example.py
+## Making code changes and updating prompts based on that
 
-# Generate Tests
-pdd --force test prompts/include_resolver_Python.prompt src/backend/core/include_resolver.py --output tests/test_include_resolver.py
+TODO: pdd update usage
 
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_include_resolver.py
-```
+## Future work
 
-#### 5.5 lint_engine
-```bash
-# Generate Code
-pdd --force generate --output src/backend/core/lint_engine.py prompts/lint_engine_Python.prompt
-
-# Generate Example
-pdd --force example prompts/lint_engine_Python.prompt src/backend/core/lint_engine.py --output examples/lint_engine_example.py
-
-# Generate Tests
-pdd --force test prompts/lint_engine_Python.prompt src/backend/core/lint_engine.py --output tests/test_lint_engine.py
-
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_lint_engine.py
-```
-
-#### 5.6 pdd_rules
-```bash
-# Generate Code
-pdd --force generate --output src/backend/rules/pdd_rules.py prompts/pdd_rules_Python.prompt
-
-# Generate Example
-pdd --force example prompts/pdd_rules_Python.prompt src/backend/rules/pdd_rules.py --output examples/pdd_rules_example.py
-
-# Generate Tests
-pdd --force test prompts/pdd_rules_Python.prompt src/backend/rules/pdd_rules.py --output tests/test_pdd_rules.py
-
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_pdd_rules.py
-```
-
-#### 5.7 api_main
-```bash
-# Generate Code
-pdd --force generate --output src/backend/app/main.py prompts/api_main_Python.prompt
-
-# Generate Example
-pdd --force example prompts/api_main_Python.prompt src/backend/app/main.py --output examples/api_main_example.py
-
-# Generate Tests
-pdd --force test prompts/api_main_Python.prompt src/backend/app/main.py --output tests/test_api_main.py
-
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_api_main.py
-```
-
-#### 5.8 cli_pddl
-```bash
-# Generate Code
-pdd --force generate --output src/cli/pddl.py prompts/cli_pddl_Python.prompt
-
-# Generate Example
-pdd --force example prompts/cli_pddl_Python.prompt src/cli/pddl.py --output examples/cli_pddl_example.py
-
-# Generate Tests
-pdd --force test prompts/cli_pddl_Python.prompt src/cli/pddl.py --output tests/test_cli_pddl.py
-
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_cli_pddl.py
-```
-
-#### 5.9 ui_streamlit
-```bash
-# Generate Code
-pdd --force generate --output src/ui/streamlit_app.py prompts/ui_streamlit_Python.prompt
-
-# Generate Example
-pdd --force example prompts/ui_streamlit_Python.prompt src/ui/streamlit_app.py --output examples/ui_streamlit_example.py
-
-# Generate Tests
-pdd --force test prompts/ui_streamlit_Python.prompt src/ui/streamlit_app.py --output tests/test_ui_streamlit.py
-
-# Run Tests
-export PYTHONPATH=$PYTHONPATH:$(pwd)/src && pytest tests/test_ui_streamlit.py
-```
-
-Note: pdd sync can do all code generation steps in a single command - instructions for using that will be added in the future
-
-```
+- Improve the frontend UI
+- Enhance scoring granularity - the current scoring system may be too lenient and could benefit from more nuanced deductions
+- There are some bugs that show different results in the CLI and UI

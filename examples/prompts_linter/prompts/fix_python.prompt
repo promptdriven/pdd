@@ -1,0 +1,108 @@
+<prompt>
+You are an expert Python developer architecting the `src/utils/fix.py` module for the PDD Prompt Linter. This module is the remediation engine responsible for transforming an original prompt text into a compliant version based on the analysis provided in a `Report` object. It operates in two modes: applying specific text replacements suggested by the LLM (patching) and enforcing structural integrity when critical PDD elements are missing (scaffolding).
+
+Requirements
+1. **Input Contract**: The module must accept the original prompt content (string) and a `Report` object (from `src/utils/models.py`).
+2. **Output Contract**: It must return a single string representing the "fixed" prompt.
+3. **LLM Patching**: If the `Report` contains `suggestions` (from the LLM), the module must apply these replacements to the text.
+4. **PDD Structural Scaffolding**: If the `Report` contains specific structural `issues` identified by heuristics, the module must programmatically repair PDD compliance violations:
+    *   **Missing Anatomy Sections**: Add missing sections (Requirements, Dependencies, Instructions, Deliverable/Input-Output) as placeholders at appropriate locations.
+    *   **Determinism Violations**: Remove or comment out non-deterministic tags (`<web>`, `<shell>`, `<exec>`, `<run>`).
+    *   **Modularity Issues**: Add warnings or comments when multiple files are detected, suggesting prompt splitting.
+    *   **Context Issues**: Add comments suggesting refactoring when repo dumps are detected.
+5. **Conflict Resolution**: If multiple fixes target the same text, priority should be given to high-severity fixes or LLM suggestions.
+6. **Safety**: The module must never return an empty string if the input was non-empty; it should default to returning the original text if no fixes can be safely applied.
+7. **Idempotency**: Applying fixes to an already compliant prompt should result in no changes or minimal changes.
+8. **API Compatibility**: The module must expose both `apply_fixes()` and `generate_scaffold()` functions for compatibility with different callers (CLI and pipeline).
+
+Dependencies
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+<src.utils.models><include>examples/models_example.py</include></src.utils.models>
+<src.utils.fix><include>examples/fix_example.py</include></src.utils.fix>
+</internal_example_modules>
+
+Prompt Dependencies:
+- models_Python.prompt
+
+Instructions
+- Import `Report`, `Issue`, `LLMSuggestionDetail`, `RuleCategory`, and `Severity` from `src.utils.models`.
+- Try to import `FixSuggestion` from `src.utils.models`, but fall back to `LLMSuggestionDetail` if it doesn't exist for backward compatibility.
+- Define a primary function `apply_fixes(original_text: str, report: Report) -> str`.
+- **Step 1: PDD Structural Scaffolding (Heuristic Fixes)**
+  - Iterate through `report.issues` to identify PDD compliance violations.
+  - Use a private helper function `_apply_structural_scaffolding(text: str, report: Report) -> str`.
+  - **Fix Missing Anatomy Sections** (RuleCategory.ANATOMY or keywords in description):
+    - If "Requirements" section is missing, insert a placeholder at the beginning or after any context section:
+      ```
+      Requirements
+      1. [TODO: Define specific requirements]
+      2. [TODO: Add acceptance criteria]
+      ```
+    - If "Dependencies" section is missing, add before Instructions:
+      ```
+      Dependencies
+      % List any modules, libraries, or other prompts this depends on
+      - [TODO: Specify dependencies]
+      ```
+    - If "Instructions" section is missing, add after Requirements/Dependencies:
+      ```
+      Instructions
+      - [TODO: Break down implementation into atomic steps]
+      - [TODO: Specify order of operations]
+      ```
+    - If "Deliverable" or "Input/Output" section is missing, add near the end:
+      ```
+      Deliverable
+      - [TODO: Specify expected output files or artifacts]
+      ```
+  - **Fix Determinism Violations** (RuleCategory.DETERMINISM):
+    - Find and remove/comment out non-deterministic tags: `<web>`, `<shell>`, `<exec>`, `<run>`.
+    - Replace with comments: `% NOTE: Removed non-deterministic tag <web> for PDD compliance`.
+  - **Fix Modularity Issues** (RuleCategory.MODULARITY):
+    - If multiple file definitions detected, add a warning comment at the top:
+      ```
+      % WARNING: This prompt appears to define multiple files. Consider splitting into separate prompts for better modularity.
+      ```
+  - **Fix Context Issues** (RuleCategory.CONTEXT):
+    - If repo dump detected, add a comment suggesting refactoring:
+      ```
+      % NOTE: Large code blocks detected. Consider using <include> tags or external context files instead.
+      ```
+  - **Section Placement**: Insert missing sections in logical order:
+    1. Context/Role definition (if any)
+    2. Requirements
+    3. Dependencies
+    4. Instructions
+    5. Deliverable
+    6. Implementation assumptions
+- **Step 2: Content Patching (LLM Suggestions)**
+  - Gather suggestions from both `report.llm_analysis.suggestions` (primary) and `report.suggestions` (fallback).
+  - Each suggestion contains `before` (text to find) and `after` (replacement text).
+  - Use `text.replace(suggestion.before, suggestion.after)` to apply changes.
+  - **Priority**: Sort suggestions by priority (High → Medium → Low) before applying to ensure critical fixes are applied first.
+  - Use a private helper function `_apply_llm_patches(text: str, suggestions: list) -> str`.
+- **Step 3: Final Cleanup**
+  - Trim excessive blank lines (more than 2 consecutive).
+  - Ensure proper spacing between sections.
+  - Use a private helper function `_apply_final_cleanup(text: str) -> str`.
+- **Edge Cases**:
+  - If `suggestion.before` is not found in the text, log a warning and skip that suggestion; do not crash.
+  - Handle whitespace normalization carefully; if exact string match fails, the fix should be skipped rather than applying a fuzzy match that might destroy code.
+  - Allow empty strings for `after` (deletion), but skip if `before` is missing or `after` is None.
+  - Check if sections already exist (case-insensitive) before adding them to maintain idempotency.
+- Define `generate_scaffold(original_text: str, report: Report) -> str` as an alias to `apply_fixes()` for pipeline compatibility.
+
+Deliverable
+- `src/utils/fix.py` containing the `apply_fixes` function, `generate_scaffold` function, and private helper functions.
+
+Implementation assumptions (explicit)
+- The `Report` object is fully populated before being passed to this module.
+- `LLMSuggestionDetail` objects rely on exact string matching for the `before` field.
+- We assume the `original_text` is UTF-8 encoded.
+- The pipeline module calls `generate_scaffold()` while other modules may call `apply_fixes()` directly.
+- The module focuses on PDD compliance fixes (anatomy, determinism, modularity) rather than generic formatting.
+- Prompts may or may not have `<prompt>` wrapper tags; this module does not add or enforce them.
+- Section detection is case-insensitive (e.g., "Requirements", "requirements", "REQUIREMENTS" all match).
+- When inserting sections, the module maintains the overall structure and style of the original prompt.
+</prompt>
