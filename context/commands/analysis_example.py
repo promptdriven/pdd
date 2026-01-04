@@ -1,16 +1,21 @@
 import os
+import shutil
 import click
 from pdd.commands.analysis import detect_change, conflicts, bug, crash, trace
 
 # Define the output directory relative to this script
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def main():
     """
     Demonstrates how to use the analysis commands (detect, conflicts, bug, crash, trace)
     programmatically by invoking their Click command callbacks.
     """
+    
+    # Clean up output directory to avoid "Overwrite?" prompts from the commands
+    if os.path.exists(OUTPUT_DIR):
+        shutil.rmtree(OUTPUT_DIR)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     # 1. Setup a Click Context
     # The commands rely on a Click Context to access global configuration like
@@ -57,8 +62,9 @@ def main():
         conflict_2 = os.path.join(OUTPUT_DIR, "theme_light.prompt")
         conflicts_out = os.path.join(OUTPUT_DIR, "conflicts.csv")
 
-        with open(conflict_1, "w") as f: f.write("Use dark theme default.")
-        with open(conflict_2, "w") as f: f.write("Use light theme default.")
+        # Updated content to help language detection logic in conflicts_main
+        with open(conflict_1, "w") as f: f.write("Create a Python function to set the theme to dark.")
+        with open(conflict_2, "w") as f: f.write("Create a Python function to set the theme to light.")
 
         result = conflicts.callback(
             prompt1=conflict_1,
@@ -85,11 +91,8 @@ def main():
         with open(des_out, "w") as f: f.write("6")
 
         result = bug.callback(
-            prompt_file=bug_prompt,
-            code_file=bug_code,
-            program_file=bug_prog,
-            current_output=curr_out,
-            desired_output=des_out,
+            manual=True,
+            args=(bug_prompt, bug_code, bug_prog, curr_out, des_out),
             output=test_out,
             language="Python"
         )
