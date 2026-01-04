@@ -1290,7 +1290,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "14" ]; then
   # Example: Desired output changes the sum description
   echo "The result of addition is: 8" > "desired_output.txt" # Assuming 5+3 example
 
-  run_pdd_command bug --output "$BUG_TEST_SCRIPT" --language Python \
+  run_pdd_command bug --manual --output "$BUG_TEST_SCRIPT" --language Python \
                       "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
                       "$MATH_VERIFICATION_PROGRAM" \
                       "current_output.txt" "desired_output.txt"
