@@ -12,7 +12,7 @@ Orchestrator for the 9-step agentic bug investigation workflow. Runs each step a
 3. Run 9 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
-6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` line to extract created files (used for hard stop check and final summary)
+6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
 
 % Step Execution
 For each step (1-9):
@@ -53,7 +53,7 @@ The orchestrator must parse step output to detect stop conditions:
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 2 | "Feature Request" or "User Error" | Output contains "Feature Request (Not a Bug)" or "User Error (Not a Bug)" |
 | 3 | Needs more info from author | Output contains "Needs More Info" |
-| 7 | No test file generated | No FILES_CREATED line in output, or empty file list |
+| 7 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
 | 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
 
 **Hard stop behavior:**
