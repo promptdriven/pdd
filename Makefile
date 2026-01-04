@@ -64,11 +64,11 @@ PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
 # CAP public repo (optional second destination)
 PUBLIC_PDD_CAP_REPO_DIR ?= staging/public/pdd_cap
 PUBLIC_PDD_CAP_REMOTE ?= https://github.com/promptdriven/pdd_cap.git
-# Top-level files to publish if present
-PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example README.md .gitignore SETUP_WITH_GEMINI.md Makefile pdd-local.sh .pddrc
+# Top-level files to publish if present (read from .sync-config.yml)
+PUBLIC_ROOT_FILES ?= $(shell python scripts/get_sync_patterns.py root_files 2>/dev/null || echo "LICENSE README.md requirements.txt pyproject.toml")
 # Include core unit tests by default
 PUBLIC_COPY_TESTS ?= 1
-PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py tests/conftest.py
+PUBLIC_TEST_INCLUDE ?= $(shell python scripts/get_sync_patterns.py test_patterns 2>/dev/null || echo "tests/test_*.py tests/__init__.py tests/conftest.py")
 PUBLIC_TEST_EXCLUDE ?= tests/regression* tests/sync_regression* tests/**/regression* tests/**/sync_regression* tests/**/*.ipynb tests/csv/**
 PUBLIC_COPY_CONTEXT ?= 1
 PUBLIC_CONTEXT_INCLUDE ?= context/**/*_example.py
@@ -846,6 +846,9 @@ publish-public-cap:
 	@echo "Copying VS Code extension to CAP public repo"
 	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/utils
 	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_CAP_REPO_DIR)/utils/
+	@echo "Copying python preamble to CAP public repo"
+	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/context
+	@cp context/python_preamble.prompt $(PUBLIC_PDD_CAP_REPO_DIR)/context/
 	@echo "Copying selected top-level files to CAP public repo (if present): $(PUBLIC_ROOT_FILES)"
 	@set -e; for f in $(PUBLIC_ROOT_FILES); do \
 		if [ -f "$$f" ]; then \

@@ -1,12 +1,44 @@
+## v0.0.101 (2026-01-03)
+
+### Feat
+
+- Enhance agentic bug investigation prompts and regression testing
+- Enhance agentic bug investigation workflow and testing
+- Implement agentic bug investigation workflow with orchestrator
+- Add agentic bug workflow with 8-step GitHub issue investigation (#153)
+- add ONBOARDING.md to sync patterns
+- Introduce sync configuration for bidirectional repository synchronization
+- Enhance cloud execution support for `pdd crash` and `pdd verify` commands
+
+### Fix
+
+- Improve error handling in analysis commands
+- Refactor output handling in analysis_example.py
+- Enhance analysis command examples and output handling
+- Update analysis prompts to include function namespaces
+- escape tag examples in preprocess_python.prompt (from pdd_cap PR #11)
+- remove root ONBOARDING.md from sync (use docs/*.md instead)
+- update Firecrawl API for 4.0+ compatibility
+- use git config for CAP_REPO_TOKEN auth
+
 ## v0.0.100 (2026-01-02)
 
 ### Feat
 
-- Add cloud execution support for pdd crash and pdd verify commands
+- **Cloud Execution for `pdd crash` and `pdd verify` Commands (PR #218):** Added cloud-first execution with automatic local fallback for both commands. Uses JWT authentication via `CloudConfig.get_jwt_token()` and posts to the `crashCode` and `verifyCode` endpoints. Supports hybrid mode for loop iterations—local program execution with cloud LLM calls. Set `PDD_CLOUD_ONLY=1` or `PDD_NO_LOCAL_FALLBACK=1` to disable fallback. Non-recoverable errors (401/402/403/400) raise `UsageError`; recoverable errors (5xx, timeouts) fall back to local.
+
+### Docs
+
+- Updated `crash_main_python.prompt` and `fix_verification_main_python.prompt` with cloud execution strategy documentation.
+
+### Tests
+
+- Added 374+ lines of tests in `test_crash_main.py` covering cloud success paths, fallback scenarios, and hybrid loop mode.
+- Added 221+ lines of tests in `test_fix_main.py` for cloud execution coverage.
 
 ### Fix
 
-- Address valid Copilot suggestions - fix patch target and remove outdated comment
+- Fixed patch target in test mocking and removed outdated comment.
 
 ## v0.0.99 (2026-01-01)
 

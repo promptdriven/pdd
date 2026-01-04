@@ -3518,3 +3518,85 @@ class TestNonPythonAgenticFallback:
             if call_kwargs.kwargs:
                 assert call_kwargs.kwargs.get('max_attempts') == 0, \
                     f"Expected max_attempts=0 for TypeScript, got {call_kwargs.kwargs.get('max_attempts')}"
+
+
+# --- Bug #XXX: Path handling tests for post-crash verification ---
+
+def test_run_example_with_relative_path_and_cwd_works(tmp_path, monkeypatch):
+    """
+    Bug #XXX: When pdd_files returns relative paths (from .pddrc templates),
+    post-crash verification must resolve them to absolute paths.
+
+    This test reproduces the bug:
+    - pdd_files['example'] = Path('context/backend/example.py')  # relative
+    - Code sets cwd=example.parent and runs ['python', str(example)]
+    - Subprocess looks for context/backend/context/backend/example.py
+    - File not found → exit code 2
+
+    The fix: Use .resolve() to get absolute paths.
+    """
+    from pathlib import Path
+    import os
+
+    # Setup directory structure matching .pddrc template
+    example_dir = tmp_path / "context" / "backend"
+    example_dir.mkdir(parents=True)
+    example_file = example_dir / "test_example.py"
+    example_file.write_text("print('hello')")
+
+    monkeypatch.chdir(tmp_path)
+
+    from pdd.sync_orchestration import _run_example_with_error_detection
+
+    # Simulate pdd_files['example'] as returned by get_pdd_file_paths
+    # (relative path from .pddrc template)
+    pdd_files_example = Path("context/backend/test_example.py")
+
+    # === THE FIX: resolve to absolute path ===
+    resolved_example = pdd_files_example.resolve()
+    example_path = str(resolved_example)
+    cmd_parts = ['python', example_path]
+
+    returncode, stdout, stderr = _run_example_with_error_detection(
+        cmd_parts,
+        env=os.environ.copy(),
+        cwd=str(resolved_example.parent),
+        timeout=5
+    )
+
+    # This should PASS with .resolve() fix applied
+    # Without .resolve(), would fail with exit code 2 (file not found)
+    assert returncode == 0, f"Expected exit 0, got {returncode}. stderr: {stderr}"
+
+
+def test_run_example_without_resolve_fails(tmp_path, monkeypatch):
+    """
+    Demonstrates the bug: relative path + cwd = doubled path → file not found.
+    This test documents the buggy behavior.
+    """
+    from pathlib import Path
+    import os
+
+    example_dir = tmp_path / "context" / "backend"
+    example_dir.mkdir(parents=True)
+    example_file = example_dir / "test_example.py"
+    example_file.write_text("print('hello')")
+
+    monkeypatch.chdir(tmp_path)
+
+    from pdd.sync_orchestration import _run_example_with_error_detection
+
+    # BUGGY PATTERN: relative path without .resolve()
+    pdd_files_example = Path("context/backend/test_example.py")
+    example_path = str(pdd_files_example)  # Still relative!
+    cmd_parts = ['python', example_path]
+
+    returncode, stdout, stderr = _run_example_with_error_detection(
+        cmd_parts,
+        env=os.environ.copy(),
+        cwd=str(pdd_files_example.parent),  # Bug: cwd + relative = doubled path
+        timeout=5
+    )
+
+    # BUG: This fails with exit code 2 (file not found)
+    assert returncode == 2, f"Expected bug to cause exit 2, got {returncode}"

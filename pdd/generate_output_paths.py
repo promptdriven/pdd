@@ -332,6 +332,11 @@ def generate_output_paths(
         elif context_path:
             source = "context"
 
+            # Check if the ORIGINAL context path ends with / (explicit complete directory)
+            # When user configures "context/" or "backend/functions/utils/", they mean
+            # "put files directly here" - don't add dir_prefix from basename
+            original_context_path_ends_with_slash = context_path.endswith('/')
+
             # Resolve relative `.pddrc` paths based on path_resolution_mode.
             # "cwd" mode: resolve relative to current working directory (for sync)
             # "config_base" mode: resolve relative to config_base_dir (for fix, etc.)
@@ -356,7 +361,22 @@ def generate_output_paths(
 
             if is_dir:
                 logger.debug(f"Context path '{context_path}' identified as a directory.")
-                final_path = os.path.join(context_path, default_filename)
+                # When the config path explicitly ends with /, it's a complete directory
+                # Don't add dir_prefix - generate filename with just the name part
+                if original_context_path_ends_with_slash:
+                    # Extract just the name part without dir_prefix
+                    if '/' in basename:
+                        _, name_part = basename.rsplit('/', 1)
+                    else:
+                        name_part = basename
+                    # Generate filename without dir_prefix
+                    filename_without_prefix = _get_default_filename(
+                        command, output_key, name_part, language, file_extension
+                    )
+                    final_path = os.path.join(context_path, filename_without_prefix)
+                    logger.debug(f"Using explicit directory without dir_prefix: {final_path}")
+                else:
+                    final_path = os.path.join(context_path, default_filename)
             else:
                 logger.debug(f"Context path '{context_path}' identified as a specific file path.")
                 final_path = context_path
