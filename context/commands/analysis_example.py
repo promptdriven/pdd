@@ -1,21 +1,25 @@
 import os
-import shutil
 import click
+import shutil
 from pdd.commands.analysis import detect_change, conflicts, bug, crash, trace
 
 # Define the output directory relative to this script
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+def clean_output(path):
+    """Removes the file or directory if it exists to prevent overwrite prompts."""
+    if os.path.exists(path):
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
 
 def main():
     """
     Demonstrates how to use the analysis commands (detect, conflicts, bug, crash, trace)
     programmatically by invoking their Click command callbacks.
     """
-    
-    # Clean up output directory to avoid "Overwrite?" prompts from the commands
-    if os.path.exists(OUTPUT_DIR):
-        shutil.rmtree(OUTPUT_DIR)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     # 1. Setup a Click Context
     # The commands rely on a Click Context to access global configuration like
@@ -41,6 +45,9 @@ def main():
         change_desc = os.path.join(OUTPUT_DIR, "change_request.txt")
         detect_out = os.path.join(OUTPUT_DIR, "detect_results.csv")
 
+        # Clean output to avoid overwrite prompt
+        clean_output(detect_out)
+
         # Create dummy files
         with open(prompt_1, "w") as f: f.write("Create a function to add numbers.")
         with open(prompt_2, "w") as f: f.write("Create a function to concat strings.")
@@ -58,13 +65,15 @@ def main():
         print("\n--- 2. Conflicts ---")
         # Checks for conflicts between two prompt files.
         
-        conflict_1 = os.path.join(OUTPUT_DIR, "theme_dark.prompt")
-        conflict_2 = os.path.join(OUTPUT_DIR, "theme_light.prompt")
+        # FIX: Use .txt extension to ensure language detection works (defaults to text)
+        conflict_1 = os.path.join(OUTPUT_DIR, "theme_dark.txt")
+        conflict_2 = os.path.join(OUTPUT_DIR, "theme_light.txt")
         conflicts_out = os.path.join(OUTPUT_DIR, "conflicts.csv")
 
-        # Updated content to help language detection logic in conflicts_main
-        with open(conflict_1, "w") as f: f.write("Create a Python function to set the theme to dark.")
-        with open(conflict_2, "w") as f: f.write("Create a Python function to set the theme to light.")
+        clean_output(conflicts_out)
+
+        with open(conflict_1, "w") as f: f.write("Use dark theme default.")
+        with open(conflict_2, "w") as f: f.write("Use light theme default.")
 
         result = conflicts.callback(
             prompt1=conflict_1,
@@ -84,12 +93,15 @@ def main():
         des_out = os.path.join(OUTPUT_DIR, "expected.txt")
         test_out = os.path.join(OUTPUT_DIR, "test_calc_bug.py")
 
+        clean_output(test_out)
+
         with open(bug_prompt, "w") as f: f.write("Function to multiply numbers.")
         with open(bug_code, "w") as f: f.write("def mul(a, b): return a + b # Bug")
         with open(bug_prog, "w") as f: f.write("from calc import mul\nprint(mul(2, 3))")
         with open(curr_out, "w") as f: f.write("5")
         with open(des_out, "w") as f: f.write("6")
 
+        # FIX: Use correct arguments for bug command (manual=True, args=tuple)
         result = bug.callback(
             manual=True,
             args=(bug_prompt, bug_code, bug_prog, curr_out, des_out),
@@ -108,6 +120,9 @@ def main():
         crash_err = os.path.join(OUTPUT_DIR, "crash.log")
         fixed_code = os.path.join(OUTPUT_DIR, "div_fixed.py")
         fixed_prog = os.path.join(OUTPUT_DIR, "run_div_fixed.py")
+
+        clean_output(fixed_code)
+        clean_output(fixed_prog)
 
         with open(crash_prompt, "w") as f: f.write("Function to divide numbers.")
         with open(crash_code, "w") as f: f.write("def div(a, b): return a / b")
@@ -134,6 +149,8 @@ def main():
         trace_prompt = os.path.join(OUTPUT_DIR, "logic.prompt")
         trace_code = os.path.join(OUTPUT_DIR, "logic.py")
         trace_out = os.path.join(OUTPUT_DIR, "trace.log")
+
+        clean_output(trace_out)
 
         with open(trace_prompt, "w") as f: f.write("1. Set x to 10.\n2. Print x.")
         with open(trace_code, "w") as f: f.write("x = 10\nprint(x)")
