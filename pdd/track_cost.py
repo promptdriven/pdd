@@ -57,9 +57,7 @@ def track_cost(func):
                             # (it might have been created/deleted during command execution)
                             if os.path.exists(abs_path) or '.' in os.path.basename(f):
                                 files_set.add(abs_path)
-                                print(f"Debug: Added to core_dump_files: {abs_path} (exists: {os.path.exists(abs_path)})")
                     ctx.obj['core_dump_files'] = files_set
-                    print(f"Debug: Total files in core_dump_files: {len(files_set)}")
 
                 # Check if we need to write cost tracking (only on success)
                 if exception_raised is None:
@@ -92,10 +90,6 @@ def track_cost(func):
                                 writer.writeheader()
                             writer.writerow(row)
 
-                        print(f"Debug: Writing row to CSV: {row}")
-                        print(f"Debug: Input files: {input_files}")
-                        print(f"Debug: Output files: {output_files}")
-
             except Exception as e:
                 rprint(f"[red]Error tracking cost: {e}[/red]")
 
@@ -115,11 +109,6 @@ def extract_cost_and_model(result: Any) -> Tuple[Any, str]:
 def collect_files(args, kwargs):
     input_files = []
     output_files = []
-
-    print(f"Debug: collect_files called")
-    print(f"Debug: args = {args}")
-    print(f"Debug: kwargs keys = {list(kwargs.keys())}")
-    print(f"Debug: kwargs = {kwargs}")
 
     # Known input parameter names that typically contain file paths
     input_param_names = {
@@ -187,6 +176,4 @@ def collect_files(args, kwargs):
                 if isinstance(item, str) and item and looks_like_file(item):
                     input_files.append(item)
 
-    print(f"Debug: Collected input files: {input_files}")
-    print(f"Debug: Collected output files: {output_files}")
     return input_files, output_files

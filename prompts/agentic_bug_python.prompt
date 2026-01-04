@@ -1,0 +1,40 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_bug.py` module.
+
+% Role & Scope
+CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 9-step investigation process.
+
+% Requirements
+1. Function: `run_agentic_bug(issue_url: str, *, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
+3. Parse GitHub issue URL to extract: owner, repo, issue_number
+4. Supported URL formats:
+   - `https://github.com/{owner}/{repo}/issues/{number}`
+   - `https://www.github.com/{owner}/{repo}/issues/{number}`
+   - `github.com/{owner}/{repo}/issues/{number}`
+5. Fetch issue content via `gh api repos/{owner}/{repo}/issues/{number}` (requires `gh` CLI)
+6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
+7. Fetch comments via `gh api {comments_url}` to get full context
+8. Clone/checkout the repository to a temp directory if not already in it
+9. Call orchestrator: `run_agentic_bug_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ...)`
+10. Return aggregated results from orchestrator
+
+% Manual Mode (legacy)
+When `--manual` flag is used, accept 5 positional arguments instead:
+- PROMPT_FILE, CODE_FILE, PROGRAM_FILE, CURRENT_OUTPUT, DESIRED_OUTPUT
+- Use existing `generate_failing_test()` logic for backward compatibility
+
+% Dependencies
+<pdd.agentic_bug_orchestrator><include>context/agentic_bug_orchestrator_example.py</include></pdd.agentic_bug_orchestrator>
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.bug_main><include>context/bug_main_example.py</include></pdd.bug_main>
+
+% Error Handling
+- Return `(False, "gh CLI not found", 0.0, "", [])` if `gh` command not available
+- Return `(False, "Invalid GitHub URL", 0.0, "", [])` if URL parsing fails
+- Return `(False, "Issue not found: {error}", 0.0, "", [])` if `gh api` fails
+
+% Deliverables
+- Code: `pdd/agentic_bug.py`
