@@ -1,97 +1,136 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import re
-import sys
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 
 from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
 
-# Internal imports using relative syntax
 from .agentic_common import run_agentic_task
 from .load_prompt_template import load_prompt_template
 
-# Initialize Rich console
+# Initialize console
 console = Console()
 
+def _get_git_root(cwd: Path) -> Optional[Path]:
+    """Get the root directory of the git repository."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return Path(result.stdout.strip())
+    except subprocess.CalledProcessError:
+        return None
 
-def _extract_files_changed(output: str) -> List[str]:
+def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
+    """Check if a path is a registered git worktree."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        # The porcelain output lists 'worktree /path/to/worktree'
+        # We check if our specific path appears in the output
+        return str(worktree_path.resolve()) in result.stdout
+    except subprocess.CalledProcessError:
+        return False
+
+def _branch_exists(cwd: Path, branch: str) -> bool:
+    """Check if a local git branch exists."""
+    try:
+        subprocess.run(
+            ["git", "show-ref", "--verify", f"refs/heads/{branch}"],
+            cwd=cwd,
+            capture_output=True,
+            check=True
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
+    """Remove a git worktree."""
+    try:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            cwd=cwd,
+            capture_output=True,
+            check=True
+        )
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        return False, str(e.stderr)
+
+def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
+    """Force delete a git branch."""
+    try:
+        subprocess.run(
+            ["git", "branch", "-D", branch],
+            cwd=cwd,
+            capture_output=True,
+            check=True
+        )
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        return False, str(e.stderr)
+
+def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]:
     """
-    Extract file paths from FILES_CREATED or FILES_MODIFIED lines in agent output.
-
-    Looks for patterns:
-        FILES_CREATED: path1, path2, ...
-        FILES_MODIFIED: path1, path2, ...
-
-    FILES_CREATED is used when new test files are created.
-    FILES_MODIFIED is used when appending tests to existing files (per PDD methodology).
-
-    Args:
-        output: The agent's output text.
-
-    Returns:
-        List of file paths, or empty list if not found.
+    Sets up an isolated git worktree for the issue fix.
+    Returns (worktree_path, error_message).
     """
-    all_paths = []
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return None, "Current directory is not a git repository."
 
-    # Match both FILES_CREATED and FILES_MODIFIED
-    for marker in ["FILES_CREATED", "FILES_MODIFIED"]:
-        pattern = rf"{marker}:\s*(.+)"
-        match = re.search(pattern, output)
-        if match:
-            paths_str = match.group(1).strip()
-            if paths_str:
-                # Split by comma and clean up each path
-                paths = [p.strip() for p in paths_str.split(",")]
-                # Filter out empty strings and backticks (in case of markdown formatting)
-                paths = [p.strip("`") for p in paths if p.strip() and p.strip() != "`"]
-                all_paths.extend(paths)
+    worktree_rel_path = Path(".pdd") / "worktrees" / f"fix-issue-{issue_number}"
+    worktree_path = git_root / worktree_rel_path
+    branch_name = f"fix/issue-{issue_number}"
 
-    return all_paths
+    # 1. Clean up existing worktree at path
+    if worktree_path.exists():
+        if _worktree_exists(git_root, worktree_path):
+            if not quiet:
+                console.print(f"[yellow]Removing existing worktree at {worktree_path}[/yellow]")
+            success, err = _remove_worktree(git_root, worktree_path)
+            if not success:
+                return None, f"Failed to remove existing worktree: {err}"
+        else:
+            # It's just a directory, not a registered worktree
+            if not quiet:
+                console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
+            shutil.rmtree(worktree_path)
 
+    # 2. Clean up existing branch
+    if _branch_exists(git_root, branch_name):
+        if not quiet:
+            console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
+        success, err = _delete_branch(git_root, branch_name)
+        if not success:
+            return None, f"Failed to delete existing branch: {err}"
 
-def _print_step_header(step_num: int, total_steps: int, description: str, quiet: bool) -> None:
-    """Helper to print a standardized step header."""
-    if quiet:
-        return
-    console.print(f"\n[bold cyan][Step {step_num}/{total_steps}][/bold cyan] {description}...")
-
-
-def _print_result(result: str, quiet: bool) -> None:
-    """Helper to print the result of a step."""
-    if quiet:
-        return
-    console.print(f"  [dim]→ {result}[/dim]")
-
-
-def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
-    """
-    Checks output for specific hard stop conditions based on the step number.
-    Returns the reason string if a stop is triggered, otherwise None.
-    """
-    output_lower = output.lower()
-    
-    if step_num == 1:
-        if "duplicate of #" in output_lower:
-            return "Issue is a duplicate"
-            
-    elif step_num == 2:
-        if "feature request (not a bug)" in output_lower:
-            return "Feature Request (Not a Bug)"
-        if "user error (not a bug)" in output_lower:
-            return "User Error (Not a Bug)"
-            
-    elif step_num == 3:
-        if "needs more info" in output_lower:
-            return "Needs more info from author"
-            
-    elif step_num == 8:
-        if "fail: test does not work as expected" in output_lower:
-            return "Test verification failed"
-
-    return None
+    # 3. Create new worktree and branch
+    try:
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+            cwd=git_root,
+            capture_output=True,
+            check=True
+        )
+        return worktree_path, None
+    except subprocess.CalledProcessError as e:
+        return None, f"Failed to create worktree: {e.stderr.decode('utf-8')}"
 
 
 def run_agentic_bug_orchestrator(
@@ -109,154 +148,156 @@ def run_agentic_bug_orchestrator(
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 9-step agentic bug investigation workflow.
-
-    Args:
-        issue_url: Full URL of the GitHub issue.
-        issue_content: Body text of the issue.
-        repo_owner: Owner of the repository.
-        repo_name: Name of the repository.
-        issue_number: The issue number.
-        issue_author: Username of the issue creator.
-        issue_title: Title of the issue.
-        cwd: Current working directory for the agent.
-        verbose: If True, prints detailed agent output.
-        quiet: If True, suppresses standard output (except errors).
-
+    
     Returns:
-        Tuple containing:
-        - success (bool): True if the workflow completed without hard stops.
-        - final_message (str): Summary message or stop reason.
-        - total_cost (float): Accumulated cost of all steps.
-        - model_used (str): The last model used (or dominant model).
-        - changed_files (List[str]): List of files modified during the process.
+        (success, final_message, total_cost, model_used, changed_files)
     """
     
     if not quiet:
-        console.print(Panel(
-            f"Investigating issue #{issue_number}: \"{issue_title}\"\n[link={issue_url}]{issue_url}[/link]",
-            title="🔍 Agentic Bug Investigation",
-            border_style="blue"
-        ))
+        console.print(f"🔍 Investigating issue #{issue_number}: \"{issue_title}\"")
 
-    # Initialize state
+    # Context accumulation
+    context: Dict[str, Any] = {
+        "issue_url": issue_url,
+        "issue_content": issue_content,
+        "repo_owner": repo_owner,
+        "repo_name": repo_name,
+        "issue_number": issue_number,
+        "issue_author": issue_author,
+        "issue_title": issue_title,
+    }
+
     total_cost = 0.0
-    all_changed_files: List[str] = []
-    last_model_used = "N/A"
-    
-    # Context accumulation dictionary
-    # Keys will be 'step1_output', 'step2_output', etc.
-    context: Dict[str, str] = {}
+    last_model_used = "unknown"
+    changed_files: List[str] = []
+    current_cwd = cwd
+    worktree_path: Optional[Path] = None
 
-    # Define the steps
+    # Step Definitions
     steps = [
-        (1, "duplicate", "Search for duplicate issues"),
-        (2, "docs", "Check documentation for user error"),
-        (3, "triage", "Assess if enough info to proceed"),
-        (4, "reproduce", "Attempt to reproduce the bug"),
-        (5, "root_cause", "Analyze root cause"),
-        (6, "test_plan", "Design test strategy"),
-        (7, "generate", "Generate failing unit test"),
-        (8, "verify", "Verify test catches the bug"),
-        (9, "pr", "Create draft PR and link to issue"),
+        (1, "duplicate", "Searching for duplicate issues"),
+        (2, "docs", "Checking documentation for user error"),
+        (3, "triage", "Assessing information completeness"),
+        (4, "reproduce", "Attempting to reproduce the bug"),
+        (5, "root_cause", "Analyzing root cause"),
+        (6, "test_plan", "Designing test strategy"),
+        (7, "generate", "Generating failing unit test"),
+        (8, "verify", "Verifying test catches the bug"),
+        (9, "pr", "Creating draft PR"),
     ]
 
     for step_num, name, description in steps:
-        _print_step_header(step_num, len(steps), description, quiet)
+        
+        # --- Pre-Step Logic: Worktree Creation ---
+        if step_num == 7:
+            wt_path, err = _setup_worktree(cwd, issue_number, quiet)
+            if not wt_path:
+                return False, f"Failed to create worktree: {err}", total_cost, last_model_used, changed_files
+            
+            worktree_path = wt_path
+            current_cwd = worktree_path
+            context["worktree_path"] = str(worktree_path)
+            
+            if not quiet:
+                console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
 
-        # 1. Load Prompt Template
+        # --- Step Execution ---
+        if not quiet:
+            console.print(f"[bold][Step {step_num}/9][/bold] {description}...")
+
         template_name = f"agentic_bug_step{step_num}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
         
         if not prompt_template:
-            error_msg = f"Failed to load prompt template: {template_name}"
-            console.print(f"[bold red]{error_msg}[/bold red]")
-            return False, error_msg, total_cost, last_model_used, all_changed_files
+            return False, f"Missing prompt template: {template_name}", total_cost, last_model_used, changed_files
 
-        # 2. Format Template
-        # Prepare arguments for formatting. We pass all accumulated context.
-        format_args = {
-            "issue_url": issue_url,
-            "repo_owner": repo_owner,
-            "repo_name": repo_name,
-            "issue_number": issue_number,
-            "issue_content": issue_content,
-            "issue_author": issue_author,
-            **context  # Unpack step1_output, step2_output, etc.
-        }
-
-        # Handle potential missing keys in template formatting gracefully
-        # (though templates should be designed to match this context)
+        # Format prompt with accumulated context
         try:
-            formatted_prompt = prompt_template.format(**format_args)
+            formatted_prompt = prompt_template.format(**context)
         except KeyError as e:
-            # Fallback: if a template expects a key we don't have, try to fill it with empty string
-            # or fail gracefully. For now, we assume templates are correct.
-            error_msg = f"Template formatting error in step {step_num}: Missing key {e}"
-            console.print(f"[bold red]{error_msg}[/bold red]")
-            return False, error_msg, total_cost, last_model_used, all_changed_files
+            return False, f"Prompt formatting error in step {step_num}: missing {e}", total_cost, last_model_used, changed_files
 
-        # 3. Run Agentic Task
-        step_success, step_output, step_cost, step_provider = run_agentic_task(
+        # Run the task
+        success, output, cost, model = run_agentic_task(
             instruction=formatted_prompt,
-            cwd=cwd,
+            cwd=current_cwd,
             verbose=verbose,
             quiet=quiet,
             label=f"step{step_num}"
         )
 
-        # Update tracking variables
-        total_cost += step_cost
-        if step_provider:
-            last_model_used = step_provider
+        # Update tracking
+        total_cost += cost
+        last_model_used = model
+        context[f"step{step_num}_output"] = output
 
-        # 4. Store Output for Context
-        # Even if the step "failed" (returned False), we store the output because
-        # the agent might have provided useful error info, unless it's a hard stop.
-        context[f"step{step_num}_output"] = step_output
+        # --- Post-Step Logic: Hard Stops & Parsing ---
 
-        # 5. Check Hard Stop Conditions
-        stop_reason = _check_hard_stop(step_num, step_output)
+        # Step 1: Duplicate Check
+        if step_num == 1 and "Duplicate of #" in output:
+            msg = f"Stopped at Step 1: Issue is a duplicate. {output.strip()}"
+            if not quiet:
+                console.print(f"⏹️  {msg}")
+            return False, msg, total_cost, last_model_used, changed_files
 
-        # Special check for Step 7 (File generation)
-        # Parse the output for FILES_CREATED to verify test files were created
+        # Step 2: User Error / Feature Request
+        if step_num == 2:
+            if "Feature Request (Not a Bug)" in output:
+                msg = "Stopped at Step 2: Identified as Feature Request."
+                if not quiet: console.print(f"⏹️  {msg}")
+                return False, msg, total_cost, last_model_used, changed_files
+            if "User Error (Not a Bug)" in output:
+                msg = "Stopped at Step 2: Identified as User Error."
+                if not quiet: console.print(f"⏹️  {msg}")
+                return False, msg, total_cost, last_model_used, changed_files
+
+        # Step 3: Needs Info
+        if step_num == 3 and "Needs More Info" in output:
+            msg = "Stopped at Step 3: Insufficient information provided."
+            if not quiet: console.print(f"⏹️  {msg}")
+            return False, msg, total_cost, last_model_used, changed_files
+
+        # Step 7: File Extraction
         if step_num == 7:
-            step_files = _extract_files_changed(step_output)
-            if step_files:
-                # Add created files to tracking list
-                for f in step_files:
-                    if f not in all_changed_files:
-                        all_changed_files.append(f)
-            else:
-                stop_reason = "No test file created or modified (missing FILES_CREATED or FILES_MODIFIED marker)"
-
-        if stop_reason:
-            if not quiet:
-                console.print(f"\n[bold yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/bold yellow]")
-                _print_result(step_output.split('\n')[0][:100] + "...", quiet)  # Print brief output
+            # Parse output for FILES_CREATED or FILES_MODIFIED
+            extracted_files = []
+            for line in output.splitlines():
+                if line.startswith("FILES_CREATED:") or line.startswith("FILES_MODIFIED:"):
+                    file_list = line.split(":", 1)[1].strip()
+                    extracted_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
             
-            return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, last_model_used, all_changed_files
+            changed_files = extracted_files
+            
+            if not changed_files:
+                msg = "Stopped at Step 7: No test file generated."
+                if not quiet: console.print(f"⏹️  {msg}")
+                return False, msg, total_cost, last_model_used, changed_files
 
-        # Soft failure handling (Agent returned False, but no hard stop pattern matched)
-        if not step_success:
-            if not quiet:
-                console.print(f"[yellow]Warning: Step {step_num} reported failure, but continuing workflow.[/yellow]")
+        # Step 8: Verification Failure
+        if step_num == 8 and "FAIL: Test does not work as expected" in output:
+            msg = "Stopped at Step 8: Generated test does not fail correctly (verification failed)."
+            if not quiet: console.print(f"⏹️  {msg}")
+            return False, msg, total_cost, last_model_used, changed_files
 
-        # Print brief result for the user
-        # We take the first line or a snippet of the output as a summary
-        summary_snippet = step_output.strip().split('\n')[0]
-        if len(summary_snippet) > 80:
-            summary_snippet = summary_snippet[:77] + "..."
-        _print_result(summary_snippet, quiet)
+        # Soft Failure Logging (if not a hard stop)
+        if not success and not quiet:
+            console.print(f"[yellow]Warning: Step {step_num} reported failure, but proceeding as no hard stop condition met.[/yellow]")
+        elif not quiet:
+            # Extract a brief result for display if possible, otherwise generic
+            console.print(f"  → Step {step_num} complete.")
 
-    # Final Summary
+    # --- Final Summary ---
     final_msg = "Investigation complete"
     if not quiet:
-        console.print(Panel(
-            f"Total Cost: ${total_cost:.4f}\n"
-            f"Files Changed: {', '.join(all_changed_files) if all_changed_files else 'None'}\n"
-            f"Model: {last_model_used}",
-            title="✅ Investigation Complete",
-            border_style="green"
-        ))
+        console.print(f"✅ {final_msg}")
+        console.print(f"   Total cost: ${total_cost:.4f}")
+        console.print(f"   Files changed: {', '.join(changed_files)}")
+        if worktree_path:
+            console.print(f"   Worktree: {worktree_path}")
 
-    return True, final_msg, total_cost, last_model_used, all_changed_files
+    return True, final_msg, total_cost, last_model_used, changed_files
+
+if __name__ == "__main__":
+    # Example usage logic could go here if needed for testing
+    pass
+
