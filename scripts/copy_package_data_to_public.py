@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Copy publishable assets to a public repo directory based on pyproject.toml.
+Copy publishable assets to a public repo directory.
 
-What gets copied:
-- Package data: [tool.setuptools.package-data]["pdd"] patterns
-- Python modules: packages matched by [tool.setuptools.packages.find].include
+Supports two modes:
+1. pyproject.toml mode (original): Copy package-data and Python modules
+2. YAML config mode (--config): Copy files from .sync-config.yml sections
 
-Both are copied preserving relative paths under DEST/.
+Both modes preserve relative paths under DEST/.
 """
 from __future__ import annotations
 
@@ -17,6 +17,158 @@ import os
 import shutil
 import sys
 
+
+# ============================================================================
+# YAML Config Support
+# ============================================================================
+
+def parse_yaml_simple(content: str) -> dict:
+    """Parse simple YAML without PyYAML dependency.
+
+    Supports only the structure used in .sync-config.yml:
+    - Top-level keys ending with ':'
+    - List items starting with '- '
+    - Comments starting with '#'
+    """
+    result: dict[str, list[str]] = {}
+    current_section: str | None = None
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        # Skip empty lines and comments
+        if not stripped or stripped.startswith('#'):
+            continue
+
+        # Check for section header (key:)
+        if stripped.endswith(':') and not stripped.startswith('-'):
+            current_section = stripped[:-1].strip()
+            result[current_section] = []
+            continue
+
+        # Check for list item (- value)
+        if stripped.startswith('- ') and current_section is not None:
+            value = stripped[2:].strip()
+            # Remove inline comments
+            if '#' in value:
+                value = value.split('#')[0].strip()
+            if value:
+                result[current_section].append(value)
+
+    return result
+
+
+def load_sync_config(config_path: str) -> dict:
+    """Load patterns from .sync-config.yml."""
+    try:
+        import yaml
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f) or {}
+    except ImportError:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return parse_yaml_simple(f.read())
+
+
+def copy_from_sync_config(
+    config: dict,
+    sections: list[str],
+    exclude_section: str,
+    dest: str,
+    project_root: str
+) -> int:
+    """Copy files from specified YAML sections, applying exclusions.
+
+    Args:
+        config: Parsed YAML config dict
+        sections: List of section names to copy (e.g., ['shared', 'cap_only'])
+        exclude_section: Section name containing exclusion patterns
+        dest: Destination directory root
+        project_root: Source project root
+
+    Returns:
+        Number of files copied
+    """
+    # Collect all patterns from specified sections
+    patterns: list[str] = []
+    for section in sections:
+        patterns.extend(config.get(section, []))
+
+    # Get exclusion patterns
+    exclude_patterns: list[str] = config.get(exclude_section, [])
+
+    def is_excluded(rel_path: str) -> bool:
+        """Check if a relative path matches any exclusion pattern."""
+        for xpat in exclude_patterns:
+            if fnmatch.fnmatch(rel_path, xpat):
+                return True
+            # Also try matching just the filename
+            if fnmatch.fnmatch(os.path.basename(rel_path), xpat):
+                return True
+        return False
+
+    copied = 0
+    copied_paths: set[str] = set()
+    processed_dirs: set[str] = set()
+
+    for pattern in patterns:
+        # Expand glob pattern relative to project root
+        full_pattern = os.path.join(project_root, pattern)
+        matches = glob.glob(full_pattern, recursive=True)
+
+        for src in sorted(matches):
+            rel_path = os.path.relpath(src, project_root)
+
+            # Skip excluded files
+            if is_excluded(rel_path):
+                continue
+
+            dest_path = os.path.join(dest, rel_path)
+
+            if os.path.isdir(src):
+                # Handle directory: walk and copy all files
+                dir_path = os.path.normpath(src)
+                if any(dir_path == seen or dir_path.startswith(seen + os.sep)
+                       for seen in processed_dirs):
+                    continue
+                processed_dirs.add(dir_path)
+
+                for root, dirs, files in os.walk(src, followlinks=True):
+                    # Skip __pycache__ directories
+                    dirs[:] = [d for d in dirs if d != '__pycache__']
+
+                    for fname in files:
+                        src_file = os.path.join(root, fname)
+                        rel_file = os.path.relpath(src_file, project_root)
+
+                        if is_excluded(rel_file):
+                            continue
+
+                        dest_file = os.path.join(dest, rel_file)
+                        if dest_file in copied_paths:
+                            continue
+
+                        os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                        shutil.copy2(src_file, dest_file)
+                        copied_paths.add(dest_file)
+                        print(f"  Copied {rel_file}")
+                        copied += 1
+            else:
+                # Handle single file
+                if dest_path in copied_paths:
+                    continue
+
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                shutil.copy2(src, dest_path)
+                copied_paths.add(dest_path)
+                print(f"  Copied {rel_path}")
+                copied += 1
+
+    return copied
+
+
+# ============================================================================
+# pyproject.toml Support (original functionality)
+# ============================================================================
 
 def load_package_data_patterns(pyproject_path: str) -> list[str]:
     try:
@@ -152,6 +304,19 @@ def main(argv: list[str] | None = None) -> int:
         default=os.getcwd(),
         help="Project root containing pyproject.toml (default: cwd)",
     )
+
+    # YAML config mode (new)
+    parser.add_argument(
+        "--config",
+        help="Path to .sync-config.yml for YAML-driven sync mode",
+    )
+    parser.add_argument(
+        "--sections",
+        nargs="+",
+        default=[],
+        help="Sections to copy from config (e.g., shared cap_only)",
+    )
+
     # Optional: add extra package-data copy patterns (relative to 'pdd/')
     parser.add_argument(
         "--extra-pattern",
@@ -190,6 +355,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # YAML config mode: if --config is provided, use YAML-driven sync
+    if args.config:
+        if not os.path.isfile(args.config):
+            print(f"Error: config file not found: {args.config}", file=sys.stderr)
+            return 1
+
+        if not args.sections:
+            print("Error: --sections required when using --config", file=sys.stderr)
+            return 1
+
+        print(f"Loading sync config from {args.config}")
+        config = load_sync_config(args.config)
+
+        print(f"Copying files from sections: {', '.join(args.sections)}")
+        copied = copy_from_sync_config(
+            config,
+            sections=args.sections,
+            exclude_section="exclude",
+            dest=args.dest,
+            project_root=args.project_root,
+        )
+        print(f"Total files copied from config: {copied}")
+        return 0
+
+    # Original pyproject.toml mode
     pyproject_path = os.path.join(args.project_root, "pyproject.toml")
     if not os.path.isfile(pyproject_path):
         print(f"Error: pyproject.toml not found at {pyproject_path}", file=sys.stderr)
