@@ -185,7 +185,7 @@ def test_hard_stop_step_7_no_file_generated(mock_dependencies, default_args):
     
     assert success is False
     assert "Stopped at step 7" in msg
-    assert "No test file generated" in msg
+    assert "No test file created or modified" in msg
     # Should stop at step 7, so 7 calls total
     assert mock_run.call_count == 7
 
@@ -323,19 +323,48 @@ def test_file_accumulation(mock_dependencies, default_args):
     Verify that changed files from multiple steps are accumulated and deduplicated.
     """
     mock_run, _, _ = mock_dependencies
-    
+
     def side_effect(*args, **kwargs):
         label = kwargs.get('label', '')
         if label == 'step7':
             # Only Step 7 reports files via FILES_CREATED
             return (True, "gen\nFILES_CREATED: test.py, repro.py", 0.1, "model")
         return (True, "ok", 0.1, "model")
-        
+
     mock_run.side_effect = side_effect
-    
+
     _, _, _, _, changed_files = run_agentic_bug_orchestrator(**default_args)
-    
+
     # Should contain both, no duplicates
     assert len(changed_files) == 2
     assert "repro.py" in changed_files
     assert "test.py" in changed_files
+
+
+def test_step7_files_modified_for_append(mock_dependencies, default_args):
+    """
+    Test that FILES_MODIFIED marker is parsed correctly when appending to existing test files.
+
+    This supports the PDD methodology where tests should accumulate in existing files
+    rather than always creating new ones. Step 6 may recommend appending to an existing
+    test file, and Step 7 should use FILES_MODIFIED to indicate the file was modified.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            # Step 7 appends to existing file, uses FILES_MODIFIED instead of FILES_CREATED
+            return (True, "Appended test to existing file\nFILES_MODIFIED: tests/test_existing_module.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, _, _, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+    # Should succeed - FILES_MODIFIED is a valid marker for step 7
+    assert success is True
+    assert "Investigation complete" in msg
+    # The modified file should be tracked
+    assert "tests/test_existing_module.py" in changed_files
+    assert mock_run.call_count == 9
