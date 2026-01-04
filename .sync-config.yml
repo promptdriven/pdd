@@ -2,19 +2,21 @@
 # Used by:
 #   - .github/workflows/sync-from-public.yml (pulling FROM public)
 #   - Makefile publish-public targets (pushing TO public)
+#   - scripts/copy_package_data_to_public.py --config
 
-# Files synced for both pdd and pdd_cap repos
+# Files synced for BOTH pdd and pdd_cap repos
 shared:
   # Python source files
   - pdd/*.py
   - pdd/commands/*.py
   - pdd/core/*.py
 
-  # Tests
+  # Tests (unit tests)
   - tests/test_*.py
   - tests/__init__.py
   - tests/conftest.py
   - tests/prompt_tester.py
+  - tests/*regression*.sh
 
   # Root config files
   - README.md
@@ -35,11 +37,45 @@ shared:
   - docs/*.md
   - docs/goldilocks_prompt.jpeg
   - docs/videos/*.gif
+  - docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md
+  - docs/whitepaper_with_benchmarks/analysis_report/*.png
+  - docs/whitepaper_with_benchmarks/creation_report/*.png
 
-# Files synced ONLY for pdd_cap repo (includes prompts)
+  # Examples
+  - examples/
+
+  # Utils
+  - utils/vscode_prompt/
+
+  # Context examples
+  - context/**/*_example.py
+
+  # Test prompts for regression (needed by both repos)
+  - prompts/test_other_python.prompt
+  - prompts/encode_message_python.prompt
+
+# Files synced ONLY for pdd_cap repo (includes all prompts)
 # Note: pdd_cap has prompts at pdd/prompts/, but private repo has them at prompts/
-# Due to inverted symlink structure, prompt syncs need manual review
+# Due to inverted symlink structure (pdd/prompts -> ../prompts), patterns work correctly
 cap_only:
+  # All prompts (full directory)
   - pdd/prompts/
+
+  # Context prompt files
   - context/ctx_obj_params.prompt
   - context/test.prompt
+  - context/example.prompt
+  - context/python_preamble.prompt
+
+# Exclusion patterns (applied globally when copying)
+exclude:
+  # Test exclusions (NOT the .sh regression scripts, just dirs/files)
+  - tests/regression*
+  - tests/sync_regression*
+  - tests/**/regression*
+  - tests/**/*.ipynb
+  - tests/csv/**
+  # Context exclusions
+  - context/**/__pycache__
+  - context/**/*.log
+  - context/**/*.csv
