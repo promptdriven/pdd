@@ -63,6 +63,13 @@ You are working on step 9 of 9 (final step) in an agentic bug investigation work
 3. **Post final summary**
    - Comment on the issue with PR link and next steps for the fix
 
+4. **Include PDD fix command**
+   - Extract code file path from Step 5's `**Location:**` field (strip the `:line_number` suffix)
+   - Use test file path from Step 7's `FILES_CREATED:` or test file section
+   - Search repo for matching prompt file: `find . -name "*.prompt" -type f`
+   - Include a ready-to-run `pdd fix` command in your GitHub comment
+   - If no prompt file exists, include a note that one must be created first
+
 % PR Creation Command
 
 ```bash
@@ -123,6 +130,14 @@ Your comment should follow this format:
 3. Verify the test passes with your fix
 4. Run full test suite to check for regressions
 5. Mark the PR as ready for review
+
+### PDD Fix Command
+
+To auto-fix this bug using PDD:
+
+```bash
+pdd --force fix --loop --max-attempts 5 {{prompt_file}} {{code_file_path}} {{test_file_path}}
+```
 
 ---
 *Investigation complete. A draft PR with a failing test has been created and linked to this issue.*
