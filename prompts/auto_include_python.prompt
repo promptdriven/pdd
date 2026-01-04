@@ -3,18 +3,20 @@
 <include>./context/python_preamble.prompt</include>
 
 % Here are the inputs and outputs of the function:
-    Inputs: 
+    Inputs:
         'input_prompt' - A string that contains the prompt that requires the includes to be selected.
         'directory_path' - The directory string of the dependencies (e.g. 'context/c*.py').
         'csv_file' - Optional[str] - A string containing existing CSV content to be updated by summarize_directory. Default is None.
+        'prompt_filename' - Optional[str] - The prompt filename being processed, used to filter out self-referential example files (e.g., 'prompts/agentic_fix_python.prompt' filters 'context/agentic_fix_example.py'). Default is None.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
         'temperature' - A float between 0 and 1 that is the temperature of the LLM model to use. Default is 0.0.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print progress for each step with visual indicators and display final results summary. Default is False.
-    Outputs as a tuple: 
+        'progress_callback' - Optional[Callable[[int, int], None]] - Callback for progress updates, called with (current, total) for each file processed. Default is None.
+    Outputs as a tuple:
         'dependencies' - A string that contains the dependencies.
         'csv_output' - A string that contains the updated csv file.
-        'total_cost' - A float that is the total cost to generate the output includes string. 
+        'total_cost' - A float that is the total cost to generate the output includes string.
         'model_name' - A string that is the name of the selected LLM model
 
 % Here are examples of how to use internal modules:
@@ -47,7 +49,10 @@
             - 'llm_output' - A string that contains the output of the auto_include_LLM prompt.
         4b. The Pydantic output will include the key 'string_of_includes' to be accessed.
     Step 5. Assign the value of key 'string_of_includes' to form the 'dependencies'.
-    Step 6. Return the tuple containing 'dependencies', 'csv_output', 'total_cost', and 'model_name'.
+    Step 6. Post-process 'dependencies':
+        6a. If prompt_filename is provided, filter out includes that reference the module's own example file (e.g., for 'agentic_fix_python.prompt', remove any include of 'context/[subdirs/]agentic_fix_example.py').
+        6b. Fix any malformed '[File: path]' patterns to proper '<include>path</include>' format.
+    Step 7. Return the tuple containing 'dependencies', 'csv_output', 'total_cost', and 'model_name'.
 
 % Error Handling:
     - Validate input parameters (strength and temperature must be between 0 and 1)

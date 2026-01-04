@@ -224,6 +224,7 @@ For non-Python languages, use `get_test_command_for_file()` to determine the app
 ### Multiple Test Files Support
 
 Support running multiple test files (e.g., `test_module.py`, `test_module_1.py`):
+- `get_pdd_file_paths()` may return `test_files` list in `pdd_files` dict (alongside the primary `test` path)
 - Accept `test_files` list parameter in `_execute_tests_and_create_run_report()`
 - Run pytest on all matching test files
 - Store test file hashes in `test_file_hashes` dict in RunReport
@@ -250,7 +251,7 @@ Implement these helpers for state management:
 - `_display_sync_log(basename, language, verbose)` - Format and display sync log
 - `_create_mock_context(**kwargs)` - Create Click context for command execution
 - `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage)
-- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)` - Run tests with coverage
+- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)` - Run tests with coverage; uses `test_files` when provided
 - `_python_cov_target_for_code_file(code_file)` - Determine dotted module path for pytest-cov
 - `_python_cov_target_for_test_and_code(test_file, code_file, fallback)` - Analyze test imports to pick best `--cov` target
 

@@ -32,43 +32,49 @@
     - Name context variable `context_override`, time variable `time_param` to avoid shadowing builtins
     - Configuration hierarchy: CLI value (if not None) > .pddrc value > hardcoded default
 
-2. **Dry-Run Mode**:
+2. **Prompt Discovery** (two-stage):
+    - **Template-based discovery (primary)**: Search contexts in .pddrc for `outputs.prompt.path` templates. Expand template with basename and common languages until a prompt file is found. Use `_find_pddrc_file`, `_load_pddrc_config`, and `expand_template` from template_expander.
+    - **Directory scanning (fallback)**: If template discovery fails, call `construct_paths` in discovery mode and scan prompts_dir for `{basename}_{language}.prompt` files.
+    - When template discovery succeeds, set `context_override` to the discovered context name (if not already set by user).
+
+3. **Dry-Run Mode**:
     - Display sync analysis for basename, then exit
     - Iterate through each detected language, print header, call sync_orchestration with `dry_run=True`
     - Pass directory parameters, verbose, quiet, context_override to sync_orchestration
     - Use `force=True` in construct_paths to avoid interactive prompts
     - Return `({}, 0.0, "")` after processing all languages
 
-3. **Path and Configuration**:
+4. **Path and Configuration**:
     - `construct_paths` handles .pddrc configuration, context detection, and path resolution
     - Returns 4-tuple: `(resolved_config, _, _, resolved_language)` - second/third elements unused
     - Extract settings from resolved_config: strength, temperature, target_coverage, max_attempts, budget
     - Update ctx.obj with resolved strength/temperature for sub-commands
 
-4. **Language Detection**:
-    - Scan for prompt files matching `{basename}_{language}.prompt` in prompts directory
+5. **Language Detection**:
+    - If context was discovered via template, use template-based detection: expand template for each known language and check file existence
+    - Otherwise, scan for prompt files matching `{basename}_{language}.prompt` in prompts directory
     - Support subdirectory basenames (e.g., "core/cloud" searches prompts/core/ for cloud_*.prompt)
     - Exclude runtime languages (LLM) - they cannot form valid development units
     - Python prioritized first, then remaining languages sorted alphabetically
     - Raise `click.UsageError` if no valid development prompt files found
 
-5. **Basename Validation**:
+6. **Basename Validation**:
     - Regex: `^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$` (alphanumeric, underscore, hyphen, forward slash for subdirs)
     - Reject empty, path traversal (..), absolute paths, trailing slashes, double slashes
     - Raise `click.UsageError` for invalid basenames
 
-6. **Budget/Attempts Validation**:
+7. **Budget/Attempts Validation**:
     - Budget must be > 0, max_attempts must be >= 0 (raise `click.BadParameter` if not)
     - Warn if budget < 1.0: `Warning: Budget of $X.XX is low`
     - max_attempts=0 is valid (skips LLM loop, goes straight to agentic mode)
 
-7. **Multi-Language Processing**:
+8. **Multi-Language Processing**:
     - Process each detected language separately via sync_orchestration
     - Track remaining_budget across languages (reduce after each language's cost)
     - Skip subsequent languages if budget exhausted
     - Aggregate results and costs from all language syncs
 
-8. **User Feedback** (unless quiet=True):
+9. **User Feedback** (unless quiet=True):
     - Show sync progress summary before starting (detected context, languages, settings)
     - Display final results table (language, status, cost, details)
     - Total time elapsed, total cost, overall status
