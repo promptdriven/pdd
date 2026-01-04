@@ -35,7 +35,8 @@ Create the following `dataclasses` to structure the data:
     -   `prompt_hash: Optional[str]`
     -   `code_hash: Optional[str]`
     -   `example_hash: Optional[str]`
-    -   `test_hash: Optional[str]`
+    -   `test_hash: Optional[str]`  # Primary test file hash (for backward compatibility)
+    -   `test_files: Optional[Dict[str, str]]`  # Bug #156: Multiple test file support {"test_foo.py": "hash1", ...}
 -   `RunReport`:
     -   `timestamp: str`
     -   `exit_code: int`
@@ -43,8 +44,9 @@ Create the following `dataclasses` to structure the data:
     -   `tests_failed: int`
     -   `coverage: float`
     -   `test_hash: Optional[str]`  # Hash of test file when tests were run (for staleness detection)
+    -   `test_files: Optional[Dict[str, str]]`  # Bug #156: Multiple test file support {"test_foo.py": "hash1", ...}
 -   `SyncDecision`:
-    -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'fix', 'update', 'analyze_conflict', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge')
+    -   `operation: str` (e.g., 'auto-deps', 'generate', 'example', 'crash', 'verify', 'test', 'test_extend', 'fix', 'update', 'analyze_conflict', 'nothing', 'all_synced', 'error', 'fail_and_request_manual_merge')
     -   `reason: str` (A human-readable explanation for the decision)
     -   `confidence: float` (Confidence level in the decision, 0.0 to 1.0, default 1.0 for deterministic decisions)
     -   `estimated_cost: float` (Estimated cost for the operation in dollars, default 0.0)
@@ -71,7 +73,9 @@ Implement a `SyncLock` context manager:
 
 Implement the following helper functions:
 
--   `get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test') to their expected `pathlib.Path` objects. Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths based on .pddrc settings. The function should:
+-   `_safe_basename(basename: str) -> str`: Sanitizes basename for use in metadata filenames by replacing '/' with '_' to prevent path interpretation for subdirectory basenames (e.g., 'core/cloud' → 'core_cloud').
+-   `_extract_name_part(basename: str) -> Tuple[str, str]`: For subdirectory basenames like 'core/cloud', returns (dir_prefix, name_part) tuple - 'core/cloud' → ('core/', 'cloud'), 'calculator' → ('', 'calculator').
+-   `get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]`: Returns a dictionary mapping file types ('prompt', 'code', 'example', 'test', 'test_files') to their expected `pathlib.Path` objects. The 'test_files' key contains a list of all matching test files for Bug #156 multi-file support. Supports subdirectory basenames (e.g., 'core/cloud'). Use the project's internal `construct_paths` function (see included examples) to get configuration-aware paths based on .pddrc settings. The function should:
     - Build the prompt file path from basename, language, and prompts_dir
     - Call `construct_paths` with `command="sync"` and `context_override=context_override` to get config-aware paths
     - Extract the code path from `output_file_paths['generate_output_path']` with fallbacks to `'output'` or `'code_file'`
@@ -79,9 +83,9 @@ Implement the following helper functions:
     - When the code file does not exist, optionally create a temporary empty code file to allow `construct_paths` to resolve example/test locations, then remove it
     - Provide robust fallback mechanisms (derive directories from `resolved_config`; final fallback to defaults like `{basename}.{ext}`, `{basename}_example.{ext}`, `test_{basename}.{ext}`)
 -   `calculate_sha256(file_path: Path) -> Optional[str]`: Calculates the SHA256 hash of a file if it exists, otherwise returns `None`.
--   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file. Returns `None` if it doesn't exist or is invalid.
--   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file.
--   `calculate_current_hashes(paths: Dict[str, Path]) -> Dict[str, Optional[str]]`: Computes the hashes for all current files on disk.
+-   `read_fingerprint(basename: str, language: str) -> Optional[Fingerprint]`: Reads and validates the JSON fingerprint file from `{META_DIR}/{safe_basename}_{language}.json`. Uses `_safe_basename()` for path construction. Returns `None` if it doesn't exist or is invalid.
+-   `read_run_report(basename: str, language: str) -> Optional[RunReport]`: Reads and validates the JSON run report file from `{META_DIR}/{safe_basename}_{language}_run.json`. Uses `_safe_basename()` for path construction.
+-   `calculate_current_hashes(paths: Dict[str, Any]) -> Dict[str, Any]`: Computes the hashes for all current files on disk. For 'test_files', returns a dict of filename to hash mappings for Bug #156 multi-file support.
 -   `estimate_operation_cost(operation: str, language: str = "python") -> float`: Returns estimated cost in dollars for each operation based on typical LLM usage:
     - 'auto-deps': 0.10
     - 'generate': 0.50
@@ -89,6 +93,7 @@ Implement the following helper functions:
     - 'crash': 0.40
     - 'verify': 0.35
     - 'test': 0.60
+    - 'test_extend': 0.60  # Same cost as test - generates additional tests
     - 'fix': 0.45
     - 'update': 0.25
     - 'analyze_conflict': 0.20
@@ -117,8 +122,14 @@ else:
 ```
 
 Log mode performs the complete analysis (reading fingerprints, calculating hashes, checking run reports, and applying decision logic) but without any file modifications or lock coordination.
-2.  **Check Runtime Signals First (updated priority)**:
-    -   Read the latest `RunReport` and the last `Fingerprint`.
+
+2.  **Check auto-deps completion first** (before runtime signals):
+    -   Read the last `Fingerprint`.
+    -   **CRITICAL**: If `fingerprint.command == 'auto-deps'`, immediately return `generate` operation. This prevents infinite loops where auto-deps keeps running but code is never generated. Auto-deps updates dependencies but doesn't produce code, so we must always follow with generate.
+
+3.  **Check Runtime Signals (updated priority)**:
+    -   Read the latest `RunReport`.
+    -   **CRITICAL: Prompt changes take priority over runtime signals**. Before processing runtime signals, check if the prompt has changed (current hash differs from fingerprint). If prompt changed, return `auto-deps` or `generate` immediately (regardless of runtime state) - this ensures the source of truth (prompt) is always processed first.
     -   If the last fingerprint command was `crash` and `skip_verify=False`:
         -   If `run_report.exit_code != 0` → return `crash` (retry the failed crash fix)
         -   Otherwise → return `verify` (verify the successful crash fix)
@@ -128,10 +139,12 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
     -   If `exit_code != 0` (runtime error):
         -   If the example has previously run successfully (based on fingerprint/run reports history) → return `fix`.
         -   Otherwise → return `crash`.
-    -   If `coverage < target_coverage` and `skip_tests=False` → return `test` to improve coverage.
+    -   If `coverage < target_coverage` and `skip_tests=False`:
+        -   If tests pass (`tests_failed == 0` and `tests_passed > 0`) → return `test_extend` to ADD more tests (not regenerate)
+        -   Otherwise → return `test` to generate tests
     -   If `coverage < target_coverage` and `skip_tests=True` → return `all_synced` to indicate workflow completion despite low coverage.
     -   If any of these conditions are met, stop analysis here.
-3.  **Analyze File State**:
+4.  **Analyze File State**:
     -   Read the last saved `Fingerprint`.
     -   Calculate the hashes of the current files.
     -   **Validate Expected Files (required)**: Before comparing hashes, verify that files expected to exist based on the fingerprint (any non-null hash) actually exist. If expected files are missing, prioritize regenerating them rather than treating it as a complex conflict:
@@ -139,7 +152,7 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         -   Missing example but code exists → `example`
         -   Missing test but code and example exist → `test` (or `nothing` if `skip_tests=True`)
     -   Compare the current hashes with the hashes in the fingerprint for files that exist.
-4.  **Implement the Decision Tree**:
+5.  **Implement the Decision Tree**:
     
     **Priority Order** (highest to lowest):
     1. Runtime failures (`crash`) - highest priority
@@ -235,8 +248,8 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
             -   Include `workflow_stage: 'continue_after_interruption'` in details
 
     -   **Dependency Heuristics (expanded)**:
-        -   Treat these as dependency indicators: XML tags `<include>`, `<web>`, `<shell>` (case-sensitive) or phrases like “auto-deps”, “auto_deps”, “dependencies needed”, “requires dependencies”, “include dependencies” (case-insensitive)
-5.  **Return the Decision**: The function must always return a `SyncDecision` object with:
+        -   Treat these as dependency indicators: XML tags `<include>`, `<web>`, `<shell>` (case-sensitive) or phrases like "auto-deps", "auto_deps", "dependencies needed", "requires dependencies", "include dependencies" (case-insensitive)
+6.  **Return the Decision**: The function must always return a `SyncDecision` object with:
     - `operation`: The recommended operation
     - `reason`: A clear, human-readable explanation
     - `confidence`: 1.0 for deterministic decisions, lower for LLM-based decisions
@@ -249,7 +262,7 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         - Run report details (`tests_failed`, `coverage`, `exit_code`, timestamps)
         - Workflow markers like `workflow_stage` (e.g., `crash_validation`, `crash_fix`, `crash_retry`, `verify_validation`, `test_generation`, `revalidation`, `post_regeneration_validation`, `verification_pending`, `continue_after_interruption`), `auto_deps_completed`, `no_run_report`, `skip_tests`, `skip_verify`, `has_dependencies`, `run_report_stale`
 
-#### 5. References: Here is how to use the internal modules that are available and must be used in this implementation:
+#### 7. References: Here is how to use the internal modules that are available and must be used in this implementation:
     <internal_modules>
         For loading prompt templates:
         <load_prompt_template_example>
@@ -375,7 +388,9 @@ Add and use these helpers in the implementation to reflect the above logic:
           1. All required files exist (code, example, test unless skip_tests)
           2. run_report exists with exit_code == 0 (code runs successfully)
           3. fingerprint.command indicates verify has been done (unless skip_verify) - must be in ['verify', 'test', 'fix', 'update']
-          4. run_report.test_hash matches current test file hash (staleness check):
+          4. Bug #23: fingerprint.command must NOT start with 'skip:' prefix (which indicates operation was skipped, not executed)
+          5. run_report test hashes match current test file hashes (staleness check):
+             - Bug #156: If run_report.test_files exists, compare ALL test file hashes (detect added/removed/changed files)
              - If run_report.test_hash exists and differs from current test hash → workflow NOT complete (stale report)
              - For legacy reports without test_hash, compare fingerprint timestamp vs run_report timestamp as fallback
              - If fingerprint is newer than run_report, the report may be stale → workflow NOT complete

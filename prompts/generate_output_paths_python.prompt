@@ -25,6 +25,7 @@
       input_file_dir: Optional[str] = None,
       input_file_dirs: Optional[Dict[str, str]] = None,
       config_base_dir: Optional[str] = None,
+      path_resolution_mode: Literal["config_base", "cwd"] = "config_base",
   ) -> Dict[str, str]
 
 % Parameter Details (beyond README)
@@ -32,6 +33,9 @@
   - input_file_dirs: Per-output-key directory mapping (e.g., {'output_code': 'src/'})
   - config_base_dir: Base directory for resolving relative .pddrc and env var paths;
       takes precedence over input_file_dir for config/env resolution
+  - path_resolution_mode: Controls relative path resolution for .pddrc and env vars
+      "config_base" (default): resolve relative to config_base_dir
+      "cwd": resolve relative to current working directory (used by sync command)
 
 % Output Keys per Command
   - generate, example, test, preprocess, change, update, detect, conflicts, trace, bug, auto-deps: ['output']
@@ -55,6 +59,10 @@
       default filename appended
   - Relative path resolution: config_base_dir takes precedence over input_file_dir
       for resolving relative paths from context_config and env vars
+  - Subdirectory basenames: When basename contains '/' (e.g., 'core/cloud'), preserve
+      directory structure; apply filename pattern only to name part (e.g., 'core/test_cloud.py')
+  - Explicit directory paths: Context paths ending with '/' are complete directories;
+      do NOT add basename's dir_prefix (e.g., 'pdd/' + 'core/cloud' -> 'pdd/cloud.py')
 
 % Error Handling
   - Unknown command or missing basename: log error, return empty dict
