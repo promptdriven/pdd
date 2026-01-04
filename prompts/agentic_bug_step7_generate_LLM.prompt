@@ -98,3 +98,11 @@ pytest {{test_file_path}}::{{test_name}} -v
 - Focus on testing behavior, not implementation details
 - Write the test file to disk before posting the comment
 - Always post your findings as a GitHub comment before completing
+
+% Machine-Readable Output
+
+After writing files, output this line exactly (for automated tracking):
+```
+FILES_CREATED: <comma-separated list of file paths you created>
+```
+Example: `FILES_CREATED: tests/test_bug_123.py, tests/fixtures/bug_123_data.json`
