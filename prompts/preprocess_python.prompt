@@ -7,7 +7,7 @@
 
 % Inputs/Outputs
     - prompt: The prompt string to preprocess
-    - recursive: When True, resolve includes but defer <shell> and <web> execution (for later variable expansion)
+    - recursive: When True, resolve includes but defer `<shell>` and `<web>` execution (for later variable expansion)
     - double_curly_brackets: When True, escape single curly braces as double braces (for PromptTemplate compatibility)
     - exclude_keys: Variable names to exclude from brace doubling
     - Returns: The preprocessed prompt (preserve leading/trailing whitespace)
@@ -16,13 +16,13 @@
     Process tags in order: pdd → include/include-many → shell → web. Apply curly-brace doubling last (only to top-level prompt).
 
 % Tag Behaviors
-    <pdd>...</pdd> - Human-only comment; delete entire block including tags
-    <include>path</include> - Replace with file contents. For images (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px, convert GIF→PNG (first frame), HEIC→JPEG, return as base64 data URL
-    <include-many>paths</include-many> - Comma/newline-separated paths; concatenate contents with newlines
-    <shell>cmd</shell> - Execute command, replace with stdout. On error, insert bracketed error message
-    <web>url</web> - Fetch via Firecrawl (requires FIRECRAWL_API_KEY), replace with markdown content
+    `<pdd>...</pdd>` - Human-only comment; delete entire block including tags
+    `<include>path</include>` - Replace with file contents. For images (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px, convert GIF→PNG (first frame), HEIC→JPEG, return as base64 data URL
+    `<include-many>paths</include-many>` - Comma/newline-separated paths; concatenate contents with newlines
+    `<shell>cmd</shell>` - Execute command, replace with stdout. On error, insert bracketed error message
+    `<web>url</web>` - Fetch via Firecrawl (requires FIRECRAWL_API_KEY), replace with markdown content
 
-    Backtick includes: ```<path>``` → ```{file contents}```
+    Backtick includes: ``` `<path>` ```  →  ```{file contents}```
 
 % Recursive Pass Behavior
     When recursive=True:
