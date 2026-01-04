@@ -492,3 +492,171 @@ def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_
 
         success, _, cost, _ = run_agentic_task("instr", mock_cwd)
         assert abs(cost - 0.375) < 0.0001
+
+
+# ---------------------------------------------------------------------------
+# Issue #256: Timeout Configuration Tests
+# ---------------------------------------------------------------------------
+# These tests verify that custom timeout values can be passed through the
+# agentic task execution chain. They are designed to FAIL on the current
+# (buggy) code and PASS once the fix is implemented.
+
+
+def test_run_agentic_task_accepts_timeout_parameter(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """
+    Issue #256: Test that run_agentic_task() accepts a custom timeout parameter.
+
+    This test verifies that:
+    1. run_agentic_task() accepts a 'timeout' keyword argument
+    2. The timeout value is passed through to subprocess.run()
+
+    Currently FAILS because run_agentic_task() does not accept a timeout parameter.
+    Should PASS after implementing the fix.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    # This call should accept a timeout parameter (600 seconds)
+    # Currently this will raise TypeError: run_agentic_task() got an unexpected keyword argument 'timeout'
+    success, msg, cost, provider = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        timeout=600.0,  # Custom timeout for complex steps
+        verbose=False,
+    )
+
+    assert success
+
+    # Verify the custom timeout was passed to subprocess.run
+    args, kwargs = mock_subprocess.call_args
+    assert kwargs.get('timeout') == 600.0, f"Expected timeout=600.0, got {kwargs.get('timeout')}"
+
+
+def test_run_with_provider_accepts_timeout_parameter(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """
+    Issue #256: Test that _run_with_provider() accepts a custom timeout parameter.
+
+    This test verifies that the internal _run_with_provider() function
+    accepts and uses a custom timeout instead of always calling _get_agent_timeout().
+
+    Currently FAILS because _run_with_provider() does not accept a timeout parameter.
+    Should PASS after implementing the fix.
+    """
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    # This call should accept a timeout parameter
+    # Currently this will raise TypeError: _run_with_provider() got an unexpected keyword argument 'timeout'
+    success, msg, cost = _run_with_provider(
+        "anthropic",
+        "Read the file .agentic_prompt.txt for instructions.",
+        mock_cwd,
+        verbose=False,
+        quiet=False,
+        timeout=600.0,  # Custom timeout
+    )
+
+    assert success
+
+    # Verify the custom timeout was passed to subprocess.run
+    args, kwargs = mock_subprocess.call_args
+    assert kwargs.get('timeout') == 600.0, f"Expected timeout=600.0, got {kwargs.get('timeout')}"
+
+
+def test_step_timeouts_dictionary_exists():
+    """
+    Issue #256: Test that STEP_TIMEOUTS dictionary exists with appropriate values.
+
+    This test verifies that:
+    1. A STEP_TIMEOUTS dictionary is defined in agentic_common.py or agentic_bug_orchestrator.py
+    2. Steps 4, 5, and 7 have longer timeouts (>= 600 seconds)
+    3. Other steps have the default timeout (240 seconds)
+
+    Currently FAILS because STEP_TIMEOUTS is not defined.
+    Should PASS after implementing the fix.
+    """
+    # Try to import from agentic_bug_orchestrator first (where per-step config belongs)
+    try:
+        from pdd.agentic_bug_orchestrator import STEP_TIMEOUTS
+    except ImportError:
+        # Fall back to agentic_common if not in orchestrator
+        try:
+            from pdd.agentic_common import STEP_TIMEOUTS
+        except ImportError:
+            pytest.fail(
+                "STEP_TIMEOUTS dictionary not found in agentic_bug_orchestrator.py "
+                "or agentic_common.py. This is required to fix issue #256."
+            )
+
+    # Verify structure
+    assert isinstance(STEP_TIMEOUTS, dict), "STEP_TIMEOUTS must be a dictionary"
+
+    # Verify complex steps have longer timeouts
+    # Steps 4 (reproduce), 5 (root cause), 7 (generate) need >= 600 seconds
+    complex_steps = [4, 5, 7]
+    for step in complex_steps:
+        assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
+        assert STEP_TIMEOUTS[step] >= 600.0, (
+            f"Step {step} timeout ({STEP_TIMEOUTS[step]}) should be >= 600 seconds "
+            f"for complex operations (issue #256)"
+        )
+
+    # Verify simple steps have standard timeout (240 seconds)
+    simple_steps = [1, 2, 3, 6, 9]
+    for step in simple_steps:
+        assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
+        assert STEP_TIMEOUTS[step] == 240.0, (
+            f"Step {step} timeout ({STEP_TIMEOUTS[step]}) should be 240 seconds "
+            f"for simple operations"
+        )
+
+
+def test_timeout_priority_cli_over_env(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """
+    Issue #256: Test that CLI timeout takes priority over environment variable.
+
+    Priority chain should be:
+    1. CLI --timeout flag (highest priority)
+    2. Per-step default from STEP_TIMEOUTS
+    3. Environment variable PDD_AGENTIC_TIMEOUT
+    4. Global default 240.0 seconds (lowest priority)
+
+    This test verifies that explicitly passed timeout overrides env var.
+
+    Currently FAILS because run_agentic_task() does not accept a timeout parameter.
+    Should PASS after implementing the fix.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["PDD_AGENTIC_TIMEOUT"] = "300"  # Env var says 300 seconds
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    # Explicit timeout=600 should override env var's 300
+    success, msg, cost, provider = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        timeout=600.0,  # Explicit timeout should take priority
+        verbose=False,
+    )
+
+    assert success
+
+    # Verify the explicit timeout was used, not the env var
+    args, kwargs = mock_subprocess.call_args
+    assert kwargs.get('timeout') == 600.0, (
+        f"Expected explicit timeout=600.0 to override env var, "
+        f"but got {kwargs.get('timeout')}"
+    )
