@@ -43,9 +43,9 @@ You are working on step 7 of 9 in an agentic bug investigation workflow. Previou
 % Your Task
 
 1. **Review the test plan**
-   - Use the test strategy from Step 6
-   - Understand the project's testing conventions
-   - Check existing tests for patterns to follow
+   - Extract the test file path from Step 6's `### Test Location` → `**File:**` field
+   - Note if Step 6 marked it `(append)` or `(new)`
+   - Understand the project's testing conventions from existing tests
 
 2. **Generate the test code**
    - Write a clear, focused test that fails on the current buggy code
@@ -54,7 +54,9 @@ You are working on step 7 of 9 in an agentic bug investigation workflow. Previou
    - Add comments explaining what the test verifies
 
 3. **Write the test file**
-   - Create or append to the appropriate test file
+   - Use the EXACT file path from Step 6's Test Location
+   - If Step 6 said `(append)`: append to the existing file
+   - If Step 6 said `(new)`: create that new file
    - Include necessary imports and fixtures
    - Ensure the test is self-contained and runnable
 
@@ -105,4 +107,5 @@ After writing files, output this line exactly (for automated tracking):
 ```
 FILES_CREATED: <comma-separated list of file paths you created>
 ```
-Example: `FILES_CREATED: tests/test_bug_123.py, tests/fixtures/bug_123_data.json`
+Example (new file): `FILES_CREATED: tests/test_bug_123.py`
+Example (append): `FILES_MODIFIED: tests/test_existing_module.py`

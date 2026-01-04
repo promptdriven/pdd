@@ -17,11 +17,16 @@ from .load_prompt_template import load_prompt_template
 console = Console()
 
 
-def _extract_files_created(output: str) -> List[str]:
+def _extract_files_changed(output: str) -> List[str]:
     """
-    Extract file paths from FILES_CREATED line in agent output.
+    Extract file paths from FILES_CREATED or FILES_MODIFIED lines in agent output.
 
-    Looks for pattern: FILES_CREATED: path1, path2, ...
+    Looks for patterns:
+        FILES_CREATED: path1, path2, ...
+        FILES_MODIFIED: path1, path2, ...
+
+    FILES_CREATED is used when new test files are created.
+    FILES_MODIFIED is used when appending tests to existing files (per PDD methodology).
 
     Args:
         output: The agent's output text.
@@ -29,21 +34,22 @@ def _extract_files_created(output: str) -> List[str]:
     Returns:
         List of file paths, or empty list if not found.
     """
-    # Match FILES_CREATED: followed by comma-separated paths
-    pattern = r"FILES_CREATED:\s*(.+)"
-    match = re.search(pattern, output)
-    if not match:
-        return []
+    all_paths = []
 
-    paths_str = match.group(1).strip()
-    if not paths_str:
-        return []
+    # Match both FILES_CREATED and FILES_MODIFIED
+    for marker in ["FILES_CREATED", "FILES_MODIFIED"]:
+        pattern = rf"{marker}:\s*(.+)"
+        match = re.search(pattern, output)
+        if match:
+            paths_str = match.group(1).strip()
+            if paths_str:
+                # Split by comma and clean up each path
+                paths = [p.strip() for p in paths_str.split(",")]
+                # Filter out empty strings and backticks (in case of markdown formatting)
+                paths = [p.strip("`") for p in paths if p.strip() and p.strip() != "`"]
+                all_paths.extend(paths)
 
-    # Split by comma and clean up each path
-    paths = [p.strip() for p in paths_str.split(",")]
-    # Filter out empty strings and backticks (in case of markdown formatting)
-    paths = [p.strip("`") for p in paths if p.strip() and p.strip() != "`"]
-    return paths
+    return all_paths
 
 
 def _print_step_header(step_num: int, total_steps: int, description: str, quiet: bool) -> None:
@@ -214,14 +220,14 @@ def run_agentic_bug_orchestrator(
         # Special check for Step 7 (File generation)
         # Parse the output for FILES_CREATED to verify test files were created
         if step_num == 7:
-            step_files = _extract_files_created(step_output)
+            step_files = _extract_files_changed(step_output)
             if step_files:
                 # Add created files to tracking list
                 for f in step_files:
                     if f not in all_changed_files:
                         all_changed_files.append(f)
             else:
-                stop_reason = "No test file generated"
+                stop_reason = "No test file created or modified (missing FILES_CREATED or FILES_MODIFIED marker)"
 
         if stop_reason:
             if not quiet:
