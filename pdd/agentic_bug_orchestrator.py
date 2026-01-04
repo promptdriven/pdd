@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
@@ -14,6 +15,35 @@ from .load_prompt_template import load_prompt_template
 
 # Initialize Rich console
 console = Console()
+
+
+def _extract_files_created(output: str) -> List[str]:
+    """
+    Extract file paths from FILES_CREATED line in agent output.
+
+    Looks for pattern: FILES_CREATED: path1, path2, ...
+
+    Args:
+        output: The agent's output text.
+
+    Returns:
+        List of file paths, or empty list if not found.
+    """
+    # Match FILES_CREATED: followed by comma-separated paths
+    pattern = r"FILES_CREATED:\s*(.+)"
+    match = re.search(pattern, output)
+    if not match:
+        return []
+
+    paths_str = match.group(1).strip()
+    if not paths_str:
+        return []
+
+    # Split by comma and clean up each path
+    paths = [p.strip() for p in paths_str.split(",")]
+    # Filter out empty strings and backticks (in case of markdown formatting)
+    paths = [p.strip("`") for p in paths if p.strip() and p.strip() != "`"]
+    return paths
 
 
 def _print_step_header(step_num: int, total_steps: int, description: str, quiet: bool) -> None:
@@ -160,7 +190,7 @@ def run_agentic_bug_orchestrator(
             return False, error_msg, total_cost, last_model_used, all_changed_files
 
         # 3. Run Agentic Task
-        step_success, step_output, step_cost, step_provider, step_files = run_agentic_task(
+        step_success, step_output, step_cost, step_provider = run_agentic_task(
             instruction=formatted_prompt,
             cwd=cwd,
             verbose=verbose,
@@ -172,11 +202,6 @@ def run_agentic_bug_orchestrator(
         total_cost += step_cost
         if step_provider:
             last_model_used = step_provider
-        if step_files:
-            # Add unique files to the list
-            for f in step_files:
-                if f not in all_changed_files:
-                    all_changed_files.append(f)
 
         # 4. Store Output for Context
         # Even if the step "failed" (returned False), we store the output because
@@ -185,11 +210,17 @@ def run_agentic_bug_orchestrator(
 
         # 5. Check Hard Stop Conditions
         stop_reason = _check_hard_stop(step_num, step_output)
-        
+
         # Special check for Step 7 (File generation)
+        # Parse the output for FILES_CREATED to verify test files were created
         if step_num == 7:
-            # If no new files were generated in step 7, treat as a hard stop
-            if not step_files:
+            step_files = _extract_files_created(step_output)
+            if step_files:
+                # Add created files to tracking list
+                for f in step_files:
+                    if f not in all_changed_files:
+                        all_changed_files.append(f)
+            else:
                 stop_reason = "No test file generated"
 
         if stop_reason:
