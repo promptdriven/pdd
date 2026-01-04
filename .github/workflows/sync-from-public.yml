@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Determine source repo
         id: source
@@ -197,6 +198,7 @@ jobs:
           git diff --staged --quiet && exit 0
 
           git commit -m "sync: Import from $SOURCE"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push -u origin "sync/from-$SAFE_SOURCE-${{ github.run_id }}-${{ github.run_attempt }}"
 
           # Build conflict warning if any
