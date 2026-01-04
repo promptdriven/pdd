@@ -1,3 +1,26 @@
+## v0.0.101 (2026-01-03)
+
+### Feat
+
+- Enhance agentic bug investigation prompts and regression testing
+- Enhance agentic bug investigation workflow and testing
+- Implement agentic bug investigation workflow with orchestrator
+- Add agentic bug workflow with 8-step GitHub issue investigation (#153)
+- add ONBOARDING.md to sync patterns
+- Introduce sync configuration for bidirectional repository synchronization
+- Enhance cloud execution support for `pdd crash` and `pdd verify` commands
+
+### Fix
+
+- Improve error handling in analysis commands
+- Refactor output handling in analysis_example.py
+- Enhance analysis command examples and output handling
+- Update analysis prompts to include function namespaces
+- escape tag examples in preprocess_python.prompt (from pdd_cap PR #11)
+- remove root ONBOARDING.md from sync (use docs/*.md instead)
+- update Firecrawl API for 4.0+ compatibility
+- use git config for CAP_REPO_TOKEN auth
+
 ## v0.0.100 (2026-01-02)
 
 ### Feat
