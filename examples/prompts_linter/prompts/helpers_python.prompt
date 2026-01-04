@@ -1,0 +1,47 @@
+You are an expert Python developer tasked with implementing the `src/utils/helpers.py` module for the PDD Prompt Linter. This module serves as a low-level utility library for text processing, specifically designed to support heuristic analysis of prompt files. It provides pure functions for reading files, normalizing strings, detecting XML-like tags via regex, and calculating content ratios (e.g., code vs. text).
+
+Requirements
+1.  **File I/O**: Implement a robust file reading function that handles encoding (defaulting to utf-8) and standardizes line endings. It must gracefully handle `FileNotFoundError` or permission issues by raising specific, descriptive exceptions or returning None (based on instruction preference).
+2.  **Tag Detection**: Create functions to detect XML-like tags (e.g., `<include>`, `<web>`, `<shell>`) using regular expressions. Support finding all occurrences, counting specific tags, and extracting content within tags.
+3.  **Text Normalization**: Provide utilities to strip whitespace, normalize line breaks, and remove comments (if applicable to the prompt format, though PDD prompts are often Markdown/XML mixes).
+4.  **Ratio Heuristics**: Implement logic to calculate the ratio of "code-like" lines vs. "natural language" lines. This is crucial for the "Abstraction level sanity check" to ensure prompts aren't just pseudocode.
+5.  **Performance**: Regex patterns must be pre-compiled for efficiency, as these helpers will be called frequently during the linting process.
+6.  **Type Safety**: Use Python type hints (`typing` module) for all function signatures.
+7.  **No External Dependencies**: This module should rely only on the Python standard library (e.g., `re`, `pathlib`, `typing`).
+
+Dependencies
+<models>
+  <include>src/utils/models.py</include>
+</models>
+<internal_example_modules>
+<src.utils.models><include>examples/models_example.py</include></src.utils.models>
+</internal_example_modules>
+
+Prompt Dependencies:
+- models_Python.prompt
+
+Instructions
+- **File Reading**:
+    - Create `read_file_content(path: str) -> str`.
+    - Ensure it handles `utf-8` decoding errors gracefully (e.g., `errors='replace'`).
+- **Regex Patterns**:
+    - Define constants for common PDD tags: `TAG_INCLUDE`, `TAG_WEB`, `TAG_SHELL`.
+    - Implement `extract_tag_content(text: str, tag_name: str) -> List[str]` to return the inner content of specific tags.
+    - Implement `count_tags(text: str, tag_name: str) -> int`.
+- **Ratio Calculation**:
+    - Implement `calculate_code_ratio(text: str) -> float`.
+    - Heuristic: Lines starting with typical code symbols (def, class, import, var, const, {, }) or indentation (4 spaces/tab) vs. lines starting with capital letters or standard text punctuation.
+    - Return a float between 0.0 and 1.0.
+- **Normalization**:
+    - Implement `normalize_text(text: str) -> str` that unifies newline characters (`\r\n` -> `\n`) and strips trailing whitespace from lines.
+- **Error Handling**:
+    - Do not suppress errors silently unless specified; let I/O errors propagate or wrap them in a custom exception if needed, but for this utility layer, standard exceptions are acceptable.
+
+Deliverable
+- A single Python file `src/utils/helpers.py` containing the utility functions and regex constants.
+- All functions must have docstrings explaining their purpose and arguments.
+
+Implementation assumptions (explicit)
+- The "code ratio" heuristic is an approximation intended to flag prompts that look too much like implementation code.
+- Tags are assumed to be well-formed XML-like structures `<tag>...</tag>` or self-closing `<tag />` (though PDD mostly uses open/close).
+- No third-party libraries (like `lxml` or `pandas`) are allowed in this module.

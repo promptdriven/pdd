@@ -1,0 +1,59 @@
+<prompt>
+The `report` module is a presentation-layer utility responsible for transforming the structured `Report` object into human-readable or machine-parsable formats. It isolates all formatting and I/O display logic from the core analysis pipeline, ensuring that the CLI, Backend, and Frontend can consume results consistently. It supports rendering to the console via `rich`, generating JSON strings for API responses, and creating Markdown files for documentation.
+
+Requirements
+1. **Input Contract**: The module must accept a `Report` object (defined in `models.py`) as the primary input for all rendering functions.
+2. **Supported Formats**: Must support three distinct output formats:
+   - `text`: Rich console output with color-coded severity and tables.
+   - `json`: Raw JSON serialization of the `Report` model.
+   - `md`: A Markdown-formatted string suitable for file output.
+3. **Console Rendering (Text)**:
+   - Use the `rich` library to render output.
+   - Display a summary header with the final score (0-100).
+   - Display a list of issues. High severity (Error) must be red; Medium/Low (Warning/Info) must be yellow or blue.
+   - If no issues are found, display a green success message.
+4. **JSON Rendering**:
+   - Utilize Pydantic's built-in JSON serialization (`model_dump_json`) with indentation for readability.
+5. **Markdown Rendering**:
+   - Generate a string containing a title, the score, a summary section, and a table or list of issues.
+6. **Output Handling**:
+   - Provide a unified function `render_report(report: Report, format: str, output_path: Optional[str] = None)` that routes to the correct renderer.
+   - If `output_path` is provided, write the rendered content to that file (atomic write is not strictly required here, but standard file write is).
+   - If `output_path` is `None` and format is `text`, print directly to stdout.
+   - If `output_path` is `None` and format is `json` or `md`, return the string (or print to stdout if intended for CLI piping—default to printing to stdout for CLI usage).
+
+Dependencies
+<utils.models><include>examples/models_example.py</include></utils.models>
+
+Prompt Dependencies:
+- models_Python.prompt
+
+Instructions
+- Import `Report`, `Issue`, `Severity` from `src.utils.models`.
+- Import `Console`, `Table`, `Panel` from `rich`.
+- Create a global `console` instance from `rich.console`.
+- Implement `_render_text(report: Report)`:
+    - Create a `Table` with columns: "Rule", "Severity", "Line", "Description".
+    - Iterate over `report.issues`. Map `Severity.ERROR` to style "red", `Severity.WARNING` to "yellow", `Severity.INFO` to "blue".
+    - Print a summary panel showing the `report.score`.
+- Implement `_render_markdown(report: Report) -> str`:
+    - Construct a string with `# PDD Prompt Report`.
+    - Add `## Score: {report.score}/100`.
+    - Add a table of issues in Markdown syntax.
+- Implement `_render_json(report: Report) -> str`:
+    - Return `report.model_dump_json(indent=2)`.
+- Implement the main entry point `render_report(report: Report, fmt: str, output_path: str = None)`:
+    - Normalize `fmt` to lowercase.
+    - Dispatch to the specific render function.
+    - If `output_path` is set, open the file in write mode (`w`, encoding `utf-8`) and write the string content.
+        - *Note*: For `text` format with `output_path`, you may need to capture the rich console output to a string (using `console = Console(file=f)` or `capture()`) to write it to a file, or simply strip ANSI codes if the user wants a plain text file. **Decision**: If `fmt=text` and `output_path` is set, write the plain text (no color) to the file to ensure readability in editors.
+    - If `output_path` is NOT set, print the result to stdout (for JSON/MD) or let Rich print to stdout (for Text).
+
+Deliverable
+- `src/utils/report.py` containing the rendering logic.
+
+Implementation assumptions (explicit)
+- The `Report` object is fully populated before being passed to this module.
+- The `rich` library is installed and available in the environment.
+- When writing `text` format to a file, we prefer stripping ANSI color codes so the file is readable.
+</prompt>

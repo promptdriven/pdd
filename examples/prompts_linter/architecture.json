@@ -1,66 +1,12 @@
 [
   {
-    "reason": "Defines the core data structures for linting results, ensuring consistent output across CLI, API, and UI.",
-    "description": "Pydantic models representing the canonical lint report structure. Includes `Finding` (rule_id, severity, message, evidence, suggested_edits) and `LintReport` (summary, findings, token_estimates).",
+    "reason": "Defines the core data structures used throughout the application to ensure type safety and consistent data exchange.",
+    "description": "Pydantic v2 models representing the domain entities. Includes `Issue` (severity, rule_id, description), `Report` (summary, issues, score), `LLMResponse` (structured output from LLM), and `FixSuggestion`. Defines enums for Severity and RuleCategories.",
     "dependencies": [],
     "priority": 1,
-    "filename": "models_findings_Python.prompt",
-    "filepath": "src/backend/models/findings.py",
+    "filename": "models_Python.prompt",
+    "filepath": "src/utils/models.py",
     "tags": [
-      "backend",
-      "core",
-      "models"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {}
-    }
-  },
-  {
-    "reason": "Provides a central registry to register and retrieve lint rules, enabling modular rule management.",
-    "description": "A registry class or module that allows rules to be registered via decorators or explicit calls. It should support retrieving all rules or filtering by ID/tag. This decouples the engine from specific rule implementations.",
-    "dependencies": [
-      "models_findings_Python.prompt"
-    ],
-    "priority": 2,
-    "filename": "rules_registry_Python.prompt",
-    "filepath": "src/backend/rules/registry.py",
-    "tags": [
-      "backend",
-      "core",
-      "rules"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {}
-    }
-  },
-  {
-    "reason": "Parses raw prompt text into a structured format amenable to analysis.",
-    "description": "A parser module that reads a prompt file and breaks it down into sections (e.g., Requirements, Context), extracts tags (e.g., <include>, <shell>), and maintains a line map for reporting error locations.",
-    "dependencies": [],
-    "priority": 3,
-    "filename": "parser_Python.prompt",
-    "filepath": "src/backend/core/parser.py",
-    "tags": [
-      "backend",
-      "core",
-      "parser"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {}
-    }
-  },
-  {
-    "reason": "Handles the resolution of <include> tags to estimate token usage and detect context dumps.",
-    "description": "A utility module that resolves file paths referenced in <include> tags (respecting security roots), reads content, and provides simple token estimation (e.g., char count / 4). It must handle missing files gracefully.",
-    "dependencies": [],
-    "priority": 4,
-    "filename": "include_resolver_Python.prompt",
-    "filepath": "src/backend/core/include_resolver.py",
-    "tags": [
-      "backend",
       "core",
       "utils"
     ],
@@ -70,21 +16,70 @@
     }
   },
   {
-    "reason": "Orchestrates the linting process by combining parsing, rule execution, and reporting.",
-    "description": "The main engine class that takes raw text (and optional config), uses the Parser to structure it, iterates through registered rules from the Registry, and aggregates results into a LintReport object.",
+    "reason": "Provides low-level text processing utilities to support heuristic rules and parsing.",
+    "description": "Utility functions for text analysis. Includes tag detection (regex for XML-like tags), ratio heuristics (code vs text), file reading helpers, and string normalization utils.",
+    "dependencies": [],
+    "priority": 2,
+    "filename": "helpers_Python.prompt",
+    "filepath": "src/utils/helpers.py",
+    "tags": [
+      "core",
+      "utils"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Implements the deterministic logic for checking prompt compliance against the PDD Guide.",
+    "description": "Contains the library of heuristic rules derived from the Prompting Guide. Functions analyze text input and return a list of `Issue` objects. Covers modularity checks, context engineering validation, and forbidden tag detection.",
     "dependencies": [
-      "models_findings_Python.prompt",
-      "rules_registry_Python.prompt",
-      "parser_Python.prompt",
-      "include_resolver_Python.prompt"
+      "models_Python.prompt",
+      "helpers_Python.prompt"
+    ],
+    "priority": 3,
+    "filename": "rules_Python.prompt",
+    "filepath": "src/utils/rules.py",
+    "tags": [
+      "core",
+      "logic"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Manages interactions with Large Language Models, including provider detection and fallback logic.",
+    "description": "Wrapper around LiteLLM. Handles API key detection (OpenAI, Anthropic, Google), enforces JSON output via schema, manages token budgets/timeouts, and implements the safe fallback mechanism (returns empty/null on failure so heuristics take over).",
+    "dependencies": [
+      "models_Python.prompt"
+    ],
+    "priority": 4,
+    "filename": "llm_Python.prompt",
+    "filepath": "src/utils/llm.py",
+    "tags": [
+      "core",
+      "ai"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Generates compliant prompt scaffolds to automatically fix issues found during linting.",
+    "description": "Logic to rewrite prompts. Takes a `Report` and original text, and produces a new text string that adheres to the PDD structure (Role, Scope, Requirements, Dependencies). Implements the `--fix` scaffolding logic.",
+    "dependencies": [
+      "models_Python.prompt"
     ],
     "priority": 5,
-    "filename": "lint_engine_Python.prompt",
-    "filepath": "src/backend/core/lint_engine.py",
+    "filename": "fix_Python.prompt",
+    "filepath": "src/utils/fix.py",
     "tags": [
-      "backend",
       "core",
-      "engine"
+      "logic"
     ],
     "interface": {
       "type": "module",
@@ -92,19 +87,17 @@
     }
   },
   {
-    "reason": "Implements the specific PDD linting rules defined in the PRD.",
-    "description": "A collection of rule implementations (PDD001-PDD060) covering Structure, Requirements, IO, Context, Determinism, and Attention. Each rule analyzes the parsed structure and emits Findings if violations are detected.",
+    "reason": "Handles the presentation of linting results in various formats.",
+    "description": "Rendering logic for the `Report` object. Supports outputting to Console (via Rich), JSON string, or Markdown file. Handles color coding based on severity.",
     "dependencies": [
-      "models_findings_Python.prompt",
-      "rules_registry_Python.prompt",
-      "parser_Python.prompt"
+      "models_Python.prompt"
     ],
     "priority": 6,
-    "filename": "pdd_rules_Python.prompt",
-    "filepath": "src/backend/rules/pdd_rules.py",
+    "filename": "report_Python.prompt",
+    "filepath": "src/utils/report.py",
     "tags": [
-      "backend",
-      "rules"
+      "core",
+      "utils"
     ],
     "interface": {
       "type": "module",
@@ -112,40 +105,38 @@
     }
   },
   {
-    "reason": "Exposes the linting functionality via a REST API for the UI and external integrations.",
-    "description": "A FastAPI application exposing a POST /lint endpoint. It accepts prompt text and options, invokes the Lint Engine, and returns the JSON report. It handles request validation and error responses.",
+    "reason": "Acts as the central orchestrator, combining heuristics, LLM analysis, and reporting.",
+    "description": "The main entry point for logic. `lint_file` and `lint_text` functions. It runs heuristics, conditionally runs the LLM (merging results additively), calculates scores, and returns a final `Report` object.",
     "dependencies": [
-      "lint_engine_Python.prompt",
-      "models_findings_Python.prompt",
-      "pdd_rules_Python.prompt"
+      "models_Python.prompt",
+      "rules_Python.prompt",
+      "llm_Python.prompt",
+      "fix_Python.prompt",
+      "report_Python.prompt"
     ],
     "priority": 7,
-    "filename": "api_main_Python.prompt",
-    "filepath": "src/backend/app/main.py",
+    "filename": "pipeline_Python.prompt",
+    "filepath": "src/utils/pipeline.py",
     "tags": [
-      "backend",
-      "api",
-      "fastapi"
+      "core",
+      "orchestrator"
     ],
     "interface": {
-      "type": "api",
-      "api": {}
+      "type": "module",
+      "module": {}
     }
   },
   {
-    "reason": "Provides a command-line interface for developers to lint files locally or in CI.",
-    "description": "A Typer-based CLI tool. Commands include `lint <file>` (outputs text or JSON), `rules` (lists rules), and `explain <rule_id>`. It uses the Lint Engine directly (in-process) for performance and offline capability.",
+    "reason": "Provides the Command Line Interface for the tool.",
+    "description": "Typer application. Parses arguments (file path, flags for LLM, output format, fix mode). Calls `utils.pipeline` to perform work and uses `utils.report` (or Rich directly) to display results. Handles exit codes.",
     "dependencies": [
-      "lint_engine_Python.prompt",
-      "models_findings_Python.prompt",
-      "pdd_rules_Python.prompt"
+      "pipeline_Python.prompt"
     ],
     "priority": 8,
-    "filename": "cli_pddl_Python.prompt",
-    "filepath": "src/cli/pddl.py",
+    "filename": "cli_Python.prompt",
+    "filepath": "src/cli/main.py",
     "tags": [
-      "cli",
-      "tool"
+      "cli"
     ],
     "interface": {
       "type": "cli",
@@ -153,41 +144,49 @@
     }
   },
   {
-    "reason": "Provides a user-friendly web interface for quick linting without CLI setup.",
-    "description": "A Streamlit application. Features a text area for input, a 'Lint' button, and a display area for the structured report. It communicates with the backend API (or imports the engine directly if deployed as a monolith for simplicity, though PRD suggests API call).",
+    "reason": "Exposes the linting logic via a REST API for integration with other tools.",
+    "description": "FastAPI application. Defines endpoints like `POST /lint` that accept text/files and return the JSON report. Wraps `utils.pipeline`.",
     "dependencies": [
-      "models_findings_Python.prompt",
-      "api_main_Python.prompt"
+      "pipeline_Python.prompt"
     ],
     "priority": 9,
-    "filename": "ui_streamlit_Python.prompt",
-    "filepath": "src/ui/streamlit_app.py",
+    "filename": "backend_api_Python.prompt",
+    "filepath": "src/backend/api.py",
     "tags": [
-      "ui",
-      "streamlit",
-      "frontend"
+      "backend",
+      "api"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {}
+    }
+  },
+  {
+    "reason": "Provides a visual, interactive interface for linting prompts.",
+    "description": "Streamlit application. Allows users to paste prompt text or upload files, configure LLM settings via UI, and view the structured report and fix suggestions visually. Calls `utils.pipeline` directly.",
+    "dependencies": [
+      "pipeline_Python.prompt"
+    ],
+    "priority": 10,
+    "filename": "frontend_streamlit_Python.prompt",
+    "filepath": "src/frontend/streamlit_app.py",
+    "tags": [
+      "frontend",
+      "ui"
     ],
     "interface": {
       "type": "page",
       "page": {
-        "route": "/ (Streamlit default)",
+        "route": "/ (Single Page App)",
         "params": [],
         "dataSources": [
           {
-            "kind": "api",
-            "source": "POST /lint",
-            "method": "POST",
-            "description": "Sends prompt text to backend for analysis",
-            "inputs": [
-              "prompt_text",
-              "options"
-            ],
-            "outputs": [
-              "LintReport JSON"
-            ]
+            "kind": "other",
+            "source": "utils.pipeline",
+            "method": "lint_text",
+            "description": "Direct python call to the pipeline orchestrator to lint input text."
           }
-        ],
-        "layout": {}
+        ]
       }
     }
   }

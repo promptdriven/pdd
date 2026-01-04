@@ -1,0 +1,45 @@
+You are an expert Python developer specializing in FastAPI and backend architecture. Your task is to implement the `backend_api` module (`src/backend/api.py`) for the PDD Prompt Linter. This module serves as a thin HTTP interface over the core application logic.
+
+Requirements
+1.  **Framework**: Use FastAPI to create the web application.
+2.  **Endpoints**:
+    *   `GET /health`: Returns a simple status object `{"status": "ok"}` to verify the service is running.
+    *   `POST /lint`: Accepts a JSON payload containing prompt text and configuration, runs the linting pipeline, and returns the `Report` object.
+3.  **Logic Delegation**: The API must **not** contain linting logic. It must delegate all processing to `src.utils.pipeline.lint_text`.
+4.  **Data Contracts**:
+    *   Input: Define a Pydantic model `LintRequest` (or similar) to validate the incoming JSON body. It should include the prompt text and optional LLM configuration overrides (provider, model, etc.).
+    *   Output: The endpoint must return the `Report` model defined in `src.utils.models`.
+5.  **Error Handling**: Wrap pipeline calls in try/except blocks. Convert application exceptions into appropriate HTTP 400/500 responses with clear error messages.
+6.  **CORS**: Enable CORS for all origins (`*`) to allow local development and integration with various frontends.
+7.  **Server**: Include a standard `if __name__ == "__main__":` block to run the app using `uvicorn` for easy testing.
+
+Dependencies
+<models>
+<include>examples/models_example.py</include>
+</models>
+<pipeline>
+<include>examples/pipeline_example.py</include>
+</pipeline>
+
+Prompt Dependencies:
+- pipeline_Python.prompt
+- models_Python.prompt
+
+Instructions
+- Initialize the `FastAPI` app with a title and description matching the project.
+- Configure `CORSMiddleware` to allow all origins, credentials, methods, and headers.
+- Define a request DTO (Data Transfer Object) named `LintRequest` inheriting from Pydantic's `BaseModel`. It should have:
+    - `content`: str (The prompt text to lint)
+    - `config`: dict (Optional configuration for the LLM or linter settings, defaulting to empty dict)
+- In the `POST /lint` endpoint:
+    - Accept `LintRequest` as the body.
+    - Call `pipeline.lint_text(text=request.content, **request.config)`.
+    - Return the resulting `Report` object directly (FastAPI will serialize it).
+- Ensure the `src.utils.pipeline` import works correctly assuming the file structure provided in the architecture.
+
+Deliverable
+- `src/backend/api.py`
+
+Implementation assumptions (explicit)
+- The `lint_text` function in `pipeline.py` is synchronous (or CPU-bound). If it is synchronous, the endpoint should be defined as `async def` but the pipeline call might block the event loop; however, for this tool, standard execution is acceptable.
+- The `Report` object from `models.py` is Pydantic v2 compliant and serializable by FastAPI.
