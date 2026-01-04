@@ -36,11 +36,10 @@ shared:
   - docs/goldilocks_prompt.jpeg
   - docs/videos/*.gif
 
-  # Context files
-  - context/test.prompt
-
 # Files synced ONLY for pdd_cap repo (includes prompts)
 # Note: pdd_cap has prompts at pdd/prompts/, but private repo has them at prompts/
 # Due to inverted symlink structure, prompt syncs need manual review
 cap_only:
   - pdd/prompts/
+  - context/ctx_obj_params.prompt
+  - context/test.prompt
