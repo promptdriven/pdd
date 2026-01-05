@@ -350,7 +350,12 @@ def sync_main(
 
     if template_result:
         discovered_context, discovered_prompt_path, first_lang = template_result
-        prompts_dir = _normalize_prompts_root(discovered_prompt_path.parent)
+        prompts_dir_raw = discovered_prompt_path.parent
+        pddrc_path = _find_pddrc_file()
+        if pddrc_path and not prompts_dir_raw.is_absolute():
+            prompts_dir = pddrc_path.parent / prompts_dir_raw
+        else:
+            prompts_dir = prompts_dir_raw
         # Use context override if not already set
         if not context_override:
             context_override = discovered_context
@@ -368,7 +373,12 @@ def sync_main(
                 command_options={"basename": basename},
                 context_override=context_override,
             )
-            prompts_dir = _normalize_prompts_root(initial_config.get("prompts_dir", "prompts"))
+            prompts_dir_raw = initial_config.get("prompts_dir", "prompts")
+            pddrc_path = _find_pddrc_file()
+            if pddrc_path and not Path(prompts_dir_raw).is_absolute():
+                prompts_dir = pddrc_path.parent / prompts_dir_raw
+            else:
+                prompts_dir = Path(prompts_dir_raw)
         except Exception as e:
             rprint(f"[bold red]Error initializing PDD paths:[/bold red] {e}")
             raise click.Abort()

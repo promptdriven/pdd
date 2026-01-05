@@ -484,7 +484,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in normalized_results):
             console.print(f"[info]Total Estimated Cost:[/info] ${total_cost:.6f}")
         # Indicate if the chain might have been incomplete due to errors
-        if num_results < num_commands and not all(res is None for res in results): # Avoid printing if all failed
+        if num_results < num_commands and results is not None and not all(res is None for res in results): # Avoid printing if all failed
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
 

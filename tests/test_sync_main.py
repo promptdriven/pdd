@@ -110,17 +110,22 @@ def mock_sync_orchestration(mocker: MagicMock) -> MagicMock:
 @pytest.fixture
 def mock_construct_paths(mocker: MagicMock, mock_project_dir: Path) -> MagicMock:
     """Mocks the construct_paths function to return predictable paths."""
-    prompts_dir = mock_project_dir / "prompts"
-    
+    prompts_root_dir = mock_project_dir / "prompts"
+
     def side_effect_func(*args, **kwargs):
         input_paths = kwargs.get("input_file_paths", {})
         lang = kwargs.get("command_options", {}).get("language", "python")
         basename = kwargs.get("command_options", {}).get("basename", "test_basename")
+        context_override = kwargs.get("context_override")
+
+        resolved_prompts_dir = prompts_root_dir
+        if context_override == "backend":
+            resolved_prompts_dir = prompts_root_dir / "backend"
 
         # First call for initial setup
         if not input_paths:
             return (
-                {"prompts_dir": str(prompts_dir)},
+                {"prompts_dir": str(resolved_prompts_dir)},
                 {},
                 {
                     "generate_output_path": str(mock_project_dir / "src"),
@@ -226,6 +231,7 @@ def test_sync_success_multiple_languages(mock_project_dir, mock_construct_paths,
     assert results["overall_success"] is True
     assert total_cost == pytest.approx(0.75 + 0.60)
     assert "python" in results["results_by_language"]
+
     assert "typescript" in results["results_by_language"]
 
 
@@ -825,3 +831,43 @@ def test_sync_defaults_used_when_no_pddrc_and_no_cli(
     )
 
     assert results["overall_success"] is True
+
+def test_sync_finds_prompt_with_prompts_dir_only(tmp_path, monkeypatch):
+    """
+    Regression test: contexts with prompts_dir but no outputs.prompt.path.
+    The prompts_dir should be used as-is, not normalized.
+    """
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text("""version: "1.0"
+contexts:
+  backend:
+    paths: ["backend/**"]
+    defaults:
+      prompts_dir: "prompts/backend"
+""")
+
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "my_module_python.prompt").write_text("test")
+
+    monkeypatch.chdir(tmp_path)
+
+    from pdd.sync_main import _detect_languages_with_context
+    from pdd.construct_paths import construct_paths
+
+    config, _, _, _ = construct_paths(
+        input_file_paths={},
+        force=False,
+        quiet=True,
+        command="sync",
+        command_options={"basename": "my_module"},
+        context_override="backend",
+    )
+
+    # The prompts_dir from config should be used directly
+    from pdd.sync_main import _find_pddrc_file
+    prompts_dir_raw = config.get("prompts_dir", "prompts")
+    pddrc_path = _find_pddrc_file()
+    prompts_dir = pddrc_path.parent / prompts_dir_raw
+
+    languages = _detect_languages_with_context("my_module", prompts_dir)
+    assert "python" in languages
