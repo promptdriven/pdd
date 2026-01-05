@@ -38,6 +38,7 @@ STEP_TIMEOUTS: Dict[int, float] = {
     5: 600.0,  # Root Cause (Complex)
     6: 240.0,  # Verify Fix Plan
     7: 600.0,  # Generate Fix (Complex)
+    8: 240.0,  # Verify
     9: 240.0,  # Final Verify
 }
 
