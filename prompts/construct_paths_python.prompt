@@ -1,81 +1,65 @@
-% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that will generate and check the appropriate input and output file paths, handle specific file requirements, and then load the input files.
+% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that resolves configuration, validates input files, determines output paths, and handles overwrite confirmation.
 
 <include>context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-    - 'input_file_paths' (dict) - A dictionary to the paths of the input files with the keys being those specified in the examples from the pdd program description. For example, the 'generate' command has the 'prompt_file' key, 'example' has 'code_file' key, etc. Additionally, handle an 'error_file' key.
-    - 'force' (boolean) - A flag that indicates whether to overwrite the output files if they already exist.
-    - 'quiet' (boolean) - A flag that indicates whether to suppress the output.
-    - 'command' (string) - pdd command that was run. Supported commands include: 'generate', 'example', 'test', 'preprocess', 'fix', 'split', 'change', 'update', 'detect', 'conflicts', 'crash', 'trace', 'bug', 'auto-deps', 'verify', 'sync'.
-    - 'command_options' (dict) - A dictionary of the command options for the given command. For example, it could have the 'language' key for the 'test' command or output locations for other commands.
-    - 'create_error_file' (boolean, optional, default: True) - A flag that indicates whether to create the error file if it does not exist.
-    - 'context_override' (string, optional, default: None) - Manually specify the .pddrc context to use, overriding automatic detection. If provided and unknown, raise a clear ValueError that includes the list of available contexts. The CLI may perform early validation; this function should still validate as a safeguard when called directly.
-    - 'confirm_callback' (Callable[[str, str], bool], optional, default: None) - A callback function for interactive confirmation in non-CLI environments (e.g., Textual TUI). Takes a confirmation message and title as arguments, returns True to proceed or False to cancel. When None, uses click.confirm for CLI interaction.
-    - 'path_resolution_mode' (string, optional, default: None) - Controls how configured paths are resolved. If "cwd", resolve relative to current working directory. If "config_base", resolve relative to .pddrc location. When None, defaults to "cwd" for sync command and "config_base" for other commands.
-    Outputs: A tuple containing:
-    - 'resolved_config' (Dict[str, Any]) - A dictionary containing the fully resolved configuration from all sources (CLI, .pddrc, env vars), including resolved output paths and directory paths like `prompts_dir`.
-    - 'input_strings' (dict) - A dictionary with the keys being the pdd description examples and the values being the input file strings. Include all existing files, including error files.
-    - 'output_file_paths' (dict[str, str])- A dictionary where keys are identifiers for output files (e.g., 'output_file', 'debug_file') and values are string paths as produced by generate_output_paths (may be relative depending on configuration).
-    - 'language' (string) - The language of the output file.
+% Inputs:
+    - 'input_file_paths' (dict) - Dictionary mapping keys (prompt_file, code_file, error_file, etc.) to file paths.
+    - 'force' (boolean) - If True, overwrite output files without confirmation.
+    - 'quiet' (boolean) - If True, suppress informational output.
+    - 'command' (string) - PDD command: 'generate', 'example', 'test', 'preprocess', 'fix', 'split', 'change', 'update', 'detect', 'conflicts', 'crash', 'trace', 'bug', 'auto-deps', 'verify', 'sync'.
+    - 'command_options' (dict) - Command-specific options (language, output locations, basename, etc.).
+    - 'create_error_file' (boolean, default: True) - Create error file if missing.
+    - 'context_override' (string, optional) - Override automatic context detection; raise ValueError if unknown.
+    - 'confirm_callback' (Callable[[str, str], bool], optional) - Callback for TUI confirmation; when None, use click.confirm.
+    - 'path_resolution_mode' (string, optional) - "cwd" or "config_base"; defaults to "cwd" for sync, "config_base" otherwise.
 
-% Here is a detailed description of the program functionality: <program_description><include>README.md</include></program_description>
+% Outputs: Tuple of (resolved_config, input_strings, output_file_paths, language)
+    - 'resolved_config' (Dict[str, Any]) - Fully resolved configuration including prompts_dir, code_dir, tests_dir, examples_dir.
+    - 'input_strings' (dict) - Loaded file contents keyed by input_file_paths keys.
+    - 'output_file_paths' (dict[str, str]) - Output paths from generate_output_paths.
+    - 'language' (string) - Detected language.
 
-% Here are examples of how to use internal modules:
+% Program description: <include>README.md</include>
+
+% Internal module examples:
 <internal_example_modules>
-    % Here is an example of how to lookup a file extension given a language: <get_extension_example><include>context/get_extension_example.py</include></get_extension_example>
-
-    % Here is an example of how to lookup a language given a file extension: <get_language_example><include>context/get_language_example.py</include></get_language_example>
-
-    % Here is how to generate the output paths: <generate_output_paths_example><include>context/generate_output_paths_example.py</include></generate_output_paths_example>
+    <get_extension_example><include>context/get_extension_example.py</include></get_extension_example>
+    <get_language_example><include>context/get_language_example.py</include></get_language_example>
+    <generate_output_paths_example><include>context/generate_output_paths_example.py</include></generate_output_paths_example>
 </internal_example_modules>
 
-% Use get_extension(language) to get the file extension for the language. If it raises or returns an empty value (and language != 'prompt'), fall back to a built-in extension map. Logging a warning for this fallback is optional (the implementation may fall back silently to reduce noise when PDD_PATH is not set). The file extension and language are used for the subsequent functionality below.
+% Requirements:
 
-% The known languages of the pdd system can be found at $PDD_PATH/data/language_format.csv which has the following columns: language,comment,extension. Prefer using this CSV when available. If PDD_PATH or the CSV is missing/unreadable, fall back to a reasonable built-in language set (silent fallback is acceptable to avoid noise). Do not raise by default solely due to missing PDD_PATH/CSV. The built-in language set should include common programming languages (python, javascript, typescript, java, cpp, c, go, ruby, rust, kotlin, swift, csharp, php, scala, r, lua, perl, bash, shell, powershell, sql, html, css, prompt, makefile) and common data/config formats (json, jsonl, yaml, yml, toml, ini).
+1. Configuration Hierarchy: CLI options > .pddrc context > environment variables > defaults.
+   - Implement helpers: _find_pddrc_file, _load_pddrc_config, _detect_context, _get_context_config.
+   - Provide utilities: list_available_contexts, detect_context_for_file, get_tests_dir_from_config.
+   - Pass 'outputs' config through for template-based path generation.
 
-% Unless quiet is True, print key details: resolved input paths, output paths, detected language, basename, and any warnings (e.g., fallbacks or overwrite prompts). Step-by-step narration is not required.
+2. Sync Discovery Mode: When command='sync' and input_file_paths is empty:
+   - Require basename in command_options (raise ValueError if missing).
+   - Use generate_output_paths to infer directory paths (prompts_dir, code_dir, tests_dir, examples_dir).
+   - Check CWD for matching prompt files first; otherwise use context-aware logic.
+   - Return early with empty input_strings and output_file_paths.
 
-% This function will do the following:
-    Step 1. Configuration Resolution. This function must implement a hierarchical configuration system as described in `README.md`. The hierarchy of settings should be: 1. CLI options (`command_options`), 2. `.pddrc` context-specific settings, 3. Environment variables, 4. Built-in defaults.
-        - **1a. .pddrc Loading:** Implement helpers for configuration:
-            - `_find_pddrc_file(start_path: Optional[Path]) -> Optional[Path]` to search upward from `start_path` (or CWD) for a `.pddrc` file.
-            - `_load_pddrc_config(path: Path) -> Dict[str, Any]` to parse YAML and validate it includes a top-level `contexts` mapping. Raise friendly ValueError messages on YAML syntax/structure errors.
-        - **1b. Context Detection:** Implement `_detect_context(current_dir: Path, config: Dict[str, Any], context_override: Optional[str]) -> Optional[str]` that:
-            - Returns `context_override` after validating it exists in `config['contexts']`; otherwise raises `ValueError("Unknown context '<name>'. Available contexts: [...]")`.
-            - When no override is given, matches `current_dir` against each context's `paths` glob list; falls back to `'default'` if present; otherwise returns `None`.
-        - **1c. Context Config Access:** Implement `_get_context_config(config: Dict[str, Any], context_name: Optional[str]) -> Dict[str, Any]` returning the `defaults` for the chosen context (empty dict if none).
-        - **1d. Hierarchy Application:** Resolve the final configuration for settings (like output paths, language, model parameters, etc.) by applying the priority order. The `command_options` dictionary should be updated in-place with the results of this resolution, ensuring that CLI options provided by the user are not overridden. The resolved context configuration should be stored for later use. Additionally, pass through any `outputs` config from the context for template-based path generation in `generate_output_paths`.
-        - **Utility – List Contexts:** Provide `list_available_contexts(start_path: Optional[Path] = None) -> list[str]` that uses the above helpers to return the sorted list of context names from `.pddrc`. If no `.pddrc` exists, return `["default"]`. Treat this helper as the single source of truth for context listing; the CLI should import and reuse it for `--list-contexts` and for early validation of `--context`.
-        - **Utility – File-based Context Detection:** Provide `detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> Tuple[Optional[str], Dict[str, Any]]` that detects the appropriate context for a specific file path (can be absolute or relative). Uses specificity-based matching (more specific patterns like 'backend/functions/**' take precedence over broader patterns like 'backend/**'). Returns tuple of (context_name, context_defaults).
-        - **Utility – Tests Directory from Config:** Provide `get_tests_dir_from_config(start_path: Optional[Path] = None) -> Optional[Path]` that finds the tests directory from .pddrc configuration by detecting the appropriate context and returning the configured test_output_path as a Path.
-    Step 2. Handle Sync Discovery Mode. If the 'command' is 'sync' and 'input_file_paths' is empty, perform a special discovery operation. Require that `command_options['basename']` is provided; raise a ValueError if not. Use 'generate_output_paths' with dummy values to infer base directory paths (prompts_dir, code_dir, tests_dir, examples_dir). When determining output paths, if `.pddrc` specifies a `generate_output_path` but `generate_output_paths` returns a path at CWD root, override with the configured directory while preserving the generated filename. Heuristic: if the current directory contains files matching `f"{basename}_*.prompt"`, set both `prompts_dir` and `code_dir` to the current directory; otherwise infer sibling directories from the generated output location. For `code_dir` and `tests_dir`, use the parent of the respective output paths (since these are file paths). For `examples_dir`, detect whether `example_output_path` is a directory or file path: if it ends with '/' or has no file extension in its final component, treat it as a directory and use it directly (stripping trailing slash); otherwise use its parent directory. Package these paths into the `resolved_config` dictionary and return immediately with empty values for the other tuple elements.
-    Step 3. Resolve input paths. For non-error files, ensure they exist strictly; for the 'sync' command be tolerant and resolve non-strictly, skipping reads for missing files. For error files, resolve non-strictly. If an input path resolves to a directory instead of a file, log a warning (unless `quiet`) and skip reading its content rather than raising an error. Then, load all existing input files into the input_strings dictionary using the 'input_file_paths' dictionary with the pdd description examples as the keys. For error files, conditionally create them if they don't exist based on `create_error_file`; if they do exist (or are created), load them like any other file. Alert the user and raise appropriate exceptions (e.g., `FileNotFoundError`, `IOError`) for path or reading issues.
-    Step 4. Extract out the basename from the input file path. This involves:
-        - Prioritizing specific input files based on the `command` (e.g., `prompt1`/`prompt2` for `conflicts`, `change_file` for `detect`, `change_prompt_file` for `change`, `prompt_file` for commands like `sync` that work with specific prompt files).
-        - For prompt-based basenames, identifying the primary prompt file.
-        - Stripping known language suffixes (e.g., `_python`) from the file stem, where known languages are defined in `$PDD_PATH/data/language_format.csv`.
-        - Handling cases where no explicit prompt is found by falling back to the first provided input file's stem (after stripping known language suffixes).
-        - Raising a `ValueError` only if a basename cannot be determined because no input files were provided.
-        - For 'sync', 'example', and 'test' commands, prefer the basename from command_options if provided to preserve subdirectory paths.
-        - For 'fix' command, create unique basename by combining prompt basename with unit test file stem.
-    Step 5. Determine the language (see "Language Determination Logic" in Implementation Notes). Determine the directory of the input files (`input_file_dir`) for commands that rely on relative file positioning (e.g., 'fix', 'crash', 'verify', 'split', 'change', 'update'). Then, construct the output file paths using the "generate_output_paths" function. Be sure to remove non-output keys from the `command_options` dictionary before passing its relevant items to the "generate_output_paths" function's `output_locations` parameter. The resolved context configuration from Step 1 (augmented with any resolved output path settings from CLI/Environment) should also be passed to `generate_output_paths`. Pass the `path_resolution_mode` parameter to control path resolution behavior. Return the dictionary of string paths from `generate_output_paths` in `output_file_paths` (do not force absolute).
-    Step 6. If the output files already exist, and force isn't true, check with the user if the program should overwrite. When `confirm_callback` is provided (for TUI environments), use it instead of `click.confirm` for interactive confirmation. Otherwise, use click.style to style the confirmation message and click.secho for the cancellation message. When prompting for confirmation, set the default to True so pressing Enter will choose to overwrite. If the user presses 'n' or 'N' then raise `click.Abort()`. If the user presses enter, 'y' or 'Y' then overwrite the output files. Handle non-interactive environments (e.g., EOF during confirmation) by displaying a message suggesting the `--force` flag and raising `click.Abort()`. Let `click.Abort` exceptions propagate to the CLI framework (e.g., `PDDCLI.invoke()`) for consistent exit behavior. For test/bug commands without --force, create numbered files instead of overwriting.
-    Step 7. Finalize and Return. Add the final resolved output paths and inferred directory paths to the `resolved_config` dictionary. Infer `prompts_dir` from the parent of the first input file path (and use the sync discovery heuristic from Step 2 when applicable). Infer `code_dir` from the parent of `generate_output_path`, `tests_dir` from the parent of `test_output_path`, and `examples_dir` from `example_output_path` (treating it as a directory if it ends with '/' or has no file extension, otherwise using its parent). Return the 'resolved_config', 'input_strings', 'output_file_paths' (as a dictionary of string paths), and 'language'.
+3. Input Resolution: Resolve input paths strictly (except error_file and sync command).
+   - Create error_file if missing and create_error_file=True.
+   - Load file contents into input_strings; skip directories with warning.
 
-% Implementation Notes (for reference during code generation):
+4. Basename Extraction: Extract from primary prompt file, stripping known language suffixes.
+   - Command-specific rules: 'detect' uses change_file, 'conflicts' combines prompt1/prompt2, 'fix' combines prompt+test basenames.
+   - For sync/example/test, prefer basename from command_options to preserve subdirectory paths.
 
-% Basename Extraction Logic:
-    - The basename is typically extracted from the primary prompt file without directory, language suffix, or file extension.
-    - Command-specific rules: 'detect' uses `change_file`, 'conflicts' combines `prompt1`/`prompt2`, 'change' uses `change_prompt_file` when present, 'sync' uses `prompt_file`.
-    - Fallback: when no explicit prompt is found, use the first provided input file's stem (after stripping known language suffixes). Only raise ValueError if no inputs are provided.
-    - When stripping language suffixes, do NOT strip `_prompt` from files that don't have a `.prompt` extension (e.g., `test_prompt.txt` should retain its full stem).
-    - Validate language suffixes against `$PDD_PATH/data/language_format.csv` with fallback to built-in language set.
+5. Language Determination (priority): explicit command_options > code file extension > prompt filename suffix > command defaults.
+   - 'detect' defaults to 'prompt'; 'bug'/'change' default to 'python' if unresolved.
+   - Use get_extension with fallback to built-in extension map if PDD_PATH unavailable.
 
-% Language Determination Logic (priority order):
-    1. An explicit 'language' option from `command_options` (if provided and not None).
-    2. Inferred from the file extension of code/test input files (using `get_language`). If a file has no extension (e.g., 'Makefile'), allow `get_language(path.name)` to determine language.
-    3. Parsed from a prompt filename suffix (e.g., `_python` in `my_prompt_python.prompt`), validated against known languages.
-    4. A default language (e.g., "prompt") for specific commands like `detect`.
-    5. For the 'bug' and 'change' commands, default to 'python' if language cannot otherwise be determined. This fallback is necessary because these commands work with test files that may not have explicit language indicators.
-    6. If language cannot be determined through these means, raise a `ValueError`.
+6. Output Path Generation: Call generate_output_paths with resolved parameters.
+   - For test/bug commands without --force, create numbered files instead of overwriting.
+   - Pass path_resolution_mode and context_config for proper path resolution.
+
+7. Overwrite Confirmation: If output files exist and not force:
+   - Use confirm_callback if provided, else click.confirm.
+   - Default to True (Enter = overwrite); raise click.Abort on 'n' or EOF.
+
+8. Finalize: Add output paths and inferred directories to resolved_config.
+   - Determine examples_dir: if path ends with '/' or has no extension, treat as directory; else use parent.
