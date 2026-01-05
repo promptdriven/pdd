@@ -361,3 +361,75 @@ def test_cli_fix_multiple_test_files(tmp_path):
             auto_submit=False,
             agentic_fallback=True,
         )
+
+def test_fix_loop_mode_treats_all_files_as_unit_tests(tmp_path):
+    """
+    Test for issue #233: In loop mode, all files should be treated as unit test files.
+    The last file should NOT be treated as error_file.
+    """
+    runner = CliRunner()
+
+    prompt_file = tmp_path / "prompt.prompt"
+    prompt_file.write_text("prompt content")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("code content")
+    test_file_1 = tmp_path / "test_1.py"
+    test_file_1.write_text("test 1 content")
+    test_file_2 = tmp_path / "test_2.py"
+    test_file_2.write_text("test 2 content")
+    verify_prog = tmp_path / "verify.py"
+    verify_prog.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(0)")
+
+    with patch('pdd.commands.fix.fix_main') as mock_fix_main:
+        mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
+        result = runner.invoke(cli.cli, [
+            'fix',
+            '--loop',
+            '--verification-program', str(verify_prog),
+            str(prompt_file),
+            str(code_file),
+            str(test_file_1),
+            str(test_file_2),
+        ])
+
+        # Should succeed
+        assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}. Output: {result.output}"
+
+        # Should process BOTH test files (not just test_1)
+        assert mock_fix_main.call_count == 2, f"Expected 2 calls to fix_main, got {mock_fix_main.call_count}"
+
+        # Verify both test files were passed as unit_test_file (not error_file)
+        calls = [call[1] for call in mock_fix_main.call_args_list]
+        unit_test_files_processed = [call['unit_test_file'] for call in calls]
+
+        assert str(test_file_1) in unit_test_files_processed, "test_1.py should be processed as unit test"
+        assert str(test_file_2) in unit_test_files_processed, "test_2.py should be processed as unit test"
+
+        # Verify error_file is empty string in loop mode
+        for call in calls:
+            assert call['error_file'] == "", f"In loop mode, error_file should be empty, got: {call['error_file']}"
+
+
+def test_fix_requires_verification_program_in_loop_mode(tmp_path):
+    """Test that loop mode requires --verification-program."""
+    runner = CliRunner()
+
+    prompt_file = tmp_path / "prompt.prompt"
+    prompt_file.write_text("prompt content")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("code content")
+    test_file = tmp_path / "test.py"
+    test_file.write_text("test content")
+
+    # Try loop mode without verification program
+    result = runner.invoke(cli.cli, [
+        'fix',
+        '--loop',
+        str(prompt_file),
+        str(code_file),
+        str(test_file),
+    ])
+
+    # Should fail with usage error
+    assert result.exit_code != 0
+    assert "--verification-program is required" in result.output
