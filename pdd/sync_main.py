@@ -94,16 +94,19 @@ def _relative_basename_for_context(basename: str, context_config: Dict[str, Any]
 
 
 def _normalize_prompts_root(prompts_dir: Path) -> Path:
-    """Normalize prompts_dir to the project prompts root."""
+    """
+    Resolve prompts_dir to an absolute path relative to the project root.
+
+    This function takes a potentially relative prompts_dir path (e.g., "prompts/backend")
+    and resolves it to an absolute path using the .pddrc location as the project root.
+
+    Note: This function previously stripped subdirectories after "prompts" which was
+    incorrect for context-specific prompts_dir values. Fixed in Issue #253.
+    """
     prompts_root = Path(prompts_dir)
     pddrc_path = _find_pddrc_file()
     if pddrc_path and not prompts_root.is_absolute():
         prompts_root = pddrc_path.parent / prompts_root
-
-    parts = prompts_root.parts
-    if "prompts" in parts:
-        prompt_index = parts.index("prompts")
-        prompts_root = Path(*parts[: prompt_index + 1])
 
     return prompts_root
 
@@ -350,7 +353,12 @@ def sync_main(
 
     if template_result:
         discovered_context, discovered_prompt_path, first_lang = template_result
-        prompts_dir = _normalize_prompts_root(discovered_prompt_path.parent)
+        prompts_dir_raw = discovered_prompt_path.parent
+        pddrc_path = _find_pddrc_file()
+        if pddrc_path and not prompts_dir_raw.is_absolute():
+            prompts_dir = pddrc_path.parent / prompts_dir_raw
+        else:
+            prompts_dir = prompts_dir_raw
         # Use context override if not already set
         if not context_override:
             context_override = discovered_context
@@ -368,7 +376,12 @@ def sync_main(
                 command_options={"basename": basename},
                 context_override=context_override,
             )
-            prompts_dir = _normalize_prompts_root(initial_config.get("prompts_dir", "prompts"))
+            prompts_dir_raw = initial_config.get("prompts_dir", "prompts")
+            pddrc_path = _find_pddrc_file()
+            if pddrc_path and not Path(prompts_dir_raw).is_absolute():
+                prompts_dir = pddrc_path.parent / prompts_dir_raw
+            else:
+                prompts_dir = Path(prompts_dir_raw)
         except Exception as e:
             rprint(f"[bold red]Error initializing PDD paths:[/bold red] {e}")
             raise click.Abort()
