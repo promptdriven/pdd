@@ -612,7 +612,7 @@ def test_step_timeouts_dictionary_exists():
         )
 
     # Verify simple steps have standard timeout (240 seconds)
-    simple_steps = [1, 2, 3, 6, 9]
+    simple_steps = [1, 2, 3, 6, 8, 9]
     for step in simple_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
         assert STEP_TIMEOUTS[step] == 240.0, (
