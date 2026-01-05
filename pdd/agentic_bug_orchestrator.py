@@ -69,7 +69,7 @@ def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
         )
         return True, ""
     except subprocess.CalledProcessError as e:
-        return False, str(e.stderr)
+        return False, e.stderr.decode('utf-8')
 
 def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
     """Force delete a git branch."""
@@ -82,7 +82,7 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         )
         return True, ""
     except subprocess.CalledProcessError as e:
-        return False, str(e.stderr)
+        return False, e.stderr.decode('utf-8')
 
 def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]:
     """
