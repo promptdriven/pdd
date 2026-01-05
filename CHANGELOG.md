@@ -1,3 +1,9 @@
+## v0.0.102 (2026-01-04)
+
+### Feat
+
+- Add git worktree isolation for agentic bug workflow
+
 ## v0.0.101 (2026-01-03)
 
 ### Feat
