@@ -12,53 +12,31 @@
 
 % Requirements
   1. **PDDCLI Class**: Inherit from `click.Group`. Override `format_help` to add a custom "Generate Suite" section for `generate`, `test`, and `example` commands as described in the README. Override `invoke` to handle exceptions centrally:
-     - `click.Abort`: User cancellation (e.g., pressed 'no' on confirmation) — exit silently with code 1, no error reporting.
+     - `click.Abort`: User cancellation — exit silently with code 1, no error reporting. Use a `user_abort` flag to handle this outside try block.
      - `KeyboardInterrupt`: Handle gracefully via `handle_error`.
-     - `SystemExit` / `click.exceptions.Exit`: Let code 0 pass through; convert non-zero exits to RuntimeError for proper error handling.
-     - Other exceptions: Report via `handle_error`, write core dump even on failure, exit with code 2 for `UsageError`, code 1 otherwise.
-  2. **Global Options**: Implement the `cli` group with all Global Options exactly as described in the README.md "Global Options" section. Note: `--time` defaults to `DEFAULT_TIME` from the package root when not provided. When `--core-dump` is enabled, capture terminal output via `OutputCapture`.
-  3. **OutputCapture Class**: Implement a "tee" class that captures terminal output while still displaying it normally. Used when `--core-dump` is enabled. Must:
-     - Wrap original stdout/stderr streams.
-     - Write to both original stream and an internal buffer.
-     - Provide `get_captured_output()` to retrieve buffered content.
-     - Delegate `isatty()` and `fileno()` to original stream.
-  4. **Helper Function `_strip_ansi_codes`**: Remove ANSI escape codes from text for clean log output in core dumps.
+     - `SystemExit` / `click.exceptions.Exit`: Let code 0 pass through; convert non-zero to RuntimeError.
+     - Other exceptions: Report via `handle_error`, write core dump even on failure, exit code 2 for `UsageError`, else 1.
+  2. **Global Options**: Implement the `cli` group with all Global Options from the README.md "Global Options" section. Note: `--time` defaults to `DEFAULT_TIME` when not provided. When `--core-dump` is enabled, capture terminal output via `OutputCapture`.
+  3. **OutputCapture Class**: A "tee" class that captures terminal output while displaying it normally. Must wrap stdout/stderr, write to both original and internal buffer, provide `get_captured_output()`, and delegate `isatty()`/`fileno()` to original stream.
+  4. **Helper Function `_strip_ansi_codes`**: Remove ANSI escape codes using regex `r'\x1b\[[0-9;]*m'`.
   5. **CLI Entry Point (`cli`)**:
      - Initialize `PDD_PATH` via `get_local_pdd_path()`.
-     - Clear core dump errors.
-     - Populate `ctx.obj` with all options (including `time` defaulting to `DEFAULT_TIME` if None).
-     - Set up terminal output capture if `--core-dump` is enabled.
+     - Clear core dump errors, populate `ctx.obj` with all options.
+     - Set up output capture if `--core-dump` enabled.
      - Suppress verbose if quiet is enabled.
-     - Show onboarding reminder if needed (via `_should_show_onboarding_reminder`).
-     - Handle `--list-contexts`: print available contexts and exit.
-     - Handle `--context`: validate against available contexts.
+     - Show onboarding reminder if needed.
+     - Handle `--list-contexts` and `--context` validation against available contexts.
      - Run `auto_update()` unless `PDD_AUTO_UPDATE=false`.
-     - If no subcommand provided, show help and exit gracefully.
+     - If no subcommand, show help and exit.
   6. **Result Callback (`process_commands`)**:
-     - Decorated with `@cli.result_callback()`.
-     - Normalize results: handle None, lists, single 3-tuples, or other return types.
-     - Get `invoked_subcommands` from Click context or fall back to `ctx.obj` (except during pytest).
-     - Iterate through results (tuples of `(result, cost, model_name)` or dicts with `examplesUsed`).
-     - Print a summary of executed steps with appropriate status messages:
-       - `install_completion` returning None: treat as success.
-       - `preprocess` with cost=0.0 and model="local": show "Command completed (local)".
-       - Other None results: show as failed.
-       - Unexpected result formats: show warning with type info.
-     - **Display examples used for grounding** (if `examplesUsed` is present in result):
-       - After each step in the summary, show "Examples used:" section.
-       - For each example, display: `  - {slug} ("{title}")`.
-       - Example output:
-         ```
-         Examples used:
-           - my-example-module-x7k ("My Example Module")
-         ```
-       - Extract `examplesUsed` from result dict if available.
-       - The `examplesUsed` array contains `{slug, title, id, command}` for each example.
-       - Displaying slugs helps users know what to use in `<pin>` or `<exclude>` tags.
-     - Print total estimated cost (only if at least one command contributed cost).
+     - Normalize results (handle None, lists, single 3-tuples).
+     - Get `invoked_subcommands` from Click context or fall back to `ctx.obj` (except during pytest—check `PYTEST_CURRENT_TEST`).
+     - Print summary with appropriate status messages for each result type.
+     - Display `examplesUsed` for grounding (slug and title) when present in result dict.
+     - Print total cost only if at least one command contributed cost.
      - Collect and restore terminal output if `--core-dump` was enabled.
-     - Write core dump via `_write_core_dump` with captured terminal output.
-     - Handle exit codes based on `_fatal_exception` flag in `ctx.obj`.
+     - Write core dump via `_write_core_dump`.
+     - Handle exit codes based on `_fatal_exception` flag.
 
 % Dependencies
   <auto_update_example>
@@ -73,20 +51,14 @@
 <pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
 
 % Instructions
-  - Import `os`, `sys`, `io`, `re`, `click` from standard library.
-  - Import `Any`, `List`, `Optional`, `Tuple`, `TextIO` from `typing`.
-  - Import `DEFAULT_STRENGTH`, `__version__`, `DEFAULT_TIME` from `..` (package root).
-  - Import `auto_update` from `..auto_update`.
-  - Import `list_available_contexts` from `..construct_paths`.
-  - Import `get_local_pdd_path` from `..install_completion`.
-  - Import `console`, `handle_error`, `clear_core_dump_errors` from `.errors`.
-  - Import `_first_pending_command` and `_should_show_onboarding_reminder` from `.utils`.
-  - Import `_write_core_dump` from `.dump`.
-  - Implement `_strip_ansi_codes()` using regex pattern `r'\x1b\[[0-9;]*m'`.
+  - Import required modules: `os`, `sys`, `io`, `re`, `click` from standard library; types from `typing`.
+  - Import from package: `DEFAULT_STRENGTH`, `__version__`, `DEFAULT_TIME` from `..`.
+  - Import: `auto_update` from `..auto_update`, `list_available_contexts` from `..construct_paths`, `get_local_pdd_path` from `..install_completion`.
+  - Import from `.errors`: `console`, `handle_error`, `clear_core_dump_errors`.
+  - Import from `.utils`: `_first_pending_command`, `_should_show_onboarding_reminder`.
+  - Import from `.dump`: `_write_core_dump`.
   - Implement `OutputCapture` class before `PDDCLI` class.
-  - In `PDDCLI.invoke`, use a `user_abort` flag to handle `click.Abort` separately from other exceptions, avoiding nested exception issues.
-  - In `process_commands`, handle cases where commands return `None` (failure) or valid tuples. Treat `install_completion` and successful `preprocess` (local) as success.
-  - In `process_commands`, avoid checking `ctx.obj.get('invoked_subcommands')` during pytest runs (check `PYTEST_CURRENT_TEST` env var) to preserve test behavior.
+  - Only set strength/temperature in ctx.obj if explicitly provided (allows `.get("key", default)` to work correctly).
 
 % Deliverables
   - Code: `pdd/core/cli.py`
