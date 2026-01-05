@@ -798,7 +798,10 @@ def construct_paths(
             else:
                 # Fall back to context-aware logic
                 # Use original_context_config to avoid checking augmented config with env vars
-                if original_context_config and any(key.endswith('_output_path') for key in original_context_config):
+                if original_context_config and (
+                    'prompts_dir' in original_context_config or
+                    any(key.endswith('_output_path') for key in original_context_config)
+                ):
                     # For configured contexts, use prompts_dir from config if provided,
                     # otherwise default to "prompts" at the same level as output dirs
                     resolved_config["prompts_dir"] = original_context_config.get("prompts_dir", "prompts")
