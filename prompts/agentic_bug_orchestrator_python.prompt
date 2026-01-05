@@ -42,7 +42,7 @@ For each step (1-9):
 - Step 4 receives: issue_content, step1_output through step3_output
 - ... and so on
 - Step 8 receives: issue_content, step1_output through step7_output
-- Step 9 receives: issue_content, step1_output through step8_output
+- Step 9 receives: issue_content, step1_output through step8_output, worktree_path
 
 % Early Exit Conditions (Hard Stops)
 
@@ -65,6 +65,33 @@ The orchestrator must parse step output to detect stop conditions:
 - If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
 - This applies to all steps - only the specific hard stop patterns above terminate the workflow
 - Steps should post their findings to GitHub even on partial failure
+
+% Git Worktree Isolation
+
+Before Step 7, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
+
+1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+   - Create worktree at `.pdd/worktrees/fix-issue-{issue_number}/` relative to git root
+   - Branch name: `fix/issue-{issue_number}`
+   - If worktree already exists at path, remove with `git worktree remove --force`
+   - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
+   - If branch already exists locally, delete with `git branch -D`
+   - Create worktree: `git worktree add -b {branch} {path} HEAD`
+   - Return (worktree_path, None) on success, (None, error_msg) on failure
+
+2. In orchestrator loop, before Step 7:
+   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
+   - Switch working directory to worktree path for Steps 7-9
+   - Add `worktree_path` to context dict (for Step 9 prompt formatting)
+   - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
+
+3. Additional helper functions:
+   - `_get_git_root(cwd: Path) -> Optional[Path]` - Get repo root via `git rev-parse --show-toplevel`
+   - `_worktree_exists(cwd: Path, worktree_path: Path) -> bool` - Check if path is in `git worktree list --porcelain` output
+   - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
+   - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
+   - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
 
 % Console Output
 
@@ -100,6 +127,7 @@ The orchestrator must provide real-time feedback to the user via rich console ou
    ✅ Investigation complete  (or ❌ Investigation failed)
       Total cost: ${total_cost:.4f}
       Files changed: {comma_separated_list}
+      Worktree: {worktree_path}  (if worktree was created)
       PR created: #{pr_number}  (if applicable)
    ```
 

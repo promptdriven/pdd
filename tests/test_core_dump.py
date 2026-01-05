@@ -11,6 +11,7 @@ from click.testing import CliRunner
 import click
 
 from pdd import cli, __version__, DEFAULT_STRENGTH, DEFAULT_TIME
+from pdd.core.cli import cli as cli_command, process_commands
 
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
@@ -488,3 +489,44 @@ def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_pa
     assert len(errors) > 0, "KeyboardInterrupt should be recorded in core dump errors"
     assert any('KeyboardInterrupt' in str(err.get('type', '')) for err in errors), \
         "Error type should include KeyboardInterrupt"
+
+
+def test_cli_results_none_guard_issue_253():
+    """
+    Regression test for Issue #253 Bug 2.
+
+    Verifies that cli.py has the guard `results is not None` before iterating
+    over results, preventing 'NoneType' object is not iterable error.
+    """
+    # Read cli.py and verify the guard is present
+    cli_path = Path(__file__).parent.parent / "pdd" / "core" / "cli.py"
+    cli_content = cli_path.read_text()
+
+    # Check for the specific guard pattern
+    expected_pattern = "results is not None and not all(res is None for res in results)"
+
+    assert expected_pattern in cli_content, (
+        f"Bug #253 (Secondary): cli.py is missing the 'results is not None' guard.\n"
+        f"Expected pattern: '{expected_pattern}'\n"
+        f"This causes 'NoneType' object is not iterable when results is None."
+    )
+
+
+@patch('pdd.core.cli.console.print')
+@patch('pdd.core.cli._write_core_dump')
+def test_process_commands_handles_none_results_issue_253(mock_write_dump, mock_print):
+    """
+    Regression test for Issue #253 Bug 2.
+
+    Verifies that process_commands handles None results gracefully
+    without raising TypeError: 'NoneType' object is not iterable.
+    """
+    ctx = click.Context(cli_command)
+    ctx.obj = {"quiet": False, "core_dump": False}
+    ctx.invoked_subcommands = ["generate", "fix"]  # 2 commands expected
+
+    with ctx:
+        # This should NOT raise TypeError
+        process_commands(results=None)
+
+    # If we reach here without exception, the test passes

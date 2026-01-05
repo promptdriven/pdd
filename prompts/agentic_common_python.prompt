@@ -48,12 +48,18 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 - Returns list of available provider names (e.g., `["anthropic", "google"]`)
 - Checks both CLI binary exists AND API key is configured
 
-`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "") -> Tuple[bool, str, float, str]`
+`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "", timeout: Optional[float] = None) -> Tuple[bool, str, float, str]`
 - Tries providers in `AGENT_PROVIDER_PREFERENCE` order
 - Returns (success, output, cost, provider_used)
+- Optional `timeout` parameter overrides environment variable and default
 
 % Environment Variables
 - `PDD_AGENTIC_TIMEOUT`: Agent CLI timeout in seconds (default: 240)
+
+% Per-Step Timeouts (Issue #256)
+Export `STEP_TIMEOUTS: Dict[int, float]` mapping step numbers to timeout values:
+- Simple steps (1-3, 6, 8-9): 240 seconds (setup, review, plan, verify)
+- Complex steps (4, 5, 7): 600 seconds (reproduce, root cause, generate fix)
 
 % Token Pricing (for providers that return tokens, not USD)
 - Gemini: Refer to current pricing from CLI documentation above
