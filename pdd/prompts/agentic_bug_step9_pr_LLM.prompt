@@ -67,8 +67,11 @@ You are working on step 9 of 9 (final step) in an agentic bug investigation work
    - Extract code file path from Step 5's `**Location:**` field (strip the `:line_number` suffix)
    - Use test file path from Step 7's `FILES_CREATED:` or test file section
    - Search repo for matching prompt file: `find . -name "*.prompt" -type f`
+   - Derive module name from code file (e.g., `pdd/foo.py` → `foo`)
+   - Use verification program: `context/{{module_name}}_example.py`
+   - Use error log path: `fix-issue-{issue_number}.log` for the fix command output
    - Include a ready-to-run `pdd fix` command in your GitHub comment
-   - If no prompt file exists, include a note that one must be created first
+   - If no prompt file or verification program exists, include a note that they must be created first
 
 % PR Creation Command
 
@@ -136,7 +139,7 @@ Your comment should follow this format:
 To auto-fix this bug using PDD:
 
 ```bash
-pdd --force fix --loop --max-attempts 5 {{prompt_file}} {{code_file_path}} {{test_file_path}}
+pdd --force fix --loop --max-attempts 5 --verification-program context/{{module_name}}_example.py {{prompt_file}} {{code_file_path}} {{test_file_path}} fix-issue-{{issue_number}}.log
 ```
 
 ---
