@@ -12,7 +12,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from pdd.sync_main import sync_main
+from pdd.sync_main import sync_main, _normalize_prompts_root
 from pdd import DEFAULT_STRENGTH
 
 # Test Plan
@@ -871,3 +871,32 @@ contexts:
 
     languages = _detect_languages_with_context("my_module", prompts_dir)
     assert "python" in languages
+
+
+def test_normalize_prompts_root_preserves_subdirectory_issue_253(tmp_path, monkeypatch):
+    """
+    Regression test for Issue #253 Bug 1.
+
+    Verifies that _normalize_prompts_root() preserves context-specific subdirectories
+    like "prompts/backend" instead of stripping to just "prompts".
+    """
+    # Setup: Create .pddrc in tmp_path
+    (tmp_path / ".pddrc").write_text('''version: "1.0"
+contexts:
+  default:
+    paths: ["**"]
+''')
+
+    monkeypatch.chdir(tmp_path)
+
+    # Test: _normalize_prompts_root should preserve the full path
+    input_path = Path("prompts/backend")
+    result = _normalize_prompts_root(input_path)
+    expected = tmp_path / "prompts" / "backend"
+
+    assert result == expected, (
+        f"Bug #253: _normalize_prompts_root strips context subdirectory.\n"
+        f"Input: {input_path}\n"
+        f"Expected: {expected}\n"
+        f"Got: {result}"
+    )
