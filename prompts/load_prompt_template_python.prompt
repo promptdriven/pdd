@@ -1,28 +1,21 @@
-% You are an expert Python engineer. Your goal is to write a python function called 'load_prompt_template' that will load a prompt into a string.
+% Write a function 'load_prompt_template' that loads a prompt file into a string.
 
 <include>../context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Input:
-        'prompt_name' - The logical name of the prompt to load, without an extension. The function must append the default '.prompt' extension automatically.
-    Returns:
-        Optional[str]: The prompt template text, or None on error/missing file
+% Inputs/Outputs
+    Input: 'prompt_name' (str) - The logical name of the prompt (without '.prompt' extension)
+    Returns: Optional[str] - The prompt template text, or None on error/missing file
 
-% This function will do the following:
-    Step 0. Validate input:
-        - If 'prompt_name' is not a str, or is empty/whitespace, print a formatted error and return None.
-        - Reject absolute paths and any path traversal/separators (e.g., '/', '\\', '..'); print a formatted error and return None.
-        - If 'prompt_name' ends with '.prompt', strip the extension and continue, printing a yellow warning.
-    Step 1. Build an ordered list of candidate project roots (normalize each with expanduser/resolve):
-        1) If $PDD_PATH is set, use that path first.
-        2) The repository root inferred from this module (the parent directory of the module's folder).
-        3) The current working directory.
-    Step 2. For each candidate root, form a candidate file path at '<root>/prompts/{prompt_name}.prompt'.
-    Step 3. Select the first candidate path that exists and is a file; if none exist, print a formatted error that includes the logical name and every tried path on separate lines, then return None.
-    Step 4. Read the file contents as UTF-8 and return the text. On success, print a brief formatted success message that includes the resolved path. On I/O or unexpected errors, print a formatted error and return None.
+% Dependencies
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
 
-% Notes/constraints:
-    - 'prompt_name' is a logical name (no path components). The function appends '.prompt'; if provided, the extension is stripped with a warning.
-    - All diagnostic messages should be printed using pretty formatting (no exceptions raised) and the function should return None on failure.
-    - The prompts are expected to live under a 'prompts/' subdirectory within each candidate project root.
-    - Do not permit absolute paths or directory traversal in 'prompt_name'.
+% Requirements
+    1. If 'prompt_name' is not a string, print a formatted error and return None.
+    2. Use PathResolver from pdd/path_resolution.py to locate the prompt file:
+       - resolver = get_default_resolver()
+       - path = resolver.resolve_prompt_template(prompt_name)
+       - The resolver must check roots in order: $PDD_PATH, repo root, CWD
+       - For each root, it checks BOTH '<root>/prompts/{name}.prompt' and '<root>/pdd/prompts/{name}.prompt'
+       - If path is None, rebuild the tried-path list from resolver.pdd_path_env, resolver.repo_root, and resolver.cwd in the same order
+    3. Return the contents of the first existing file. Print success message with prompt name.
+    4. If no file found, print error listing all tried paths. On I/O errors, print error and return None.

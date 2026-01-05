@@ -1,17 +1,21 @@
-% You are an expert Python engineer. Your goal is to write a python function, "get_extension", that will return the file extension associated with a given language. 
+% Write a function `get_extension` that returns the file extension for a given programming language.
 
 <include>context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Input: 'language' - A string containing the language (e.g. Bash, Makefile, Python).
-    Output: returns a string that is the extension for the langauge
+% Inputs/Outputs
+    Input: language (str) - e.g. "Python", "Bash", "Makefile"
+    Output: str - file extension (e.g. ".py") or "" if not found/invalid
 
-% Here is an example of the $PDD_PATH/data/language_format.csv:```language,comment,extension
-Python,#,.py
-Java,//,.java```
+% Data Source
+    CSV at $PDD_PATH/data/language_format.csv with columns: language, comment, extension
 
-% This program will do the following:
-    Step 1. Load environment variables PDD_PATH so the CSV can be loaded.
-    Step 2. Lower case the language string to make the comparison case insensitive.
-    Step 3. Look up the file extension for the given language. 
-    Step 4. If the language is not found or file extension is an invalid string, return an empty string otherwise return the file extension
+% Dependencies
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
+
+% Requirements
+    1. Use PathResolver from pdd/path_resolution.py to locate the CSV:
+       - resolver = get_default_resolver()
+       - csv_path = resolver.resolve_data_file("data/language_format.csv")
+       - If PDD_PATH is not set, raise ValueError
+    2. Case-insensitive language lookup
+    3. Return "" for unknown languages or invalid extensions

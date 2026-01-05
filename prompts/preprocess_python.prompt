@@ -7,17 +7,20 @@
 
 % Inputs/Outputs
     - prompt: The prompt string to preprocess
-    - recursive: When True, resolve includes but defer `<shell>` and `<web>` execution (for later variable expansion)
-    - double_curly_brackets: When True, escape single curly braces as double braces (for PromptTemplate compatibility)
+    - recursive: When True, resolve includes but defer `<shell>` and `<web>` execution
+    - double_curly_brackets: When True, escape single curly braces as double braces
     - exclude_keys: Variable names to exclude from brace doubling
     - Returns: The preprocessed prompt (preserve leading/trailing whitespace)
+
+% Dependencies
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
 
 % Processing Order
     Process tags in order: pdd → include/include-many → shell → web. Apply curly-brace doubling last (only to top-level prompt).
 
 % Tag Behaviors
     `<pdd>...</pdd>` - Human-only comment; delete entire block including tags
-    `<include>path</include>` - Replace with file contents. For images (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px, convert GIF→PNG (first frame), HEIC→JPEG, return as base64 data URL
+    `<include>path</include>` - Replace with file contents. For images (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px, convert to base64 data URL
     `<include-many>paths</include-many>` - Comma/newline-separated paths; concatenate contents with newlines
     `<shell>cmd</shell>` - Execute command, replace with stdout. On error, insert bracketed error message
     `<web>url</web>` - Fetch via Firecrawl (requires FIRECRAWL_API_KEY), replace with markdown content
@@ -33,18 +36,22 @@
     - Execute shell/web tags
     - On missing file, insert [File not found: path]
 
+% Code Block Protection
+    Tags inside fenced code blocks (``` or ~~~) or inline backticks should NOT be processed.
+
 % Curly Brace Handling (when double_curly_brackets=True)
     - Double single braces: {var} → {{var}}
     - Preserve already-doubled: {{var}} stays {{var}}
     - Skip excluded keys: {key} in exclude_keys stays {key}
     - Handle ${IDENT} placeholders: convert to ${{IDENT}} to prevent PromptTemplate errors
-    - Process code blocks (json, js, ts, python, py) with idempotence
 
 % File Path Resolution
-    Implement get_file_path(file_name) that:
-    1. First tries CWD: ./file_name
-    2. Falls back to package directory if not found in CWD
-    3. Returns CWD path as default (for consistent error behavior)
+    Implement get_file_path(file_name) by delegating to PathResolver:
+    - Import get_default_resolver from pdd/path_resolution.py
+    - resolver = get_default_resolver()
+    - return resolver.resolve_include(file_name)
+    The include resolution must try CWD, then package_root, then repo_root, and
+    return the CWD path as the default for consistent error behavior.
 
 % Firecrawl Usage
 <firecrawl_example>
