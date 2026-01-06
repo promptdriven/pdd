@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Optional
 from rich import print
-from pdd.path_resolution import PathResolver, get_default_resolver
+from pdd.path_resolution import get_default_resolver
 
 def print_formatted(message: str) -> None:
     """Print message with raw formatting tags for testing compatibility."""
@@ -22,14 +22,7 @@ def load_prompt_template(prompt_name: str) -> Optional[str]:
         print_formatted("[red]Unexpected error loading prompt template[/red]")
         return None
 
-    base_resolver = get_default_resolver()
-    package_root = Path(__file__).resolve().parent
-    resolver = PathResolver(
-        cwd=base_resolver.cwd,
-        pdd_path_env=base_resolver.pdd_path_env,
-        package_root=package_root,
-        repo_root=package_root.parent,
-    )
+    resolver = get_default_resolver()
     prompt_path = resolver.resolve_prompt_template(prompt_name)
 
     if prompt_path is None:
