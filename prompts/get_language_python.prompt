@@ -9,8 +9,14 @@
 Python,#,.py
 Java,//,.java```
 
+% Dependencies
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
+
 % This program will do the following:
-    Step 1. Load environment variables PDD_PATH so the CSV can be loaded from $PDD_PATH/data/language_format.csv.
+    Step 1. Use PathResolver from pdd/path_resolution.py to locate the CSV:
+            - resolver = get_default_resolver()
+            - csv_path = resolver.resolve_data_file("data/language_format.csv")
+            - Raise ValueError if PDD_PATH is not set
     Step 2. Ensure the extension starts with a dot (.) and convert it to lowercase for case-insensitive comparison.
     Step 3. Look up the language name for the given file extension.
     Step 4. If the extension is not found or the language name is an invalid string, return an empty string; otherwise, return the language name.

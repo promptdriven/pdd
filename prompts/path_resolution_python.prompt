@@ -1,0 +1,60 @@
+% You are an expert Python engineer. Create a module `path_resolution` that centralizes path resolution for includes, prompt templates, project root discovery, and PDD_PATH data files.
+
+<include>context/python_preamble.prompt</include>
+
+% Module API
+    - Dataclass `PathResolver` with fields:
+        - cwd: Path (resolved current working directory)
+        - pdd_path_env: Optional[Path] (resolved PDD_PATH if set and is a directory; otherwise None)
+        - package_root: Path (directory containing this module; the `pdd/` package)
+        - repo_root: Optional[Path] (parent of package_root if it exists)
+
+    - Profile types (Literal):
+        IncludeProfile = "cwd_then_package_then_repo"
+        PromptProfile = "pdd_path_then_repo_then_cwd"
+        DataProfile = "pdd_path_only"
+        ProjectRootProfile = "pdd_path_then_marker_then_cwd"
+
+    - Factory:
+        def get_default_resolver() -> PathResolver
+
+    - Methods:
+        def resolve_include(self, rel: str, profile: IncludeProfile = "cwd_then_package_then_repo") -> Path
+        def resolve_prompt_template(self, name: str, profile: PromptProfile = "pdd_path_then_repo_then_cwd") -> Optional[Path]
+        def resolve_data_file(self, rel: str, profile: DataProfile = "pdd_path_only") -> Path
+        def resolve_project_root(self, profile: ProjectRootProfile = "pdd_path_then_marker_then_cwd", max_levels: int = 5) -> Path
+
+% Behavior Details
+    get_default_resolver():
+        - cwd = Path.cwd().resolve()
+        - pdd_path_env = Path(os.getenv("PDD_PATH")).expanduser().resolve() if set and is_dir else None
+        - package_root = Path(__file__).resolve().parent
+        - repo_root = package_root.parent if it exists
+
+    resolve_include(rel, "cwd_then_package_then_repo"):
+        1) If (cwd / rel) exists, return it
+        2) If (package_root / rel) exists, return it
+        3) If repo_root exists and (repo_root / rel) exists, return it
+        4) Return (cwd / rel) as default to preserve current FileNotFound behavior
+
+    resolve_prompt_template(name, "pdd_path_then_repo_then_cwd"):
+        - Build candidate roots in order: pdd_path_env (if set), repo_root (if set), cwd
+        - For each root, check BOTH:
+            a) <root>/prompts/<name>.prompt
+            b) <root>/pdd/prompts/<name>.prompt
+        - Return the first existing file path; return None if none exist
+
+    resolve_data_file(rel, "pdd_path_only"):
+        - If pdd_path_env is None, raise ValueError("PDD_PATH environment variable is not set.")
+        - Return (pdd_path_env / rel). Do not auto-create or modify files.
+
+    resolve_project_root("pdd_path_then_marker_then_cwd", max_levels=5):
+        - If pdd_path_env is set and does NOT point inside package_root, return it
+        - Else search upward from cwd for a directory containing any marker:
+            .git, pyproject.toml, data/ (dir), .env
+          Search up to max_levels parents
+        - If found, return that directory; otherwise return cwd
+
+% Notes
+    - Keep all paths normalized with resolve/expanduser.
+    - This module should be dependency-light and side-effect free (no filesystem writes).
