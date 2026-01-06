@@ -12,8 +12,14 @@ parameters (always passes) rather than tests that verify the caller uses correct
 (would actually fail).
 
 These tests FAIL on the current buggy prompt and PASS once the fix is applied.
+
+Test Categories:
+1. Unit tests (TestStep7Prompt*): Verify prompt contains required guidance phrases
+2. Integration test (TestStep7PromptIntegration): Verify LLM generates correct test code
 """
 
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -196,4 +202,231 @@ class TestStep7PromptEnforcesStep6Strategy:
             "The prompt should require: 'Implement EXACTLY what Step 6's test plan described' "
             "and 'If Step 6 provided example test code, use that as the template'. "
             "Currently it only says 'Extract the test file path from Step 6'."
+        )
+
+
+# --- Integration Test Fixtures and Helpers ---
+
+
+# Realistic caller-bug scenario: function uses `limit=` but callee expects `k=`
+CALLER_BUG_SCENARIO = {
+    "issue_url": "https://github.com/example/repo/issues/999",
+    "repo_owner": "example",
+    "repo_name": "repo",
+    "issue_number": "999",
+    "issue_content": """
+## Bug Report
+
+When calling `search_similar_examples()`, the code passes `limit=5` but the function
+signature expects `k=5`. This causes a TypeError.
+
+### Steps to Reproduce
+1. Call `get_recommendations()` which internally calls `search_similar_examples(limit=5)`
+2. Observe TypeError: search_similar_examples() got an unexpected keyword argument 'limit'
+
+### Expected Behavior
+The caller should use `k=5` to match the callee's signature.
+""",
+    "step1_output": "Issue is a valid bug report about parameter name mismatch.",
+    "step2_output": "Confirmed bug: caller uses wrong parameter name.",
+    "step3_output": "Root cause: get_recommendations() passes limit= but search_similar_examples() expects k=",
+    "step4_output": "Located bug in src/recommendations.py:45 - get_recommendations() calls search_similar_examples(limit=count)",
+    "step5_output": "Fix: Change line 45 from `search_similar_examples(query, limit=count)` to `search_similar_examples(query, k=count)`",
+    "step6_output": """
+### Test Location
+**File:** tests/test_recommendations.py (new)
+
+### Test Strategy
+To verify the caller uses the correct parameter name:
+1. **Mock** the `search_similar_examples` function
+2. Call `get_recommendations()` which triggers the caller code path
+3. Use `mock.call_args.kwargs` to verify the caller passed `k=` (not `limit=`)
+
+### Example Test Code
+```python
+from unittest.mock import patch
+
+def test_get_recommendations_uses_correct_parameter_name():
+    with patch('src.recommendations.search_similar_examples') as mock_search:
+        mock_search.return_value = []
+        get_recommendations(query="test", count=5)
+
+        # Verify caller used 'k=' not 'limit='
+        assert 'k' in mock_search.call_args.kwargs, "Caller should use 'k=' parameter"
+        assert 'limit' not in mock_search.call_args.kwargs, "Caller should NOT use 'limit='"
+```
+""",
+}
+
+
+def has_vertex_credentials() -> bool:
+    """Check if Vertex AI credentials are available for integration tests."""
+    creds_path = os.environ.get('VERTEX_CREDENTIALS', '')
+    if not creds_path:
+        return False
+    if os.path.isfile(creds_path):
+        return True
+    return bool(creds_path)
+
+
+def extract_python_code_blocks(text: str) -> list[str]:
+    """Extract Python code blocks from markdown-formatted text."""
+    pattern = r'```python\s*(.*?)```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    return matches
+
+
+def analyze_test_code_for_mocking_patterns(code: str) -> dict:
+    """
+    Analyze generated test code for correct mocking patterns.
+
+    Returns a dict with boolean flags for each pattern found.
+    """
+    code_lower = code.lower()
+
+    return {
+        # Does it import/use mock?
+        "uses_mock": any([
+            "from unittest.mock import" in code,
+            "from unittest import mock" in code,
+            "import mock" in code,
+            "@patch" in code,
+            "with patch" in code_lower,
+            "mock." in code_lower,
+        ]),
+        # Does it mock the called function (search_similar_examples)?
+        "mocks_callee": any([
+            "search_similar_examples" in code and "patch" in code_lower,
+            "mock_search" in code_lower,
+        ]),
+        # Does it use call_args to inspect parameters?
+        "uses_call_args": any([
+            "call_args" in code_lower,
+            "assert_called_with" in code_lower,
+            "assert_called_once_with" in code_lower,
+        ]),
+        # Does it verify the correct parameter name 'k'?
+        "verifies_k_parameter": any([
+            "'k'" in code and "call_args" in code_lower,
+            '"k"' in code and "call_args" in code_lower,
+            "k=" in code and "assert" in code_lower,
+        ]),
+        # ANTI-PATTERN: Does it just test the callee rejects wrong params?
+        # This is the WRONG approach that always passes
+        "anti_pattern_tests_callee_signature": any([
+            "typeerror" in code_lower and "search_similar_examples(" in code_lower
+            and "limit=" in code_lower and "patch" not in code_lower,
+            "pytest.raises" in code_lower and "search_similar_examples(limit" in code,
+        ]),
+    }
+
+
+# --- Integration Tests ---
+
+
+class TestStep7PromptIntegration:
+    """
+    Integration tests that verify the Step 7 prompt produces correct LLM output.
+
+    These tests make REAL LLM API calls and validate that the generated test code
+    uses proper mocking patterns for caller-bug scenarios.
+
+    Skip criteria: VERTEX_CREDENTIALS not set
+    """
+
+    @pytest.fixture
+    def formatted_prompt(self, step7_prompt_content: str) -> str:
+        """Format the Step 7 prompt with the caller-bug scenario."""
+        return step7_prompt_content.format(**CALLER_BUG_SCENARIO)
+
+    @pytest.mark.integration
+    @pytest.mark.skipif(
+        not has_vertex_credentials(),
+        reason="VERTEX_CREDENTIALS not set - skipping integration test"
+    )
+    def test_llm_generates_test_with_mocking_for_caller_bug(
+        self, formatted_prompt: str
+    ) -> None:
+        """
+        Integration test: Verify LLM generates a test that mocks the callee.
+
+        Given a caller-bug scenario where Step 6 explicitly recommends mocking,
+        verify that Step 7's LLM output actually uses mocking to test caller behavior.
+
+        This test FAILS if the LLM takes the easy path of testing callee signature.
+        """
+        from pdd.llm_invoke import llm_invoke
+
+        # The formatted prompt may contain {placeholders} from the output template
+        # (e.g., {{test_file_path}} becomes {test_file_path} after first format).
+        # Use messages parameter to bypass llm_invoke's formatting.
+        messages = [{"role": "user", "content": formatted_prompt}]
+
+        # Call the LLM with pre-formatted messages
+        response = llm_invoke(
+            prompt="",  # Not used when messages is provided
+            input_json={},
+            messages=messages,
+            strength=0.7,  # Use a capable model
+            temperature=0.1,  # Low temperature for consistency
+            verbose=True,
+        )
+
+        # Extract the generated output
+        output = response.get('result', '')
+        if hasattr(output, 'content'):
+            output = output.content
+        output = str(output)
+
+        # Extract Python code blocks from the output
+        code_blocks = extract_python_code_blocks(output)
+        assert code_blocks, (
+            f"LLM output should contain Python code blocks. Got:\n{output[:500]}..."
+        )
+
+        # Analyze the generated test code
+        all_code = "\n".join(code_blocks)
+        analysis = analyze_test_code_for_mocking_patterns(all_code)
+
+        # Verify the test uses mocking (not just testing callee signature)
+        assert analysis["uses_mock"], (
+            "Generated test should use unittest.mock or @patch. "
+            f"Got code:\n{all_code[:500]}..."
+        )
+
+        assert analysis["mocks_callee"], (
+            "Generated test should mock search_similar_examples (the callee). "
+            f"Got code:\n{all_code[:500]}..."
+        )
+
+        assert analysis["uses_call_args"], (
+            "Generated test should use call_args to verify parameter names. "
+            f"Got code:\n{all_code[:500]}..."
+        )
+
+        # Verify it's NOT using the anti-pattern
+        assert not analysis["anti_pattern_tests_callee_signature"], (
+            "Generated test uses ANTI-PATTERN: testing that callee rejects wrong params. "
+            "This test would always pass! Should mock callee and verify caller behavior. "
+            f"Got code:\n{all_code[:500]}..."
+        )
+
+    def test_formatted_prompt_includes_step6_mocking_guidance(
+        self, formatted_prompt: str
+    ) -> None:
+        """
+        Unit test: Verify the formatted prompt includes Step 6's mocking guidance.
+
+        This is a sanity check that the test scenario is properly injected.
+        The formatted prompt should contain Step 6's explicit mocking instructions.
+        """
+        # The formatted prompt should contain Step 6's mocking guidance
+        assert "mock" in formatted_prompt.lower(), (
+            "Formatted prompt should contain Step 6's mocking guidance"
+        )
+        assert "call_args" in formatted_prompt.lower(), (
+            "Formatted prompt should contain Step 6's call_args guidance"
+        )
+        assert "search_similar_examples" in formatted_prompt, (
+            "Formatted prompt should reference the callee function"
         )

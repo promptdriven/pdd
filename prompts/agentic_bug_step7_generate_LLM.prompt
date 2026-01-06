@@ -40,11 +40,38 @@ You are working on step 7 of 9 in an agentic bug investigation workflow. Previou
 {step6_output}
 </step6_output>
 
+% Critical: Testing Caller Behavior Bugs
+
+When the bug involves incorrect function call arguments (e.g., caller uses `limit=` but callee expects `k=`):
+
+**DO: Mock the callee and verify caller behavior**
+- Use `@patch` or `with patch()` to mock the called function
+- Invoke the caller's code path
+- Use `mock.call_args.kwargs` to verify the caller passed correct parameter names
+
+Example:
+```python
+from unittest.mock import patch
+
+def test_caller_uses_correct_parameter():
+    with patch('module.callee_function') as mock_callee:
+        caller_function()  # This triggers the call
+        # Verify caller used 'k=' not 'limit='
+        assert 'k' in mock_callee.call_args.kwargs
+```
+
+**DO NOT: Test that the callee rejects wrong parameters**
+- This anti-pattern tests the callee's signature, not the caller's behavior
+- Such tests always pass because the callee was never broken
+- Example of WRONG approach: `pytest.raises(TypeError, lambda: callee(limit=5))`
+
 % Your Task
 
-1. **Review the test plan**
+1. **Review the test plan and implement Step 6's test strategy**
    - Extract the test file path from Step 6's `### Test Location` → `**File:**` field
    - Note if Step 6 marked it `(append)` or `(new)`
+   - **CRITICAL: Follow Step 6's test plan exactly** — if Step 6 provided example test code, use that as the template
+   - Implement the testing approach Step 6 specified (mocking, assertions, fixtures, etc.) unless there is a mistake in the test plan.
    - Understand the project's testing conventions from existing tests
 
 2. **Generate the test code**
