@@ -58,8 +58,10 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 
 % Per-Step Timeouts (Issue #256)
 Export `STEP_TIMEOUTS: Dict[int, float]` mapping step numbers to timeout values:
-- Simple steps (1-3, 6, 8-9): 240 seconds (setup, review, plan, verify)
-- Complex steps (4, 5, 7): 600 seconds (reproduce, root cause, generate fix)
+- Simple steps (1-3, 9): 240 seconds (setup, review, plan, final verify)
+- Medium step (6): 340 seconds (verify fix plan)
+- Complex steps (4, 5, 8): 600 seconds (reproduce, root cause, verify)
+- Most complex step (7): 1000 seconds (generate fix)
 
 % Token Pricing (for providers that return tokens, not USD)
 - Gemini: Refer to current pricing from CLI documentation above
