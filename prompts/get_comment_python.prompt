@@ -1,16 +1,21 @@
-% You are an expert Python engineer. Your goal is to write a python function, "get_comment", that will return the comment character(s) associated with a given language.
+% You are an expert Python engineer. Write a function `get_comment` that returns the comment character(s) for a given language.
 
-% Here are the inputs and outputs of the function:
-    Input: 'language' - A string containing the language (e.g. Bash, Makefile, Python).
-    Output: returns a string that is the comment character(s) for the langauge. 'del' means the language does not have a comment character and the line with the comment most be deleted. Also, If there is a space between the comment characters, this means that the language requires the initial comment character and the closing comment character to encapsulate the comment.
+% Inputs/Outputs
+  Input: language (str) - e.g., "Bash", "Makefile", "Python"
+  Output: str - the comment character(s), or "del" if not found/invalid
 
+% Data
+  The CSV at $PDD_PATH/data/language_format.csv contains columns: language, comment, extension
+  A space in the comment field indicates opening/closing characters (e.g., "/* */")
 
-% Here is an example of the $PDD_PATH/data/language_format.csv:```language,comment,extension
-Python,#,.py
-Java,//,.java```
+% Dependencies
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
 
-% This program will do the following:
-    Step 1. Load environment variables PDD_PATH so the CSV can be loaded.
-    Step 2. Lower case the language string to make the comparison case insensitive.
-    Step 3. Look up the comment character(s) for the given language. 
-    Step 4. If the language is not found or comment character(s) is an invalid string, return an 'del' string otherwise return the comment character(s). 
+% Steps
+  1. Use PathResolver from pdd/path_resolution.py to locate the CSV:
+     - resolver = get_default_resolver()
+     - csv_path = resolver.resolve_data_file("data/language_format.csv")
+     - If resolve_data_file raises ValueError (PDD_PATH missing), return "del"
+  2. Lowercase the language for case-insensitive comparison
+  3. Look up the comment character(s) in the CSV
+  4. Return "del" if language not found, file missing, or comment is empty

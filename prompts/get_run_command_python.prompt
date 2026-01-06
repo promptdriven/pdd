@@ -5,12 +5,16 @@
 % Role & Scope
   A utility module responsible for looking up run commands (e.g., "python {file}") for different programming languages by reading a configuration CSV.
 
+% Dependencies
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
+
 % Requirements
   1) Function `get_run_command(extension: str) -> str`:
      - Accepts an extension (e.g., ".py", "js", ".JS").
      - Returns the run command template (e.g., "python {file}") or an empty string if not found.
      - Must normalize the extension: ensure it starts with '.' and is lowercase.
-     - Must read from `$PDD_PATH/data/language_format.csv`.
+     - Must read from the CSV located via PathResolver:
+       `resolver = get_default_resolver(); csv_path = resolver.resolve_data_file("data/language_format.csv")`
      - Raises `ValueError` if `PDD_PATH` environment variable is not set.
      - Handles `FileNotFoundError` or `csv.Error` by printing an error message and returning an empty string.
 

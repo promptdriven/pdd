@@ -8,9 +8,15 @@
     - `pandas` for reading the model CSV.
     - `pydantic` for structured output validation.
 
+% Internal module examples:
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
+
 % Startup Behavior:
     - Load environment variables from a `.env` file located at the project root.
-    - Project root detection: (1) `$PDD_PATH` if pointing to a real project (not the installed package path); (2) otherwise search upward from CWD for markers (.git, pyproject.toml, data/, .env); (3) fallback to CWD.
+    - Project root detection: use PathResolver.resolve_project_root (profile "pdd_path_then_marker_then_cwd").
+      This must ignore PDD_PATH if it points inside the installed package path, then
+      search upward from CWD for markers (.git, pyproject.toml, data/, .env), and
+      fall back to CWD if none found.
     - Resolve `llm_model.csv` in priority order: (a) `~/.pdd/llm_model.csv`; (b) `<PROJECT_ROOT>/.pdd/llm_model.csv` if `$PDD_PATH` points to a real project; (c) `<cwd>/.pdd/llm_model.csv`; (d) packaged `pdd/data/llm_model.csv`.
 
 % Logging Configuration:

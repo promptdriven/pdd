@@ -1,8 +1,7 @@
 from pathlib import Path
-import os
 from typing import Optional
-import sys
 from rich import print
+from pdd.path_resolution import get_default_resolver
 
 def print_formatted(message: str) -> None:
     """Print message with raw formatting tags for testing compatibility."""
@@ -23,40 +22,22 @@ def load_prompt_template(prompt_name: str) -> Optional[str]:
         print_formatted("[red]Unexpected error loading prompt template[/red]")
         return None
 
-    # Step 1: Get project path from environment variable (preferred),
-    # else fall back to auto-detect based on this module's location or CWD.
-    project_path_env = os.getenv('PDD_PATH')
-    candidate_paths = []
-    if project_path_env:
-        candidate_paths.append(Path(project_path_env))
-
-    # Fallback 1: repository root inferred from this module (pdd/ => repo root)
-    try:
-        module_root = Path(__file__).resolve().parent  # pdd/
-        repo_root = module_root.parent                 # repo root
-        candidate_paths.append(repo_root)
-    except Exception:
-        pass
-
-    # Fallback 2: current working directory
-    candidate_paths.append(Path.cwd())
-
-    # Build candidate prompt paths to try in order
-    prompt_candidates = []
-    for cp in candidate_paths:
-        # Check both <path>/prompts/ and <path>/pdd/prompts/
-        # The latter handles installed package case where prompts are in pdd/prompts/
-        prompt_candidates.append(cp / 'prompts' / f"{prompt_name}.prompt")
-        prompt_candidates.append(cp / 'pdd' / 'prompts' / f"{prompt_name}.prompt")
-
-    # Step 2: Load and return the prompt template
-    prompt_path: Optional[Path] = None
-    for candidate in prompt_candidates:
-        if candidate.exists():
-            prompt_path = candidate
-            break
+    resolver = get_default_resolver()
+    prompt_path = resolver.resolve_prompt_template(prompt_name)
 
     if prompt_path is None:
+        candidate_roots = []
+        if resolver.pdd_path_env is not None:
+            candidate_roots.append(resolver.pdd_path_env)
+        if resolver.repo_root is not None:
+            candidate_roots.append(resolver.repo_root)
+        candidate_roots.append(resolver.cwd)
+
+        prompt_candidates = []
+        for root in candidate_roots:
+            prompt_candidates.append(root / 'prompts' / f"{prompt_name}.prompt")
+            prompt_candidates.append(root / 'pdd' / 'prompts' / f"{prompt_name}.prompt")
+
         tried = "\n".join(str(c) for c in prompt_candidates)
         print_formatted(
             f"[red]Prompt file not found in any candidate locations for '{prompt_name}'. Tried:\n{tried}[/red]"
