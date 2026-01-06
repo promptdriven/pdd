@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
-from pdd.path_resolution import PathResolver, get_default_resolver
+from pdd.path_resolution import get_default_resolver
 
 install()
 console = Console()
@@ -149,15 +149,6 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
 
 def get_file_path(file_name: str) -> str:
     resolver = get_default_resolver()
-    package_root = Path(__file__).resolve().parent
-    repo_root = package_root.parent
-    resolver = PathResolver(
-        cwd=resolver.cwd,
-        pdd_path_env=resolver.pdd_path_env,
-        package_root=package_root,
-        repo_root=repo_root,
-    )
-
     resolved = resolver.resolve_include(file_name)
     if not Path(file_name).is_absolute() and resolved == resolver.cwd / file_name:
         return os.path.join("./", file_name)
