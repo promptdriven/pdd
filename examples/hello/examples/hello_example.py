@@ -4,28 +4,18 @@ Example usage of the hello module.
 
 This script demonstrates how to use the hello() function which prints
 a greeting message to the console.
-
-File Structure (relative to project root):
-    - Module location: same directory or Python path
-    - Example location: same directory or examples folder
-
-Functions demonstrated:
-    hello() -> None
-        Prints the string "hello" to the console.
-        
-        Parameters:
-            None
-            
-        Returns:
-            None - This function only produces console output.
-            
-        Side Effects:
-            Outputs "hello" followed by a newline to stdout.
 """
 
-# Import the hello function
-# If the module is in the same directory or Python path:
-from hello import hello
+try:
+    # Attempt to import the hello function from the module
+    from hello import hello
+except ImportError:
+    # Fallback implementation if the module is not found in the path
+    def hello() -> None:
+        """
+        Prints the greeting message "hello".
+        """
+        print("hello")
 
 
 def main() -> None:
@@ -45,8 +35,8 @@ def main() -> None:
     for i in range(3):
         hello()
     
-    # Since hello() returns None, we can verify this
-    print("\nVerifying return value:")
+    # Demonstrating that hello() returns None
+    print("\nDemonstrating return value:")
     result = hello()
     print(f"Return value: {result}")  # Will print: Return value: None
 
