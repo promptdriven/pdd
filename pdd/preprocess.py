@@ -4,10 +4,12 @@ import base64
 import subprocess
 from typing import List, Optional, Tuple
 import traceback
+from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
+from pdd.path_resolution import PathResolver, get_default_resolver
 
 install()
 console = Console()
@@ -146,19 +148,20 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         return prompt
 
 def get_file_path(file_name: str) -> str:
-    # First try CWD (for user project files)
-    cwd_path = os.path.join('./', file_name)
-    if os.path.exists(cwd_path):
-        return cwd_path
+    resolver = get_default_resolver()
+    package_root = Path(__file__).resolve().parent
+    repo_root = package_root.parent
+    resolver = PathResolver(
+        cwd=resolver.cwd,
+        pdd_path_env=resolver.pdd_path_env,
+        package_root=package_root,
+        repo_root=repo_root,
+    )
 
-    # Fallback to package directory (for bundled files like docs/)
-    package_dir = os.path.dirname(os.path.abspath(__file__))
-    pkg_path = os.path.join(package_dir, file_name)
-    if os.path.exists(pkg_path):
-        return pkg_path
-
-    # Return CWD path (will fail with FileNotFoundError, preserving current behavior)
-    return cwd_path
+    resolved = resolver.resolve_include(file_name)
+    if not Path(file_name).is_absolute() and resolved == resolver.cwd / file_name:
+        return os.path.join("./", file_name)
+    return str(resolved)
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
     # More specific pattern that doesn't match nested > characters

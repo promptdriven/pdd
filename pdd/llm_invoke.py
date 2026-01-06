@@ -88,6 +88,7 @@ import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 # Import the default model constant
 from pdd import DEFAULT_LLM_MODEL
+from pdd.path_resolution import get_default_resolver
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -187,46 +188,22 @@ def _get_environment_info() -> Dict[str, str]:
 
 # --- Constants and Configuration ---
 
-# Determine project root: 1. PDD_PATH env var, 2. Search upwards from script, 3. CWD
-PROJECT_ROOT = None
+# Determine project root: use PathResolver to ignore package-root PDD_PATH values.
 PDD_PATH_ENV = os.getenv("PDD_PATH")
-
 if PDD_PATH_ENV:
-    _path_from_env = Path(PDD_PATH_ENV)
-    if _path_from_env.is_dir():
-        PROJECT_ROOT = _path_from_env.resolve()
-        logger.debug(f"Using PROJECT_ROOT from PDD_PATH: {PROJECT_ROOT}")
-    else:
-        warnings.warn(f"PDD_PATH environment variable ('{PDD_PATH_ENV}') is set but not a valid directory. Attempting auto-detection.")
-
-if PROJECT_ROOT is None: # If PDD_PATH wasn't set or was invalid
     try:
-        # Start from the current working directory (where user is running PDD)
-        current_dir = Path.cwd().resolve()
-        # Look for project markers (e.g., .git, pyproject.toml, data/, .env)
-        # Go up a maximum of 5 levels to prevent infinite loops
-        for _ in range(5):
-            has_git = (current_dir / ".git").exists()
-            has_pyproject = (current_dir / "pyproject.toml").exists()
-            has_data = (current_dir / "data").is_dir()
-            has_dotenv = (current_dir / ".env").exists()
+        _path_from_env = Path(PDD_PATH_ENV).expanduser().resolve()
+        if not _path_from_env.is_dir():
+            warnings.warn(
+                f"PDD_PATH environment variable ('{PDD_PATH_ENV}') is set but not a valid directory. Attempting auto-detection."
+            )
+    except Exception as e:
+        warnings.warn(f"Error validating PDD_PATH environment variable: {e}")
 
-            if has_git or has_pyproject or has_data or has_dotenv:
-                PROJECT_ROOT = current_dir
-                logger.debug(f"Determined PROJECT_ROOT by marker search from CWD: {PROJECT_ROOT}")
-                break
-
-            parent_dir = current_dir.parent
-            if parent_dir == current_dir: # Reached filesystem root
-                break
-            current_dir = parent_dir
-
-    except Exception as e: # Catch potential permission errors etc.
-        warnings.warn(f"Error during project root auto-detection from current working directory: {e}")
-
-if PROJECT_ROOT is None: # Fallback to CWD if no method succeeded
-    PROJECT_ROOT = Path.cwd().resolve()
-    warnings.warn(f"Could not determine project root automatically. Using current working directory: {PROJECT_ROOT}. Ensure this is the intended root or set the PDD_PATH environment variable.")
+resolver = get_default_resolver()
+PROJECT_ROOT = resolver.resolve_project_root()
+PROJECT_ROOT_FROM_ENV = resolver.pdd_path_env is not None and PROJECT_ROOT == resolver.pdd_path_env
+logger.debug(f"Using PROJECT_ROOT: {PROJECT_ROOT}")
 
 
 # ENV_PATH is set after _is_env_path_package_dir is defined (see below)
@@ -302,7 +279,7 @@ else:
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
     logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
-elif (not _is_env_path_package_dir(PROJECT_ROOT)) and project_csv_from_env.is_file():
+elif PROJECT_ROOT_FROM_ENV and project_csv_from_env.is_file():
     # Honor an explicitly-set PDD_PATH pointing to a real project directory
     LLM_MODEL_CSV_PATH = project_csv_from_env
     logger.info(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
