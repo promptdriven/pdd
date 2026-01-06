@@ -30,6 +30,43 @@
     4. Retrieve ctx.obj options: strength, temperature, time, force, quiet, verbose
     5. On error: print message (unless quiet) and sys.exit(1)
 
+% Implementation Note for `bug_main`:
+    - Retrieve options from the Click context with sensible defaults:
+        - `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`
+        - `temperature = ctx.obj.get('temperature', 0.0)`
+        - `time = ctx.obj.get('time', DEFAULT_TIME)`  # float time budget
+        - `force = ctx.obj.get('force', False)` and `quiet = ctx.obj.get('quiet', False)`
+        - `verbose = ctx.obj.get('verbose', False)`
+    - Use `construct_paths` with `command='bug'` to:
+        - Resolve and validate all input file paths.
+        - Load file contents into strings for generation.
+        - Determine a default output path based on context/env/defaults.
+        - Detect the `language` when the CLI `language` option is None.
+      When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
+      Also pass `confirm_callback=ctx.obj.get('confirm_callback')` for TUI confirmation support.
+    - Use Cloud vs Local Execution Strategy (see below) to generate bug tests.
+    - Validate generated content is non-empty after stripping; on empty, print diagnostics and return an error result.
+    - Save to the resolved output path (creating parent directories if needed). Print model and cost when not quiet, and always print the generated unit test to the console.
+    - On any error (path construction, generation, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}")` to allow the orchestrator to handle gracefully.
+    - Re-raise `click.Abort` and `click.UsageError` exceptions to properly handle user cancellations and non-recoverable errors.
+
+% Cloud vs Local Execution Strategy:
+%  1. If `ctx.obj.get('local')` is True, use local execution directly.
+%  2. Otherwise, attempt cloud execution first:
+%     - Obtain JWT via `CloudConfig.get_jwt_token(verbose=verbose)`.
+%     - Use request timeout of 400 seconds.
+%     - POST to the `generateBugTest` cloud endpoint with JSON payload:
+%       `{ "promptContent": <prompt>, "codeContent": <code>, "programContent": <program>,
+%          "currentOutput": <current>, "desiredOutput": <desired>, "language": <language>,
+%          "strength": <strength>, "temperature": <temperature>, "time": <time>, "verbose": <verbose> }`
+%     - Expected response fields: `generatedTest`, `totalCost`, `modelName`.
+%  3. If cloud fails (auth/network/HTTP errors, timeout, or missing code):
+%     - For non-recoverable errors (401, 402, 403, 400): raise `click.UsageError` without fallback.
+%     - For recoverable errors (5xx, timeout, network issues): Log warning and fall back to local execution.
+%  4. For local execution, call `bug_to_unit_test` with appropriate parameters.
+%  5. If verbose is True, print execution info using Rich panels.
+%  6. Environment variable `PDD_CLOUD_ONLY` or `PDD_NO_LOCAL_FALLBACK` prevents fallback to local.
+
 <examples>
 <construct_paths_example>
 <include>context/construct_paths_example.py</include>
@@ -42,4 +79,14 @@
 <agentic_bug_example>
 <include>context/agentic_bug_example.py</include>
 </agentic_bug_example>
+
+<get_jwt_token_example>
+<include>context/get_jwt_token_example.py</include>
+</get_jwt_token_example>
+% The `get_jwt_token` function is async and must be run with `asyncio.run`.
+% Expects environment variables `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID`.
+
+<cloud_function_call_example>
+<include>context/cloud_function_call.py</include>
+</cloud_function_call_example>
 </examples>
