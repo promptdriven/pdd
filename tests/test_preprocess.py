@@ -1645,11 +1645,11 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
     # │               └── prompt_to_update.prompt
     # └── other_files/
 
-    # Mock the location of the preprocess.py file to simulate import shadowing
-    # This will make os.path.abspath(__file__) return a path inside our mock worktree.
-    mock_preprocess_file_path = tmp_path / "mock_project" / "pdd" / "pdd" / "preprocess.py"
-    mock_preprocess_file_path.parent.mkdir(parents=True, exist_ok=True)
-    mock_preprocess_file_path.write_text("...")  # Content doesn't matter for this test
+    # Mock the location of path_resolution.py to simulate import shadowing
+    # This will make get_default_resolver() return paths inside our mock worktree.
+    mock_path_resolution_file = tmp_path / "mock_project" / "pdd" / "pdd" / "path_resolution.py"
+    mock_path_resolution_file.parent.mkdir(parents=True, exist_ok=True)
+    mock_path_resolution_file.write_text("...")  # Content doesn't matter for this test
 
     # Create the mock context file in the repository root
     mock_repo_root = tmp_path / "mock_project" / "pdd"
@@ -1661,9 +1661,9 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
     # The CWD is 'tmp_path / "mock_project"' but the pdd source is in 'tmp_path / "mock_project" / "pdd"'
     monkeypatch.chdir(tmp_path / "mock_project")
 
-    # Mock pdd.preprocess.__file__ to return the path to our mock preprocess.py
-    # This is crucial for simulating the 'package_dir' calculation
-    monkeypatch.setattr('pdd.preprocess.__file__', str(mock_preprocess_file_path))
+    # Mock pdd.path_resolution.__file__ to return the path to our mock file
+    # This is crucial for simulating the 'package_root' calculation in get_default_resolver()
+    monkeypatch.setattr('pdd.path_resolution.__file__', str(mock_path_resolution_file))
 
     # Expectation: get_file_path should find the file in the mock_repo_root
     found_path = get_file_path(mock_file_name)
