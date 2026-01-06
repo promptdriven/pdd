@@ -6,7 +6,7 @@ import base64
 from PIL import Image
 import io
 from unittest.mock import patch, mock_open
-from pdd.preprocess import preprocess
+from pdd.preprocess import preprocess, get_file_path
 import subprocess
 import importlib
 from unittest.mock import MagicMock
@@ -1617,3 +1617,56 @@ Optional Docs: {DOC_FILES}
     single_brace_pattern = r'(?<!\{)\{(MODULE|PRD_FILE|DOC_FILES)\}(?!\})'
     matches = re.findall(single_brace_pattern, preprocessed)
     assert len(matches) == 0, f"Found single-brace variables: {matches}"
+
+
+def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
+    """
+    Verifies that get_file_path correctly falls back to the repository root
+    when run from a worktree where import shadowing occurs.
+
+    This test simulates the scenario where:
+    1. The CWD does not contain the target file.
+    2. The 'package_dir' (local pdd/pdd) does not contain the target file.
+    3. The file *does* exist in the repository root (parent of pdd/pdd).
+
+    Bug: https://github.com/gltanaka/pdd/issues/240
+    """
+    mock_file_name = "context/insert/1/prompt_to_update.prompt"
+
+    # Create a mock repository structure
+    # /tmp_path/mock_project/
+    # ├── pdd/                       <-- Mock repo root
+    # │   ├── pdd/                   <-- Mock Python package
+    # │   │   ├── preprocess.py
+    # │   │   └── __init__.py
+    # │   └── context/
+    # │       └── insert/
+    # │           └── 1/
+    # │               └── prompt_to_update.prompt
+    # └── other_files/
+
+    # Mock the location of path_resolution.py to simulate import shadowing
+    # This will make get_default_resolver() return paths inside our mock worktree.
+    mock_path_resolution_file = tmp_path / "mock_project" / "pdd" / "pdd" / "path_resolution.py"
+    mock_path_resolution_file.parent.mkdir(parents=True, exist_ok=True)
+    mock_path_resolution_file.write_text("...")  # Content doesn't matter for this test
+
+    # Create the mock context file in the repository root
+    mock_repo_root = tmp_path / "mock_project" / "pdd"
+    expected_file_path = mock_repo_root / mock_file_name
+    expected_file_path.parent.mkdir(parents=True, exist_ok=True)
+    expected_file_path.write_text("Mock context content")
+
+    # Change CWD to simulate running from the project root (not pdd/pdd)
+    # The CWD is 'tmp_path / "mock_project"' but the pdd source is in 'tmp_path / "mock_project" / "pdd"'
+    monkeypatch.chdir(tmp_path / "mock_project")
+
+    # Mock pdd.path_resolution.__file__ to return the path to our mock file
+    # This is crucial for simulating the 'package_root' calculation in get_default_resolver()
+    monkeypatch.setattr('pdd.path_resolution.__file__', str(mock_path_resolution_file))
+
+    # Expectation: get_file_path should find the file in the mock_repo_root
+    found_path = get_file_path(mock_file_name)
+
+    # Assert that the found path is the one in the mock repository root
+    assert found_path == str(expected_file_path)

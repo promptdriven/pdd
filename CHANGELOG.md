@@ -1,8 +1,25 @@
+## v0.0.103 (2026-01-05)
+
 ## v0.0.102 (2026-01-04)
 
 ### Feat
 
-- Add git worktree isolation for agentic bug workflow
+- **Git Worktree Isolation for Agentic Bug Workflow (PR #231):** Refactored `agentic_bug_orchestrator.py` to run bug investigations in isolated git worktrees. Each issue gets its own worktree at `.pdd/worktrees/fix-issue-{N}` with a dedicated branch `fix/issue-{N}`. Adds cleanup of stale worktrees/branches before starting. Prevents polluting the main branch during investigation.
+
+- **Configurable Timeouts for Agentic Bug Steps (Issue #256):** Added `STEP_TIMEOUTS` dictionary with per-step timeout configuration. Complex steps (reproduce, root cause, generate) get 600s timeouts; simpler steps use 240s default. Added `timeout` parameter to `run_agentic_task()` and `_run_with_provider()`.
+
+### Fix
+
+- **Backward Compatibility with v0.0.99 Projects (Issue #251):** Fixed path resolution for projects lacking `outputs` templates in `.pddrc`. v0.0.99 projects now sync correctly with v0.0.100+ binaries.
+
+- **CLI Results None Guard (Issue #253):** Added `results is not None` guard in `process_commands()` to prevent `TypeError: 'NoneType' object is not iterable` when results are None.
+
+### Tests
+
+- Added 636 lines of backward compatibility tests (`test_sync_backward_compat.py`) covering v0.0.99 projects, legacy `.pddrc`, mixed-version meta files, and bare projects.
+- Added 168 lines of timeout configuration tests in `test_agentic_common.py`.
+- Added regression tests for CLI None guard in `test_core_dump.py`.
+- Updated `test_agentic_bug_orchestrator.py` to mock worktree setup.
 
 ## v0.0.101 (2026-01-03)
 
