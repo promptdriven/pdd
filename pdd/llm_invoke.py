@@ -1527,7 +1527,7 @@ def llm_invoke(
     verbose: bool = False,
     output_pydantic: Optional[Type[BaseModel]] = None,
     output_schema: Optional[Dict[str, Any]] = None,
-    time: float = 0.25,
+    time: Optional[float] = 0.25,
     use_batch_mode: bool = False,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
     language: Optional[str] = None,
@@ -1650,6 +1650,10 @@ def llm_invoke(
          formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+
+    # Handle None time (means "no reasoning requested")
+    if time is None:
+        time = 0.0
 
     if not (0.0 <= strength <= 1.0):
         raise ValueError("'strength' must be between 0.0 and 1.0.")

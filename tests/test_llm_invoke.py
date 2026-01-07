@@ -2220,3 +2220,37 @@ def test_cloud_enabled_detection():
 
                 assert result["result"] == "cloud result"
                 assert result["cost"] == 0.001
+
+
+# --- Regression Test for time=None TypeError ---
+
+def test_llm_invoke_time_none_does_not_crash(mock_load_models, mock_set_llm_cache):
+    """Regression test: time=None should not raise TypeError.
+
+    When time=None is passed (valid default from code_generator),
+    llm_invoke should treat it as 0.0 (no reasoning requested).
+
+    Bug: llm_invoke.py line 1658 crashed with:
+    TypeError: '<=' not supported between instances of 'float' and 'NoneType'
+    """
+    first_model_key_name = "OPENAI_API_KEY"
+    with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response(
+                "Mocked response", model_name='gpt-5-nano',
+                prompt_tokens=10, completion_tokens=20
+            )
+            mock_completion.return_value = mock_response
+            mock_cost = 0.00003
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 20}):
+                # This should NOT raise TypeError
+                response = llm_invoke(
+                    prompt="Test prompt {var}",
+                    input_json={"var": "value"},
+                    strength=0.5,
+                    temperature=0.0,
+                    time=None,  # <-- The bug: this used to crash
+                )
+
+            assert response is not None
+            assert response['result'] == "Mocked response"
