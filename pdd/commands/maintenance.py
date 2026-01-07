@@ -57,6 +57,19 @@ from ..core.utils import _run_setup_utility
     help="Deprecated: Use --dry-run instead.",
 )
 @click.option(
+    "--no-steer",
+    "no_steer",
+    is_flag=True,
+    default=False,
+    help="Disable interactive steering of sync operations.",
+)
+@click.option(
+    "--steer-timeout",
+    type=float,
+    default=None,
+    help="Timeout in seconds for steering prompts (default: 8.0).",
+)
+@click.option(
     "--agentic",
     is_flag=True,
     default=False,
@@ -74,6 +87,8 @@ def sync(
     target_coverage: Optional[float],
     dry_run: bool,
     log: bool,
+    no_steer: bool,
+    steer_timeout: Optional[float],
     agentic: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
@@ -102,6 +117,8 @@ def sync(
             skip_tests=skip_tests,
             target_coverage=target_coverage,
             dry_run=dry_run,
+            no_steer=no_steer,
+            steer_timeout=steer_timeout,
             agentic_mode=agentic,
         )
         return str(result), total_cost, model_name
