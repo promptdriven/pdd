@@ -179,16 +179,16 @@ def test_load_prompt_template_installed_package_location(monkeypatch, capsys, tm
     prompt_file.write_text(expected_content, encoding='utf-8')
     
     # Create a fake __file__ path that simulates the installed package location
-    fake_module_file = pdd_package / "load_prompt_template.py"
+    fake_module_file = pdd_package / "path_resolution.py"
     fake_module_file.touch()
-    
+
     # Ensure PDD_PATH is not set and CWD doesn't have prompts
     monkeypatch.delenv("PDD_PATH", raising=False)
     monkeypatch.setattr(Path, "cwd", lambda: tmp_path / "user_project")
-    
-    # Mock __file__ to point to the installed package location
-    import pdd.load_prompt_template as lpt_module
-    monkeypatch.setattr(lpt_module, "__file__", str(fake_module_file))
+
+    # Mock __file__ in path_resolution module (where get_default_resolver reads package_root)
+    import pdd.path_resolution as pr_module
+    monkeypatch.setattr(pr_module, "__file__", str(fake_module_file))
     
     # Call load_prompt_template
     result = load_prompt_template(prompt_name)
