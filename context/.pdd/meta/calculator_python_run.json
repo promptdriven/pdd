@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-01-06T23:00:15.129175+00:00",
+  "exit_code": 1,
+  "tests_passed": 17,
+  "tests_failed": 1,
+  "coverage": 40.0,
+  "test_hash": "d87686d0d902a78bc592345ef82877781a948bee19938e13d78fa31ccaad9803",
+  "test_files": {
+    "test_calculator.py": "d87686d0d902a78bc592345ef82877781a948bee19938e13d78fa31ccaad9803"
+  }
+}
