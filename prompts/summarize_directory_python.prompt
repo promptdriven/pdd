@@ -7,7 +7,7 @@
 
 % Here are the inputs and outputs for the function:
     - Inputs:
-        'directory_path': str, path to the directory to summarize with wildcard (e.g. /path/to/directory/*.py)
+        'directory_path': str, path to directory or glob pattern (e.g. /path/to/directory or /path/to/directory/*.py). If a directory path is provided, it will be converted to a recursive glob pattern.
         'strength' - float, between 0 and 1 that is the strength of the LLM model to use.
         'temperature' - float, controls the randomness of the LLM's output.
         'time' - float, between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
@@ -42,10 +42,12 @@
 % This program will do the following:
     Step 1: Validate all inputs according to the input validation requirements. Raise FileNotFoundError if the prompt template cannot be loaded.
     Step 2: Load prompt template summarize_file_LLM.prompt
-    Step 3: Get list of files matching directory_path using glob. Filter out:
-        - Directories (only process files)
-        - Files in __pycache__ directories
-        - Files ending with .pyc or .pyo
+    Step 3: Get list of files matching directory_path using glob.
+        - If directory_path is a directory (os.path.isdir returns True), convert it to a recursive glob pattern: os.path.join(directory_path, "**", "*")
+        - Filter out:
+            - Directories (only process files)
+            - Files in __pycache__ directories
+            - Files ending with .pyc or .pyo
     Step 4: If no files found, return early with empty CSV header, 0.0 cost, and "None" model_name.
     Step 5: Parse existing csv_file if provided to get cached entries.
     Step 6: For each file, use progress_callback(current, total) if provided, or use Rich track() for progress display:
