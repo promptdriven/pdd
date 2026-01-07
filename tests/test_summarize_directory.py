@@ -979,15 +979,84 @@ def test_file_read_error_handling(mock_dependencies, tmp_path):
 def test_llm_invoke_error_handling(mock_dependencies, tmp_path):
     """Test handling of LLM invocation errors."""
     mock_load, mock_invoke = mock_dependencies
-    
+
     file_path = tmp_path / "test.py"
     file_path.write_text("content")
-    
+
     # Mock LLM to raise exception
     mock_invoke.side_effect = Exception("LLM Failed")
-    
+
     csv_out, cost, model = summarize_directory(str(file_path), 0.5, 0.5)
-    
+
     assert "Error processing file" in csv_out
     assert "LLM Failed" in csv_out
     assert cost == 0.0
+
+
+# ============================================================================
+# Plain Directory Path Handling Tests (TDD - Regression Fix)
+# ============================================================================
+
+def test_summarize_directory_handles_plain_directory_path(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """
+    Regression test: summarize_directory should accept a plain directory path
+    without a glob pattern and find files recursively.
+
+    Bug: sync_orchestration passes examples_dir="context" (no glob pattern).
+    CHANGELOG.md v0.0.84 removed /* from caller but never added isdir()
+    handling to callee. This caused glob.glob("context") to return just
+    ["context"] which gets filtered out as a directory.
+
+    Fix: If directory_path is a directory, convert to recursive glob pattern.
+    """
+    # Create files in directory
+    file1 = tmp_path / "file1.py"
+    file1.write_text("print('hello')")
+    file2 = tmp_path / "file2.py"
+    file2.write_text("print('world')")
+
+    # Pass JUST the directory path (no glob pattern) - this is what sync does
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=str(tmp_path),  # NOT str(tmp_path / "*.py")
+        strength=0.5,
+        temperature=0.7,
+        verbose=False,
+        csv_file=None
+    )
+
+    # Should find files even without glob pattern
+    reader = csv.DictReader(StringIO(csv_output))
+    rows = list(reader)
+
+    assert len(rows) == 2, f"Expected 2 files, got {len(rows)}. Directory path without glob should still find files."
+    assert total_cost > 0, "LLM should have been called to summarize files"
+
+
+def test_summarize_directory_handles_subdirectories(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """
+    Plain directory path should find files in subdirectories recursively.
+    """
+    # Create nested structure
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    file1 = tmp_path / "root.py"
+    file1.write_text("print('root')")
+    file2 = subdir / "nested.py"
+    file2.write_text("print('nested')")
+
+    # Pass plain directory path
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=str(tmp_path),
+        strength=0.5,
+        temperature=0.7,
+        verbose=False,
+        csv_file=None
+    )
+
+    reader = csv.DictReader(StringIO(csv_output))
+    rows = list(reader)
+    paths = [r['full_path'] for r in rows]
+
+    assert len(rows) == 2, f"Expected 2 files, got {len(rows)}"
+    assert any("root.py" in p for p in paths), "Should find root.py"
+    assert any("nested.py" in p for p in paths), "Should find nested.py in subdirectory"
