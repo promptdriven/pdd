@@ -7,7 +7,7 @@ from datetime import datetime, UTC
 import csv
 from io import StringIO
 from typing import Callable, Optional
-from z3 import Solver, Bool, Int, Implies, Not, And, Or, If, sat, unsat
+from z3 import Solver, Bool, Int, Not, And, sat, unsat
 
 @pytest.fixture
 def mock_load_prompt_template():
