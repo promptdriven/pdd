@@ -7,6 +7,8 @@ from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
 class ExtractedCode(BaseModel):
     """Pydantic model for the extracted code."""
+    focus: str = Field(default="", description="The focus of the generation")
+    explanation: str = Field(default="", description="Explanation of the extraction")
     extracted_code: str = Field(description="The extracted code from the LLM output")
 
 def postprocess_0(text: str) -> str:

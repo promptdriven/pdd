@@ -4,10 +4,12 @@ import base64
 import subprocess
 from typing import List, Optional, Tuple
 import traceback
+from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
+from pdd.path_resolution import get_default_resolver
 
 install()
 console = Console()
@@ -146,19 +148,11 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
         return prompt
 
 def get_file_path(file_name: str) -> str:
-    # First try CWD (for user project files)
-    cwd_path = os.path.join('./', file_name)
-    if os.path.exists(cwd_path):
-        return cwd_path
-
-    # Fallback to package directory (for bundled files like docs/)
-    package_dir = os.path.dirname(os.path.abspath(__file__))
-    pkg_path = os.path.join(package_dir, file_name)
-    if os.path.exists(pkg_path):
-        return pkg_path
-
-    # Return CWD path (will fail with FileNotFoundError, preserving current behavior)
-    return cwd_path
+    resolver = get_default_resolver()
+    resolved = resolver.resolve_include(file_name)
+    if not Path(file_name).is_absolute() and resolved == resolver.cwd / file_name:
+        return os.path.join("./", file_name)
+    return str(resolved)
 
 def process_backtick_includes(text: str, recursive: bool) -> str:
     # More specific pattern that doesn't match nested > characters
@@ -323,7 +317,7 @@ def process_web_tags(text: str, recursive: bool) -> str:
         _dbg(f"Web tag URL: {url}")
         try:
             try:
-                from firecrawl import FirecrawlApp
+                from firecrawl import Firecrawl
             except ImportError:
                 _dbg("firecrawl import failed; package not installed")
                 return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
@@ -332,9 +326,13 @@ def process_web_tags(text: str, recursive: bool) -> str:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
                 _dbg("FIRECRAWL_API_KEY not set")
                 return f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
-            app = FirecrawlApp(api_key=api_key)
-            response = app.scrape_url(url, formats=['markdown'])
-            if hasattr(response, 'markdown'):
+            app = Firecrawl(api_key=api_key)
+            response = app.scrape(url, formats=['markdown'])
+            # Handle both dict response (new API) and object response (legacy)
+            if isinstance(response, dict) and 'markdown' in response:
+                _dbg(f"Web scrape returned markdown (len={len(response['markdown'])})")
+                return response['markdown']
+            elif hasattr(response, 'markdown'):
                 _dbg(f"Web scrape returned markdown (len={len(response.markdown)})")
                 return response.markdown
             else:

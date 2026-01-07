@@ -1188,6 +1188,22 @@ def _has_cloud_jwt_token() -> bool:
         return False
 
 
+def _wait_for_cloud_credentials(max_retries: int = 3, delay: float = 1.0) -> bool:
+    """
+    Retry checking for cloud credentials with delays.
+
+    pytest-xdist workers may have delayed access to keyring or env vars.
+    This gives the system a chance to make credentials available.
+    """
+    import time
+    for attempt in range(max_retries):
+        if _has_cloud_credentials() and _has_cloud_jwt_token():
+            return True
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    return False
+
+
 # Marker for tests that require actual cloud execution with valid token
 requires_cloud_e2e = pytest.mark.skipif(
     not (_has_cloud_credentials() and _has_cloud_jwt_token()),
@@ -1206,6 +1222,10 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
 
     Requires PDD_JWT_TOKEN to be set (e.g., via infisical).
     """
+    # Retry credentials check (pytest-xdist workers may have delayed keyring access)
+    if not _wait_for_cloud_credentials(max_retries=3, delay=1.0):
+        pytest.skip("Cloud credentials not available in this worker process after retries")
+
     # Prevent silent fallback to local - cloud must work or test fails
     monkeypatch.setenv("PDD_CLOUD_ONLY", "1")
 
