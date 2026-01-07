@@ -6,7 +6,7 @@ import base64
 from PIL import Image
 import io
 from unittest.mock import patch, mock_open
-from pdd.preprocess import preprocess
+from pdd.preprocess import preprocess, get_file_path
 import subprocess
 import importlib
 from unittest.mock import MagicMock
@@ -328,9 +328,7 @@ def test_web_second_pass_executes_after_deferral() -> None:
     """Second pass without recursion should execute the deferred web scrape."""
     prompt = "Start <web>https://example.com</web> End"
     mock_firecrawl = MagicMock()
-    mock_response = MagicMock()
-    mock_response.markdown = "# Content"
-    mock_firecrawl.FirecrawlApp.return_value.scrape_url.return_value = mock_response
+    mock_firecrawl.Firecrawl.return_value.scrape.return_value = {'markdown': "# Content"}
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
         with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key'}):
@@ -548,17 +546,12 @@ def test_process_xml_web_tag() -> None:
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = f"This is a test {mock_markdown_content}"
 
-    # Since FirecrawlApp is imported inside the function, we need to patch the module
-    # Create a mock module with a FirecrawlApp class
+    # Since Firecrawl is imported inside the function, we need to patch the module
     mock_firecrawl = MagicMock()
-    mock_response = MagicMock()
-    mock_response.markdown = mock_markdown_content  # This is what's accessed in the code
-    
-    # Setup the mock FirecrawlApp class
     mock_app = MagicMock()
-    mock_app.scrape_url.return_value = mock_response
-    mock_firecrawl.FirecrawlApp.return_value = mock_app
-    
+    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
     # Patch the import at the module level
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
         # Mock the environment variable for API key
@@ -572,13 +565,13 @@ def test_process_xml_web_tag_missing_api_key() -> None:
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [Error: FIRECRAWL_API_KEY not set. Cannot scrape https://example.com]"
 
-    # Create a mock FirecrawlApp class
-    mock_firecrawl_app = MagicMock()
-    
+    # Create a mock Firecrawl class
+    mock_firecrawl_class = MagicMock()
+
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
-        with patch('builtins.__import__', side_effect=lambda name, *args: 
-              MagicMock(FirecrawlApp=mock_firecrawl_app) if name == 'firecrawl' else importlib.__import__(name, *args)):
+        with patch('builtins.__import__', side_effect=lambda name, *args:
+              MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
             # Ensure the API key environment variable is not set
             with patch.dict('os.environ', {}, clear=True):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
@@ -605,15 +598,15 @@ def test_process_xml_web_tag_empty_content() -> None:
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [No content available for https://example.com]"
 
-    # Create a mock FirecrawlApp class that returns empty response
-    mock_firecrawl_app = MagicMock()
-    mock_instance = mock_firecrawl_app.return_value
-    mock_instance.scrape_url.return_value = {}  # No markdown key
-    
+    # Create a mock Firecrawl class that returns empty response
+    mock_firecrawl_class = MagicMock()
+    mock_instance = mock_firecrawl_class.return_value
+    mock_instance.scrape.return_value = {}  # No markdown key
+
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
-        with patch('builtins.__import__', side_effect=lambda name, *args: 
-              MagicMock(FirecrawlApp=mock_firecrawl_app) if name == 'firecrawl' else importlib.__import__(name, *args)):
+        with patch('builtins.__import__', side_effect=lambda name, *args:
+              MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
             with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
@@ -625,15 +618,15 @@ def test_process_xml_web_tag_scraping_error() -> None:
     error_message = "API request failed"
     expected_output = f"This is a test [Web scraping error: {error_message}]"
 
-    # Create a mock FirecrawlApp class that raises an exception
-    mock_firecrawl_app = MagicMock()
-    mock_instance = mock_firecrawl_app.return_value
-    mock_instance.scrape_url.side_effect = Exception(error_message)
-    
+    # Create a mock Firecrawl class that raises an exception
+    mock_firecrawl_class = MagicMock()
+    mock_instance = mock_firecrawl_class.return_value
+    mock_instance.scrape.side_effect = Exception(error_message)
+
     # Patch the import
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
-        with patch('builtins.__import__', side_effect=lambda name, *args: 
-              MagicMock(FirecrawlApp=mock_firecrawl_app) if name == 'firecrawl' else importlib.__import__(name, *args)):
+        with patch('builtins.__import__', side_effect=lambda name, *args:
+              MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
             with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
@@ -1624,3 +1617,56 @@ Optional Docs: {DOC_FILES}
     single_brace_pattern = r'(?<!\{)\{(MODULE|PRD_FILE|DOC_FILES)\}(?!\})'
     matches = re.findall(single_brace_pattern, preprocessed)
     assert len(matches) == 0, f"Found single-brace variables: {matches}"
+
+
+def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
+    """
+    Verifies that get_file_path correctly falls back to the repository root
+    when run from a worktree where import shadowing occurs.
+
+    This test simulates the scenario where:
+    1. The CWD does not contain the target file.
+    2. The 'package_dir' (local pdd/pdd) does not contain the target file.
+    3. The file *does* exist in the repository root (parent of pdd/pdd).
+
+    Bug: https://github.com/gltanaka/pdd/issues/240
+    """
+    mock_file_name = "context/insert/1/prompt_to_update.prompt"
+
+    # Create a mock repository structure
+    # /tmp_path/mock_project/
+    # ├── pdd/                       <-- Mock repo root
+    # │   ├── pdd/                   <-- Mock Python package
+    # │   │   ├── preprocess.py
+    # │   │   └── __init__.py
+    # │   └── context/
+    # │       └── insert/
+    # │           └── 1/
+    # │               └── prompt_to_update.prompt
+    # └── other_files/
+
+    # Mock the location of path_resolution.py to simulate import shadowing
+    # This will make get_default_resolver() return paths inside our mock worktree.
+    mock_path_resolution_file = tmp_path / "mock_project" / "pdd" / "pdd" / "path_resolution.py"
+    mock_path_resolution_file.parent.mkdir(parents=True, exist_ok=True)
+    mock_path_resolution_file.write_text("...")  # Content doesn't matter for this test
+
+    # Create the mock context file in the repository root
+    mock_repo_root = tmp_path / "mock_project" / "pdd"
+    expected_file_path = mock_repo_root / mock_file_name
+    expected_file_path.parent.mkdir(parents=True, exist_ok=True)
+    expected_file_path.write_text("Mock context content")
+
+    # Change CWD to simulate running from the project root (not pdd/pdd)
+    # The CWD is 'tmp_path / "mock_project"' but the pdd source is in 'tmp_path / "mock_project" / "pdd"'
+    monkeypatch.chdir(tmp_path / "mock_project")
+
+    # Mock pdd.path_resolution.__file__ to return the path to our mock file
+    # This is crucial for simulating the 'package_root' calculation in get_default_resolver()
+    monkeypatch.setattr('pdd.path_resolution.__file__', str(mock_path_resolution_file))
+
+    # Expectation: get_file_path should find the file in the mock_repo_root
+    found_path = get_file_path(mock_file_name)
+
+    # Assert that the found path is the one in the mock repository root
+    assert found_path == str(expected_file_path)

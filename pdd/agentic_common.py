@@ -1,4 +1,3 @@
-# pdd/agentic_common.py
 from __future__ import annotations
 
 import json
@@ -28,6 +27,20 @@ CLI_COMMANDS: Dict[str, str] = {
 # Timeouts
 DEFAULT_TIMEOUT_SECONDS: float = 240.0
 TIMEOUT_ENV_VAR: str = "PDD_AGENTIC_TIMEOUT"
+
+# Per-step timeouts for agentic bug orchestrator (Issue #256)
+# Complex steps (reproduce, root cause, generate) get more time.
+STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,  # Setup
+    2: 240.0,  # Review
+    3: 240.0,  # Plan
+    4: 600.0,  # Reproduce (Complex)
+    5: 600.0,  # Root Cause (Complex)
+    6: 340.0,  # Verify Fix Plan
+    7: 1000.0,  # Generate Fix (Complex)
+    8: 600.0,  # Verify
+    9: 240.0,  # Final Verify
+}
 
 
 @dataclass(frozen=True)
@@ -609,6 +622,7 @@ def _run_with_provider(
     verbose: bool,
     quiet: bool,
     label: str = "",
+    timeout: Optional[float] = None,
 ) -> Tuple[bool, str, float]:
     """
     Invoke the given provider's CLI in headless JSON mode.
@@ -633,11 +647,14 @@ def _run_with_provider(
         agentic_instruction,
         use_interactive_mode=use_interactive,
     )
-    timeout = _get_agent_timeout()
+    
+    # Determine effective timeout: explicit > env var > default
+    effective_timeout = timeout if timeout is not None else _get_agent_timeout()
+    
     env = _build_subprocess_env(use_cli_auth=use_cli_auth)
 
     log_debug(
-        f"Invoking provider '{provider}' with timeout {timeout:.1f}s",
+        f"Invoking provider '{provider}' with timeout {effective_timeout:.1f}s",
         verbose=verbose,
         quiet=quiet,
         label=label,
@@ -656,7 +673,7 @@ def _run_with_provider(
             env=env,
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=effective_timeout,
             check=False,
         )
     except FileNotFoundError:
@@ -664,7 +681,7 @@ def _run_with_provider(
         log_error(message, verbose=verbose, quiet=quiet, label=label)
         return False, message, 0.0
     except subprocess.TimeoutExpired:
-        message = f"Provider '{provider}' CLI timed out after {timeout:.1f} seconds."
+        message = f"Provider '{provider}' CLI timed out after {effective_timeout:.1f} seconds."
         log_error(message, verbose=verbose, quiet=quiet, label=label)
         return False, message, 0.0
     except Exception as exc:
@@ -785,6 +802,7 @@ def run_agentic_task(
     verbose: bool = False,
     quiet: bool = False,
     label: str = "",
+    timeout: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Run an agentic task using the first available provider in preference order.
@@ -815,6 +833,8 @@ def run_agentic_task(
         verbose: Enable verbose logging (debug output).
         quiet: Suppress non-error logging.
         label: Optional label prefix for log messages (e.g. "agentic-fix").
+        timeout: Optional timeout in seconds. If provided, overrides environment
+                 variable and default timeout.
 
     Returns:
         Tuple[bool, str, float, str]:
@@ -887,6 +907,7 @@ def run_agentic_task(
                 verbose=verbose,
                 quiet=quiet,
                 label=label,
+                timeout=timeout,
             )
             total_cost += cost
 

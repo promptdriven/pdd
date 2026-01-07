@@ -38,12 +38,14 @@ CLOUD_ENDPOINTS = {
     "generateCode": "/generateCode",
     "generateExample": "/generateExample",
     "generateTest": "/generateTest",
+    "generateBugTest": "/generateBugTest",
     "fixCode": "/fixCode",
     "crashCode": "/crashCode",
     "verifyCode": "/verifyCode",
     "syncState": "/syncState",
     "trackUsage": "/trackUsage",
     "getCreditBalance": "/getCreditBalance",
+    "llmInvoke": "/llmInvoke",
 }
 
 

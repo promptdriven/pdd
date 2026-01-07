@@ -104,9 +104,9 @@ contexts:
   pdd_cli:
     paths: ["pdd/**", "*.py", "prompts/**", "tests/**"]
     defaults:
-      generate_output_path: "pdd/"
-      test_output_path: "tests/"
-      example_output_path: "context/"
+      generate_output_path: "pdd"
+      test_output_path: "tests"
+      example_output_path: "context"
       default_language: "python"
       target_coverage: 80.0
       strength: 1
