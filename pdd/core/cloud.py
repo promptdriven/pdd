@@ -45,6 +45,7 @@ CLOUD_ENDPOINTS = {
     "syncState": "/syncState",
     "trackUsage": "/trackUsage",
     "getCreditBalance": "/getCreditBalance",
+    "llmInvoke": "/llmInvoke",
 }
 
 
