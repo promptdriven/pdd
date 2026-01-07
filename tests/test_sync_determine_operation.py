@@ -1928,7 +1928,16 @@ contexts:
             (tmp_path / "examples").mkdir()
             
             # Mock construct_paths to return configured paths
-            def mock_construct_paths(input_file_paths, force, quiet, command, command_options, context_override=None):
+            def mock_construct_paths(
+                input_file_paths,
+                force,
+                quiet,
+                command,
+                command_options,
+                context_override=None,
+                path_resolution_mode=None,
+                **_ignored,
+            ):
                 # Simulate what construct_paths would return with .pddrc configuration
                 return (
                     {
@@ -1962,6 +1971,53 @@ contexts:
             
         finally:
             os.chdir(original_cwd)
+
+    def test_get_pdd_file_paths_uses_context_relative_basename_for_templates(self, tmp_path, monkeypatch):
+        pddrc_content = """version: "1.0"
+contexts:
+  frontend-components:
+    paths:
+      - "frontend/components/**"
+    defaults:
+      default_language: "typescriptreact"
+      outputs:
+        prompt:
+          path: "prompts/frontend/components/{category}/{name}_{language}.prompt"
+        code:
+          path: "frontend/src/components/{category}/{name}/{name}.tsx"
+        example:
+          path: "context/frontend/{name}_example.tsx"
+  default:
+    defaults:
+      default_language: "python"
+"""
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        prompt_path = (
+            tmp_path
+            / "prompts"
+            / "frontend"
+            / "components"
+            / "marketplace"
+            / "AssetCard_typescriptreact.prompt"
+        )
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text("Generate AssetCard component", encoding="utf-8")
+
+        repo_root = Path(__file__).resolve().parents[1]
+        monkeypatch.setenv("PDD_PATH", str(repo_root))
+        monkeypatch.chdir(tmp_path)
+
+        paths = get_pdd_file_paths(
+            basename="frontend/components/marketplace/AssetCard",
+            language="typescriptreact",
+            prompts_dir="prompts",
+            context_override="frontend-components",
+        )
+
+        assert paths["prompt"].resolve() == prompt_path.resolve()
+        assert paths["code"].as_posix() == "frontend/src/components/marketplace/AssetCard/AssetCard.tsx"
+        assert paths["example"].as_posix() == "context/frontend/AssetCard_example.tsx"
     
     def test_get_pdd_file_paths_fallback_without_construct_paths(self, tmp_path, monkeypatch):
         """Test that paths use configured directories even without .pddrc when prompt is missing.
@@ -2247,15 +2303,21 @@ def test_get_pdd_file_paths_respects_pddrc_with_PDD_PATH(pdd_test_environment, m
 
 
 def test_get_pdd_file_paths_with_subdirectory_basename(pdd_test_environment, monkeypatch):
-    """Should preserve subdirectory structure in output paths.
+    """When config paths end with /, files go directly into configured directory.
 
-    For basename='core/cloud', paths should be:
-    - code: pdd/core/cloud.py (NOT pdd/cloud.py)
-    - test: tests/core/test_cloud.py (NOT tests/test_cloud.py)
-    - example: examples/core/cloud_example.py (NOT examples/cloud_example.py)
+    For basename='core/cloud' with .pddrc paths ending in /:
+    - generate_output_path: pdd/ → code: pdd/cloud.py
+    - test_output_path: tests/ → test: tests/test_cloud.py
+    - example_output_path: examples/ → example: examples/cloud_example.py
 
-    This test validates the fix for the bug where subdirectory prefixes were
-    being dropped from output paths.
+    Note: When config paths explicitly end with /, they are treated as COMPLETE
+    directories. The dir_prefix from basename is NOT added because the config
+    already specifies the exact directory. This prevents double-pathing bugs
+    like 'backend/functions/utils/backend/utils/file.py'.
+
+    If you WANT subdirectory structure, either:
+    1. Don't end config paths with / (e.g., 'pdd' instead of 'pdd/')
+    2. Use template-based paths with {dir_prefix} placeholder
     """
     _write_pddrc_here()
 
@@ -2269,17 +2331,19 @@ def test_get_pdd_file_paths_with_subdirectory_basename(pdd_test_environment, mon
 
     paths = get_pdd_file_paths(basename="core/cloud", language="python", prompts_dir="prompts")
 
-    # Verify subdirectory is preserved in all paths
+    # When config paths end with /, files go directly into that directory
+    # The dir_prefix (core/) is NOT added because explicit paths are used
     code_path = paths["code"].as_posix()
     test_path = paths["test"].as_posix()
     example_path = paths["example"].as_posix()
 
-    assert "core/cloud.py" in code_path, \
-        f"Expected 'core/cloud.py' in code path, got {code_path}"
-    assert "core/test_cloud.py" in test_path, \
-        f"Expected 'core/test_cloud.py' in test path, got {test_path}"
-    assert "core/cloud_example.py" in example_path, \
-        f"Expected 'core/cloud_example.py' in example path, got {example_path}"
+    # Files go directly into configured directories (no dir_prefix added)
+    assert code_path.endswith("pdd/cloud.py"), \
+        f"Expected path ending with 'pdd/cloud.py', got {code_path}"
+    assert test_path.endswith("tests/test_cloud.py"), \
+        f"Expected path ending with 'tests/test_cloud.py', got {test_path}"
+    assert example_path.endswith("examples/cloud_example.py"), \
+        f"Expected path ending with 'examples/cloud_example.py', got {example_path}"
 
 
 # --- Regression Tests: All Files Exist But Workflow Incomplete ---

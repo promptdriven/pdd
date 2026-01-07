@@ -1246,7 +1246,9 @@ def sync_orchestration(
                                     for var in ['FORCE_COLOR', 'COLUMNS']:
                                         env.pop(var, None)
                                     # Get language-appropriate run command from language_format.csv
-                                    example_path = str(pdd_files['example'])
+                                    # Bug fix: Use .resolve() to get absolute path, avoiding doubled paths
+                                    # when cwd is set to the parent directory
+                                    example_path = str(pdd_files['example'].resolve())
                                     run_cmd = get_run_command_for_file(example_path)
                                     if run_cmd:
                                         # Use the language-specific interpreter (e.g., node for .js)
@@ -1258,7 +1260,7 @@ def sync_orchestration(
                                     returncode, stdout, stderr = _run_example_with_error_detection(
                                         cmd_parts,
                                         env=env,
-                                        cwd=str(pdd_files['example'].parent),
+                                        cwd=str(pdd_files['example'].resolve().parent),
                                         timeout=60
                                     )
 
@@ -1538,7 +1540,9 @@ def sync_orchestration(
                                  for var in ['FORCE_COLOR', 'COLUMNS']:
                                      clean_env.pop(var, None)
                                  # Get language-appropriate run command
-                                 example_path = str(pdd_files['example'])
+                                 # Bug fix: Use .resolve() to get absolute path, avoiding doubled paths
+                                 # when cwd is set to the parent directory
+                                 example_path = str(pdd_files['example'].resolve())
                                  run_cmd = get_run_command_for_file(example_path)
                                  if run_cmd:
                                      cmd_parts = run_cmd.split()
@@ -1548,7 +1552,7 @@ def sync_orchestration(
                                  returncode, stdout, stderr = _run_example_with_error_detection(
                                      cmd_parts,
                                      env=clean_env,
-                                     cwd=str(pdd_files['example'].parent),
+                                     cwd=str(pdd_files['example'].resolve().parent),
                                      timeout=60
                                  )
                                  # Include test_hash for staleness detection

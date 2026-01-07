@@ -64,11 +64,11 @@ PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
 # CAP public repo (optional second destination)
 PUBLIC_PDD_CAP_REPO_DIR ?= staging/public/pdd_cap
 PUBLIC_PDD_CAP_REMOTE ?= https://github.com/promptdriven/pdd_cap.git
-# Top-level files to publish if present
-PUBLIC_ROOT_FILES ?= LICENSE CHANGELOG.md CONTRIBUTING.md requirements.txt pyproject.toml .env.example README.md .gitignore SETUP_WITH_GEMINI.md Makefile pdd-local.sh .pddrc
+# Top-level files to publish if present (read from .sync-config.yml)
+PUBLIC_ROOT_FILES ?= $(shell python scripts/get_sync_patterns.py root_files 2>/dev/null || echo "LICENSE README.md requirements.txt pyproject.toml")
 # Include core unit tests by default
 PUBLIC_COPY_TESTS ?= 1
-PUBLIC_TEST_INCLUDE ?= tests/test_*.py tests/__init__.py tests/conftest.py
+PUBLIC_TEST_INCLUDE ?= $(shell python scripts/get_sync_patterns.py test_patterns 2>/dev/null || echo "tests/test_*.py tests/__init__.py tests/conftest.py")
 PUBLIC_TEST_EXCLUDE ?= tests/regression* tests/sync_regression* tests/**/regression* tests/**/sync_regression* tests/**/*.ipynb tests/csv/**
 PUBLIC_COPY_CONTEXT ?= 1
 PUBLIC_CONTEXT_INCLUDE ?= context/**/*_example.py
@@ -663,98 +663,12 @@ publish-public:
 	fi
 	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
-	@echo "Copying examples to public repo"
-	@cp -r ./examples $(PUBLIC_PDD_REPO_DIR)/
-	@echo "Copying doctrine doc to public repo"
-	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs
-	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_REPO_DIR)/docs/
-	@echo "Copying prompting guide to public repo"
-	@cp docs/prompting_guide.md $(PUBLIC_PDD_REPO_DIR)/docs/
-	@echo "Copying onboarding guide to public repo"
-	@cp docs/ONBOARDING.md $(PUBLIC_PDD_REPO_DIR)/docs/
-	@echo "Copying goldilocks prompt image to public repo"
-	@cp docs/goldilocks_prompt.jpeg $(PUBLIC_PDD_REPO_DIR)/docs/
-	@echo "Copying demo video to public repo"
-	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/videos
-	@cp docs/videos/handpaint_demo.gif $(PUBLIC_PDD_REPO_DIR)/docs/videos/
-	@echo "Copying specific whitepaper files to public repo"
-	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report
-	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report
-	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" $(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/
-	@cp \
-		docs/whitepaper_with_benchmarks/analysis_report/overall_success_rate.png \
-		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_execution_time.png \
-		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_api_cost.png \
-		docs/whitepaper_with_benchmarks/analysis_report/cost_per_successful_task.png \
-		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_file_size.png \
-		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_file_size.png \
-		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_file_size.png \
-		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_edit_type.png \
-		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_edit_type.png \
-		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_edit_type.png \
-		$(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report/
-	@cp \
-		docs/whitepaper_with_benchmarks/creation_report/total_cost_comparison.png \
-		docs/whitepaper_with_benchmarks/creation_report/total_time_comparison.png \
-		docs/whitepaper_with_benchmarks/creation_report/pdd_avg_cost_per_module_dist.png \
-		docs/whitepaper_with_benchmarks/creation_report/claude_cost_per_run_dist.png \
-		$(PUBLIC_PDD_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report/
-	@echo "Copying VS Code extension to public repo"
-	@mkdir -p $(PUBLIC_PDD_REPO_DIR)/utils
-	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_REPO_DIR)/utils/
-	@echo "Copying selected top-level files to public repo (if present): $(PUBLIC_ROOT_FILES)"
-	@set -e; for f in $(PUBLIC_ROOT_FILES); do \
-		if [ -f "$$f" ]; then \
-			echo "  -> $$f"; \
-			cp "$$f" $(PUBLIC_PDD_REPO_DIR)/; \
-		fi; \
-	done
-	@if [ -n "$(strip $(PUBLIC_REGRESSION_SCRIPTS))" ]; then \
-		echo "Copying regression scripts to public repo"; \
-		mkdir -p $(PUBLIC_PDD_REPO_DIR)/tests; \
-		for script in $(PUBLIC_REGRESSION_SCRIPTS); do \
-			if [ -f "$$script" ]; then \
-				echo "  -> $$script"; \
-				cp "$$script" $(PUBLIC_PDD_REPO_DIR)/tests/; \
-			fi; \
-		done; \
-	else \
-		echo "No regression scripts found to copy"; \
-	fi
-	@if [ "$(PUBLIC_COPY_TESTS)" = "1" ]; then \
-		echo "Copying core unit tests to public repo"; \
-		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
-			--dest $(PUBLIC_PDD_REPO_DIR) \
-			--copy-tests \
-			$(foreach pat,$(PUBLIC_TEST_INCLUDE),--tests-include '$(pat)') \
-			$(foreach xpat,$(PUBLIC_TEST_EXCLUDE),--tests-exclude '$(xpat)'); \
-	else \
-		echo "Skipping tests copy (PUBLIC_COPY_TESTS=$(PUBLIC_COPY_TESTS))"; \
-	fi
-	@if [ "$(PUBLIC_COPY_CONTEXT)" = "1" ]; then \
-		echo "Copying context examples to public repo"; \
-		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
-			--dest $(PUBLIC_PDD_REPO_DIR) \
-			--copy-context \
-			$(foreach pat,$(PUBLIC_CONTEXT_INCLUDE),--context-include '$(pat)') \
-			$(foreach xpat,$(PUBLIC_CONTEXT_EXCLUDE),--context-exclude '$(xpat)'); \
-	else \
-		echo "Skipping context copy (PUBLIC_COPY_CONTEXT=$(PUBLIC_COPY_CONTEXT))"; \
-	fi
-		@echo "Copying package-data files defined in pyproject.toml to public repo"
-		@mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd
-		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py --dest $(PUBLIC_PDD_REPO_DIR)
-	@# Copy test prompts for regression tests (from root prompts/ to public repo)
-	@if [ -f "prompts/test_other_python.prompt" ]; then \
-		echo "Copying test prompt for regression tests"; \
-		mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd/prompts; \
-		cp prompts/test_other_python.prompt $(PUBLIC_PDD_REPO_DIR)/pdd/prompts/; \
-	fi
-	@if [ -f "prompts/encode_message_python.prompt" ]; then \
-		echo "Copying encode_message prompt for regression tests"; \
-		mkdir -p $(PUBLIC_PDD_REPO_DIR)/pdd/prompts; \
-		cp prompts/encode_message_python.prompt $(PUBLIC_PDD_REPO_DIR)/pdd/prompts/; \
-	fi
+	@echo "Copying files from .sync-config.yml (shared section only)"
+	@python scripts/copy_package_data_to_public.py \
+		--dest $(PUBLIC_PDD_REPO_DIR) \
+		--project-root . \
+		--config .sync-config.yml \
+		--sections shared
 	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
 	@if [ -d "$(PUBLIC_PDD_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_REPO_DIR)/prompts" ]; then \
 		echo "Creating prompts symlink"; \
@@ -807,89 +721,12 @@ publish-public-cap:
 	fi
 	@echo "Ensuring CAP public repo directory exists: $(PUBLIC_PDD_CAP_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)
-	@echo "Copying examples to CAP public repo"
-	@cp -r ./examples $(PUBLIC_PDD_CAP_REPO_DIR)/
-	@echo "Copying doctrine doc to CAP public repo"
-	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs
-	@cp docs/prompt-driven-development-doctrine.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
-	@echo "Copying prompting guide to CAP public repo"
-	@cp docs/prompting_guide.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
-	@echo "Copying onboarding guide to CAP public repo"
-	@cp docs/ONBOARDING.md $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
-	@echo "Copying goldilocks prompt image to CAP public repo"
-	@cp docs/goldilocks_prompt.jpeg $(PUBLIC_PDD_CAP_REPO_DIR)/docs/
-	@echo "Copying demo video to CAP public repo"
-	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs/videos
-	@cp docs/videos/handpaint_demo.gif $(PUBLIC_PDD_CAP_REPO_DIR)/docs/videos/
-	@echo "Copying specific whitepaper files to CAP public repo"
-	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report
-	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report
-	@cp "docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md" $(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/
-	@cp \
-		docs/whitepaper_with_benchmarks/analysis_report/overall_success_rate.png \
-		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_execution_time.png \
-		docs/whitepaper_with_benchmarks/analysis_report/overall_avg_api_cost.png \
-		docs/whitepaper_with_benchmarks/analysis_report/cost_per_successful_task.png \
-		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_file_size.png \
-		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_file_size.png \
-		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_file_size.png \
-		docs/whitepaper_with_benchmarks/analysis_report/success_rate_by_edit_type.png \
-		docs/whitepaper_with_benchmarks/analysis_report/avg_api_cost_by_edit_type.png \
-		docs/whitepaper_with_benchmarks/analysis_report/avg_execution_time_by_edit_type.png \
-		$(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/analysis_report/
-	@cp \
-		docs/whitepaper_with_benchmarks/creation_report/total_cost_comparison.png \
-		docs/whitepaper_with_benchmarks/creation_report/total_time_comparison.png \
-		docs/whitepaper_with_benchmarks/creation_report/pdd_avg_cost_per_module_dist.png \
-		docs/whitepaper_with_benchmarks/creation_report/claude_cost_per_run_dist.png \
-		$(PUBLIC_PDD_CAP_REPO_DIR)/docs/whitepaper_with_benchmarks/creation_report/
-	@echo "Copying VS Code extension to CAP public repo"
-	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/utils
-	@cp -r ./utils/vscode_prompt $(PUBLIC_PDD_CAP_REPO_DIR)/utils/
-	@echo "Copying selected top-level files to CAP public repo (if present): $(PUBLIC_ROOT_FILES)"
-	@set -e; for f in $(PUBLIC_ROOT_FILES); do \
-		if [ -f "$$f" ]; then \
-			echo "  -> $$f"; \
-			cp "$$f" $(PUBLIC_PDD_CAP_REPO_DIR)/; \
-		fi; \
-	done
-	@if [ -n "$(strip $(PUBLIC_REGRESSION_SCRIPTS))" ]; then \
-		echo "Copying regression scripts to CAP public repo"; \
-		mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/tests; \
-		for script in $(PUBLIC_REGRESSION_SCRIPTS); do \
-			if [ -f "$$script" ]; then \
-				echo "  -> $$script"; \
-				cp "$$script" $(PUBLIC_PDD_CAP_REPO_DIR)/tests/; \
-			fi; \
-		done; \
-	else \
-		echo "No regression scripts found to copy"; \
-	fi
-	@if [ "$(PUBLIC_COPY_TESTS)" = "1" ]; then \
-		echo "Copying core unit tests to CAP public repo"; \
-		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
-			--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
-			--copy-tests \
-			$(foreach pat,$(PUBLIC_TEST_INCLUDE),--tests-include '$(pat)') \
-			$(foreach xpat,$(PUBLIC_TEST_EXCLUDE),--tests-exclude '$(xpat)'); \
-	else \
-		echo "Skipping tests copy (PUBLIC_COPY_TESTS=$(PUBLIC_COPY_TESTS))"; \
-	fi
-	@if [ "$(PUBLIC_COPY_CONTEXT)" = "1" ]; then \
-		echo "Copying context examples to CAP public repo"; \
-		conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
-			--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
-			--copy-context \
-			$(foreach pat,$(PUBLIC_CONTEXT_INCLUDE),--context-include '$(pat)') \
-			$(foreach xpat,$(PUBLIC_CONTEXT_EXCLUDE),--context-exclude '$(xpat)'); \
-	else \
-		echo "Skipping context copy (PUBLIC_COPY_CONTEXT=$(PUBLIC_COPY_CONTEXT))"; \
-	fi
-		@echo "Copying package-data files (including all prompts) to CAP public repo"
-		@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)/pdd
-		@conda run -n pdd --no-capture-output python scripts/copy_package_data_to_public.py \
-			--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
-			--extra-pattern 'prompts/**/*.prompt'
+	@echo "Copying files from .sync-config.yml (shared + cap_only sections)"
+	@python scripts/copy_package_data_to_public.py \
+		--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
+		--project-root . \
+		--config .sync-config.yml \
+		--sections shared cap_only
 	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
 	@if [ -d "$(PUBLIC_PDD_CAP_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_CAP_REPO_DIR)/prompts" ]; then \
 		echo "Creating prompts symlink"; \
