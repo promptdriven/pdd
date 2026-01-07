@@ -18,7 +18,9 @@
      - First check `PDD_JWT_TOKEN` env var (for testing/CI)
      - Fall back to device flow auth via `get_jwt_token` from `..get_jwt_token`
      - Catch all auth exceptions and return None on failure
-  5) `is_cloud_enabled()`: Return True if both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set
+  5) `is_cloud_enabled()`: Return True if cloud features are available. Cloud is enabled if:
+     - `PDD_JWT_TOKEN` is set (for injected token in testing/CI scenarios), OR
+     - Both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set (for device flow auth)
   6) Export module-level constants for env var names and cloud endpoints
   7) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
 
