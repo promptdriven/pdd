@@ -25,6 +25,162 @@ from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, 
 from . import logo_animation
 from rich.style import Style
 
+# --- Sync steering (used by sync_orchestration.py) ---
+
+_ACTIVE_SYNC_APP = None  # set by SyncApp when running interactively
+
+# Default steering timeout (seconds). Can be overridden via env var.
+try:
+    DEFAULT_STEER_TIMEOUT_S = float(os.environ.get("PDD_STEER_TIMEOUT_S", "8"))
+except Exception:
+    DEFAULT_STEER_TIMEOUT_S = 8.0
+
+
+def _is_headless_environment() -> bool:
+    """Best-effort check for whether we're in a headless / CI / non-interactive run."""
+
+    # Test override (used by unit tests and local debugging)
+    try:
+        override = os.environ.get("PDD_TEST_HEADLESS", "").strip().lower()
+        if override in {"1", "true", "yes"}:
+            return True
+        if override in {"0", "false", "no"}:
+            return False
+    except Exception:
+        pass
+
+    try:
+        if os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"}:
+            return True
+    except Exception:
+        pass
+
+    # IMPORTANT: do not consult `sys.stdout` here because SyncApp redirects it.
+    # Use the original stdio streams instead.
+    try:
+        return not bool(getattr(sys.__stdout__, "isatty", lambda: False)())
+    except Exception:
+        return True
+
+
+
+class ChoiceScreen(ModalScreen[str]):
+    """Modal choice picker with a default selection after a short timeout."""
+
+    CSS = """
+    ChoiceScreen {
+        align: center middle;
+    }
+
+    #choice-dialog {
+        width: 90;
+        height: auto;
+        border: thick $primary;
+        background: #0A0A23;
+        padding: 1 2;
+    }
+
+    #choice-title {
+        width: 100%;
+        text-align: center;
+        text-style: bold;
+        color: #00D8FF;
+        margin-bottom: 1;
+    }
+
+    #choice-prompt {
+        width: 100%;
+        color: #FFFFFF;
+        margin-bottom: 1;
+    }
+
+    #choice-buttons {
+        width: 100%;
+        height: auto;
+    }
+
+    #choice-buttons Button {
+        width: 100%;
+        margin: 0 0 1 0;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(
+        self,
+        title: str,
+        prompt: str,
+        choices: list[str],
+        default: str,
+        timeout_s: float,
+    ) -> None:
+        super().__init__()
+        self.title_text = title
+        self.prompt_text = prompt
+        self.choices = choices
+        self.default = default
+        self.timeout_s = max(0.0, float(timeout_s))
+        self._dismissed = False
+
+    def compose(self) -> ComposeResult:
+        with Container(id="choice-dialog"):
+            yield Label(self.title_text, id="choice-title")
+            yield Label(self.prompt_text, id="choice-prompt")
+            with Vertical(id="choice-buttons"):
+                for idx, choice in enumerate(self.choices, start=1):
+                    # Show numeric shortcuts for the first 9 options
+                    label = f"{idx}. {choice}" if idx <= 9 else choice
+                    variant = "primary" if choice == self.default else "default"
+                    # Use a stable, Textual-safe id and map back via index
+                    yield Button(label, id=f"choice-{idx}", variant=variant)
+
+    async def on_mount(self) -> None:
+        # Auto-default after timeout
+        if self.timeout_s > 0:
+            asyncio.create_task(self._auto_default())
+
+    async def _auto_default(self) -> None:
+        try:
+            await asyncio.sleep(self.timeout_s)
+        except Exception:
+            return
+        if not self._dismissed:
+            self._dismissed = True
+            self.dismiss(self.default)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id and event.button.id.startswith("choice-"):
+            # Button ids are `choice-<1-based index>`
+            try:
+                idx_str = event.button.id[len("choice-"):]
+                idx = int(idx_str)
+                if 1 <= idx <= len(self.choices):
+                    choice = self.choices[idx - 1]
+                else:
+                    choice = self.default
+            except Exception:
+                choice = self.default
+            self._dismissed = True
+            self.dismiss(choice)
+
+    def on_key(self, event) -> None:
+        # Numeric shortcuts 1-9
+        try:
+            if event.character and event.character.isdigit():
+                idx = int(event.character)
+                if 1 <= idx <= 9 and idx <= len(self.choices):
+                    self._dismissed = True
+                    self.dismiss(self.choices[idx - 1])
+        except Exception:
+            pass
+
+    def action_cancel(self) -> None:
+        # Treat cancel as choosing the default
+        self._dismissed = True
+        self.dismiss(self.default)
 
 class ConfirmScreen(ModalScreen[bool]):
     """A modal confirmation dialog for user prompts within the TUI."""
@@ -448,6 +604,15 @@ class SyncApp(App):
         # Reference to self for stdin redirector (using list for mutability)
         self._app_ref: List[Optional['SyncApp']] = [None]
 
+        # Choice mechanism for worker thread to request a selection
+        self._choice_event = threading.Event()
+        self._choice_result: Optional[str] = None
+        self._choice_title = ""
+        self._choice_prompt = ""
+        self._choice_choices: list[str] = []
+        self._choice_default = ""
+        self._choice_timeout_s = 0.0
+
     @property
     def captured_logs(self) -> List[str]:
         if self.redirector:
@@ -483,6 +648,9 @@ class SyncApp(App):
         yield Container(RichLog(highlight=True, markup=True, wrap=True, id="log"), id="log-container")
 
     def on_mount(self) -> None:
+        global _ACTIVE_SYNC_APP
+        _ACTIVE_SYNC_APP = self
+        
         self.log_widget = self.query_one("#log", RichLog)
         self.progress_bar = self.query_one("#progress-bar", ProgressBar)
         self.progress_container = self.query_one("#progress-container", Container)
@@ -748,6 +916,106 @@ class SyncApp(App):
 
         return self._confirm_result
 
+    def request_choice(self, title: str, prompt: str, choices: list[str], default: str, *, timeout_s: float = DEFAULT_STEER_TIMEOUT_S) -> str:
+        """Ask the user to choose from a list of options.
+
+        Safe to call from non-UI threads.
+        If the user provides no input for `timeout_s`, defaults to `default`.
+        In headless mode, returns `default`.
+        """
+        if _is_headless_environment():
+            return default
+
+        self._choice_event.clear()
+        self._choice_result = None
+        self._choice_title = title
+        self._choice_prompt = prompt
+        self._choice_choices = list(choices)
+        self._choice_default = default
+        self._choice_timeout_s = float(timeout_s)
+
+        def schedule_modal() -> None:
+            asyncio.create_task(self._show_choice_modal_async())
+
+        self.call_from_thread(schedule_modal)
+
+        # Give the UI time to mount and the timeout to elapse; the screen itself
+        # auto-dismisses at `timeout_s`, so we just need a safe cushion here.
+        if not self._choice_event.wait(timeout=max(10.0, self._choice_timeout_s + 30.0)):
+            return default
+
+        return self._choice_result or default
+
+    async def _show_choice_modal_async(self) -> None:
+        """Async method to show the choice modal."""
+        try:
+            result = await self.push_screen_wait(
+                ChoiceScreen(
+                    self._choice_title,
+                    self._choice_prompt,
+                    self._choice_choices,
+                    self._choice_default,
+                    self._choice_timeout_s,
+                )
+            )
+            self._choice_result = result
+        except Exception as e:
+            print(f"Choice modal error: {e}", file=sys.__stderr__)
+            self._choice_result = self._choice_default
+        finally:
+            self._choice_event.set()
+
+
+    def request_steering(self, recommended_op: str, reason: str, *, timeout_s: float = DEFAULT_STEER_TIMEOUT_S) -> tuple[str, bool]:
+        """Return (chosen_operation, should_abort).
+
+        In headless/CI mode, returns (recommended_op, False).
+        """
+        if _is_headless_environment():
+            return recommended_op, False
+
+        if os.environ.get("PDD_DISABLE_STEERING", "").strip().lower() in {"1", "true", "yes"}:
+            return recommended_op, False
+
+        choices = [
+            recommended_op,
+            "generate",
+            "example",
+            "crash",
+            "verify",
+            "test",
+            "test_extend",
+            "fix",
+            "update",
+            "auto-deps",
+            "abort",
+        ]
+
+        seen = set()
+        deduped: list[str] = []
+        for c in choices:
+            if c not in seen:
+                seen.add(c)
+                deduped.append(c)
+
+        title = "Sync steering"
+        prompt = (
+            f"Recommended: {recommended_op} ({reason})\nChoose next operation:"
+            if reason else
+            f"Recommended: {recommended_op}\nChoose next operation:"
+        )
+
+        chosen = self.request_choice(
+            title=title,
+            prompt=prompt,
+            choices=deduped,
+            default=recommended_op,
+            timeout_s=timeout_s,
+        )
+        if chosen == "abort":
+            return recommended_op, True
+        return chosen, False
+
     async def _show_confirm_modal_async(self) -> None:
         """Async method to show the confirmation modal."""
         try:
@@ -846,3 +1114,43 @@ def show_exit_animation():
     console.print(Align.center(logo_panel))
     time.sleep(1.0)
     console.clear()
+
+def maybe_steer_operation(
+    operation: str,
+    reason: str = "",
+    app: Optional["SyncApp"] = None,
+    quiet: bool = False,
+    skip_tests: bool = False,
+    skip_verify: bool = False,
+    *,
+    timeout_s: float = DEFAULT_STEER_TIMEOUT_S,
+    **kwargs,
+) -> tuple[str, bool]:
+    """Adapter used by sync_orchestration.py to support user steering.
+
+    Returns:
+        (chosen_operation, should_abort)
+
+    Notes:
+    - In headless/CI/non-TTY runs we do not prompt.
+    - `quiet`, `skip_tests`, and `skip_verify` are accepted for compatibility.
+    - Extra kwargs are accepted so older/newer callers don't crash.
+    """
+    if quiet or _is_headless_environment():
+        return operation, False
+
+    disallowed = set()
+    if skip_tests:
+        disallowed.update({"test", "test_extend", "fix"})
+    if skip_verify:
+        disallowed.add("verify")
+
+    active_app = app or _ACTIVE_SYNC_APP
+    if active_app is None:
+        return operation, False
+
+    chosen, should_abort = active_app.request_steering(operation, reason, timeout_s=timeout_s)
+    if chosen in disallowed:
+        return operation, False
+
+    return chosen, should_abort
