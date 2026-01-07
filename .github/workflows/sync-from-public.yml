@@ -167,7 +167,7 @@ jobs:
           SOURCE="${{ steps.source.outputs.repo }}"
           SAFE_SOURCE="${SOURCE//\//-}"
 
-          git checkout -b "sync/from-$SAFE_SOURCE-${{ github.run_id }}-${{ github.run_attempt }}"
+          git checkout -B "sync/from-$SAFE_SOURCE"
 
           echo "${{ steps.changed.outputs.files_b64 }}" | base64 -d | while read -r file; do
             if [ -n "$file" ]; then
@@ -199,7 +199,7 @@ jobs:
 
           git commit -m "sync: Import from $SOURCE"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git push -u origin "sync/from-$SAFE_SOURCE-${{ github.run_id }}-${{ github.run_attempt }}"
+          git push origin "sync/from-$SAFE_SOURCE" --force
 
           # Build conflict warning if any
           CONFLICTS_B64="${{ steps.changed.outputs.conflicts_b64 }}"
@@ -214,6 +214,13 @@ jobs:
           Please review these changes carefully - local fixes may be lost!
 
           "
+          fi
+
+          # Check if PR already exists (force-push updated it)
+          EXISTING_PR=$(gh pr list --head "sync/from-$SAFE_SOURCE" --state open --json number -q '.[0].number')
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Updated existing PR #$EXISTING_PR via force-push"
+            exit 0
           fi
 
           gh pr create \
