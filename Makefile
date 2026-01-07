@@ -628,6 +628,9 @@ release: check-deps check-suspicious-files
 	fi
 	@# Post-release cleanup check (Issue #186)
 	@$(MAKE) check-suspicious-files
+	@# Update CHANGELOG.md with changes from this release
+	@echo "Updating CHANGELOG.md..."
+	@claude --dangerously-skip-permissions -p "do a git diff between the prior version and the current version to update CHANGELOG.md. It should edit the file directly"
 
 analysis:
 	@echo "Running regression analysis"
