@@ -2096,6 +2096,22 @@ def _has_cloud_jwt_token() -> bool:
         return False
 
 
+def _wait_for_cloud_credentials(max_retries: int = 3, delay: float = 1.0) -> bool:
+    """
+    Retry checking for cloud credentials with delays.
+
+    pytest-xdist workers may have delayed access to keyring or env vars.
+    This gives the system a chance to make credentials available.
+    """
+    import time
+    for attempt in range(max_retries):
+        if _has_cloud_credentials() and _has_cloud_jwt_token():
+            return True
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    return False
+
+
 requires_cloud_e2e = pytest.mark.skipif(
     not (_has_cloud_credentials() and _has_cloud_jwt_token()),
     reason="Cloud E2E tests require credentials (API keys) and auth token (PDD_JWT_TOKEN or stored refresh token)"
@@ -2110,6 +2126,10 @@ def test_fix_main_cloud_e2e_non_loop(tmp_path, capsys):
     """
     import os
     import click
+
+    # Retry credentials check (pytest-xdist workers may have delayed keyring access)
+    if not _wait_for_cloud_credentials(max_retries=3, delay=1.0):
+        pytest.skip("Cloud credentials not available in this worker process after retries")
 
     # Set PDD_CLOUD_ONLY to prevent silent fallback to local
     os.environ['PDD_CLOUD_ONLY'] = '1'
@@ -2197,6 +2217,10 @@ def test_fix_main_cloud_e2e_loop(tmp_path, capsys):
     """
     import os
     import click
+
+    # Retry credentials check (pytest-xdist workers may have delayed keyring access)
+    if not _wait_for_cloud_credentials(max_retries=3, delay=1.0):
+        pytest.skip("Cloud credentials not available in this worker process after retries")
 
     # Set PDD_CLOUD_ONLY to prevent silent fallback to local
     os.environ['PDD_CLOUD_ONLY'] = '1'
