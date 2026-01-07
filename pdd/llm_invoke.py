@@ -1181,6 +1181,7 @@ _PROSE_FIELD_NAMES = frozenset({
     'details',             # VerificationOutput - issue details
     'description',         # General prose descriptions
     'focus',               # Focus descriptions
+    'file_summary',        # FileSummary - prose summaries of file contents
 })
 
 
