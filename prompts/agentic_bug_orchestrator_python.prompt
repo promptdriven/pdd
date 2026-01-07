@@ -18,7 +18,9 @@ Orchestrator for the 9-step agentic bug investigation workflow. Runs each step a
 For each step (1-9):
 1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
 2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
-3. Call `run_agentic_task(formatted_prompt, cwd, ...)`
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=STEP_TIMEOUTS.get(step_num))`
+   - Import `STEP_TIMEOUTS` from `agentic_common` (Issue #261)
+   - Pass step-specific timeout to ensure complex steps get adequate time
 4. Store the output for use by subsequent steps
 5. Accumulate cost: `total_cost += step_cost`
 
@@ -134,6 +136,7 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
 
 % Dependencies
+Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>
