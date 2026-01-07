@@ -51,60 +51,62 @@ class CodeFixLikeModel(BaseModel):
 @pytest.fixture
 def mock_load_models():
     # Mock the internal helper that returns a DataFrame
-    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
-        mock_data = [
-            MockModelInfoData( # Base model
-                provider='OpenAI', model='gpt-5-nano', input=0.02, output=0.03, # avg_cost=0.025
-                coding_arena_elo=1500, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
-                max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
-            ),
-            MockModelInfoData( # Cheapest model
-                provider='OpenAI', model='cheap-model', input=0.01, output=0.015, # avg_cost=0.0125
-                coding_arena_elo=1200, structured_output=False, base_url="", api_key="OPENAI_API_KEY",
-                max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
-            ),
-            MockModelInfoData( # Highest ELO model
-                provider='Anthropic', model='claude-3', input=0.025, output=0.035, # avg_cost=0.03
-                coding_arena_elo=1600, structured_output=False, base_url="", api_key="ANTHROPIC_API_KEY",
-                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=1000
-            ),
-            MockModelInfoData( # Closest to interpolated values in tests
-                provider='Google', model='gemini-pro', input=0.015, output=0.025, # avg_cost=0.02
-                coding_arena_elo=1550, structured_output=True, base_url="", api_key="GOOGLE_API_KEY", # Example: Gemini supports structured
-                max_tokens="", max_completion_tokens="", reasoning_type='effort', max_reasoning_tokens=0
-            )
-        ]
-        # Convert the list of namedtuples to a DataFrame, mimicking _load_model_data
-        mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+    # Also force local execution to prevent cloud routing when infisical secrets are present
+    with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
+        with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+            mock_data = [
+                MockModelInfoData( # Base model
+                    provider='OpenAI', model='gpt-5-nano', input=0.02, output=0.03, # avg_cost=0.025
+                    coding_arena_elo=1500, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
+                    max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
+                ),
+                MockModelInfoData( # Cheapest model
+                    provider='OpenAI', model='cheap-model', input=0.01, output=0.015, # avg_cost=0.0125
+                    coding_arena_elo=1200, structured_output=False, base_url="", api_key="OPENAI_API_KEY",
+                    max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
+                ),
+                MockModelInfoData( # Highest ELO model
+                    provider='Anthropic', model='claude-3', input=0.025, output=0.035, # avg_cost=0.03
+                    coding_arena_elo=1600, structured_output=False, base_url="", api_key="ANTHROPIC_API_KEY",
+                    max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=1000
+                ),
+                MockModelInfoData( # Closest to interpolated values in tests
+                    provider='Google', model='gemini-pro', input=0.015, output=0.025, # avg_cost=0.02
+                    coding_arena_elo=1550, structured_output=True, base_url="", api_key="GOOGLE_API_KEY", # Example: Gemini supports structured
+                    max_tokens="", max_completion_tokens="", reasoning_type='effort', max_reasoning_tokens=0
+                )
+            ]
+            # Convert the list of namedtuples to a DataFrame, mimicking _load_model_data
+            mock_df = pd.DataFrame([m._asdict() for m in mock_data])
 
-        # Perform minimal processing similar to _load_model_data
-        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
-                        'max_completion_tokens', 'max_reasoning_tokens']
-        for col in numeric_cols:
-             if col in mock_df.columns:
-                 # Use errors='coerce' to turn unparseable values into NaN
-                 mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+            # Perform minimal processing similar to _load_model_data
+            numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                            'max_completion_tokens', 'max_reasoning_tokens']
+            for col in numeric_cols:
+                if col in mock_df.columns:
+                    # Use errors='coerce' to turn unparseable values into NaN
+                    mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
 
-        # Fill NaN in critical numeric columns used for selection/interpolation
-        mock_df['input'] = mock_df['input'].fillna(0.0)
-        mock_df['output'] = mock_df['output'].fillna(0.0)
-        mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0) # Use 0 ELO for missing
-        mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int) # Ensure int
+            # Fill NaN in critical numeric columns used for selection/interpolation
+            mock_df['input'] = mock_df['input'].fillna(0.0)
+            mock_df['output'] = mock_df['output'].fillna(0.0)
+            mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0) # Use 0 ELO for missing
+            mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int) # Ensure int
 
-        # Calculate average cost
-        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+            # Calculate average cost
+            mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
 
-        # Ensure boolean interpretation for structured_output
-        mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+            # Ensure boolean interpretation for structured_output
+            mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
 
-        # Ensure reasoning_type is string, fillna with 'none' and lowercase
-        mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+            # Ensure reasoning_type is string, fillna with 'none' and lowercase
+            mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
 
-        # Ensure api_key is treated as string, fill NaN with empty string ''
-        mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+            # Ensure api_key is treated as string, fill NaN with empty string ''
+            mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
 
-        mock_load_data.return_value = mock_df
-        yield mock_load_data # Yield the mock object itself
+            mock_load_data.return_value = mock_df
+            yield mock_load_data # Yield the mock object itself
 
 @pytest.fixture
 def mock_set_llm_cache():
@@ -112,8 +114,10 @@ def mock_set_llm_cache():
     with patch('litellm.caching.caching.Cache') as mock_cache_class:
         # Disable cloud detection by default to prevent Firebase authentication prompts
         # Tests that need cloud behavior should explicitly mock CloudConfig differently
-        with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
-            yield mock_cache_class
+        # Also set PDD_FORCE_LOCAL to ensure local execution when infisical secrets are present
+        with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
+            with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+                yield mock_cache_class
 
 # --- Helper Function to Create Mock LiteLLM Response ---
 def create_mock_litellm_response(content, model_name="test-model", prompt_tokens=10, completion_tokens=10, finish_reason="stop", thinking_output=None):
@@ -307,7 +311,7 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
         return mock_response
 
     with patch("pdd.llm_invoke._load_model_data", return_value=_mock_models_df()):
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake"}, clear=False):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake", "PDD_FORCE_LOCAL": "1"}, clear=False):
             with patch("pdd.llm_invoke.litellm.completion", return_value=_mock_litellm_response()):
                 with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0, "input_tokens": 5, "output_tokens": 5}):
                     resp = llm_invoke(prompt=processed_prompt, input_json={}, strength=0.5, temperature=0.0, verbose=False)
