@@ -282,26 +282,25 @@ def extract_python_code_blocks(text: str) -> list[str]:
     """
     results = []
 
-    # 1. Standard ```python blocks (must not be followed by more word chars)
-    python_pattern = r'```python\s*\n(.*?)```'
+    # 1. Standard ```python blocks - use word boundary to ensure full match
+    python_pattern = r'```python\b\s*(.*?)```'
     results.extend(re.findall(python_pattern, text, re.DOTALL))
 
-    # 2. ```py blocks (must be exactly "py", not "python" - use newline after py)
-    py_pattern = r'```py\s*\n(.*?)```'
+    # 2. ```py blocks - word boundary prevents matching ```python
+    py_pattern = r'```py\b\s*(.*?)```'
     py_matches = re.findall(py_pattern, text, re.DOTALL)
-    # Filter out matches that came from ```python (check original text)
+    # Filter out duplicates (in case both patterns match same content)
     for match in py_matches:
-        # Only include if it's a standalone ```py block, not part of ```python
-        if match not in [r for r in results]:
+        if match not in results:
             results.append(match)
 
     # 3. Bash heredocs: cat <<EOF > *.py ... EOF or cat <<'EOF' > *.py ... EOF
-    heredoc_pattern = r"cat\s+<<'?EOF'?\s*>\s*\S+\.py\s*\n(.*?)EOF"
+    heredoc_pattern = r"cat\s+<<'?EOF'?\s*>\s*\S+\.py\s*(.*?)EOF"
     results.extend(re.findall(heredoc_pattern, text, re.DOTALL))
 
     # 4. Generic ``` blocks that look like Python (fallback)
     if not results:
-        generic_pattern = r'```\s*\n(.*?)```'
+        generic_pattern = r'```\s*(.*?)```'
         generic_matches = re.findall(generic_pattern, text, re.DOTALL)
         for match in generic_matches:
             # Check if it looks like Python code
@@ -416,6 +415,21 @@ pytest tests/test_recommendations.py -v
         assert "from unittest.mock import patch" in result[0]
         assert "def test_get_recommendations_uses_correct_parameter_name():" in result[0]
         assert "mock_search.call_args.kwargs" in result[0]
+
+    def test_backward_compat_no_newline_after_python(self) -> None:
+        """Test edge case: code on same line as language identifier (rare but valid)."""
+        text = "```python def test(): assert True```"
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "def test():" in result[0]
+
+    def test_py_pattern_does_not_match_python(self) -> None:
+        """Ensure ```py pattern doesn't incorrectly match ```python blocks."""
+        text = "```python\nfrom os import path\n```"
+        result = extract_python_code_blocks(text)
+        # Should get exactly 1 match (from python pattern), not 2
+        assert len(result) == 1
+        assert "from os import path" in result[0]
 
 
 def analyze_test_code_for_mocking_patterns(code: str) -> dict:
