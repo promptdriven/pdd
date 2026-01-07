@@ -214,6 +214,7 @@ CALLER_BUG_SCENARIO = {
     "repo_owner": "example",
     "repo_name": "repo",
     "issue_number": "999",
+    "worktree_path": "/tmp/test-worktree/example-repo",
     "issue_content": """
 ## Bug Report
 
