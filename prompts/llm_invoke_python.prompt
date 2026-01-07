@@ -127,7 +127,8 @@
     - Helper functions:
       - `_pydantic_to_json_schema(pydantic_class)`: Convert Pydantic model to JSON Schema for cloud transport. Include `__pydantic_class_name__` for debugging.
       - `_validate_with_pydantic(result, pydantic_class)`: Validate cloud response (dict or str) using the Pydantic model.
-      - `_llm_invoke_cloud(...)`: Execute llm_invoke via cloud `/llmInvoke` endpoint.
+      - `_llm_invoke_cloud(...)`: Execute llm_invoke via cloud endpoint `llmInvoke`. 
+
     - Cloud execution path (at start of llm_invoke, before local validation):
       - If use_cloud is None: Check `PDD_FORCE_LOCAL` env var. If not set, check `CloudConfig.is_cloud_enabled()`.
       - If use_cloud is True: Attempt cloud execution.
@@ -137,6 +138,11 @@
       - On CloudInvocationError: Print warning, fall back to local.
     - Cloud request payload: prompt, inputJson, messages, strength, temperature, time, verbose, outputSchema, useBatchMode, language.
     - Cloud response: {result, totalCost, modelName, thinkingOutput}.
+
+% Cloud API Documentation:
+   <cloud_api_documentation>
+      <include>../docs/api-documentation.md</include>
+   </cloud_api_documentation>
 
 % Vertex AI Support:
     - Detect Vertex AI models by provider or model name prefix.
