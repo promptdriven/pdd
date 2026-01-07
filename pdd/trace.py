@@ -222,7 +222,7 @@ def trace(
                 for start_idx in range(1, len(prompt_lines) - window_size + 2):
                     window_lines = prompt_lines[start_idx - 1 : start_idx - 1 + window_size]
                     window_text = " ".join(window_lines)
-                    normalized_window = normalize_text(window_text).casefold()
+                    normalized_window = _normalize_text(window_text).casefold()
                     seg_len = len(normalized_window)
                     if seg_len == 0:
                         continue

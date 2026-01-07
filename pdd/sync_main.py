@@ -1,3 +1,4 @@
+import fnmatch
 import re
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from .construct_paths import (
     _is_known_language,
     construct_paths,
     _find_pddrc_file,
+    _get_relative_basename,
     _load_pddrc_config,
     _detect_context,
     _get_context_config,
@@ -58,6 +60,57 @@ def _get_extension_safe(language: str) -> str:
         return builtin_ext_map.get(language.lower(), '')
 
 
+def _relative_basename_for_context(basename: str, context_config: Dict[str, Any]) -> str:
+    """Return basename relative to a context's most specific path or prompt prefix."""
+    matches = []
+
+    for path_pattern in context_config.get('paths', []):
+        pattern_base = path_pattern.rstrip('/**').rstrip('/*')
+        if fnmatch.fnmatch(basename, path_pattern) or \
+           basename.startswith(pattern_base + '/') or \
+           basename == pattern_base:
+            relative = _get_relative_basename(basename, path_pattern)
+            matches.append((len(pattern_base), relative))
+
+    defaults = context_config.get('defaults', {})
+    prompts_dir = defaults.get('prompts_dir', '')
+    if prompts_dir:
+        normalized = prompts_dir.rstrip('/')
+        prefix = normalized
+        if normalized == 'prompts':
+            prefix = ''
+        elif normalized.startswith('prompts/'):
+            prefix = normalized[len('prompts/'):]
+
+        if prefix and (basename == prefix or basename.startswith(prefix + '/')):
+            relative = basename[len(prefix) + 1 :] if basename != prefix else basename.split('/')[-1]
+            matches.append((len(prefix), relative))
+
+    if not matches:
+        return basename
+
+    matches.sort(key=lambda item: item[0], reverse=True)
+    return matches[0][1]
+
+
+def _normalize_prompts_root(prompts_dir: Path) -> Path:
+    """
+    Resolve prompts_dir to an absolute path relative to the project root.
+
+    This function takes a potentially relative prompts_dir path (e.g., "prompts/backend")
+    and resolves it to an absolute path using the .pddrc location as the project root.
+
+    Note: This function previously stripped subdirectories after "prompts" which was
+    incorrect for context-specific prompts_dir values. Fixed in Issue #253.
+    """
+    prompts_root = Path(prompts_dir)
+    pddrc_path = _find_pddrc_file()
+    if pddrc_path and not prompts_root.is_absolute():
+        prompts_root = pddrc_path.parent / prompts_root
+
+    return prompts_root
+
+
 def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
     """
     Search for a prompt file across all contexts using outputs.prompt.path templates.
@@ -86,14 +139,6 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
 
     contexts = config.get('contexts', {})
 
-    # Extract just the name part for template expansion
-    if '/' in basename:
-        dir_prefix = basename.rsplit('/', 1)[0] + '/'
-        name_part = basename.rsplit('/', 1)[1]
-    else:
-        dir_prefix = ''
-        name_part = basename
-
     # Common languages to try
     languages_to_try = ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']
 
@@ -109,12 +154,18 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
         if not prompt_template:
             continue
 
+        context_basename = _relative_basename_for_context(basename, context_config)
+        parts = context_basename.split('/') if context_basename else ['']
+        name_part = parts[-1]
+        category = '/'.join(parts[:-1]) if len(parts) > 1 else ''
+        dir_prefix = f"{category}/" if category else ''
+
         # Try each language
         for lang in languages_to_try:
             ext = _get_extension_safe(lang)
             template_context = {
                 'name': name_part,
-                'category': '',
+                'category': category,
                 'dir_prefix': dir_prefix,
                 'ext': ext,
                 'language': lang,
@@ -152,13 +203,11 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                 prompt_template = prompt_config.get('path')
 
                 if prompt_template:
-                    # Extract name part
-                    if '/' in basename:
-                        dir_prefix = basename.rsplit('/', 1)[0] + '/'
-                        name_part = basename.rsplit('/', 1)[1]
-                    else:
-                        dir_prefix = ''
-                        name_part = basename
+                    context_basename = _relative_basename_for_context(basename, context_config)
+                    parts = context_basename.split('/') if context_basename else ['']
+                    name_part = parts[-1]
+                    category = '/'.join(parts[:-1]) if len(parts) > 1 else ''
+                    dir_prefix = f"{category}/" if category else ''
 
                     # Try all known languages
                     languages_to_try = ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']
@@ -168,7 +217,7 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                         ext = _get_extension_safe(lang)
                         template_context = {
                             'name': name_part,
-                            'category': '',
+                            'category': category,
                             'dir_prefix': dir_prefix,
                             'ext': ext,
                             'language': lang,
@@ -304,7 +353,12 @@ def sync_main(
 
     if template_result:
         discovered_context, discovered_prompt_path, first_lang = template_result
-        prompts_dir = discovered_prompt_path.parent
+        prompts_dir_raw = discovered_prompt_path.parent
+        pddrc_path = _find_pddrc_file()
+        if pddrc_path and not prompts_dir_raw.is_absolute():
+            prompts_dir = pddrc_path.parent / prompts_dir_raw
+        else:
+            prompts_dir = prompts_dir_raw
         # Use context override if not already set
         if not context_override:
             context_override = discovered_context
@@ -322,7 +376,12 @@ def sync_main(
                 command_options={"basename": basename},
                 context_override=context_override,
             )
-            prompts_dir = Path(initial_config.get("prompts_dir", "prompts"))
+            prompts_dir_raw = initial_config.get("prompts_dir", "prompts")
+            pddrc_path = _find_pddrc_file()
+            if pddrc_path and not Path(prompts_dir_raw).is_absolute():
+                prompts_dir = pddrc_path.parent / prompts_dir_raw
+            else:
+                prompts_dir = Path(prompts_dir_raw)
         except Exception as e:
             rprint(f"[bold red]Error initializing PDD paths:[/bold red] {e}")
             raise click.Abort()

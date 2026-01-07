@@ -1,12 +1,12 @@
 {
-  "pdd_version": "0.0.99",
-  "timestamp": "2026-01-03T07:46:12.450644+00:00",
-  "command": "test_extend",
+  "pdd_version": "0.0.102",
+  "timestamp": "2026-01-06T07:19:19.138705+00:00",
+  "command": "test",
   "prompt_hash": "f8df355ee1c6e73a393a00c18232048a83fde694b33c472771246631a3724bf6",
   "code_hash": "5ed89ce42bda948cba3e6c2e38d0480d95c2e64a119169aefb2af13743540654",
-  "example_hash": "a8d21a8e1476d9a6918ed815a1704e22d58d42791fa6209a01ec4be950635e31",
-  "test_hash": "febf82d1af06c0e6a0a080368f90d3d788cc89431ce3294a0ff6f6e69c0f90dc",
+  "example_hash": "b760033ea83c80f9a5dfc2635cdb17f7c10ad1cabcc50a321f57a1c0675e3ffb",
+  "test_hash": "4a27ddeeb5d25e5aabdc8b7da388f60e25721a3228d8d3c0e26c6c92f5af2e6d",
   "test_files": {
-    "test_hello.py": "febf82d1af06c0e6a0a080368f90d3d788cc89431ce3294a0ff6f6e69c0f90dc"
+    "test_hello.py": "4a27ddeeb5d25e5aabdc8b7da388f60e25721a3228d8d3c0e26c6c92f5af2e6d"
   }
 }

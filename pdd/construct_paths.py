@@ -125,6 +125,46 @@ def _match_path_to_contexts(
     return 'default' if 'default' in contexts else None
 
 
+def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Optional[str]:
+    """Detect context by matching a sync basename against prompts_dir prefixes or paths patterns."""
+    if not basename:
+        return None
+
+    contexts = config.get('contexts', {})
+    matches = []
+
+    for context_name, context_config in contexts.items():
+        if context_name == 'default':
+            continue
+
+        defaults = context_config.get('defaults', {})
+        prompts_dir = defaults.get('prompts_dir', '')
+        if prompts_dir:
+            normalized = prompts_dir.rstrip('/')
+            prefix = normalized
+            if normalized == 'prompts':
+                prefix = ''
+            elif normalized.startswith('prompts/'):
+                prefix = normalized[len('prompts/'):]
+
+            if prefix and (basename == prefix or basename.startswith(prefix + '/')):
+                matches.append((context_name, len(prefix)))
+                continue
+
+        for path_pattern in context_config.get('paths', []):
+            pattern_base = path_pattern.rstrip('/**').rstrip('/*')
+            if fnmatch.fnmatch(basename, path_pattern) or \
+               basename.startswith(pattern_base + '/') or \
+               basename == pattern_base:
+                matches.append((context_name, len(pattern_base)))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda item: item[1], reverse=True)
+    return matches[0][0]
+
+
 def _get_relative_basename(input_path: str, pattern: str) -> str:
     """
     Compute basename relative to the matched pattern base.
@@ -203,12 +243,16 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
     """
     # Find repo root if not provided
     if repo_root is None:
-        try:
-            import git
-            repo = git.Repo(file_path, search_parent_directories=True)
-            repo_root = repo.working_tree_dir
-        except:
-            repo_root = os.getcwd()
+        pddrc_path = _find_pddrc_file(Path(file_path).parent)
+        if pddrc_path:
+            repo_root = str(pddrc_path.parent)
+        else:
+            try:
+                import git
+                repo = git.Repo(file_path, search_parent_directories=True)
+                repo_root = repo.working_tree_dir
+            except:
+                repo_root = os.getcwd()
 
     # Make file_path relative to repo_root for matching
     file_path_abs = os.path.abspath(file_path)
@@ -231,7 +275,26 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
 
     contexts = config.get('contexts', {})
 
-    # Use shared helper with specificity matching for file-based detection
+    # First, try to match against prompts_dir for each context
+    # This allows prompt files to be detected even when paths pattern only matches code files
+    prompts_dir_matches = []
+    for context_name, context_config in contexts.items():
+        if context_name == 'default':
+            continue
+        prompts_dir = context_config.get('defaults', {}).get('prompts_dir', '')
+        if prompts_dir:
+            prompts_dir_normalized = prompts_dir.rstrip('/')
+            if relative_path.startswith(prompts_dir_normalized + '/') or relative_path == prompts_dir_normalized:
+                # Track match with specificity (length of prompts_dir)
+                prompts_dir_matches.append((context_name, len(prompts_dir_normalized)))
+
+    # Return most specific prompts_dir match if any
+    if prompts_dir_matches:
+        prompts_dir_matches.sort(key=lambda x: x[1], reverse=True)
+        matched_context = prompts_dir_matches[0][0]
+        return matched_context, _get_context_config(config, matched_context)
+
+    # Fall back to existing paths pattern matching
     context_name = _match_path_to_contexts(relative_path, contexts, use_specificity=True, is_absolute=False)
     return context_name, _get_context_config(config, context_name)
 
@@ -654,7 +717,15 @@ def construct_paths(
                     else:
                         context = _detect_context(Path.cwd(), pddrc_config, None)
                 else:
-                    context = _detect_context(Path.cwd(), pddrc_config, None)
+                    basename_hint = command_options.get("basename")
+                    if basename_hint:
+                        detected_context = _detect_context_from_basename(basename_hint, pddrc_config)
+                        if detected_context:
+                            context = detected_context
+                        else:
+                            context = _detect_context(Path.cwd(), pddrc_config, None)
+                    else:
+                        context = _detect_context(Path.cwd(), pddrc_config, None)
 
             # Get context-specific configuration
             context_config = _get_context_config(pddrc_config, context)
@@ -727,7 +798,10 @@ def construct_paths(
             else:
                 # Fall back to context-aware logic
                 # Use original_context_config to avoid checking augmented config with env vars
-                if original_context_config and any(key.endswith('_output_path') for key in original_context_config):
+                if original_context_config and (
+                    'prompts_dir' in original_context_config or
+                    any(key.endswith('_output_path') for key in original_context_config)
+                ):
                     # For configured contexts, use prompts_dir from config if provided,
                     # otherwise default to "prompts" at the same level as output dirs
                     resolved_config["prompts_dir"] = original_context_config.get("prompts_dir", "prompts")

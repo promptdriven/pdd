@@ -1,12 +1,98 @@
+## v0.0.104 (2026-01-06)
+
+### Feat
+
+- add cloud execution support for llm_invoke
+
+### Fix
+
+- prevent duplicate sync PRs by using fixed branch name
+- align ExtractedCode schema with extract_code_LLM prompt
+- lower EXTRACTION_STRENGTH from 0.75 to 0.5 to prevent Opus usage
+
+## v0.0.103 (2026-01-05)
+
+### Feat
+
+- **Cloud Execution for `pdd bug` Command (PR #243):** Added cloud-first execution with automatic local fallback. Uses JWT authentication and posts to the `generateBugTest` endpoint. Non-recoverable errors (401/402/403/400) raise `UsageError`; recoverable errors (5xx, timeouts) fall back to local. Cloud request timeout set to 400s. Set `PDD_CLOUD_ONLY=1` or `PDD_NO_LOCAL_FALLBACK=1` to disable fallback.
+
+- **Centralized Path Resolution Module (Issue #240, PR #241):** Added new `path_resolution.py` module with `PathResolver` dataclass for standardized file path resolution across the codebase. Supports four resolution profiles:
+  - `resolve_include()`: cwd → package → repo fallback chain
+  - `resolve_prompt_template()`: PDD_PATH → repo → cwd for prompts
+  - `resolve_data_file()`: PDD_PATH only for data files
+  - `resolve_project_root()`: PDD_PATH → marker → cwd for project detection
+
+### Fix
+
+- **Repo Root Fallback (Issue #240):** Fixed `get_file_path` to properly fall back to repo root when resolving include paths in installed-package scenarios.
+
+### Tests
+
+- Added 643+ lines of tests in `test_bug_main.py` covering cloud success paths, fallback scenarios, non-recoverable HTTP errors, and cloud-only mode.
+- Added failing test for issue #240 repo root fallback behavior.
+
+## v0.0.102 (2026-01-04)
+
+### Feat
+
+- **Git Worktree Isolation for Agentic Bug Workflow (PR #231):** Refactored `agentic_bug_orchestrator.py` to run bug investigations in isolated git worktrees. Each issue gets its own worktree at `.pdd/worktrees/fix-issue-{N}` with a dedicated branch `fix/issue-{N}`. Adds cleanup of stale worktrees/branches before starting. Prevents polluting the main branch during investigation.
+
+- **Configurable Timeouts for Agentic Bug Steps (Issue #256):** Added `STEP_TIMEOUTS` dictionary with per-step timeout configuration. Complex steps (reproduce, root cause, generate) get 600s timeouts; simpler steps use 240s default. Added `timeout` parameter to `run_agentic_task()` and `_run_with_provider()`.
+
+### Fix
+
+- **Backward Compatibility with v0.0.99 Projects (Issue #251):** Fixed path resolution for projects lacking `outputs` templates in `.pddrc`. v0.0.99 projects now sync correctly with v0.0.100+ binaries.
+
+- **CLI Results None Guard (Issue #253):** Added `results is not None` guard in `process_commands()` to prevent `TypeError: 'NoneType' object is not iterable` when results are None.
+
+### Tests
+
+- Added 636 lines of backward compatibility tests (`test_sync_backward_compat.py`) covering v0.0.99 projects, legacy `.pddrc`, mixed-version meta files, and bare projects.
+- Added 168 lines of timeout configuration tests in `test_agentic_common.py`.
+- Added regression tests for CLI None guard in `test_core_dump.py`.
+- Updated `test_agentic_bug_orchestrator.py` to mock worktree setup.
+
+## v0.0.101 (2026-01-03)
+
+### Feat
+
+- **Agentic Bug Investigation Workflow (Issue #153):** New 9-step automated workflow for investigating GitHub issues. Parses issue URL via `gh` CLI, fetches issue content/comments, and runs steps: duplicate detection, documentation check, triage, reproduction, root cause analysis, test plan design, test generation, verification, and PR creation. Includes hard-stop conditions (duplicate, feature request, user error, needs info) and context accumulation between steps.
+
+- **Bidirectional Repository Sync:** Added `.sync-config.yml` for syncing files between `pdd` and `pdd_cap` repositories, including prompts, context files, and documentation.
+
+- **Analysis Command Enhancements:** Added function namespaces to analysis prompts, improved output handling in examples, and better error handling.
+
+### Fix
+
+- **Firecrawl API 4.0+ Compatibility:** Updated API calls for newer Firecrawl versions.
+- **Preprocess Tag Escaping:** Escape tag examples in `preprocess_python.prompt` (from pdd_cap PR #11).
+- **ONBOARDING.md Sync Path:** Use `docs/*.md` pattern instead of root file.
+- **Git Auth for CAP_REPO_TOKEN:** Use git config for token authentication in sync workflow.
+
+### Tests
+
+- Added 700+ lines of tests for agentic bug workflow (`test_agentic_bug.py`, `test_agentic_bug_orchestrator.py`).
+- Added 250+ lines of analysis command tests (`tests/commands/test_analysis.py`).
+- Added sync tests for construct paths, template discovery, and orchestration.
+
 ## v0.0.100 (2026-01-02)
 
 ### Feat
 
-- Add cloud execution support for pdd crash and pdd verify commands
+- **Cloud Execution for `pdd crash` and `pdd verify` Commands (PR #218):** Added cloud-first execution with automatic local fallback for both commands. Uses JWT authentication via `CloudConfig.get_jwt_token()` and posts to the `crashCode` and `verifyCode` endpoints. Supports hybrid mode for loop iterations—local program execution with cloud LLM calls. Set `PDD_CLOUD_ONLY=1` or `PDD_NO_LOCAL_FALLBACK=1` to disable fallback. Non-recoverable errors (401/402/403/400) raise `UsageError`; recoverable errors (5xx, timeouts) fall back to local.
+
+### Docs
+
+- Updated `crash_main_python.prompt` and `fix_verification_main_python.prompt` with cloud execution strategy documentation.
+
+### Tests
+
+- Added 374+ lines of tests in `test_crash_main.py` covering cloud success paths, fallback scenarios, and hybrid loop mode.
+- Added 221+ lines of tests in `test_fix_main.py` for cloud execution coverage.
 
 ### Fix
 
-- Address valid Copilot suggestions - fix patch target and remove outdated comment
+- Fixed patch target in test mocking and removed outdated comment.
 
 ## v0.0.99 (2026-01-01)
 
