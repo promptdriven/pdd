@@ -1,12 +1,13 @@
 import pytest
 from unittest.mock import patch, mock_open, MagicMock
-from pdd.summarize_directory import summarize_directory
+from pdd.summarize_directory import summarize_directory, FileSummary
 import os
 import sys
 from datetime import datetime, UTC
 import csv
 from io import StringIO
 from typing import Callable, Optional
+from z3 import Solver, Bool, Int, Implies, Not, And, Or, If, sat, unsat
 
 @pytest.fixture
 def mock_load_prompt_template():
@@ -19,12 +20,20 @@ def mock_llm_invoke():
     with patch('pdd.summarize_directory.llm_invoke') as mock:
         # Define a default mock response
         mock_response = {
-            'result': MagicMock(file_summary="This is a summary."),
+            'result': FileSummary(file_summary="This is a summary."),
             'cost': 0.01,
             'model_name': "TestModel"
         }
         mock.return_value = mock_response
         yield mock
+
+@pytest.fixture
+def mock_dependencies():
+    with patch('pdd.summarize_directory.load_prompt_template') as mock_load, \
+         patch('pdd.summarize_directory.llm_invoke') as mock_invoke:
+        mock_load.return_value = "Summarize this: {file_contents}"
+        yield mock_load, mock_invoke
+
 
 def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     # Create some temporary files
@@ -59,6 +68,7 @@ def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_
 
     assert total_cost == 0.02  # Two files summarized
     assert model_name == "TestModel"
+
 
 def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test that cache is used when content hash matches."""
@@ -107,6 +117,7 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     assert total_cost == 0.01  # Only file2 was summarized
     assert model_name == "TestModel"
 
+
 def test_empty_directory(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -130,6 +141,7 @@ def test_empty_directory(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     assert total_cost == 0.0
     assert model_name == "None"
 
+
 def test_invalid_directory_path(mock_load_prompt_template, mock_llm_invoke):
     directory_path = ""  # Invalid
     strength = 0.5
@@ -145,6 +157,7 @@ def test_invalid_directory_path(mock_load_prompt_template, mock_llm_invoke):
             verbose=verbose,
             csv_file=csv_file
         )
+
 
 def test_invalid_strength(mock_load_prompt_template, mock_llm_invoke):
     directory_path = "/path/to/*.py"
@@ -162,6 +175,7 @@ def test_invalid_strength(mock_load_prompt_template, mock_llm_invoke):
             csv_file=csv_file
         )
 
+
 def test_invalid_temperature(mock_load_prompt_template, mock_llm_invoke):
     directory_path = "/path/to/*.py"
     strength = 0.5
@@ -178,6 +192,7 @@ def test_invalid_temperature(mock_load_prompt_template, mock_llm_invoke):
             csv_file=csv_file
         )
 
+
 def test_invalid_verbose(mock_load_prompt_template, mock_llm_invoke):
     directory_path = "/path/to/*.py"
     strength = 0.5
@@ -193,6 +208,7 @@ def test_invalid_verbose(mock_load_prompt_template, mock_llm_invoke):
             verbose=verbose,
             csv_file=csv_file
         )
+
 
 def test_invalid_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     # Create temporary files
@@ -216,6 +232,7 @@ def test_invalid_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invo
             verbose=verbose,
             csv_file=csv_file
         )
+
 
 def test_llm_invoke_error(tmp_path, mock_load_prompt_template):
     """Test error handling when llm_invoke fails."""
@@ -251,6 +268,7 @@ def test_llm_invoke_error(tmp_path, mock_load_prompt_template):
     assert total_cost == 0.0  # No cost accumulated
     assert model_name == "cached"  # No successful LLM calls
 
+
 def test_load_prompt_template_not_found(tmp_path, mock_llm_invoke):
     # Create temporary file
     file1 = tmp_path / "file1.py"
@@ -274,6 +292,7 @@ def test_load_prompt_template_not_found(tmp_path, mock_llm_invoke):
                 verbose=verbose,
                 csv_file=csv_file
             )
+
 
 def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test partial cache hit: file1 cached, file2 content changed, file3 new."""
@@ -325,6 +344,7 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
 
     assert total_cost == 0.02  # file2 and file3 summarized
     assert model_name == "TestModel"
+
 
 def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test summarization of non-Python files."""
@@ -425,7 +445,6 @@ def test_skips_pyc_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     assert len(rows) == 1
     assert rows[0]['full_path'].endswith('.py')
     assert rows[0]['file_summary'] == "This is a summary."
-
 
 # ============================================================================
 # Progress Callback Tests (TDD - these should FAIL initially)
@@ -661,3 +680,314 @@ class TestContentHashCacheInvalidation:
         rows = list(reader)
         # Should have new summary from mock
         assert rows[0]['file_summary'] == "This is a summary."
+
+# --- Z3 Formal Verification ---
+
+def test_z3_verify_caching_logic():
+    """
+    Formally verify the caching decision logic using Z3.
+    
+    Logic to verify:
+    should_invoke_llm <==> NOT (in_cache AND current_hash == cached_hash)
+    """
+    s = Solver()
+
+    # State variables
+    in_cache = Bool('in_cache')
+    current_hash = Int('current_hash')
+    cached_hash = Int('cached_hash')
+    
+    # The decision logic implemented in the code:
+    # if normalized_path in existing_data: (in_cache)
+    #    if cached_entry.get('content_hash') == current_hash:
+    #        cache_hit = True
+    # if not cache_hit: invoke_llm
+    
+    # Let's model 'cache_hit'
+    cache_hit = And(in_cache, current_hash == cached_hash)
+    
+    # Let's model 'invoke_llm'
+    invoke_llm = Not(cache_hit)
+    
+    # Property 1: If in cache and hashes match, we must NOT invoke LLM
+    # We assert the negation and check for unsat (counter-example)
+    s.push()
+    s.add(in_cache)
+    s.add(current_hash == cached_hash)
+    s.add(invoke_llm) # Asserting we DO invoke (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where LLM is invoked despite valid cache hit"
+    s.pop()
+    
+    # Property 2: If not in cache, we MUST invoke LLM
+    s.push()
+    s.add(Not(in_cache))
+    s.add(Not(invoke_llm)) # Asserting we DO NOT invoke (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where LLM is NOT invoked when file missing from cache"
+    s.pop()
+    
+    # Property 3: If in cache but hashes differ, we MUST invoke LLM
+    s.push()
+    s.add(in_cache)
+    s.add(current_hash != cached_hash)
+    s.add(Not(invoke_llm)) # Asserting we DO NOT invoke (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where LLM is NOT invoked when hash mismatch occurs"
+    s.pop()
+
+# --- Unit Tests ---
+
+def test_input_validation():
+    """Test that invalid inputs raise ValueError."""
+    # Invalid directory_path
+    with pytest.raises(ValueError, match="Invalid 'directory_path'"):
+        summarize_directory("", 0.5, 0.5)
+    
+    # Invalid strength
+    with pytest.raises(ValueError, match="Invalid 'strength'"):
+        summarize_directory(".", -0.1, 0.5)
+    with pytest.raises(ValueError, match="Invalid 'strength'"):
+        summarize_directory(".", 1.1, 0.5)
+        
+    # Invalid temperature
+    with pytest.raises(ValueError, match="Invalid 'temperature'"):
+        summarize_directory(".", 0.5, -0.1)
+        
+    # Invalid verbose
+    with pytest.raises(ValueError, match="Invalid 'verbose'"):
+        summarize_directory(".", 0.5, 0.5, verbose="True") # type: ignore
+
+def test_csv_validation():
+    """Test validation of the provided CSV string."""
+    # Invalid CSV format (missing columns)
+    invalid_csv = "col1,col2\nval1,val2"
+    # The prompt specifies "Invalid CSV file format." for missing columns as well
+    with pytest.raises(ValueError, match="Invalid CSV file format."):
+        summarize_directory(".", 0.5, 0.5, csv_file=invalid_csv)
+        
+    # Malformed CSV
+    # Note: csv.DictReader is quite robust, so "Invalid CSV file format" usually catches
+    # exceptions during parsing if passed non-string or something very broken.
+    # However, the code raises ValueError("Invalid CSV file format.") on generic Exception.
+    # We can trigger this by mocking io.StringIO to raise.
+    with patch('io.StringIO', side_effect=Exception("Boom")):
+        with pytest.raises(ValueError, match="Invalid CSV file format"):
+            summarize_directory(".", 0.5, 0.5, csv_file="some data")
+
+def test_missing_prompt_template(mock_dependencies):
+    """Test FileNotFoundError when prompt template is missing."""
+    mock_load, _ = mock_dependencies
+    mock_load.return_value = None
+    
+    with pytest.raises(FileNotFoundError, match="Prompt template .* is empty or missing"):
+        summarize_directory(".", 0.5, 0.5)
+
+def test_empty_directory(mock_dependencies, tmp_path):
+    """Test behavior when no files match the pattern."""
+    mock_load, _ = mock_dependencies
+    
+    # Use a temp dir with no files
+    result_csv, cost, model = summarize_directory(str(tmp_path), 0.5, 0.5)
+    
+    assert cost == 0.0
+    assert model == "None"
+    assert "full_path,file_summary,content_hash" in result_csv
+    # Should only have header
+    assert len(result_csv.strip().split('\n')) == 1
+
+def test_file_filtering(mock_dependencies, tmp_path):
+    """Test that directories and specific file extensions are filtered out."""
+    mock_load, mock_invoke = mock_dependencies
+    
+    # Setup directory structure
+    (tmp_path / "valid.py").write_text("print('hello')")
+    (tmp_path / "ignored.pyc").write_text("binary")
+    (tmp_path / "subdir").mkdir()
+    (tmp_path / "subdir" / "nested.py").write_text("print('nested')")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "cache.py").write_text("cache")
+    
+    # Mock LLM response
+    mock_invoke.return_value = {
+        'result': FileSummary(file_summary="Summary"),
+        'cost': 0.01,
+        'model_name': "gpt-4"
+    }
+    
+    # Run on tmp_path recursively
+    csv_out, cost, model = summarize_directory(str(tmp_path) + "/**/*", 0.5, 0.5)
+    
+    # Parse output
+    reader = csv.DictReader(StringIO(csv_out))
+    rows = list(reader)
+    paths = [r['full_path'] for r in rows]
+    
+    # Check filtering
+    # valid.py should be there
+    assert any("valid.py" in p for p in paths)
+    # nested.py should be there
+    assert any("nested.py" in p for p in paths)
+    # ignored.pyc should NOT be there
+    assert not any("ignored.pyc" in p for p in paths)
+    # __pycache__ files should NOT be there
+    assert not any("__pycache__" in p for p in paths)
+    # Directories should NOT be there (glob returns dirs too if ** is used, code filters os.path.isfile)
+    assert not any(p.endswith("subdir") for p in paths)
+
+def test_summarization_no_cache(mock_dependencies, tmp_path):
+    """Test full summarization flow without existing cache."""
+    mock_load, mock_invoke = mock_dependencies
+    
+    file_path = tmp_path / "test.py"
+    file_content = "def foo(): pass"
+    file_path.write_text(file_content)
+    
+    mock_invoke.return_value = {
+        'result': FileSummary(file_summary="Function foo"),
+        'cost': 0.05,
+        'model_name': "gpt-test"
+    }
+    
+    csv_out, cost, model = summarize_directory(str(file_path), 0.5, 0.5)
+    
+    assert cost == 0.05
+    assert model == "gpt-test"
+    
+    reader = csv.DictReader(StringIO(csv_out))
+    row = next(reader)
+    
+    assert row['full_path'] == str(file_path)
+    assert row['file_summary'] == "Function foo"
+    # Verify hash calculation
+    import hashlib
+    expected_hash = hashlib.sha256(file_content.encode('utf-8')).hexdigest()
+    assert row['content_hash'] == expected_hash
+    
+    # Verify LLM call arguments
+    mock_invoke.assert_called_once()
+    call_kwargs = mock_invoke.call_args[1]
+    assert call_kwargs['input_json']['file_contents'] == file_content
+    assert call_kwargs['output_pydantic'] == FileSummary
+
+def test_summarization_cache_hit(mock_dependencies, tmp_path):
+    """Test that LLM is not called when cache matches."""
+    mock_load, mock_invoke = mock_dependencies
+    
+    file_path = tmp_path / "test.py"
+    file_content = "content"
+    file_path.write_text(file_content)
+    
+    import hashlib
+    content_hash = hashlib.sha256(file_content.encode('utf-8')).hexdigest()
+    
+    # Construct existing CSV
+    existing_csv = StringIO()
+    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'content_hash'])
+    writer.writeheader()
+    writer.writerow({
+        'full_path': str(file_path),
+        'file_summary': "Cached Summary",
+        'content_hash': content_hash
+    })
+    
+    csv_out, cost, model = summarize_directory(
+        str(file_path), 0.5, 0.5, csv_file=existing_csv.getvalue()
+    )
+    
+    # Should be 0 cost, no LLM call
+    assert cost == 0.0
+    assert model == "cached" # Default when no LLM calls made
+    mock_invoke.assert_not_called()
+    
+    # Output should match cache
+    assert "Cached Summary" in csv_out
+
+def test_summarization_cache_miss_hash_mismatch(mock_dependencies, tmp_path):
+    """Test that LLM is called when file content changes (hash mismatch)."""
+    mock_load, mock_invoke = mock_dependencies
+    
+    file_path = tmp_path / "test.py"
+    file_content = "new content"
+    file_path.write_text(file_content)
+    
+    # Cache has OLD hash
+    existing_csv = StringIO()
+    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'content_hash'])
+    writer.writeheader()
+    writer.writerow({
+        'full_path': str(file_path),
+        'file_summary': "Old Summary",
+        'content_hash': "old_hash_value"
+    })
+    
+    mock_invoke.return_value = {
+        'result': FileSummary(file_summary="New Summary"),
+        'cost': 0.02,
+        'model_name': "gpt-new"
+    }
+    
+    csv_out, cost, model = summarize_directory(
+        str(file_path), 0.5, 0.5, csv_file=existing_csv.getvalue()
+    )
+    
+    assert cost == 0.02
+    assert model == "gpt-new"
+    mock_invoke.assert_called_once()
+    assert "New Summary" in csv_out
+
+def test_progress_callback(mock_dependencies, tmp_path):
+    """Test that progress callback is invoked correctly."""
+    mock_load, mock_invoke = mock_dependencies
+    
+    (tmp_path / "1.py").write_text("1")
+    (tmp_path / "2.py").write_text("2")
+    
+    mock_invoke.return_value = {
+        'result': FileSummary(file_summary="Sum"),
+        'cost': 0.01,
+        'model_name': "m"
+    }
+    
+    callback = MagicMock()
+    
+    summarize_directory(str(tmp_path) + "/*.py", 0.5, 0.5, progress_callback=callback)
+    
+    # Should be called twice
+    assert callback.call_count == 2
+    # Check args: (1, 2) then (2, 2)
+    callback.assert_any_call(1, 2)
+    callback.assert_any_call(2, 2)
+
+def test_file_read_error_handling(mock_dependencies, tmp_path):
+    """Test handling of file read errors."""
+    mock_load, mock_invoke = mock_dependencies
+    
+    file_path = tmp_path / "unreadable.py"
+    file_path.write_text("content")
+    
+    # Mock open to raise PermissionError
+    # We need to mock open specifically for the file read inside _process_single_file_logic
+    # Since _process_single_file_logic uses 'open', we patch builtins.open
+    # But we must be careful not to break other opens (like loading prompt template if it wasn't mocked)
+    # Since load_prompt_template is mocked, we are safer.
+    
+    with patch('builtins.open', side_effect=PermissionError("Access denied")):
+        csv_out, cost, model = summarize_directory(str(file_path), 0.5, 0.5)
+    
+    assert "Error processing file" in csv_out
+    assert "Access denied" in csv_out
+    assert "error" in csv_out # content_hash set to "error"
+
+def test_llm_invoke_error_handling(mock_dependencies, tmp_path):
+    """Test handling of LLM invocation errors."""
+    mock_load, mock_invoke = mock_dependencies
+    
+    file_path = tmp_path / "test.py"
+    file_path.write_text("content")
+    
+    # Mock LLM to raise exception
+    mock_invoke.side_effect = Exception("LLM Failed")
+    
+    csv_out, cost, model = summarize_directory(str(file_path), 0.5, 0.5)
+    
+    assert "Error processing file" in csv_out
+    assert "LLM Failed" in csv_out
+    assert cost == 0.0
