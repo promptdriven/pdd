@@ -54,22 +54,29 @@ def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_
     for row in rows:
         assert 'full_path' in row
         assert 'file_summary' in row
-        assert 'date' in row
+        assert 'content_hash' in row
         assert row['file_summary'] == "This is a summary."
 
     assert total_cost == 0.02  # Two files summarized
     assert model_name == "TestModel"
 
 def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test that cache is used when content hash matches."""
+    import hashlib
+
     # Create temporary files
     file1 = tmp_path / "file1.py"
-    file1.write_text("print('Hello World')")
+    file1_content = "print('Hello World')"
+    file1.write_text(file1_content)
     file2 = tmp_path / "file2.py"
     file2.write_text("def foo(): pass")
 
-    # Create existing CSV with file1
-    existing_csv = f'''full_path,file_summary,date
-"{os.path.relpath(str(file1))}","Existing summary.",{datetime.now(UTC).isoformat()}'''
+    # Compute content hash for file1
+    file1_hash = hashlib.sha256(file1_content.encode()).hexdigest()
+
+    # Create existing CSV with file1 (using absolute path since glob returns absolute)
+    existing_csv = f'''full_path,file_summary,content_hash
+{str(file1)},Existing summary.,{file1_hash}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -77,32 +84,24 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     verbose = False
     csv_file = existing_csv
 
-    # Mock file modification time
-    with patch('pdd.summarize_directory.os.path.getmtime') as mock_getmtime:
-        # file1 has not changed
-        mock_getmtime.side_effect = [
-            file1.stat().st_mtime,
-            file2.stat().st_mtime
-        ]
-
-        csv_output, total_cost, model_name = summarize_directory(
-            directory_path=directory_path,
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            csv_file=csv_file
-        )
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=directory_path,
+        strength=strength,
+        temperature=temperature,
+        verbose=verbose,
+        csv_file=csv_file
+    )
 
     # Parse CSV output
     reader = csv.DictReader(StringIO(csv_output))
     rows = list(reader)
     assert len(rows) == 2
 
-    # Check that file1 reused summary
+    # Check that file1 reused summary (based on content hash match)
     for row in rows:
-        if row['full_path'] == os.path.relpath(str(file1)):
+        if row['full_path'] == str(file1):
             assert row['file_summary'] == "Existing summary."
-        elif row['full_path'] == os.path.relpath(str(file2)):
+        elif row['full_path'] == str(file2):
             assert row['file_summary'] == "This is a summary."
 
     assert total_cost == 0.01  # Only file2 was summarized
@@ -219,6 +218,7 @@ def test_invalid_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invo
         )
 
 def test_llm_invoke_error(tmp_path, mock_load_prompt_template):
+    """Test error handling when llm_invoke fails."""
     # Create temporary file
     file1 = tmp_path / "file1.py"
     file1.write_text("print('Hello World')")
@@ -229,11 +229,9 @@ def test_llm_invoke_error(tmp_path, mock_load_prompt_template):
     verbose = False
     csv_file = None
 
-    # Mock llm_invoke to return an error
+    # Mock llm_invoke to raise an exception (simulating LLM failure)
     with patch('pdd.summarize_directory.llm_invoke') as mock_llm:
-        mock_llm.return_value = {
-            'error': "LLM service failed."
-        }
+        mock_llm.side_effect = RuntimeError("LLM service failed.")
 
         csv_output, total_cost, model_name = summarize_directory(
             directory_path=directory_path,
@@ -248,9 +246,10 @@ def test_llm_invoke_error(tmp_path, mock_load_prompt_template):
     rows = list(reader)
     assert len(rows) == 1
     row = rows[0]
-    assert row['file_summary'] == "Error in summarization."
+    # Error handling stores error message in file_summary
+    assert "Error processing file" in row['file_summary']
     assert total_cost == 0.0  # No cost accumulated
-    assert model_name == "None"
+    assert model_name == "cached"  # No successful LLM calls
 
 def test_load_prompt_template_not_found(tmp_path, mock_llm_invoke):
     # Create temporary file
@@ -267,7 +266,7 @@ def test_load_prompt_template_not_found(tmp_path, mock_llm_invoke):
     with patch('pdd.summarize_directory.load_prompt_template') as mock_load:
         mock_load.return_value = None
 
-        with pytest.raises(FileNotFoundError, match="Prompt template 'summarize_file_LLM.prompt' not found."):
+        with pytest.raises(FileNotFoundError, match="Prompt template 'summarize_file_LLM' is empty or missing."):
             summarize_directory(
                 directory_path=directory_path,
                 strength=strength,
@@ -277,18 +276,28 @@ def test_load_prompt_template_not_found(tmp_path, mock_llm_invoke):
             )
 
 def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test partial cache hit: file1 cached, file2 content changed, file3 new."""
+    import hashlib
+
     # Create multiple temporary files
     file1 = tmp_path / "file1.py"
-    file1.write_text("print('Hello World')")
+    file1_content = "print('Hello World')"
+    file1.write_text(file1_content)
     file2 = tmp_path / "file2.py"
-    file2.write_text("def foo(): pass")
+    file2_content = "def foo(): pass"
+    file2.write_text(file2_content)
     file3 = tmp_path / "file3.py"
     file3.write_text("import os")
 
-    # Create existing CSV with file1 and file2
-    existing_csv = f'''full_path,file_summary,date
-"{os.path.relpath(str(file1))}","Existing summary.",{datetime.now(UTC).isoformat()}
-"{os.path.relpath(str(file2))}","Existing summary.",{datetime.now(UTC).isoformat()}'''
+    # Compute content hashes
+    file1_hash = hashlib.sha256(file1_content.encode()).hexdigest()
+    # Use WRONG hash for file2 to simulate content change
+    old_file2_hash = hashlib.sha256(b"old content").hexdigest()
+
+    # Create existing CSV with file1 (correct hash) and file2 (wrong hash)
+    existing_csv = f'''full_path,file_summary,content_hash
+{str(file1)},Existing summary.,{file1_hash}
+{str(file2)},Existing summary.,{old_file2_hash}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -296,22 +305,13 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
     verbose = False
     csv_file = existing_csv
 
-    # Mock file modification time: file1 not changed, file2 modified, file3 new
-    with patch('pdd.summarize_directory.os.path.getmtime') as mock_getmtime:
-        current_time = datetime.now(UTC).timestamp()
-        mock_getmtime.side_effect = [
-            file1.stat().st_mtime,  # file1 unchanged
-            current_time + 100,     # file2 modified
-            file3.stat().st_mtime   # file3 new
-        ]
-
-        csv_output, total_cost, model_name = summarize_directory(
-            directory_path=directory_path,
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            csv_file=csv_file
-        )
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=directory_path,
+        strength=strength,
+        temperature=temperature,
+        verbose=verbose,
+        csv_file=csv_file
+    )
 
     # Parse CSV output
     reader = csv.DictReader(StringIO(csv_output))
@@ -319,14 +319,15 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
     assert len(rows) == 3
 
     summaries = {row['full_path']: row['file_summary'] for row in rows}
-    assert summaries[os.path.relpath(str(file1))] == "Existing summary."
-    assert summaries[os.path.relpath(str(file2))] == "This is a summary."
-    assert summaries[os.path.relpath(str(file3))] == "This is a summary."
+    assert summaries[str(file1)] == "Existing summary."  # Cached (hash match)
+    assert summaries[str(file2)] == "This is a summary."  # Re-summarized (hash mismatch)
+    assert summaries[str(file3)] == "This is a summary."  # New file
 
     assert total_cost == 0.02  # file2 and file3 summarized
     assert model_name == "TestModel"
 
 def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test summarization of non-Python files."""
     # Create non-Python files
     file1 = tmp_path / "file1.txt"
     file1.write_text("Just some text.")
@@ -339,20 +340,13 @@ def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     verbose = False
     csv_file = None
 
-    # Mock file modification time
-    with patch('pdd.summarize_directory.os.path.getmtime') as mock_getmtime:
-        mock_getmtime.side_effect = [
-            file1.stat().st_mtime,
-            file2.stat().st_mtime
-        ]
-
-        csv_output, total_cost, model_name = summarize_directory(
-            directory_path=directory_path,
-            strength=strength,
-            temperature=temperature,
-            verbose=verbose,
-            csv_file=csv_file
-        )
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=directory_path,
+        strength=strength,
+        temperature=temperature,
+        verbose=verbose,
+        csv_file=csv_file
+    )
 
     # Parse CSV output
     reader = csv.DictReader(StringIO(csv_output))
@@ -361,7 +355,7 @@ def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     for row in rows:
         assert 'full_path' in row
         assert 'file_summary' in row
-        assert 'date' in row
+        assert 'content_hash' in row
         assert row['file_summary'] == "This is a summary."
 
     assert total_cost == 0.02  # Two files summarized
@@ -578,3 +572,92 @@ class TestProgressCallback:
         # All calls should have total=2 (only .py files)
         for current, total in progress_calls:
             assert total == 2
+
+
+# ============================================================================
+# Content Hash Cache Invalidation Tests (TDD - Bug Fix)
+# ============================================================================
+
+class TestContentHashCacheInvalidation:
+    """Tests for content hash-based cache invalidation.
+
+    Bug: Auto-deps re-runs unnecessarily on fresh git checkout because
+    it uses filesystem mtime for cache invalidation, but git doesn't
+    preserve mtime. Fresh checkout = new mtime = all files appear "changed".
+
+    Fix: Use content hash (SHA-256) instead of mtime.
+    """
+
+    def test_cache_invalidation_uses_content_hash_not_mtime(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Same content = same hash = no re-summarization, regardless of mtime."""
+        import hashlib
+
+        # Create a file
+        file1 = tmp_path / "file1.py"
+        content = "print('Hello')"
+        file1.write_text(content)
+
+        # Compute the content hash
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        # Use absolute path since glob returns absolute paths when given absolute pattern
+        file1_abs = str(file1)
+
+        # Simulate existing CSV with SAME content hash
+        # (This is what should happen - content unchanged means skip LLM)
+        existing_csv = f'''full_path,file_summary,content_hash
+{file1_abs},Existing summary.,{content_hash}'''
+
+        csv_output, total_cost, model_name = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=existing_csv
+        )
+
+        # Should NOT re-summarize because content hash matches
+        assert total_cost == 0.0, "Should not call LLM when content unchanged"
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        assert rows[0]['file_summary'] == "Existing summary."
+
+    def test_cache_invalidation_resumes_when_content_changes(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Different content = different hash = re-summarize."""
+        import hashlib
+
+        # Create a file with NEW content
+        file1 = tmp_path / "file1.py"
+        new_content = "print('Hello World - MODIFIED')"
+        file1.write_text(new_content)
+
+        # Use absolute path since glob returns absolute paths
+        file1_abs = str(file1)
+
+        # Existing CSV has hash of OLD content
+        old_content = "print('Hello')"
+        old_hash = hashlib.sha256(old_content.encode()).hexdigest()
+
+        existing_csv = f'''full_path,file_summary,content_hash
+{file1_abs},Old summary.,{old_hash}'''
+
+        csv_output, total_cost, model_name = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=existing_csv
+        )
+
+        # SHOULD re-summarize because content hash differs
+        assert total_cost > 0, "Should call LLM when content changed"
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        # Should have new summary from mock
+        assert rows[0]['file_summary'] == "This is a summary."

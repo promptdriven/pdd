@@ -1,7 +1,7 @@
-% You are an expert Python Programmer. Generate a Python function called `summarize_directory` that takes the following inputs and generates a csv output containing the following: 
-    'full_path': str, the full path of the file, 
-    'file_summary': str, the summary of the file, and 
-    'date': timestamp, the date of when the summary was generated.
+% You are an expert Python Programmer. Generate a Python function called `summarize_directory` that takes the following inputs and generates a csv output containing the following:
+    'full_path': str, the full path of the file,
+    'file_summary': str, the summary of the file, and
+    'content_hash': str, SHA-256 hash of the file contents for cache invalidation.
 
 <include>context/python_preamble.prompt</include>
 
@@ -13,10 +13,18 @@
         'time' - float, between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose': bool, whether to print out the details of the function.
         'csv_file': optional str, current csv file contents if it already exists.
+        'progress_callback': Optional[Callable[[int, int], None]], callback for progress updates, called with (current, total) for each file processed. Default is None.
     - Outputs:
-        'csv_file' - A string containing the contents of the csv file that contains the full path of the file, summary, and date of the files in the directory.
+        'csv_file' - A string containing the contents of the csv file that contains the full path of the file, summary, and content_hash of the files in the directory.
         'total_cost' - A float representing the total cost of the LCEL runs.
         'model_name' - A string representing the name of the LLM model used.
+
+% Input validation requirements:
+    - Raise ValueError("Invalid 'directory_path'.") if directory_path is not a non-empty string
+    - Raise ValueError("Invalid 'strength' value.") if strength is not between 0.0 and 1.0
+    - Raise ValueError("Invalid 'temperature' value.") if temperature is not a number >= 0
+    - Raise ValueError("Invalid 'verbose' value.") if verbose is not a boolean
+    - Raise ValueError("Invalid CSV file format.") if csv_file is provided but doesn't have valid format with required columns (full_path, file_summary, content_hash)
 
 % Here is how to use the internal modules:
     <internal_modules>
@@ -32,18 +40,23 @@
     </internal_modules>
 
 % This program will do the following:
-    Step 1: Load prompt template summarize_file_LLM.prompt
-    Step 2: Iterate through all files in the directory specified by the 'directory_path' input.
-        Step 2a: For each file:
-            - Extract the filename using os.path.basename()
-            - Check if any existing entry in the CSV has a matching filename
-            - Only proceed with summarization if either:
-                1. No matching filename is found in existing entries
-                2. The file is newer than the existing entry with the matching filename
-            - If a match is found and the file hasn't changed, reuse the existing summary
-        Step 2b: Read each file and read the contents of the file as a string.
-        Step 2c: Summarize the files contents using llm_invoke, passing the loaded prompt template, input parameters {'file_contents': file_contents}, and the 'strength', 'temperature', and 'time' arguments.
+    Step 1: Validate all inputs according to the input validation requirements. Raise FileNotFoundError if the prompt template cannot be loaded.
+    Step 2: Load prompt template summarize_file_LLM.prompt
+    Step 3: Get list of files matching directory_path using glob. Filter out:
+        - Directories (only process files)
+        - Files in __pycache__ directories
+        - Files ending with .pyc or .pyo
+    Step 4: If no files found, return early with empty CSV header, 0.0 cost, and "None" model_name.
+    Step 5: Parse existing csv_file if provided to get cached entries.
+    Step 6: For each file, use progress_callback(current, total) if provided, or use Rich track() for progress display:
+        Step 6a: Read the file contents as a string
+        Step 6b: Compute the content hash using hashlib.sha256(file_contents.encode()).hexdigest()
+        Step 6c: Check if any existing entry in the CSV has a matching filename (use normalized path comparison)
+        Step 6d: Only proceed with summarization if either:
+            1. No matching filename is found in existing entries
+            2. The file's content_hash differs from the existing entry's content_hash
+        Step 6e: If a match is found and the content_hash matches, reuse the existing summary
+        Step 6f: If summarization is needed, summarize the file contents using llm_invoke, passing the loaded prompt template, input parameters {'file_contents': file_contents}, and the 'strength', 'temperature', and 'time' arguments.
             - Use a Pydantic model called FileSummary with a field named 'file_summary' for consistent naming
-        Step 2d: Store the relative path (not the full path) of the file, the file_summary, and the date in the current data dictionary.
-    Step 3. Pretty print a message letting the user know it is running and the current progress.
-    Step 4: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
+        Step 6g: Store the relative path (not the full path) of the file, the file_summary, and the content_hash in the current data dictionary.
+    Step 7: Return the tuple containing the updated csv output string, the total_cost and the model_name of the LLM model used.
