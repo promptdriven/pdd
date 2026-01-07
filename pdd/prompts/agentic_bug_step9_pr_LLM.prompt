@@ -145,6 +145,7 @@ Your comment should follow this format:
 To auto-fix this bug using PDD:
 
 ```bash
+cd {{worktree_path}}
 pdd --force fix --loop --max-attempts 5 --verification-program context/{{module_name}}_example.py {{prompt_file}} {{code_file_path}} {{test_file_path}} fix-issue-{{issue_number}}.log
 ```
 
