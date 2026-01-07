@@ -83,7 +83,9 @@ Outputs:
    - Determine success based on issues found and fixes proposed
 5. For loop mode:
    - Call `fix_verification_errors_loop` with paths, content, budget parameters, and `use_cloud` flag
-   - If `ctx.obj.get('local')` is True, pass `use_cloud=False`; otherwise `use_cloud=True` for hybrid mode
+   - Cloud hybrid mode is enabled by default: LLM fix calls go to cloud, program execution stays local
+   - Pass `use_cloud=False` only if `ctx.obj.get('local')` is True (local execution preferred)
+   - Auto-detect cloud availability via JWT token; if available and not forcing local, use cloud
    - Extract results from the returned dictionary
 6. Write output files to resolved paths
 7. Display summary panel and return results tuple
@@ -95,8 +97,10 @@ Outputs:
 %       `{ "programContent": <program>, "promptContent": <prompt>, "codeContent": <code>, "outputContent": <program_output>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "time": <time>, "verbose": <verbose> }`
 %     - Expected response: `{ "fixedCode", "fixedProgram", "explanation", "issuesCount", "totalCost", "modelName" }`
 %     - Request timeout: 400 seconds.
-%  3. For loop mode: use hybrid approach. Pass `use_cloud=True` to `fix_verification_errors_loop` for cloud LLM calls while keeping local program execution.
-%     - If `ctx.obj.get('local')` is True, pass `use_cloud=False` to force local execution.
+%  3. For loop mode: cloud hybrid is the default. Local program execution always stays local, but LLM fix calls go to cloud.
+%     - Default: `use_cloud=True` when JWT token is available and `ctx.obj.get('local')` is not True
+%     - Pass `use_cloud=False` only when `ctx.obj.get('local')` is True (explicit local-only mode)
+%     - The `cloud_only` flag still enables cloud LLM calls (for backward compatibility)
 %  4. Handle errors: 401/402/403/400 are non-recoverable (raise `click.UsageError`); 5xx errors fall back to local.
 %  5. If verbose is True, print execution info using Rich panels.
 
