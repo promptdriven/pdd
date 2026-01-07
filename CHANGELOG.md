@@ -1,4 +1,35 @@
+## v0.0.104 (2026-01-06)
+
+### Feat
+
+- add cloud execution support for llm_invoke
+
+### Fix
+
+- prevent duplicate sync PRs by using fixed branch name
+- align ExtractedCode schema with extract_code_LLM prompt
+- lower EXTRACTION_STRENGTH from 0.75 to 0.5 to prevent Opus usage
+
 ## v0.0.103 (2026-01-05)
+
+### Feat
+
+- **Cloud Execution for `pdd bug` Command (PR #243):** Added cloud-first execution with automatic local fallback. Uses JWT authentication and posts to the `generateBugTest` endpoint. Non-recoverable errors (401/402/403/400) raise `UsageError`; recoverable errors (5xx, timeouts) fall back to local. Cloud request timeout set to 400s. Set `PDD_CLOUD_ONLY=1` or `PDD_NO_LOCAL_FALLBACK=1` to disable fallback.
+
+- **Centralized Path Resolution Module (Issue #240, PR #241):** Added new `path_resolution.py` module with `PathResolver` dataclass for standardized file path resolution across the codebase. Supports four resolution profiles:
+  - `resolve_include()`: cwd → package → repo fallback chain
+  - `resolve_prompt_template()`: PDD_PATH → repo → cwd for prompts
+  - `resolve_data_file()`: PDD_PATH only for data files
+  - `resolve_project_root()`: PDD_PATH → marker → cwd for project detection
+
+### Fix
+
+- **Repo Root Fallback (Issue #240):** Fixed `get_file_path` to properly fall back to repo root when resolving include paths in installed-package scenarios.
+
+### Tests
+
+- Added 643+ lines of tests in `test_bug_main.py` covering cloud success paths, fallback scenarios, non-recoverable HTTP errors, and cloud-only mode.
+- Added failing test for issue #240 repo root fallback behavior.
 
 ## v0.0.102 (2026-01-04)
 
