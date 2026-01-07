@@ -9,7 +9,7 @@
   A space in the comment field indicates opening/closing characters (e.g., "/* */")
 
 % Dependencies
-<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
+<pdd.path_resolution><include>context/path_resolution_example.py</include></pdd.path_resolution>
 
 % Steps
   1. Use PathResolver from pdd/path_resolution.py to locate the CSV:
