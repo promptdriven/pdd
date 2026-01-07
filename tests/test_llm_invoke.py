@@ -774,6 +774,28 @@ def test_has_invalid_python_code_ignores_prose_fields():
     assert not _has_invalid_python_code(obj)
 
 
+def test_file_summary_prose_not_flagged_as_invalid_python():
+    """file_summary field contains prose that may include Python keywords.
+
+    Reproduces false positive during summarize_directory when prose contains
+    phrases like 'return a successful result'.
+    """
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class FileSummary(BaseModel):
+        file_summary: str
+
+    # Real prose from production that was triggering false positives
+    obj = FileSummary(
+        file_summary="The mock is configured to return a successful result, "
+                     "simulating an 8-step workflow that costs $2.50."
+    )
+
+    # Should return False - prose should not be flagged as invalid Python
+    assert not _has_invalid_python_code(obj)
+
+
 def test_is_prose_field_name():
     """Test prose field name detection."""
     from pdd.llm_invoke import _is_prose_field_name
