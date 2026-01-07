@@ -1,6 +1,6 @@
 """PDD - Prompt Driven Development"""
 
-__version__ = "0.0.103"
+__version__ = "0.0.104"
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction
