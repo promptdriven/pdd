@@ -141,7 +141,16 @@ class CloudConfig:
 
     @staticmethod
     def is_cloud_enabled() -> bool:
-        """Check if cloud features are available (API keys configured)."""
+        """Check if cloud features are available.
+
+        Cloud is enabled if:
+        1. PDD_JWT_TOKEN is set (injected token for testing/CI), OR
+        2. Both FIREBASE_API_KEY and GITHUB_CLIENT_ID are set (for device flow auth)
+        """
+        # Check for injected token first (testing/CI scenario)
+        if os.environ.get(PDD_JWT_TOKEN_ENV):
+            return True
+        # Check for device flow auth credentials
         return bool(
             os.environ.get(FIREBASE_API_KEY_ENV) and
             os.environ.get(GITHUB_CLIENT_ID_ENV)
