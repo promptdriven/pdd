@@ -1,5 +1,7 @@
+import subprocess
 import pytest
-from pdd.sync_orchestration import _detect_example_errors
+from unittest.mock import patch, MagicMock
+from pdd.sync_orchestration import _detect_example_errors, _run_example_with_error_detection
 
 
 class TestDetectExampleErrors:
@@ -107,3 +109,107 @@ class TestDetectExampleErrors:
         output = "2024-01-01 12:00:00 - INFO - All tests completed"
         has_errors, _ = _detect_example_errors(output)
         assert has_errors is False
+
+
+class TestRunExampleWithErrorDetection:
+    """Test that _run_example_with_error_detection respects returncode."""
+
+    @patch('pdd.sync_orchestration.subprocess.Popen')
+    def test_returncode_zero_with_error_log_is_success(self, mock_popen):
+        """Process that exits 0 should succeed even with ERROR logs.
+
+        Regression test: returncode=0 means success, regardless of output.
+        This matches the documented intent in sync_orchestration.py comments:
+        "Zero exit code → success"
+
+        Bug: Example logs non-fatal ERROR (Firebase emulator not running)
+        but exits 0. Current code treats this as failure.
+        """
+        # Mock a process that exits with 0 but has ERROR in output
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout.readline.side_effect = [
+            b"2026-01-07 - INFO - Starting example\n",
+            b"2026-01-07 - ERROR - Error retrieving examples: HTTPConnectionPool(host='127.0.0.1', port=5001)...\n",
+            b"2026-01-07 - INFO - Example completed successfully\n",
+            b"",  # End of stdout
+        ]
+        mock_proc.stderr.readline.side_effect = [b""]  # No stderr
+        mock_proc.wait.return_value = 0
+        mock_popen.return_value = mock_proc
+
+        returncode, stdout, stderr = _run_example_with_error_detection(
+            cmd_parts=['python', 'test.py'],
+            env={},
+            cwd='/tmp',
+            timeout=5
+        )
+
+        # Key assertion: returncode=0 should mean success, even with ERROR log
+        assert returncode == 0, f"Expected 0 (success) but got {returncode}. Process exited 0, ERROR logs should not override."
+
+    @patch('pdd.sync_orchestration.subprocess.Popen')
+    def test_signal_killed_with_error_log_is_failure(self, mock_popen):
+        """Process killed by signal with ERROR logs should fail.
+
+        Server-style examples get killed by timeout. For these, we need
+        to analyze output since returncode is just the signal number.
+        """
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline.side_effect = [
+            b"2026-01-07 - ERROR - Connection failed\n",
+            b"",
+        ]
+        mock_proc.stderr.readline.side_effect = [b""]
+        mock_proc.terminate.return_value = None
+        mock_proc.kill.return_value = None
+        mock_popen.return_value = mock_proc
+
+        # Simulate timeout then termination
+        call_count = [0]
+        def wait_side_effect(timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:  # Initial wait - timeout
+                raise subprocess.TimeoutExpired(cmd=['python'], timeout=5)
+            # After terminate/kill
+            mock_proc.returncode = -15  # SIGTERM
+            return -15
+
+        mock_proc.wait.side_effect = wait_side_effect
+        mock_proc.returncode = -15  # Set initial value
+
+        returncode, stdout, stderr = _run_example_with_error_detection(
+            cmd_parts=['python', 'server.py'],
+            env={},
+            cwd='/tmp',
+            timeout=5
+        )
+
+        # For signal-killed processes, ERROR logs should cause failure
+        assert returncode == 1, f"Expected 1 (failure) for signal-killed with errors, got {returncode}"
+
+    @patch('pdd.sync_orchestration.subprocess.Popen')
+    def test_signal_killed_without_errors_is_success(self, mock_popen):
+        """Process killed by signal without errors should succeed.
+
+        Server ran fine until we killed it.
+        """
+        mock_proc = MagicMock()
+        mock_proc.returncode = -15  # SIGTERM
+        mock_proc.stdout.readline.side_effect = [
+            b"2026-01-07 - INFO - Server started on port 8080\n",
+            b"",
+        ]
+        mock_proc.stderr.readline.side_effect = [b""]
+        mock_proc.wait.return_value = -15
+        mock_popen.return_value = mock_proc
+
+        returncode, stdout, stderr = _run_example_with_error_detection(
+            cmd_parts=['python', 'server.py'],
+            env={},
+            cwd='/tmp',
+            timeout=5
+        )
+
+        # No errors in output, so success
+        assert returncode == 0, f"Expected 0 (success) for signal-killed without errors, got {returncode}"

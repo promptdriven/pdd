@@ -640,24 +640,23 @@ def _run_example_with_error_detection(
     # Check for errors in output
     has_errors, error_summary = _detect_example_errors(combined)
 
-    # Determine result:
-    # - Errors in output → failure
+    # Determine result (check returncode first, then use error detection for signal-killed):
+    # - Zero exit code → success (trust the exit code)
     # - Positive exit code (process failed normally, e.g., sys.exit(1)) → failure
     # - Negative exit code (killed by signal, e.g., -9 for SIGKILL) → check output
-    # - Zero exit code → success
     #
     # IMPORTANT: When we kill the process after timeout, returncode is negative
     # (the signal number). This is NOT a failure if output has no errors.
-    if has_errors:
-        return 1, stdout, stderr  # Errors detected in output
+    if proc.returncode is not None and proc.returncode == 0:
+        return 0, stdout, stderr  # Clean exit = success (trust exit code)
     elif proc.returncode is not None and proc.returncode > 0:
         return proc.returncode, stdout, stderr  # Process exited with error
     else:
-        # Success cases:
-        # - returncode == 0 (clean exit)
-        # - returncode < 0 (killed by signal, but no errors in output)
-        # - returncode is None (shouldn't happen after wait, but safe fallback)
-        return 0, stdout, stderr
+        # Killed by signal (returncode < 0 or None) - use error detection
+        # Server-style examples may run until timeout, need to check output
+        if has_errors:
+            return 1, stdout, stderr  # Errors detected in output
+        return 0, stdout, stderr  # No errors, server was running fine
 
 
 def _execute_tests_and_create_run_report(
