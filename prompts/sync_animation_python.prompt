@@ -28,6 +28,11 @@
     <include>../docs/branding.md</include>
 </branding>
 
+% Here is how to use the internal modules:
+<internal_modules>
+    <pdd.logo_animation><include>context/logo_animation_example.py</include></pdd.logo_animation>
+</internal_modules>
+
 % This function will do the following:
     1. Upon first starting to run, call logo_animation.run_logo_animation_inline() for the initial logo sequence
     2. Transition to the main animation box (18 lines tall, responsive width)
