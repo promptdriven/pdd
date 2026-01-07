@@ -5,7 +5,7 @@ __version__ = "0.0.103"
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction
 # operations. The module should have a large context window and be affordable.
-EXTRACTION_STRENGTH = 0.75
+EXTRACTION_STRENGTH = 0.5
 
 DEFAULT_STRENGTH = 1.0
 

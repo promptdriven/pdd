@@ -35,6 +35,6 @@
         3a. Pass the following parameters to the prompt template (via `input_json` for `llm_invoke`):
             - 'llm_output'
             - 'language'
-        3b. The Pydantic output will contain the 'extracted_code' key.
+        3b. The Pydantic output model (ExtractedCode) will contain 'focus', 'explanation', and 'extracted_code' keys to match the extract_code_LLM.prompt schema. Only the 'extracted_code' value is used in the return.
         3c. For the extracted_code, if the first and last line have triple backticks delete the entire first and last line. There will be the name of the language after the first triple backticks and that should be removed as well.
     Step 4. Return the extracted code string, total cost float and model name string.
