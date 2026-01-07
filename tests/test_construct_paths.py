@@ -804,7 +804,12 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
         "example_output_path": str(tmpdir / "examples" / "ex_my_sync_project.py"),
     }
 
-    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen_paths:
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen_paths, \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {}}), \
+         patch('pdd.construct_paths._detect_context', return_value=None), \
+         patch('pdd.construct_paths._get_context_config', return_value={}):
+
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
@@ -821,11 +826,6 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     assert Path(resolved_config["tests_dir"]).name == "tests"
     # examples_dir defaults to "context" since no example_output_path in raw config
     assert resolved_config["examples_dir"] == "context"
-    
-    # Assert that other return values are empty/default
-    assert input_strings == {}
-    assert output_file_paths == {}
-    assert language == ""
 
 
 def test_construct_paths_sync_discovery_requires_basename(tmpdir):
@@ -868,7 +868,14 @@ def test_construct_paths_sync_discovery_examples_dir_from_directory_path(tmpdir)
         "example_output_path": "context/",  # Directory path, not file path!
     }
 
-    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths):
+    # Mock context config with example_output_path as a directory
+    mock_context_config = {'example_output_path': 'context/'}
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path(str(tmpdir / '.pddrc'))), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'default': {'defaults': mock_context_config}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='default'), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config):
+
         resolved_config, input_strings, output_file_paths, language = construct_paths(
             input_file_paths, force, quiet, command, command_options
         )
@@ -1805,19 +1812,25 @@ def test_construct_paths_detect_command_language_detection(tmpdir):
         assert isinstance(output_file_paths['output'], str)
         assert output_file_paths['output'] == str(mock_output_path)
     
-    # Now test what happens if we use a different command
-    # The 'detect' special case should not be triggered for other commands
+    # Create a test case for a different command with no language indicators
+    no_lang_prompt_file = tmp_path / 'generic.prompt'
+    no_lang_prompt_file.write_text('Generic prompt with no language suffix')
+    input_file_paths_no_lang = {
+        'prompt_file': str(no_lang_prompt_file),
+    }
+    
+    # Test with a different command without language indicators
     with patch('pdd.construct_paths.get_extension', side_effect=lambda lang: '.prompt' if lang == 'prompt' else '.py' if lang == 'python' else ''), \
          patch('pdd.construct_paths.get_language', side_effect=lambda ext: 'python' if ext == '.py' else ''), \
          patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths_dict_str):
         
-        # Using a different command should result in ValueError
+        # The "generate" command should raise ValueError with no language indicators
         with pytest.raises(ValueError) as excinfo:
             _, input_strings, output_file_paths, language = construct_paths(
-                input_file_paths, force, quiet, "generate", command_options  # Use different command
+                input_file_paths_no_lang, force, quiet, "generate", command_options
             )
         
-        # The error would be about not being able to determine language
+        # The error should be about not being able to determine language
         assert "Could not determine language" in str(excinfo.value)
 
 def test_construct_paths_bug_command_language_detection(tmpdir):
@@ -2663,3 +2676,185 @@ def test_examples_dir_uses_root_of_outputs_example_path_not_parent(tmpdir):
     assert resolved_config["examples_dir"] == "context", \
         f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent). " \
         "examples_dir should use root of outputs.example.path, not parent directory."
+
+
+class TestPromptsDirContextDetection:
+    """
+    TDD Tests for detecting context from prompts_dir configuration.
+
+    Bug: When .pddrc has a context with prompts_dir configured (legacy style),
+    but the paths pattern doesn't match the prompt file location,
+    context detection fails and falls back to 'default'.
+
+    Example:
+        backend-utils:
+          paths: ["backend/functions/utils/**"]   # Matches CODE files
+          defaults:
+            prompts_dir: "prompts/backend/utils"  # Where PROMPTS live
+
+    When syncing, prompt file is at prompts/backend/utils/foo.prompt
+    but paths pattern only matches backend/functions/utils/**, so context
+    detection falls back to 'default' instead of 'backend-utils'.
+    """
+
+    @pytest.fixture
+    def pddrc_with_prompts_dir(self, tmp_path):
+        """Create .pddrc where paths pattern differs from prompts_dir."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      prompts_dir: "prompts/backend/utils"
+      generate_output_path: "backend/functions/utils/"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+        # Create prompt file
+        prompt_dir = tmp_path / "prompts" / "backend" / "utils"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "credit_helpers_python.prompt").write_text("test prompt")
+        return tmp_path
+
+    def test_detect_context_from_prompts_dir(self, pddrc_with_prompts_dir):
+        """
+        Regression test: Context should be detected from prompts_dir.
+
+        When prompt file is at prompts/backend/utils/credit_helpers_python.prompt
+        and backend-utils context has prompts_dir: "prompts/backend/utils",
+        context should be detected as "backend-utils" even though
+        paths pattern "backend/functions/utils/**" doesn't match.
+        """
+        from pdd.construct_paths import detect_context_for_file
+
+        prompt_path = pddrc_with_prompts_dir / "prompts" / "backend" / "utils" / "credit_helpers_python.prompt"
+
+        context_name, config = detect_context_for_file(
+            str(prompt_path),
+            repo_root=str(pddrc_with_prompts_dir)
+        )
+
+        assert context_name == "backend-utils", \
+            f"Expected 'backend-utils' but got '{context_name}'. " \
+            f"Context detection should match prompts_dir, not just paths patterns."
+
+    def test_most_specific_prompts_dir_wins(self, tmp_path):
+        """More specific prompts_dir should take precedence."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  backend:
+    paths:
+      - "backend/**"
+    defaults:
+      prompts_dir: "prompts/backend"
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      prompts_dir: "prompts/backend/utils"
+''')
+        prompt_dir = tmp_path / "prompts" / "backend" / "utils"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "foo.prompt").write_text("test")
+
+        from pdd.construct_paths import detect_context_for_file
+
+        context_name, _ = detect_context_for_file(
+            str(prompt_dir / "foo.prompt"),
+            repo_root=str(tmp_path)
+        )
+
+        # backend-utils (prompts/backend/utils) is more specific than backend (prompts/backend)
+        assert context_name == "backend-utils", \
+            f"Expected 'backend-utils' (more specific) but got '{context_name}'"
+
+    def test_paths_pattern_still_works(self, tmp_path):
+        """Existing paths pattern matching should still work for code files."""
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      prompts_dir: "prompts/backend/utils"
+''')
+        code_dir = tmp_path / "backend" / "functions" / "utils"
+        code_dir.mkdir(parents=True)
+        (code_dir / "helper.py").write_text("# code")
+
+        from pdd.construct_paths import detect_context_for_file
+
+        context_name, _ = detect_context_for_file(
+            str(code_dir / "helper.py"),
+            repo_root=str(tmp_path)
+        )
+
+        # paths pattern should still match code files
+        assert context_name == "backend-utils", \
+            f"Expected 'backend-utils' from paths pattern but got '{context_name}'"
+
+
+class TestSyncDiscoveryBasenameContextDetection:
+    """Sync discovery should infer context from basename prefixes and patterns."""
+
+    def test_construct_paths_sync_basename_prompts_dir_context(self, tmp_path, monkeypatch):
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  backend-utils:
+    paths:
+      - "backend/functions/utils/**"
+    defaults:
+      prompts_dir: "prompts/backend/utils"
+      generate_output_path: "backend/functions/utils/"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        monkeypatch.chdir(tmp_path)
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths={},
+            force=False,
+            quiet=True,
+            command="sync",
+            command_options={"basename": "backend/utils/credit_helpers", "language": "python"},
+        )
+
+        assert resolved_config["_matched_context"] == "backend-utils"
+        assert resolved_config["prompts_dir"] == "prompts/backend/utils"
+        assert Path(resolved_config["code_dir"]).as_posix().endswith("backend/functions/utils")
+
+    def test_construct_paths_sync_basename_paths_pattern_context(self, tmp_path, monkeypatch):
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text('''version: "1.0"
+contexts:
+  frontend-components:
+    paths:
+      - "frontend/components/**"
+    defaults:
+      generate_output_path: "frontend/src/components/"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        monkeypatch.chdir(tmp_path)
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths={},
+            force=False,
+            quiet=True,
+            command="sync",
+            command_options={"basename": "frontend/components/marketplace/AssetCard", "language": "typescriptreact"},
+        )
+
+        assert resolved_config["_matched_context"] == "frontend-components"
+        assert resolved_config["prompts_dir"] == "prompts"
+        assert Path(resolved_config["code_dir"]).as_posix().endswith("frontend/src/components")

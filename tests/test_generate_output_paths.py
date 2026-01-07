@@ -1042,7 +1042,14 @@ class TestSubdirectoryBasenameSupport:
         assert result == "test_calculator.py", f"Expected 'test_calculator.py', got '{result}'"
 
     def test_generate_output_paths_with_subdirectory_basename(self, tmp_path):
-        """Full integration test: generate_output_paths should handle subdirectory basenames."""
+        """Full integration test: generate_output_paths handles explicit paths ending with /.
+
+        When config paths end with /, they are treated as COMPLETE directories.
+        The basename's subdirectory structure (dir_prefix) is NOT added.
+        This matches the expected behavior for explicit output paths like:
+            generate_output_path: "backend/functions/utils/"
+        where files should go directly to that directory.
+        """
         project_root = tmp_path / "project"
         project_root.mkdir()
 
@@ -1062,15 +1069,16 @@ class TestSubdirectoryBasenameSupport:
             config_base_dir=str(project_root),
         )
 
-        # All paths should preserve subdirectory structure
+        # Paths ending with / are treated as complete directories (no dir_prefix added)
         generate_path = result.get("generate_output_path", "")
         test_path = result.get("test_output_path", "")
         example_path = result.get("example_output_path", "")
 
-        # Expected: pdd/core/cloud.py, tests/core/test_cloud.py, examples/core/cloud_example.py
-        expected_generate = str(project_root / "pdd" / "core" / "cloud.py")
-        expected_test = str(project_root / "tests" / "core" / "test_cloud.py")
-        expected_example = str(project_root / "examples" / "core" / "cloud_example.py")
+        # With explicit paths ending in /, only filename (no subdir) is added
+        # pdd/ + cloud.py, tests/ + test_cloud.py, examples/ + cloud_example.py
+        expected_generate = str(project_root / "pdd" / "cloud.py")
+        expected_test = str(project_root / "tests" / "test_cloud.py")
+        expected_example = str(project_root / "examples" / "cloud_example.py")
 
         assert generate_path == expected_generate, \
             f"Expected {expected_generate}, got {generate_path}"

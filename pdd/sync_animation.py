@@ -336,8 +336,13 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     max_x = max(all_branch_xs)
 
     # Draw horizontal line on line 2 (index 2)
-    for i in range(min_x, max_x + 1):
-        line_parts[2][i] = "─"
+    # Clamp drawing range to console width to prevent IndexError and wrapping
+    draw_start = max(min_x, 0)
+    draw_end = min(max_x, console_width - 1)
+    
+    if draw_start <= draw_end:
+        for i in range(draw_start, draw_end + 1):
+            line_parts[2][i] = "─"
     
     # Draw vertical connectors only where needed
     # Prompt always connects vertically (lines 0,1 above junction, lines 3,4,5 below)
@@ -640,4 +645,3 @@ def sync_animation(
         print(f"Error in animation: {e}", flush=True)
     finally:
         _final_logo_animation_sequence(console)
-

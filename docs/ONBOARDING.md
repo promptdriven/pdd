@@ -111,26 +111,7 @@ See `.env.example` for a complete list of supported environment variables.
 
 These final steps configure the local repository to ensure the application can find its resources correctly.
 
-**1. Create Symbolic Links:**
-The application's source code in `pdd/` needs access to the project's root `prompts/` and `data/` directories. This step creates symbolic links to make them accessible.
-
-```bash
-# Navigate into the pdd directory
-cd pdd
-
-# Remove the existing prompts and data files in the pdd folder
-rm -f prompts
-rm -f data
-
-# Link to the root prompts/ and data/ directories
-# (use rm -rf if they already exist as regular directories)
-ln -s ../prompts .
-ln -s ../data .
-# Go back to the project root
-cd ..
-```
-
-**2. Set the `PDD_PATH` Environment Variable:**
+**1. Set the `PDD_PATH` Environment Variable:**
 The application needs the absolute path to the `pdd/` source directory to function correctly.
 
 -   **Step 1: Get the path.**
@@ -150,7 +131,7 @@ The application needs the absolute path to the `pdd/` source directory to functi
     echo ".env" >> .gitignore
     ```
 
-	**3. Set Conda Environment Variable (Recommended for WSL):**
+**2. Set Conda Environment Variable (Recommended for WSL):**
 This is the most robust method to ensure `PDD_PATH` is always set correctly when your Conda environment is active, as it takes precedence over system variables within the Conda shell.
 -   **Step 1: Set the Conda variable.**
     Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd`), run the following command from your project root (using pwd):

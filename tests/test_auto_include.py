@@ -348,3 +348,58 @@ def test_auto_include_fixes_multiple_malformed_file_brackets(
     assert "[File:" not in deps
     assert "<include>context/python_preamble.prompt</include>" in deps
     assert "<include>context/database-schema.md</include>" in deps
+
+
+def test_auto_include_filters_self_referential_example_in_subdirectory(
+    mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
+):
+    """
+    Test that auto_include filters out a module's own example file when in a subdirectory.
+
+    This is a regression test for the issue where examples in context/backend/ or other
+    subdirectories were not being filtered out because the regex pattern only matched
+    context/{module}_example.py but not context/backend/{module}_example.py.
+    """
+    # Mock prompt templates
+    mock_load_prompt_template.side_effect = lambda name: f"{name} content"
+
+    # Mock summarize_directory - includes the module's own example in a subdirectory
+    mock_summarize_directory.return_value = (
+        "full_path,file_summary,date\n"
+        "context/backend/credit_helpers_example.py,Example usage of credit helpers,2023-02-02\n"
+        "context/firebase_helpers_example.py,Example usage of firebase helpers,2023-02-02",
+        0.25,
+        "mock-summary-model",
+    )
+
+    # Mock LLM returns a self-referential include with subdirectory path (the bug)
+    mock_llm_invoke.side_effect = [
+        {
+            "result": "Include credit_helpers_example.py for context",
+            "cost": 0.5,
+            "model_name": "mock-model-1",
+        },
+        {
+            "result": MagicMock(
+                string_of_includes=(
+                    "<utils.credit_helpers><include>context/backend/credit_helpers_example.py"
+                    "</include></utils.credit_helpers>"
+                )
+            ),
+            "cost": 0.75,
+            "model_name": "mock-model-2",
+        },
+    ]
+
+    deps, _, _, _ = auto_include(
+        input_prompt="Write the utils/credit_helpers.py module...",
+        directory_path="context/*.py",
+        csv_file=None,
+        prompt_filename="prompts/backend/utils/credit_helpers_python.prompt",
+        strength=0.7,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    # The self-referential include should be filtered out even with subdirectory
+    assert "credit_helpers_example.py" not in deps

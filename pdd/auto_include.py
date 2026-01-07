@@ -151,8 +151,9 @@ def _filter_self_references(dependencies: str, module_name: Optional[str]) -> st
     """
     if not module_name:
         return dependencies
-    # Pattern matches: <...><include>context/{module_name}_example.py</include></...>
-    pattern = rf'<[^>]+><include>context/{re.escape(module_name)}_example\.py</include></[^>]+>\s*'
+    # Pattern matches: <...><include>context/[subdirs/]{module_name}_example.py</include></...>
+    # The (?:[^/]+/)* matches zero or more subdirectory levels (e.g., backend/, frontend/)
+    pattern = rf'<[^>]+><include>context/(?:[^/]+/)*{re.escape(module_name)}_example\.py</include></[^>]+>\s*'
     return re.sub(pattern, '', dependencies)
 
 

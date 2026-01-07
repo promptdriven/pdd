@@ -88,6 +88,7 @@ import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 # Import the default model constant
 from pdd import DEFAULT_LLM_MODEL
+from pdd.path_resolution import get_default_resolver
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -113,6 +114,204 @@ class SchemaValidationError(Exception):
         super().__init__(message)
         self.raw_response = raw_response
         self.item_index = item_index
+
+
+class CloudFallbackError(Exception):
+    """Raised when cloud execution fails and should fall back to local.
+
+    This exception is caught internally and triggers fallback to local execution
+    when cloud is unavailable (network errors, timeouts, auth failures).
+    """
+    pass
+
+
+class CloudInvocationError(Exception):
+    """Raised when cloud invocation fails with a non-recoverable error.
+
+    This exception indicates a cloud error that should not fall back to local,
+    such as validation errors returned by the cloud endpoint.
+    """
+    pass
+
+
+class InsufficientCreditsError(Exception):
+    """Raised when user has insufficient credits for cloud execution.
+
+    This exception is raised when the cloud returns 402 (Payment Required)
+    and should NOT fall back to local execution - the user needs to know.
+    """
+    pass
+
+
+# --- Cloud Execution Helpers ---
+
+def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
+    """Convert a Pydantic model class to JSON Schema for cloud transport.
+
+    Args:
+        pydantic_class: A Pydantic BaseModel subclass
+
+    Returns:
+        JSON Schema dictionary that can be serialized and sent to cloud
+    """
+    schema = pydantic_class.model_json_schema()
+    # Include class name for debugging/logging purposes
+    schema['__pydantic_class_name__'] = pydantic_class.__name__
+    return schema
+
+
+def _validate_with_pydantic(
+    result: Any,
+    pydantic_class: Type[BaseModel]
+) -> BaseModel:
+    """Validate cloud response using original Pydantic class.
+
+    Args:
+        result: The result from cloud (dict or JSON string)
+        pydantic_class: The Pydantic model to validate against
+
+    Returns:
+        Validated Pydantic model instance
+
+    Raises:
+        ValidationError: If validation fails
+    """
+    if isinstance(result, dict):
+        return pydantic_class.model_validate(result)
+    elif isinstance(result, str):
+        return pydantic_class.model_validate_json(result)
+    elif isinstance(result, pydantic_class):
+        # Already validated
+        return result
+    raise ValueError(f"Cannot validate result type {type(result)} with Pydantic model")
+
+
+def _llm_invoke_cloud(
+    prompt: Optional[str],
+    input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]],
+    strength: float,
+    temperature: float,
+    verbose: bool,
+    output_pydantic: Optional[Type[BaseModel]],
+    output_schema: Optional[Dict[str, Any]],
+    time: float,
+    use_batch_mode: bool,
+    messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]],
+    language: Optional[str],
+) -> Dict[str, Any]:
+    """Execute llm_invoke via cloud endpoint.
+
+    Args:
+        All parameters match llm_invoke signature
+
+    Returns:
+        Dictionary with 'result', 'cost', 'model_name', 'thinking_output'
+
+    Raises:
+        CloudFallbackError: For recoverable errors (network, timeout, auth)
+        InsufficientCreditsError: For 402 Payment Required
+        CloudInvocationError: For non-recoverable cloud errors
+    """
+    import requests
+    from rich.console import Console
+
+    # Lazy import to avoid circular dependency
+    from pdd.core.cloud import CloudConfig
+
+    console = Console()
+    CLOUD_TIMEOUT = 300  # 5 minutes
+
+    # Get JWT token
+    jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
+    if not jwt_token:
+        raise CloudFallbackError("Could not authenticate with cloud")
+
+    # Prepare payload
+    payload: Dict[str, Any] = {
+        "strength": strength,
+        "temperature": temperature,
+        "time": time,
+        "verbose": verbose,
+        "useBatchMode": use_batch_mode,
+    }
+
+    if language:
+        payload["language"] = language
+
+    # Add prompt/messages
+    if messages:
+        payload["messages"] = messages
+    else:
+        payload["prompt"] = prompt
+        payload["inputJson"] = input_json
+
+    # Handle output schema
+    if output_pydantic:
+        payload["outputSchema"] = _pydantic_to_json_schema(output_pydantic)
+    elif output_schema:
+        payload["outputSchema"] = output_schema
+
+    # Make request
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Content-Type": "application/json"
+    }
+
+    cloud_url = CloudConfig.get_endpoint_url("llmInvoke")
+
+    if verbose:
+        logger.debug(f"Cloud llm_invoke request to: {cloud_url}")
+
+    try:
+        response = requests.post(
+            cloud_url,
+            json=payload,
+            headers=headers,
+            timeout=CLOUD_TIMEOUT
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            result = data.get("result")
+
+            # Validate with Pydantic if specified
+            if output_pydantic and result:
+                try:
+                    result = _validate_with_pydantic(result, output_pydantic)
+                except (ValidationError, ValueError) as e:
+                    logger.warning(f"Cloud response validation failed: {e}")
+                    # Return raw result if validation fails
+                    pass
+
+            return {
+                "result": result,
+                "cost": data.get("totalCost", 0.0),
+                "model_name": data.get("modelName", "cloud_model"),
+                "thinking_output": data.get("thinkingOutput"),
+            }
+
+        elif response.status_code == 402:
+            error_msg = response.json().get("error", "Insufficient credits")
+            raise InsufficientCreditsError(error_msg)
+
+        elif response.status_code in (401, 403):
+            error_msg = response.json().get("error", f"Authentication failed ({response.status_code})")
+            raise CloudFallbackError(error_msg)
+
+        elif response.status_code >= 500:
+            error_msg = response.json().get("error", f"Server error ({response.status_code})")
+            raise CloudFallbackError(error_msg)
+
+        else:
+            error_msg = response.json().get("error", f"HTTP {response.status_code}")
+            raise CloudInvocationError(f"Cloud llm_invoke failed: {error_msg}")
+
+    except requests.exceptions.Timeout:
+        raise CloudFallbackError("Cloud request timed out")
+    except requests.exceptions.ConnectionError as e:
+        raise CloudFallbackError(f"Cloud connection failed: {e}")
+    except requests.exceptions.RequestException as e:
+        raise CloudFallbackError(f"Cloud request failed: {e}")
 
 
 def _is_wsl_environment() -> bool:
@@ -187,46 +386,22 @@ def _get_environment_info() -> Dict[str, str]:
 
 # --- Constants and Configuration ---
 
-# Determine project root: 1. PDD_PATH env var, 2. Search upwards from script, 3. CWD
-PROJECT_ROOT = None
+# Determine project root: use PathResolver to ignore package-root PDD_PATH values.
 PDD_PATH_ENV = os.getenv("PDD_PATH")
-
 if PDD_PATH_ENV:
-    _path_from_env = Path(PDD_PATH_ENV)
-    if _path_from_env.is_dir():
-        PROJECT_ROOT = _path_from_env.resolve()
-        logger.debug(f"Using PROJECT_ROOT from PDD_PATH: {PROJECT_ROOT}")
-    else:
-        warnings.warn(f"PDD_PATH environment variable ('{PDD_PATH_ENV}') is set but not a valid directory. Attempting auto-detection.")
-
-if PROJECT_ROOT is None: # If PDD_PATH wasn't set or was invalid
     try:
-        # Start from the current working directory (where user is running PDD)
-        current_dir = Path.cwd().resolve()
-        # Look for project markers (e.g., .git, pyproject.toml, data/, .env)
-        # Go up a maximum of 5 levels to prevent infinite loops
-        for _ in range(5):
-            has_git = (current_dir / ".git").exists()
-            has_pyproject = (current_dir / "pyproject.toml").exists()
-            has_data = (current_dir / "data").is_dir()
-            has_dotenv = (current_dir / ".env").exists()
+        _path_from_env = Path(PDD_PATH_ENV).expanduser().resolve()
+        if not _path_from_env.is_dir():
+            warnings.warn(
+                f"PDD_PATH environment variable ('{PDD_PATH_ENV}') is set but not a valid directory. Attempting auto-detection."
+            )
+    except Exception as e:
+        warnings.warn(f"Error validating PDD_PATH environment variable: {e}")
 
-            if has_git or has_pyproject or has_data or has_dotenv:
-                PROJECT_ROOT = current_dir
-                logger.debug(f"Determined PROJECT_ROOT by marker search from CWD: {PROJECT_ROOT}")
-                break
-
-            parent_dir = current_dir.parent
-            if parent_dir == current_dir: # Reached filesystem root
-                break
-            current_dir = parent_dir
-
-    except Exception as e: # Catch potential permission errors etc.
-        warnings.warn(f"Error during project root auto-detection from current working directory: {e}")
-
-if PROJECT_ROOT is None: # Fallback to CWD if no method succeeded
-    PROJECT_ROOT = Path.cwd().resolve()
-    warnings.warn(f"Could not determine project root automatically. Using current working directory: {PROJECT_ROOT}. Ensure this is the intended root or set the PDD_PATH environment variable.")
+resolver = get_default_resolver()
+PROJECT_ROOT = resolver.resolve_project_root()
+PROJECT_ROOT_FROM_ENV = resolver.pdd_path_env is not None and PROJECT_ROOT == resolver.pdd_path_env
+logger.debug(f"Using PROJECT_ROOT: {PROJECT_ROOT}")
 
 
 # ENV_PATH is set after _is_env_path_package_dir is defined (see below)
@@ -302,7 +477,7 @@ else:
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
     logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
-elif (not _is_env_path_package_dir(PROJECT_ROOT)) and project_csv_from_env.is_file():
+elif PROJECT_ROOT_FROM_ENV and project_csv_from_env.is_file():
     # Honor an explicitly-set PDD_PATH pointing to a real project directory
     LLM_MODEL_CSV_PATH = project_csv_from_env
     logger.info(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
@@ -1006,6 +1181,7 @@ _PROSE_FIELD_NAMES = frozenset({
     'details',             # VerificationOutput - issue details
     'description',         # General prose descriptions
     'focus',               # Focus descriptions
+    'file_summary',        # FileSummary - prose summaries of file contents
 })
 
 
@@ -1355,6 +1531,7 @@ def llm_invoke(
     use_batch_mode: bool = False,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
     language: Optional[str] = None,
+    use_cloud: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -1372,6 +1549,7 @@ def llm_invoke(
         time: Relative thinking time (0-1, default 0.25).
         use_batch_mode: Use batch completion if True.
         messages: Pre-formatted list of messages (or list of lists for batch). If provided, ignores prompt and input_json.
+        use_cloud: None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
 
     Returns:
         Dictionary containing 'result', 'cost', 'model_name', 'thinking_output'.
@@ -1380,6 +1558,7 @@ def llm_invoke(
         ValueError: For invalid inputs or prompt formatting errors.
         FileNotFoundError: If llm_model.csv is missing.
         RuntimeError: If all candidate models fail.
+        InsufficientCreditsError: If cloud execution fails due to insufficient credits.
         openai.*Error: If LiteLLM encounters API errors after retries.
     """
     # Set verbose logging if requested
@@ -1396,6 +1575,58 @@ def llm_invoke(
         logger.debug(f"  time: {time}")
         logger.debug(f"  use_batch_mode: {use_batch_mode}")
         logger.debug(f"  messages: {'provided' if messages else 'None'}")
+        logger.debug(f"  use_cloud: {use_cloud}")
+
+    # --- 0. Cloud Execution Path ---
+    # Determine cloud usage: explicit param > environment > default (local)
+    if use_cloud is None:
+        # Check environment for cloud preference
+        # PDD_FORCE_LOCAL=1 forces local execution
+        force_local = os.environ.get("PDD_FORCE_LOCAL", "").lower() in ("1", "true", "yes")
+        if force_local:
+            use_cloud = False
+        else:
+            # Try to use cloud if credentials are configured
+            try:
+                from pdd.core.cloud import CloudConfig
+                use_cloud = CloudConfig.is_cloud_enabled()
+            except ImportError:
+                use_cloud = False
+
+    if use_cloud:
+        from rich.console import Console
+        console = Console()
+
+        if verbose:
+            logger.debug("Attempting cloud execution...")
+
+        try:
+            return _llm_invoke_cloud(
+                prompt=prompt,
+                input_json=input_json,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                output_pydantic=output_pydantic,
+                output_schema=output_schema,
+                time=time,
+                use_batch_mode=use_batch_mode,
+                messages=messages,
+                language=language,
+            )
+        except CloudFallbackError as e:
+            # Notify user and fall back to local execution
+            console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
+            logger.warning(f"Cloud fallback: {e}")
+            # Continue to local execution below
+        except InsufficientCreditsError:
+            # Re-raise credit errors - user needs to know
+            raise
+        except CloudInvocationError as e:
+            # Non-recoverable cloud error - notify and fall back
+            console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
+            logger.warning(f"Cloud invocation error: {e}")
+            # Continue to local execution below
 
     # --- 1. Load Environment & Validate Inputs ---
     # .env loading happens at module level
