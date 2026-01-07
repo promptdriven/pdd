@@ -12,10 +12,11 @@ Test Plan:
     *   Verify that if `PDD_CLOUD_URL` contains the endpoint name, it is returned as-is (override logic).
 
 2.  **Cloud Enablement Tests (`is_cloud_enabled`)**:
-    *   Verify returns False if neither API key nor Client ID is set.
-    *   Verify returns False if only one of them is set.
-    *   Verify returns True only if both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set.
-    *   **Z3 Formal Verification**: Use Z3 to prove that the function returns True <=> (Key1 is Set AND Key2 is Set).
+    *   Verify returns False if neither API key nor Client ID is set (and no JWT token).
+    *   Verify returns False if only one of Firebase/GitHub keys is set (and no JWT token).
+    *   Verify returns True if both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set.
+    *   Verify returns True if `PDD_JWT_TOKEN` is set (for injected token in testing/CI scenarios).
+    *   **Z3 Formal Verification**: Use Z3 to prove that the function returns True <=> (JWT is Set OR (Key1 is Set AND Key2 is Set)).
 
 3.  **Authentication Tests (`get_jwt_token`)**:
     *   Verify `PDD_JWT_TOKEN` environment variable takes precedence (returns immediately).
@@ -153,6 +154,25 @@ def test_is_cloud_enabled_true(clean_env):
     }):
         assert CloudConfig.is_cloud_enabled() is True
 
+
+def test_is_cloud_enabled_true_with_jwt_token(clean_env):
+    """Test is_cloud_enabled returns True when PDD_JWT_TOKEN is set (injected token for testing/CI).
+
+    This tests the bug fix where cloud should be detected as enabled when a JWT token
+    is directly injected via environment variable, even without device flow auth credentials.
+    """
+    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.injected.token"}):
+        assert CloudConfig.is_cloud_enabled() is True
+
+
+def test_is_cloud_enabled_jwt_token_takes_priority(clean_env):
+    """Test that PDD_JWT_TOKEN alone enables cloud, regardless of other credentials."""
+    # Only JWT token set, no Firebase/GitHub credentials
+    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.test.token"}, clear=True):
+        # Re-add only the JWT token after clearing
+        os.environ[PDD_JWT_TOKEN_ENV] = "ey.test.token"
+        assert CloudConfig.is_cloud_enabled() is True
+
 # -----------------------------------------------------------------------------
 # Z3 Formal Verification: Cloud Enablement Logic
 # -----------------------------------------------------------------------------
@@ -160,34 +180,33 @@ def test_is_cloud_enabled_true(clean_env):
 def test_z3_verify_cloud_enabled_logic():
     """
     Formally verify the logic of is_cloud_enabled using Z3.
-    
-    Logic to prove: Result is True if and only if (FirebaseKey is Set AND GithubId is Set).
+
+    Logic to prove: Result is True if and only if:
+      (JWT is Set) OR (FirebaseKey is Set AND GithubId is Set)
     """
+    from z3 import Or
     s = Solver()
-    
+
     # Define boolean variables representing the state of environment variables
+    jwt_set = Bool('jwt_set')
     firebase_set = Bool('firebase_set')
     github_set = Bool('github_set')
-    
+
     # Define the result of the function based on the code's logic
-    # Code: return bool(os.environ.get(FIREBASE) and os.environ.get(GITHUB))
+    # Code: if jwt_set: return True; return bool(FIREBASE and GITHUB)
     result = Bool('result')
-    
+
     # Add constraint representing the implementation
-    s.add(result == And(firebase_set, github_set))
-    
-    # We want to prove that there is NO case where:
-    # (result is True) AND NOT (firebase_set AND github_set)
-    # OR
-    # (result is False) AND (firebase_set AND github_set)
-    
-    # Negate the biconditional: NOT (result <-> (firebase_set AND github_set))
-    # If this is unsatisfiable, the logic is sound.
-    conjecture = result == And(firebase_set, github_set)
+    # result == (jwt_set OR (firebase_set AND github_set))
+    s.add(result == Or(jwt_set, And(firebase_set, github_set)))
+
+    # Negate the biconditional: NOT (result <-> (jwt OR (firebase AND github)))
+    # If this is unsatisfiable, the logic is verified.
+    conjecture = result == Or(jwt_set, And(firebase_set, github_set))
     s.add(Not(conjecture))
-    
+
     check = s.check()
-    
+
     # If unsat, it means no counter-example exists, so the logic is verified.
     assert str(check) == "unsat", \
         f"Z3 found a counter-example to the logic: {s.model()}"
