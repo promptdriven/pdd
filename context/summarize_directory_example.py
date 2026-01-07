@@ -11,10 +11,10 @@ def main() -> None:
     2. Summarize Python files in a directory
     3. Print the results
     """
-    # Example existing CSV content
-    existing_csv = """full_path,file_summary,date
-context/change_example.py,"This is an old summary",2025-01-01T10:00:00
-context/click_example.py,"This is an old summary",2023-01-01T10:00:00"""
+    # Example existing CSV content (uses content_hash for cache invalidation)
+    existing_csv = """full_path,file_summary,content_hash
+context/change_example.py,"This is an old summary",a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+context/click_example.py,"This is an old summary",f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5"""
 
     try:
         # Call summarize_directory
