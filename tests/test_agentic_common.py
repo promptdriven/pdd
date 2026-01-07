@@ -692,8 +692,8 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     This indicates no actual work was done (false positive). The system should
     treat this as a failure and try the next provider.
 
-    Currently FAILS because run_agentic_task() accepts these false positives.
-    Should PASS after implementing the fix.
+    This test verifies that such false positives are rejected and that the
+    system falls back to a provider that performs real work.
     """
     mock_shutil_which.return_value = "/bin/exe"
     os.environ["ANTHROPIC_API_KEY"] = "key"
