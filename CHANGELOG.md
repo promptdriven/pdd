@@ -1,3 +1,15 @@
+## v0.0.104 (2026-01-06)
+
+### Feat
+
+- add cloud execution support for llm_invoke
+
+### Fix
+
+- prevent duplicate sync PRs by using fixed branch name
+- align ExtractedCode schema with extract_code_LLM prompt
+- lower EXTRACTION_STRENGTH from 0.75 to 0.5 to prevent Opus usage
+
 ## v0.0.103 (2026-01-05)
 
 ### Feat
