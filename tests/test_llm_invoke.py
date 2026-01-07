@@ -108,8 +108,12 @@ def mock_load_models():
 
 @pytest.fixture
 def mock_set_llm_cache():
+    """Mock LiteLLM cache and disable cloud by default to prevent Firebase auth prompts."""
     with patch('litellm.caching.caching.Cache') as mock_cache_class:
-         yield mock_cache_class
+        # Disable cloud detection by default to prevent Firebase authentication prompts
+        # Tests that need cloud behavior should explicitly mock CloudConfig differently
+        with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+            yield mock_cache_class
 
 # --- Helper Function to Create Mock LiteLLM Response ---
 def create_mock_litellm_response(content, model_name="test-model", prompt_tokens=10, completion_tokens=10, finish_reason="stop", thinking_output=None):
@@ -2028,8 +2032,10 @@ def test_llm_invoke_use_cloud_true_success():
 
 def test_llm_invoke_cloud_fallback_on_error():
     """Test that CloudFallbackError triggers local fallback."""
+    # Re-import exception class to handle potential module reloads from earlier tests
+    from pdd.llm_invoke import CloudFallbackError as CurrentCloudFallbackError
     with patch("pdd.llm_invoke._llm_invoke_cloud") as mock_cloud:
-        mock_cloud.side_effect = CloudFallbackError("Network error")
+        mock_cloud.side_effect = CurrentCloudFallbackError("Network error")
 
         with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
             mock_response = MagicMock()
@@ -2060,7 +2066,7 @@ def test_llm_invoke_cloud_fallback_on_error():
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
                     with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
                         # Mock the console to avoid output during test
-                        with patch("pdd.llm_invoke.Console"):
+                        with patch("rich.console.Console"):
                             result = llm_invoke(
                                 prompt="Test {topic}",
                                 input_json={"topic": "test"},
@@ -2073,11 +2079,13 @@ def test_llm_invoke_cloud_fallback_on_error():
 
 def test_llm_invoke_insufficient_credits_no_fallback():
     """Test that InsufficientCreditsError does NOT fallback to local."""
+    # Re-import exception class to handle potential module reloads from earlier tests
+    from pdd.llm_invoke import InsufficientCreditsError as CurrentInsufficientCreditsError
     with patch("pdd.llm_invoke._llm_invoke_cloud") as mock_cloud:
-        mock_cloud.side_effect = InsufficientCreditsError("Insufficient credits")
+        mock_cloud.side_effect = CurrentInsufficientCreditsError("Insufficient credits")
 
-        with patch("pdd.llm_invoke.Console"):
-            with pytest.raises(InsufficientCreditsError):
+        with patch("rich.console.Console"):
+            with pytest.raises(CurrentInsufficientCreditsError):
                 llm_invoke(
                     prompt="Test {topic}",
                     input_json={"topic": "test"},
@@ -2087,8 +2095,10 @@ def test_llm_invoke_insufficient_credits_no_fallback():
 
 def test_llm_invoke_cloud_invocation_error_fallback():
     """Test that CloudInvocationError triggers local fallback."""
+    # Re-import exception class to handle potential module reloads from earlier tests
+    from pdd.llm_invoke import CloudInvocationError as CurrentCloudInvocationError
     with patch("pdd.llm_invoke._llm_invoke_cloud") as mock_cloud:
-        mock_cloud.side_effect = CloudInvocationError("Validation error")
+        mock_cloud.side_effect = CurrentCloudInvocationError("Validation error")
 
         with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
             mock_response = MagicMock()
@@ -2118,7 +2128,7 @@ def test_llm_invoke_cloud_invocation_error_fallback():
 
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
                     with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
-                        with patch("pdd.llm_invoke.Console"):
+                        with patch("rich.console.Console"):
                             result = llm_invoke(
                                 prompt="Test {topic}",
                                 input_json={"topic": "test"},
@@ -2152,13 +2162,13 @@ def test_insufficient_credits_error():
 
 def test_cloud_enabled_detection():
     """Test that cloud is detected when credentials are configured."""
-    with patch("pdd.llm_invoke.CloudConfig") as mock_config:
+    with patch("pdd.core.cloud.CloudConfig") as mock_config:
         mock_config.is_cloud_enabled.return_value = True
         mock_config.get_jwt_token.return_value = "fake_token"
         mock_config.get_endpoint_url.return_value = "https://example.com/llmInvoke"
 
         # Mock requests.post for cloud call
-        with patch("pdd.llm_invoke.requests.post") as mock_post:
+        with patch("requests.post") as mock_post:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
@@ -2168,7 +2178,7 @@ def test_cloud_enabled_detection():
             }
             mock_post.return_value = mock_response
 
-            with patch("pdd.llm_invoke.Console"):
+            with patch("rich.console.Console"):
                 # Import fresh to get the cloud path
                 from pdd.llm_invoke import _llm_invoke_cloud
 
