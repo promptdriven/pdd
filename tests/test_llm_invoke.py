@@ -774,6 +774,28 @@ def test_has_invalid_python_code_ignores_prose_fields():
     assert not _has_invalid_python_code(obj)
 
 
+def test_file_summary_prose_not_flagged_as_invalid_python():
+    """file_summary field contains prose that may include Python keywords.
+
+    Reproduces false positive during summarize_directory when prose contains
+    phrases like 'return a successful result'.
+    """
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class FileSummary(BaseModel):
+        file_summary: str
+
+    # Real prose from production that was triggering false positives
+    obj = FileSummary(
+        file_summary="The mock is configured to return a successful result, "
+                     "simulating an 8-step workflow that costs $2.50."
+    )
+
+    # Should return False - prose should not be flagged as invalid Python
+    assert not _has_invalid_python_code(obj)
+
+
 def test_is_prose_field_name():
     """Test prose field name detection."""
     from pdd.llm_invoke import _is_prose_field_name
@@ -2198,3 +2220,37 @@ def test_cloud_enabled_detection():
 
                 assert result["result"] == "cloud result"
                 assert result["cost"] == 0.001
+
+
+# --- Regression Test for time=None TypeError ---
+
+def test_llm_invoke_time_none_does_not_crash(mock_load_models, mock_set_llm_cache):
+    """Regression test: time=None should not raise TypeError.
+
+    When time=None is passed (valid default from code_generator),
+    llm_invoke should treat it as 0.0 (no reasoning requested).
+
+    Bug: llm_invoke.py line 1658 crashed with:
+    TypeError: '<=' not supported between instances of 'float' and 'NoneType'
+    """
+    first_model_key_name = "OPENAI_API_KEY"
+    with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response(
+                "Mocked response", model_name='gpt-5-nano',
+                prompt_tokens=10, completion_tokens=20
+            )
+            mock_completion.return_value = mock_response
+            mock_cost = 0.00003
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 20}):
+                # This should NOT raise TypeError
+                response = llm_invoke(
+                    prompt="Test prompt {var}",
+                    input_json={"var": "value"},
+                    strength=0.5,
+                    temperature=0.0,
+                    time=None,  # <-- The bug: this used to crash
+                )
+
+            assert response is not None
+            assert response['result'] == "Mocked response"
