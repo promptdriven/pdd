@@ -40,7 +40,7 @@
         </preprocess_example>
     </internal_modules>
 
-% Here is the format of the csv file: full_path,file_summary,date
+% Here is the format of the csv file: full_path,file_summary,content_hash
 
 % The function should do the following:
     1. Load the prompt template 'insert_includes_LLM.prompt'.
