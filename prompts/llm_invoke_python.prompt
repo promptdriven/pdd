@@ -39,6 +39,7 @@
         use_batch_mode: bool = False,
         messages: Optional[Union[List[Dict], List[List[Dict]]]] = None,
         language: Optional[str] = None,
+        use_cloud: Optional[bool] = None,
     ) -> Dict[str, Any]
 
 % Inputs:
@@ -53,6 +54,7 @@
     - 'use_batch_mode': Use litellm.batch_completion if True.
     - 'messages': Pre-formatted messages (ignores prompt/input_json if provided).
     - 'language': Language hint (e.g., "python", "javascript"). Skip Python-specific validation when not "python" or None.
+    - 'use_cloud': None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
 
 % Output (dictionary):
     - 'result': String or Pydantic object (or list if batch mode).
@@ -116,6 +118,31 @@
     - Preserve provider credentials in retries: Pass vertex_credentials, vertex_project, vertex_location, api_key, base_url from original call.
     - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry.
     - After exhausting all candidates: Raise RuntimeError.
+
+% Cloud Execution:
+    - Define three cloud-related exceptions:
+      - CloudFallbackError: Raised for recoverable errors (network, timeout, auth). Triggers fallback to local.
+      - CloudInvocationError: Raised for non-recoverable cloud errors.
+      - InsufficientCreditsError: Raised for 402 Payment Required. Does NOT fall back to local.
+    - Helper functions:
+      - `_pydantic_to_json_schema(pydantic_class)`: Convert Pydantic model to JSON Schema for cloud transport. Include `__pydantic_class_name__` for debugging.
+      - `_validate_with_pydantic(result, pydantic_class)`: Validate cloud response (dict or str) using the Pydantic model.
+      - `_llm_invoke_cloud(...)`: Execute llm_invoke via cloud endpoint `llmInvoke`. 
+
+    - Cloud execution path (at start of llm_invoke, before local validation):
+      - If use_cloud is None: Check `PDD_FORCE_LOCAL` env var. If not set, check `CloudConfig.is_cloud_enabled()`.
+      - If use_cloud is True: Attempt cloud execution.
+      - On success: Return cloud result (validate with output_pydantic if specified).
+      - On CloudFallbackError: Print warning message via rich console, log warning, fall back to local.
+      - On InsufficientCreditsError: Re-raise (no fallback).
+      - On CloudInvocationError: Print warning, fall back to local.
+    - Cloud request payload: prompt, inputJson, messages, strength, temperature, time, verbose, outputSchema, useBatchMode, language.
+    - Cloud response: {result, totalCost, modelName, thinkingOutput}.
+
+% Cloud API Documentation:
+   <cloud_api_documentation>
+      <include>../docs/api-documentation.md</include>
+   </cloud_api_documentation>
 
 % Vertex AI Support:
     - Detect Vertex AI models by provider or model name prefix.

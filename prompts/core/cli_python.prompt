@@ -22,6 +22,7 @@
   5. **CLI Entry Point (`cli`)**:
      - Initialize `PDD_PATH` via `get_local_pdd_path()`.
      - Clear core dump errors, populate `ctx.obj` with all options.
+     - Propagate `--local` flag to environment: set `os.environ['PDD_FORCE_LOCAL'] = '1'` when `--local` is passed. This allows `llm_invoke` to detect local execution preference.
      - Set up output capture if `--core-dump` enabled.
      - Suppress verbose if quiet is enabled.
      - Show onboarding reminder if needed.
