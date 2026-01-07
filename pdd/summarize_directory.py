@@ -81,7 +81,13 @@ def summarize_directory(
         raise FileNotFoundError(f"Prompt template '{prompt_template_name}' is empty or missing.")
 
     # Step 3: Get list of files matching directory_path
-    files = glob.glob(directory_path, recursive=True)
+    # If directory_path is a directory, convert to recursive glob pattern
+    if os.path.isdir(directory_path):
+        search_pattern = os.path.join(directory_path, "**", "*")
+    else:
+        search_pattern = directory_path
+
+    files = glob.glob(search_pattern, recursive=True)
     
     # Filter out directories, keep only files
     # Also filter out __pycache__ and .pyc/.pyo files
