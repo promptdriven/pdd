@@ -1428,11 +1428,13 @@ def sync_orchestration(
                                             # Bug #156: Run pytest on ALL matching test files
                                             test_files = pdd_files.get('test_files', [pdd_files['test']])
                                             pytest_args = [python_executable, '-m', 'pytest'] + [str(f) for f in test_files] + ['-v', '--tb=short']
+                                            # Bug fix: Run from project root (no cwd), matching _run_tests_and_report pattern
+                                            # Using cwd=test.parent with paths like 'backend/tests/test_foo.py' causes
+                                            # pytest to look for 'backend/tests/backend/tests/test_foo.py' (not found)
                                             test_result = subprocess.run(
                                                 pytest_args,
                                                 capture_output=True, text=True, timeout=300,
-                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True,
-                                                cwd=str(pdd_files['test'].parent)
+                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
                                             )
                                         else:
                                             # Use shell command for non-Python
