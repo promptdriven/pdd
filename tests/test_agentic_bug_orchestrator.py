@@ -413,3 +413,122 @@ def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_arg
         assert timeout == expected_timeout, (
             f"Step {step_num}: expected timeout={expected_timeout}, got timeout={timeout}"
         )
+
+
+def test_files_to_stage_passed_to_step9(mock_dependencies, default_args):
+    """
+    Test that files_to_stage context variable is passed to Step 9.
+
+    This verifies the fix for Issue #268: The pdd bug command was including
+    unrelated files in PRs because the Step 9 prompt didn't have explicit
+    file paths to stage. Now the orchestrator passes files_to_stage to Step 9.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    # Setup templates that use the files_to_stage variable
+    def side_effect_load(name):
+        if "step9" in name:
+            # Step 9 template now uses files_to_stage
+            return "Files to stage: {files_to_stage}"
+        return "Generic prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "gen\nFILES_CREATED: tests/test_bug_fix.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # Find the Step 9 call and verify files_to_stage was formatted into the prompt
+    step9_call = None
+    for call_obj in mock_run.call_args_list:
+        if call_obj.kwargs.get('label') == 'step9':
+            step9_call = call_obj
+            break
+
+    assert step9_call is not None, "Step 9 should have been called"
+    instruction = step9_call.kwargs['instruction']
+    assert "Files to stage: tests/test_bug_fix.py" == instruction
+
+
+def test_files_to_stage_with_multiple_files(mock_dependencies, default_args):
+    """
+    Test that multiple files are correctly joined in files_to_stage.
+
+    When Step 7 creates multiple files, all should be listed in files_to_stage
+    so the agent knows exactly which files to git add.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    def side_effect_load(name):
+        if "step9" in name:
+            return "Stage these: {files_to_stage}"
+        return "Generic prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            # Step 7 creates multiple files
+            return (True, "gen\nFILES_CREATED: tests/test_bug.py, tests/conftest.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    step9_call = None
+    for call_obj in mock_run.call_args_list:
+        if call_obj.kwargs.get('label') == 'step9':
+            step9_call = call_obj
+            break
+
+    assert step9_call is not None
+    instruction = step9_call.kwargs['instruction']
+    # Both files should be in the instruction, comma-separated
+    assert "tests/test_bug.py" in instruction
+    assert "tests/conftest.py" in instruction
+
+
+def test_files_to_stage_with_modified_files(mock_dependencies, default_args):
+    """
+    Test that FILES_MODIFIED files are also included in files_to_stage.
+
+    When appending to existing test files (FILES_MODIFIED), those files
+    should also be passed to Step 9 for staging.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    def side_effect_load(name):
+        if "step9" in name:
+            return "Stage: {files_to_stage}"
+        return "Generic prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            # Step 7 modifies an existing file
+            return (True, "appended\nFILES_MODIFIED: tests/test_existing.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    step9_call = None
+    for call_obj in mock_run.call_args_list:
+        if call_obj.kwargs.get('label') == 'step9':
+            step9_call = call_obj
+            break
+
+    assert step9_call is not None
+    instruction = step9_call.kwargs['instruction']
+    assert "tests/test_existing.py" in instruction
