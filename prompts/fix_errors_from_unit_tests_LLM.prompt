@@ -71,4 +71,5 @@
     Step 5. Explain in detail step by step how to solve each of the errors and warnings. For each error and warning, there should be several paragraphs description of the solution steps. Sometimes logging or print statements can help debug the code in subsequent iterations. It is important to make sure the tests are still sufficiently comprehensive to catch potential errors.
     Step 6. Review the above steps and correct for any errors and warnings in the code under test or unit test.
     Step 7. For the code that need changes, write the corrected code_under_test and/or corrected unit_test in its/their entirety.
+    Step 8. CRITICAL: You MUST preserve ALL existing test functions from the original unit_test. Only modify the tests that are failing. Do not remove, skip, or omit any test functions that were present in the original unit_test, even if they seem unrelated to the current errors. The output must include every single test function from the input.
 </instructions>
