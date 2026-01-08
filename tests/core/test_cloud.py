@@ -11,14 +11,20 @@ Test Plan:
     *   Verify unknown endpoints default to `/{name}`.
     *   Verify that if `PDD_CLOUD_URL` contains the endpoint name, it is returned as-is (override logic).
 
-2.  **Cloud Enablement Tests (`is_cloud_enabled`)**:
+2.  **Cloud Environment Detection Tests (`is_running_in_cloud`)**:
+    *   Verify returns False when not in cloud environment.
+    *   Verify returns True when `K_SERVICE` is set (Cloud Run/Cloud Functions).
+    *   Verify returns True when `FUNCTIONS_EMULATOR` is set.
+
+3.  **Cloud Enablement Tests (`is_cloud_enabled`)**:
+    *   Verify returns False if running in cloud environment (prevents infinite loops).
     *   Verify returns False if neither API key nor Client ID is set (and no JWT token).
     *   Verify returns False if only one of Firebase/GitHub keys is set (and no JWT token).
     *   Verify returns True if both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set.
     *   Verify returns True if `PDD_JWT_TOKEN` is set (for injected token in testing/CI scenarios).
     *   **Z3 Formal Verification**: Use Z3 to prove that the function returns True <=> (JWT is Set OR (Key1 is Set AND Key2 is Set)).
 
-3.  **Authentication Tests (`get_jwt_token`)**:
+4.  **Authentication Tests (`get_jwt_token`)**:
     *   Verify `PDD_JWT_TOKEN` environment variable takes precedence (returns immediately).
     *   Verify that missing API keys trigger an `AuthError` internally and return `None` (graceful failure).
     *   Verify successful device flow execution returns the token.
@@ -133,6 +139,72 @@ def test_get_endpoint_url_full_override(clean_env):
 # -----------------------------------------------------------------------------
 # Unit Tests: Cloud Enablement
 # -----------------------------------------------------------------------------
+
+def test_is_running_in_cloud_false_by_default(clean_env):
+    """Test is_running_in_cloud returns False when not in cloud environment."""
+    # Ensure cloud env vars are not set
+    for key in ["K_SERVICE", "FUNCTIONS_EMULATOR"]:
+        if key in os.environ:
+            del os.environ[key]
+    assert CloudConfig.is_running_in_cloud() is False
+
+
+def test_is_running_in_cloud_true_k_service(clean_env):
+    """Test is_running_in_cloud returns True when K_SERVICE is set (Cloud Run/Functions)."""
+    with patch.dict(os.environ, {"K_SERVICE": "my-function"}):
+        assert CloudConfig.is_running_in_cloud() is True
+
+
+def test_is_running_in_cloud_true_functions_emulator(clean_env):
+    """Test is_running_in_cloud returns True when FUNCTIONS_EMULATOR is set."""
+    with patch.dict(os.environ, {"FUNCTIONS_EMULATOR": "true"}):
+        assert CloudConfig.is_running_in_cloud() is True
+
+
+def test_is_cloud_enabled_false_when_in_cloud_environment(clean_env):
+    """Test is_cloud_enabled returns False when running in cloud, even with credentials.
+
+    This prevents infinite loops when cloud endpoints call CLI internally.
+    """
+    with patch.dict(os.environ, {
+        "K_SERVICE": "generateCode",
+        FIREBASE_API_KEY_ENV: "key",
+        GITHUB_CLIENT_ID_ENV: "id"
+    }):
+        assert CloudConfig.is_cloud_enabled() is False
+
+
+def test_is_cloud_enabled_false_when_in_emulator(clean_env):
+    """Test is_cloud_enabled returns False when running in emulator, even with JWT token."""
+    with patch.dict(os.environ, {
+        "FUNCTIONS_EMULATOR": "true",
+        PDD_JWT_TOKEN_ENV: "ey.test.token"
+    }):
+        assert CloudConfig.is_cloud_enabled() is False
+
+
+def test_is_cloud_enabled_false_when_force_local_set(clean_env):
+    """Test is_cloud_enabled returns False when PDD_FORCE_LOCAL is set (--local flag).
+
+    This ensures that the --local CLI flag properly disables cloud mode,
+    preventing keychain access prompts during local testing.
+    """
+    with patch.dict(os.environ, {
+        "PDD_FORCE_LOCAL": "1",
+        FIREBASE_API_KEY_ENV: "key",
+        GITHUB_CLIENT_ID_ENV: "id"
+    }):
+        assert CloudConfig.is_cloud_enabled() is False
+
+
+def test_is_cloud_enabled_false_when_force_local_with_jwt(clean_env):
+    """Test is_cloud_enabled returns False when PDD_FORCE_LOCAL is set, even with JWT token."""
+    with patch.dict(os.environ, {
+        "PDD_FORCE_LOCAL": "1",
+        PDD_JWT_TOKEN_ENV: "ey.test.token"
+    }):
+        assert CloudConfig.is_cloud_enabled() is False
+
 
 def test_is_cloud_enabled_false_when_empty(clean_env):
     """Test is_cloud_enabled returns False when keys are missing."""
