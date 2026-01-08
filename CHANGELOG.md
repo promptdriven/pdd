@@ -1,3 +1,14 @@
+## v0.0.106 (2026-01-08)
+
+### Feat
+
+- auto-inject public OAuth keys for seamless cloud mode setup
+- enhance caching, timeout handling, and cloud detection
+
+### Fix
+
+- clean_env fixture now clears PDD_FORCE_LOCAL and cloud env vars
+
 ## v0.0.105 (2026-01-07)
 
 ### Feat
