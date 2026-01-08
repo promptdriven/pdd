@@ -203,5 +203,3 @@ package-lock.json
 yarn.lock
 
 .pdd/core_dumps/*
-
-pdd/prompts

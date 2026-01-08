@@ -8,7 +8,14 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
 from pydantic import BaseModel, ValidationError
 from collections import namedtuple
-from pdd.llm_invoke import llm_invoke
+from pdd.llm_invoke import (
+    llm_invoke,
+    CloudFallbackError,
+    CloudInvocationError,
+    InsufficientCreditsError,
+    _pydantic_to_json_schema,
+    _validate_with_pydantic,
+)
 import openai # Import openai for exception types used by LiteLLM
 import httpx # Import httpx for mocking request/response
 import logging # For caplog
@@ -44,65 +51,73 @@ class CodeFixLikeModel(BaseModel):
 @pytest.fixture
 def mock_load_models():
     # Mock the internal helper that returns a DataFrame
-    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
-        mock_data = [
-            MockModelInfoData( # Base model
-                provider='OpenAI', model='gpt-5-nano', input=0.02, output=0.03, # avg_cost=0.025
-                coding_arena_elo=1500, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
-                max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
-            ),
-            MockModelInfoData( # Cheapest model
-                provider='OpenAI', model='cheap-model', input=0.01, output=0.015, # avg_cost=0.0125
-                coding_arena_elo=1200, structured_output=False, base_url="", api_key="OPENAI_API_KEY",
-                max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
-            ),
-            MockModelInfoData( # Highest ELO model
-                provider='Anthropic', model='claude-3', input=0.025, output=0.035, # avg_cost=0.03
-                coding_arena_elo=1600, structured_output=False, base_url="", api_key="ANTHROPIC_API_KEY",
-                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=1000
-            ),
-            MockModelInfoData( # Closest to interpolated values in tests
-                provider='Google', model='gemini-pro', input=0.015, output=0.025, # avg_cost=0.02
-                coding_arena_elo=1550, structured_output=True, base_url="", api_key="GOOGLE_API_KEY", # Example: Gemini supports structured
-                max_tokens="", max_completion_tokens="", reasoning_type='effort', max_reasoning_tokens=0
-            )
-        ]
-        # Convert the list of namedtuples to a DataFrame, mimicking _load_model_data
-        mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+    # Also force local execution to prevent cloud routing when infisical secrets are present
+    with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
+        with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+            mock_data = [
+                MockModelInfoData( # Base model
+                    provider='OpenAI', model='gpt-5-nano', input=0.02, output=0.03, # avg_cost=0.025
+                    coding_arena_elo=1500, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
+                    max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
+                ),
+                MockModelInfoData( # Cheapest model
+                    provider='OpenAI', model='cheap-model', input=0.01, output=0.015, # avg_cost=0.0125
+                    coding_arena_elo=1200, structured_output=False, base_url="", api_key="OPENAI_API_KEY",
+                    max_tokens="", max_completion_tokens="", reasoning_type='none', max_reasoning_tokens=0
+                ),
+                MockModelInfoData( # Highest ELO model
+                    provider='Anthropic', model='claude-3', input=0.025, output=0.035, # avg_cost=0.03
+                    coding_arena_elo=1600, structured_output=False, base_url="", api_key="ANTHROPIC_API_KEY",
+                    max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=1000
+                ),
+                MockModelInfoData( # Closest to interpolated values in tests
+                    provider='Google', model='gemini-pro', input=0.015, output=0.025, # avg_cost=0.02
+                    coding_arena_elo=1550, structured_output=True, base_url="", api_key="GOOGLE_API_KEY", # Example: Gemini supports structured
+                    max_tokens="", max_completion_tokens="", reasoning_type='effort', max_reasoning_tokens=0
+                )
+            ]
+            # Convert the list of namedtuples to a DataFrame, mimicking _load_model_data
+            mock_df = pd.DataFrame([m._asdict() for m in mock_data])
 
-        # Perform minimal processing similar to _load_model_data
-        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
-                        'max_completion_tokens', 'max_reasoning_tokens']
-        for col in numeric_cols:
-             if col in mock_df.columns:
-                 # Use errors='coerce' to turn unparseable values into NaN
-                 mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+            # Perform minimal processing similar to _load_model_data
+            numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                            'max_completion_tokens', 'max_reasoning_tokens']
+            for col in numeric_cols:
+                if col in mock_df.columns:
+                    # Use errors='coerce' to turn unparseable values into NaN
+                    mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
 
-        # Fill NaN in critical numeric columns used for selection/interpolation
-        mock_df['input'] = mock_df['input'].fillna(0.0)
-        mock_df['output'] = mock_df['output'].fillna(0.0)
-        mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0) # Use 0 ELO for missing
-        mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int) # Ensure int
+            # Fill NaN in critical numeric columns used for selection/interpolation
+            mock_df['input'] = mock_df['input'].fillna(0.0)
+            mock_df['output'] = mock_df['output'].fillna(0.0)
+            mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0) # Use 0 ELO for missing
+            mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int) # Ensure int
 
-        # Calculate average cost
-        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+            # Calculate average cost
+            mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
 
-        # Ensure boolean interpretation for structured_output
-        mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+            # Ensure boolean interpretation for structured_output
+            mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
 
-        # Ensure reasoning_type is string, fillna with 'none' and lowercase
-        mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+            # Ensure reasoning_type is string, fillna with 'none' and lowercase
+            mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
 
-        # Ensure api_key is treated as string, fill NaN with empty string ''
-        mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+            # Ensure api_key is treated as string, fill NaN with empty string ''
+            mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
 
-        mock_load_data.return_value = mock_df
-        yield mock_load_data # Yield the mock object itself
+            mock_load_data.return_value = mock_df
+            yield mock_load_data # Yield the mock object itself
 
 @pytest.fixture
 def mock_set_llm_cache():
+    """Mock LiteLLM cache and disable cloud by default to prevent Firebase auth prompts."""
     with patch('litellm.caching.caching.Cache') as mock_cache_class:
-         yield mock_cache_class
+        # Disable cloud detection by default to prevent Firebase authentication prompts
+        # Tests that need cloud behavior should explicitly mock CloudConfig differently
+        # Also set PDD_FORCE_LOCAL to ensure local execution when infisical secrets are present
+        with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
+            with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+                yield mock_cache_class
 
 # --- Helper Function to Create Mock LiteLLM Response ---
 def create_mock_litellm_response(content, model_name="test-model", prompt_tokens=10, completion_tokens=10, finish_reason="stop", thinking_output=None):
@@ -296,7 +311,7 @@ def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
         return mock_response
 
     with patch("pdd.llm_invoke._load_model_data", return_value=_mock_models_df()):
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake"}, clear=False):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake", "PDD_FORCE_LOCAL": "1"}, clear=False):
             with patch("pdd.llm_invoke.litellm.completion", return_value=_mock_litellm_response()):
                 with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0, "input_tokens": 5, "output_tokens": 5}):
                     resp = llm_invoke(prompt=processed_prompt, input_json={}, strength=0.5, temperature=0.0, verbose=False)
@@ -760,6 +775,28 @@ def test_has_invalid_python_code_ignores_prose_fields():
         is_finished=True
     )
     # BUG: Currently returns True (false positive), should return False
+    assert not _has_invalid_python_code(obj)
+
+
+def test_file_summary_prose_not_flagged_as_invalid_python():
+    """file_summary field contains prose that may include Python keywords.
+
+    Reproduces false positive during summarize_directory when prose contains
+    phrases like 'return a successful result'.
+    """
+    from pdd.llm_invoke import _has_invalid_python_code
+    from pydantic import BaseModel
+
+    class FileSummary(BaseModel):
+        file_summary: str
+
+    # Real prose from production that was triggering false positives
+    obj = FileSummary(
+        file_summary="The mock is configured to return a successful result, "
+                     "simulating an 8-step workflow that costs $2.50."
+    )
+
+    # Should return False - prose should not be flagged as invalid Python
     assert not _has_invalid_python_code(obj)
 
 
@@ -1878,3 +1915,389 @@ def test_javascript_code_does_not_trigger_python_validation(mock_load_models, mo
     # Should NOT log Python syntax warning for JavaScript
     assert "invalid python syntax" not in caplog.text.lower(), \
         f"JavaScript should not trigger Python validation. Logs: {caplog.text}"
+
+
+# ==============================================================================
+# Tests for Cloud Execution Functionality
+# ==============================================================================
+
+# Sample Pydantic models for cloud testing
+class CloudSampleModel(BaseModel):
+    name: str
+    value: int
+
+
+class CloudNestedModel(BaseModel):
+    items: list[str]
+    count: int
+
+
+# --- Tests for _pydantic_to_json_schema ---
+
+def test_pydantic_to_json_schema_basic():
+    """Test converting a simple Pydantic model to JSON Schema."""
+    schema = _pydantic_to_json_schema(CloudSampleModel)
+
+    assert isinstance(schema, dict)
+    assert "__pydantic_class_name__" in schema
+    assert schema["__pydantic_class_name__"] == "CloudSampleModel"
+    assert "properties" in schema
+    assert "name" in schema["properties"]
+    assert "value" in schema["properties"]
+
+
+def test_pydantic_to_json_schema_nested():
+    """Test converting a nested Pydantic model to JSON Schema."""
+    schema = _pydantic_to_json_schema(CloudNestedModel)
+
+    assert schema["__pydantic_class_name__"] == "CloudNestedModel"
+    assert "items" in schema["properties"]
+    assert "count" in schema["properties"]
+
+
+# --- Tests for _validate_with_pydantic ---
+
+def test_validate_with_pydantic_dict():
+    """Test validating a dict result with Pydantic model."""
+    result = {"name": "test", "value": 42}
+    validated = _validate_with_pydantic(result, CloudSampleModel)
+
+    assert isinstance(validated, CloudSampleModel)
+    assert validated.name == "test"
+    assert validated.value == 42
+
+
+def test_validate_with_pydantic_json_string():
+    """Test validating a JSON string result with Pydantic model."""
+    result = '{"name": "test", "value": 42}'
+    validated = _validate_with_pydantic(result, CloudSampleModel)
+
+    assert isinstance(validated, CloudSampleModel)
+    assert validated.name == "test"
+    assert validated.value == 42
+
+
+def test_validate_with_pydantic_already_validated():
+    """Test that already-validated Pydantic objects pass through."""
+    model = CloudSampleModel(name="test", value=42)
+    validated = _validate_with_pydantic(model, CloudSampleModel)
+
+    assert validated is model
+
+
+def test_validate_with_pydantic_invalid_type():
+    """Test that invalid types raise ValueError."""
+    with pytest.raises(ValueError, match="Cannot validate result type"):
+        _validate_with_pydantic(12345, CloudSampleModel)
+
+
+# --- Tests for cloud execution path ---
+
+def test_llm_invoke_force_local_env_var():
+    """Test that PDD_FORCE_LOCAL=1 forces local execution."""
+    with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
+        with patch("pdd.llm_invoke._llm_invoke_cloud") as mock_cloud:
+            with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+                # Set up mock for local execution
+                mock_response = MagicMock()
+                mock_response.choices = [MagicMock()]
+                mock_response.choices[0].message.content = "local response"
+                mock_response.choices[0].finish_reason = "stop"
+                mock_response.usage.prompt_tokens = 10
+                mock_response.usage.completion_tokens = 10
+                mock_response._hidden_params = {}
+                mock_completion.return_value = mock_response
+
+                with patch("pdd.llm_invoke._load_model_data") as mock_load:
+                    mock_df = pd.DataFrame([{
+                        "model": "test-model",
+                        "provider": "OpenAI",
+                        "input": 0.01,
+                        "output": 0.02,
+                        "coding_arena_elo": 1500,
+                        "structured_output": True,
+                        "api_key": "OPENAI_API_KEY",
+                        "base_url": "",
+                        "reasoning_type": "none",
+                        "max_reasoning_tokens": 0,
+                    }])
+                    mock_df["avg_cost"] = (mock_df["input"] + mock_df["output"]) / 2
+                    mock_load.return_value = mock_df
+
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+                        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                            llm_invoke(
+                                prompt="Test {topic}",
+                                input_json={"topic": "test"},
+                                use_cloud=None,  # Auto-detect should respect PDD_FORCE_LOCAL
+                            )
+
+                # Cloud should NOT have been called
+                mock_cloud.assert_not_called()
+
+
+def test_llm_invoke_use_cloud_false():
+    """Test that use_cloud=False forces local execution."""
+    with patch("pdd.llm_invoke._llm_invoke_cloud") as mock_cloud:
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = "local response"
+            mock_response.choices[0].finish_reason = "stop"
+            mock_response.usage.prompt_tokens = 10
+            mock_response.usage.completion_tokens = 10
+            mock_response._hidden_params = {}
+            mock_completion.return_value = mock_response
+
+            with patch("pdd.llm_invoke._load_model_data") as mock_load:
+                mock_df = pd.DataFrame([{
+                    "model": "test-model",
+                    "provider": "OpenAI",
+                    "input": 0.01,
+                    "output": 0.02,
+                    "coding_arena_elo": 1500,
+                    "structured_output": True,
+                    "api_key": "OPENAI_API_KEY",
+                    "base_url": "",
+                    "reasoning_type": "none",
+                    "max_reasoning_tokens": 0,
+                }])
+                mock_df["avg_cost"] = (mock_df["input"] + mock_df["output"]) / 2
+                mock_load.return_value = mock_df
+
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                        llm_invoke(
+                            prompt="Test {topic}",
+                            input_json={"topic": "test"},
+                            use_cloud=False,
+                        )
+
+            # Cloud should NOT have been called
+            mock_cloud.assert_not_called()
+
+
+def test_llm_invoke_use_cloud_true_success():
+    """Test that use_cloud=True routes to cloud and returns result."""
+    mock_cloud_result = {
+        "result": "cloud response",
+        "cost": 0.001,
+        "model_name": "cloud-model",
+        "thinking_output": None,
+    }
+
+    with patch("pdd.llm_invoke._llm_invoke_cloud", return_value=mock_cloud_result) as mock_cloud:
+        result = llm_invoke(
+            prompt="Test {topic}",
+            input_json={"topic": "test"},
+            use_cloud=True,
+        )
+
+        mock_cloud.assert_called_once()
+        assert result["result"] == "cloud response"
+        assert result["cost"] == 0.001
+        assert result["model_name"] == "cloud-model"
+
+
+def test_llm_invoke_cloud_fallback_on_error():
+    """Test that CloudFallbackError triggers local fallback."""
+    # Re-import exception class to handle potential module reloads from earlier tests
+    from pdd.llm_invoke import CloudFallbackError as CurrentCloudFallbackError
+    with patch("pdd.llm_invoke._llm_invoke_cloud") as mock_cloud:
+        mock_cloud.side_effect = CurrentCloudFallbackError("Network error")
+
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = "local fallback response"
+            mock_response.choices[0].finish_reason = "stop"
+            mock_response.usage.prompt_tokens = 10
+            mock_response.usage.completion_tokens = 10
+            mock_response._hidden_params = {}
+            mock_completion.return_value = mock_response
+
+            with patch("pdd.llm_invoke._load_model_data") as mock_load:
+                mock_df = pd.DataFrame([{
+                    "model": "test-model",
+                    "provider": "OpenAI",
+                    "input": 0.01,
+                    "output": 0.02,
+                    "coding_arena_elo": 1500,
+                    "structured_output": True,
+                    "api_key": "OPENAI_API_KEY",
+                    "base_url": "",
+                    "reasoning_type": "none",
+                    "max_reasoning_tokens": 0,
+                }])
+                mock_df["avg_cost"] = (mock_df["input"] + mock_df["output"]) / 2
+                mock_load.return_value = mock_df
+
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                        # Mock the console to avoid output during test
+                        with patch("rich.console.Console"):
+                            result = llm_invoke(
+                                prompt="Test {topic}",
+                                input_json={"topic": "test"},
+                                use_cloud=True,
+                            )
+
+        # Should have used local fallback
+        assert result["result"] == "local fallback response"
+
+
+def test_llm_invoke_insufficient_credits_no_fallback():
+    """Test that InsufficientCreditsError does NOT fallback to local."""
+    # Re-import exception class to handle potential module reloads from earlier tests
+    from pdd.llm_invoke import InsufficientCreditsError as CurrentInsufficientCreditsError
+    with patch("pdd.llm_invoke._llm_invoke_cloud") as mock_cloud:
+        mock_cloud.side_effect = CurrentInsufficientCreditsError("Insufficient credits")
+
+        with patch("rich.console.Console"):
+            with pytest.raises(CurrentInsufficientCreditsError):
+                llm_invoke(
+                    prompt="Test {topic}",
+                    input_json={"topic": "test"},
+                    use_cloud=True,
+                )
+
+
+def test_llm_invoke_cloud_invocation_error_fallback():
+    """Test that CloudInvocationError triggers local fallback."""
+    # Re-import exception class to handle potential module reloads from earlier tests
+    from pdd.llm_invoke import CloudInvocationError as CurrentCloudInvocationError
+    with patch("pdd.llm_invoke._llm_invoke_cloud") as mock_cloud:
+        mock_cloud.side_effect = CurrentCloudInvocationError("Validation error")
+
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = "local fallback response"
+            mock_response.choices[0].finish_reason = "stop"
+            mock_response.usage.prompt_tokens = 10
+            mock_response.usage.completion_tokens = 10
+            mock_response._hidden_params = {}
+            mock_completion.return_value = mock_response
+
+            with patch("pdd.llm_invoke._load_model_data") as mock_load:
+                mock_df = pd.DataFrame([{
+                    "model": "test-model",
+                    "provider": "OpenAI",
+                    "input": 0.01,
+                    "output": 0.02,
+                    "coding_arena_elo": 1500,
+                    "structured_output": True,
+                    "api_key": "OPENAI_API_KEY",
+                    "base_url": "",
+                    "reasoning_type": "none",
+                    "max_reasoning_tokens": 0,
+                }])
+                mock_df["avg_cost"] = (mock_df["input"] + mock_df["output"]) / 2
+                mock_load.return_value = mock_df
+
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+                    with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                        with patch("rich.console.Console"):
+                            result = llm_invoke(
+                                prompt="Test {topic}",
+                                input_json={"topic": "test"},
+                                use_cloud=True,
+                            )
+
+        assert result["result"] == "local fallback response"
+
+
+# --- Tests for cloud exception classes ---
+
+def test_cloud_fallback_error():
+    """Test CloudFallbackError exception."""
+    error = CloudFallbackError("Test error")
+    assert str(error) == "Test error"
+
+
+def test_cloud_invocation_error():
+    """Test CloudInvocationError exception."""
+    error = CloudInvocationError("Test error")
+    assert str(error) == "Test error"
+
+
+def test_insufficient_credits_error():
+    """Test InsufficientCreditsError exception."""
+    error = InsufficientCreditsError("Insufficient credits")
+    assert str(error) == "Insufficient credits"
+
+
+# --- Tests for cloud detection ---
+
+def test_cloud_enabled_detection():
+    """Test that cloud is detected when credentials are configured."""
+    with patch("pdd.core.cloud.CloudConfig") as mock_config:
+        mock_config.is_cloud_enabled.return_value = True
+        mock_config.get_jwt_token.return_value = "fake_token"
+        mock_config.get_endpoint_url.return_value = "https://example.com/llmInvoke"
+
+        # Mock requests.post for cloud call
+        with patch("requests.post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "result": "cloud result",
+                "totalCost": 0.001,
+                "modelName": "cloud-model",
+            }
+            mock_post.return_value = mock_response
+
+            with patch("rich.console.Console"):
+                # Import fresh to get the cloud path
+                from pdd.llm_invoke import _llm_invoke_cloud
+
+                result = _llm_invoke_cloud(
+                    prompt="Test {topic}",
+                    input_json={"topic": "test"},
+                    strength=0.5,
+                    temperature=0.1,
+                    verbose=False,
+                    output_pydantic=None,
+                    output_schema=None,
+                    time=0.25,
+                    use_batch_mode=False,
+                    messages=None,
+                    language=None,
+                )
+
+                assert result["result"] == "cloud result"
+                assert result["cost"] == 0.001
+
+
+# --- Regression Test for time=None TypeError ---
+
+def test_llm_invoke_time_none_does_not_crash(mock_load_models, mock_set_llm_cache):
+    """Regression test: time=None should not raise TypeError.
+
+    When time=None is passed (valid default from code_generator),
+    llm_invoke should treat it as 0.0 (no reasoning requested).
+
+    Bug: llm_invoke.py line 1658 crashed with:
+    TypeError: '<=' not supported between instances of 'float' and 'NoneType'
+    """
+    first_model_key_name = "OPENAI_API_KEY"
+    with patch.dict(os.environ, {first_model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            mock_response = create_mock_litellm_response(
+                "Mocked response", model_name='gpt-5-nano',
+                prompt_tokens=10, completion_tokens=20
+            )
+            mock_completion.return_value = mock_response
+            mock_cost = 0.00003
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 20}):
+                # This should NOT raise TypeError
+                response = llm_invoke(
+                    prompt="Test prompt {var}",
+                    input_json={"var": "value"},
+                    strength=0.5,
+                    temperature=0.0,
+                    time=None,  # <-- The bug: this used to crash
+                )
+
+            assert response is not None
+            assert response['result'] == "Mocked response"

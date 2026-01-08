@@ -582,7 +582,7 @@ def _try_auto_fix_import_error(
 def _run_example_with_error_detection(
     cmd_parts: list[str],
     env: dict,
-    cwd: str,
+    cwd: Optional[str] = None,
     timeout: int = 60
 ) -> tuple[int, str, str]:
     """
@@ -643,24 +643,23 @@ def _run_example_with_error_detection(
     # Check for errors in output
     has_errors, error_summary = _detect_example_errors(combined)
 
-    # Determine result:
-    # - Errors in output → failure
+    # Determine result (check returncode first, then use error detection for signal-killed):
+    # - Zero exit code → success (trust the exit code)
     # - Positive exit code (process failed normally, e.g., sys.exit(1)) → failure
     # - Negative exit code (killed by signal, e.g., -9 for SIGKILL) → check output
-    # - Zero exit code → success
     #
     # IMPORTANT: When we kill the process after timeout, returncode is negative
     # (the signal number). This is NOT a failure if output has no errors.
-    if has_errors:
-        return 1, stdout, stderr  # Errors detected in output
+    if proc.returncode is not None and proc.returncode == 0:
+        return 0, stdout, stderr  # Clean exit = success (trust exit code)
     elif proc.returncode is not None and proc.returncode > 0:
         return proc.returncode, stdout, stderr  # Process exited with error
     else:
-        # Success cases:
-        # - returncode == 0 (clean exit)
-        # - returncode < 0 (killed by signal, but no errors in output)
-        # - returncode is None (shouldn't happen after wait, but safe fallback)
-        return 0, stdout, stderr
+        # Killed by signal (returncode < 0 or None) - use error detection
+        # Server-style examples may run until timeout, need to check output
+        if has_errors:
+            return 1, stdout, stderr  # Errors detected in output
+        return 0, stdout, stderr  # No errors, server was running fine
 
 
 def _execute_tests_and_create_run_report(
@@ -1303,22 +1302,15 @@ def sync_orchestration(
                                     # Remove TUI-specific env vars that might contaminate subprocess
                                     for var in ['FORCE_COLOR', 'COLUMNS']:
                                         env.pop(var, None)
-                                    # Get language-appropriate run command from language_format.csv
-                                    # Bug fix: Use .resolve() to get absolute path, avoiding doubled paths
-                                    # when cwd is set to the parent directory
+                                    # Bug fix: Use sys.executable to match crash_main's Python interpreter
+                                    # and do NOT set cwd - inherit from pdd invocation directory
+                                    # to match crash_main behavior. Setting cwd to example's parent breaks imports.
                                     example_path = str(pdd_files['example'].resolve())
-                                    run_cmd = get_run_command_for_file(example_path)
-                                    if run_cmd:
-                                        # Use the language-specific interpreter (e.g., node for .js)
-                                        cmd_parts = run_cmd.split()
-                                    else:
-                                        # Fallback to Python if no run command found
-                                        cmd_parts = ['python', example_path]
+                                    cmd_parts = [sys.executable, example_path]
                                     # Use error-detection runner that handles server-style examples
                                     returncode, stdout, stderr = _run_example_with_error_detection(
                                         cmd_parts,
                                         env=env,
-                                        cwd=str(pdd_files['example'].resolve().parent),
                                         timeout=60
                                     )
 
@@ -1364,7 +1356,6 @@ def sync_orchestration(
                                         retry_returncode, retry_stdout, retry_stderr = _run_example_with_error_detection(
                                             cmd_parts,
                                             env=env,
-                                            cwd=str(pdd_files['example'].parent),
                                             timeout=60
                                         )
                                         if retry_returncode == 0:
@@ -1487,11 +1478,13 @@ def sync_orchestration(
                                             # Bug #156: Run pytest on ALL matching test files
                                             test_files = pdd_files.get('test_files', [pdd_files['test']])
                                             pytest_args = [python_executable, '-m', 'pytest'] + [str(f) for f in test_files] + ['-v', '--tb=short']
+                                            # Bug fix: Run from project root (no cwd), matching _run_tests_and_report pattern
+                                            # Using cwd=test.parent with paths like 'backend/tests/test_foo.py' causes
+                                            # pytest to look for 'backend/tests/backend/tests/test_foo.py' (not found)
                                             test_result = subprocess.run(
                                                 pytest_args,
                                                 capture_output=True, text=True, timeout=300,
-                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True,
-                                                cwd=str(pdd_files['test'].parent)
+                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
                                             )
                                         else:
                                             # Use shell command for non-Python
@@ -1597,20 +1590,18 @@ def sync_orchestration(
                                  clean_env = os.environ.copy()
                                  for var in ['FORCE_COLOR', 'COLUMNS']:
                                      clean_env.pop(var, None)
-                                 # Get language-appropriate run command
-                                 # Bug fix: Use .resolve() to get absolute path, avoiding doubled paths
-                                 # when cwd is set to the parent directory
+                                 # Bug fix: Use sys.executable to ensure same Python interpreter as
+                                 # crash_main (fix_code_loop.py:477). When both venv and conda are
+                                 # active, PATH lookup for 'python' may resolve to a different
+                                 # interpreter, causing infinite crash loops.
+                                 # Bug fix: Do NOT set cwd - inherit from pdd invocation directory
+                                 # to match crash_main behavior. Setting cwd to example's parent breaks imports.
                                  example_path = str(pdd_files['example'].resolve())
-                                 run_cmd = get_run_command_for_file(example_path)
-                                 if run_cmd:
-                                     cmd_parts = run_cmd.split()
-                                 else:
-                                     cmd_parts = ['python', example_path]
+                                 cmd_parts = [sys.executable, example_path]
                                  # Use error-detection runner that handles server-style examples
                                  returncode, stdout, stderr = _run_example_with_error_detection(
                                      cmd_parts,
                                      env=clean_env,
-                                     cwd=str(pdd_files['example'].resolve().parent),
                                      timeout=60
                                  )
                                  # Include test_hash for staleness detection

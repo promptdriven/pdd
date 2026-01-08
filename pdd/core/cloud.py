@@ -38,12 +38,14 @@ CLOUD_ENDPOINTS = {
     "generateCode": "/generateCode",
     "generateExample": "/generateExample",
     "generateTest": "/generateTest",
+    "generateBugTest": "/generateBugTest",
     "fixCode": "/fixCode",
     "crashCode": "/crashCode",
     "verifyCode": "/verifyCode",
     "syncState": "/syncState",
     "trackUsage": "/trackUsage",
     "getCreditBalance": "/getCreditBalance",
+    "llmInvoke": "/llmInvoke",
 }
 
 
@@ -138,8 +140,42 @@ class CloudConfig:
             return None
 
     @staticmethod
+    def is_running_in_cloud() -> bool:
+        """Check if we're running inside a cloud environment.
+
+        Detects Google Cloud Functions/Cloud Run via K_SERVICE env var,
+        or local emulator via FUNCTIONS_EMULATOR. This prevents infinite
+        loops when cloud endpoints call the CLI internally.
+        """
+        return bool(
+            os.environ.get("K_SERVICE") or
+            os.environ.get("FUNCTIONS_EMULATOR")
+        )
+
+    @staticmethod
     def is_cloud_enabled() -> bool:
-        """Check if cloud features are available (API keys configured)."""
+        """Check if cloud features are available.
+
+        Cloud is enabled if:
+        1. PDD_FORCE_LOCAL is NOT set (respects --local flag), AND
+        2. NOT already running inside a cloud environment (prevents infinite loops), AND
+        3. Either:
+           a. PDD_JWT_TOKEN is set (injected token for testing/CI), OR
+           b. Both FIREBASE_API_KEY and GITHUB_CLIENT_ID are set (for device flow auth)
+        """
+        # Respect --local flag (sets PDD_FORCE_LOCAL=1)
+        if os.environ.get("PDD_FORCE_LOCAL"):
+            return False
+
+        # CRITICAL: Never enable cloud mode when already running in cloud
+        # This prevents infinite loops when cloud endpoints call CLI internally
+        if CloudConfig.is_running_in_cloud():
+            return False
+
+        # Check for injected token first (testing/CI scenario)
+        if os.environ.get(PDD_JWT_TOKEN_ENV):
+            return True
+        # Check for device flow auth credentials
         return bool(
             os.environ.get(FIREBASE_API_KEY_ENV) and
             os.environ.get(GITHUB_CLIENT_ID_ENV)

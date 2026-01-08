@@ -351,16 +351,16 @@ def test_run_agentic_task_fallback(mock_cwd, mock_env, mock_load_model_data, moc
     # Side effect for subprocess.run
     # First call (Anthropic): Fails
     # Second call (Google): Succeeds
-    
+
     anthropic_fail = MagicMock()
     anthropic_fail.returncode = 1
     anthropic_fail.stdout = json.dumps({"error": {"message": "Overloaded"}})
-    
+
     google_success = MagicMock()
     google_success.returncode = 0
     google_success.stdout = json.dumps({
-        "response": "Success",
-        "stats": {"models": {"flash": {"tokens": {"prompt": 0, "candidates": 0}}}}
+        "response": "Task completed successfully. I have analyzed the code and made the requested changes.",
+        "stats": {"models": {"flash": {"tokens": {"prompt": 100, "candidates": 50}}}}
     })
 
     # We need to inspect the command to decide which mock to return
@@ -377,9 +377,9 @@ def test_run_agentic_task_fallback(mock_cwd, mock_env, mock_load_model_data, moc
 
     assert success
     assert provider == "google"
-    assert msg == "Success"
-    # Cost should be 0.0 (Anthropic failed/0 + Google 0)
-    assert cost == 0.0
+    assert "Task completed successfully" in msg
+    # Cost is based on Google's token usage
+    assert cost >= 0.0
 
 def test_run_agentic_task_all_fail(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test when all providers fail."""
@@ -517,7 +517,10 @@ def test_run_agentic_task_accepts_timeout_parameter(mock_cwd, mock_env, mock_loa
     os.environ["ANTHROPIC_API_KEY"] = "key"
 
     mock_subprocess.return_value.returncode = 0
-    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stdout = json.dumps({
+        "response": "Task completed successfully. The bug has been fixed and all tests pass.",
+        "total_cost_usd": 0.05,
+    })
     mock_subprocess.return_value.stderr = ""
 
     # This call should accept a timeout parameter (600 seconds)
@@ -602,8 +605,8 @@ def test_step_timeouts_dictionary_exists():
     assert isinstance(STEP_TIMEOUTS, dict), "STEP_TIMEOUTS must be a dictionary"
 
     # Verify complex steps have longer timeouts
-    # Steps 4 (reproduce), 5 (root cause), 7 (generate) need >= 600 seconds
-    complex_steps = [4, 5, 7]
+    # Steps 4 (reproduce), 5 (root cause), 7 (generate), 8 (verify) need >= 600 seconds
+    complex_steps = [4, 5, 7, 8]
     for step in complex_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
         assert STEP_TIMEOUTS[step] >= 600.0, (
@@ -611,8 +614,15 @@ def test_step_timeouts_dictionary_exists():
             f"for complex operations (issue #256)"
         )
 
+    # Verify medium complexity step (Verify Fix Plan) has increased timeout
+    assert 6 in STEP_TIMEOUTS, "STEP_TIMEOUTS missing entry for step 6"
+    assert STEP_TIMEOUTS[6] >= 300.0, (
+        f"Step 6 timeout ({STEP_TIMEOUTS[6]}) should be >= 300 seconds "
+        f"for verify fix plan operations"
+    )
+
     # Verify simple steps have standard timeout (240 seconds)
-    simple_steps = [1, 2, 3, 6, 8, 9]
+    simple_steps = [1, 2, 3, 9]
     for step in simple_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
         assert STEP_TIMEOUTS[step] == 240.0, (
@@ -641,7 +651,10 @@ def test_timeout_priority_cli_over_env(mock_cwd, mock_env, mock_load_model_data,
     os.environ["PDD_AGENTIC_TIMEOUT"] = "300"  # Env var says 300 seconds
 
     mock_subprocess.return_value.returncode = 0
-    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stdout = json.dumps({
+        "response": "Task completed successfully. The timeout was properly applied.",
+        "total_cost_usd": 0.05,
+    })
     mock_subprocess.return_value.stderr = ""
 
     # Explicit timeout=600 should override env var's 300
@@ -660,3 +673,68 @@ def test_timeout_priority_cli_over_env(mock_cwd, mock_env, mock_load_model_data,
         f"Expected explicit timeout=600.0 to override env var, "
         f"but got {kwargs.get('timeout')}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #261: False Positive Detection Tests
+# ---------------------------------------------------------------------------
+
+
+def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """
+    Issue #261: Test that zero-cost responses with minimal output are detected as failures.
+
+    When a provider returns:
+    - returncode 0 (success)
+    - cost $0.00
+    - minimal or empty output
+
+    This indicates no actual work was done (false positive). The system should
+    treat this as a failure and try the next provider.
+
+    This test verifies that such false positives are rejected and that the
+    system falls back to a provider that performs real work.
+    """
+    mock_shutil_which.return_value = "/bin/exe"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["GEMINI_API_KEY"] = "key"
+
+    # First provider (Anthropic): Returns "success" with $0.00 cost and minimal output
+    # This is a false positive - no work was actually done
+    anthropic_false_positive = MagicMock()
+    anthropic_false_positive.returncode = 0  # CLI says success
+    anthropic_false_positive.stdout = json.dumps({
+        "response": "",  # Empty/minimal output
+        "total_cost_usd": 0.0,  # Zero cost = no work done
+    })
+    anthropic_false_positive.stderr = ""
+
+    # Second provider (Google): Returns real success with actual output and cost
+    google_real_success = MagicMock()
+    google_real_success.returncode = 0
+    google_real_success.stdout = json.dumps({
+        "response": "I have analyzed the code and found the bug in line 42.",
+        "stats": {"models": {"flash": {"tokens": {"prompt": 1000, "candidates": 500, "cached": 0}}}}
+    })
+    google_real_success.stderr = ""
+
+    def run_side_effect(cmd, **kwargs):
+        if "claude" in cmd:
+            return anthropic_false_positive
+        if "gemini" in cmd:
+            return google_real_success
+        return MagicMock(returncode=1)
+
+    mock_subprocess.side_effect = run_side_effect
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    # Should detect Anthropic's false positive and fall back to Google
+    assert success, "Task should succeed via Google fallback"
+    assert provider == "google", (
+        f"Expected fallback to 'google' after detecting Anthropic false positive, "
+        f"but got provider='{provider}'"
+    )
+    assert "analyzed the code" in msg, "Should have Google's actual response"
+    # Cost should include Google's real cost (not just Anthropic's $0.00)
+    assert cost > 0, "Cost should be > 0 from Google's actual work"

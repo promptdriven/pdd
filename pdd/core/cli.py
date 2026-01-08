@@ -309,6 +309,9 @@ def cli(
     ctx.obj["output_cost"] = output_cost
     ctx.obj["review_examples"] = review_examples
     ctx.obj["local"] = local
+    # Propagate --local flag to environment for llm_invoke cloud detection
+    if local:
+        os.environ['PDD_FORCE_LOCAL'] = '1'
     # Use DEFAULT_TIME if time is not provided
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
     # Persist context override for downstream calls

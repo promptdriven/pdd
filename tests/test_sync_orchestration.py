@@ -2455,6 +2455,65 @@ class TestStrengthTemperaturePropagation:
             "update_main call should include 'strength=strength' parameter"
 
 
+# --- Bug: Post-crash verification uses wrong Python interpreter ---
+
+class TestPythonInterpreterConsistency:
+    """
+    Regression tests for Python interpreter consistency in sync_orchestration.
+
+    The crash fix loop (fix_code_loop.py:477) uses sys.executable to run examples.
+    Post-crash verification in sync_orchestration.py must be consistent to avoid
+    PATH resolution issues when venv/conda environments are both active.
+    """
+
+    def test_post_crash_verification_uses_sys_executable(self):
+        """
+        Bug fix: Post-crash verification must use sys.executable, not 'python' from
+        get_run_command_for_file(), to match the Python interpreter used by crash_main.
+
+        Without this fix, when both venv and conda are active, PATH lookup for 'python'
+        may resolve to a different interpreter than sys.executable, causing:
+        1. crash_main verification passes (uses sys.executable = venv Python)
+        2. post-crash verification fails (uses 'python' = conda Python)
+        3. run_report saved with non-zero exit code
+        4. Infinite crash loop until MAX_CONSECUTIVE_CRASHES reached
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find the post-crash verification section (after "if success and operation == 'crash':")
+        # and verify it uses sys.executable, not get_run_command_for_file
+
+        lines = source.split('\n')
+        in_post_crash_section = False
+        found_sys_executable = False
+        found_get_run_command = False
+
+        for line in lines:
+            if "if success and operation == 'crash':" in line:
+                in_post_crash_section = True
+            if in_post_crash_section:
+                if 'sys.executable' in line:
+                    found_sys_executable = True
+                if 'get_run_command_for_file' in line:
+                    found_get_run_command = True
+                # Exit section when we hit the next major block
+                if 'if success and operation ==' in line and 'crash' not in line:
+                    break
+
+        assert found_sys_executable, (
+            "REGRESSION BUG: Post-crash verification should use sys.executable "
+            "to match crash_main's Python interpreter. Using get_run_command_for_file() "
+            "or 'python' can resolve to wrong interpreter when venv/conda are both active."
+        )
+        assert not found_get_run_command, (
+            "REGRESSION BUG: Post-crash verification should NOT use get_run_command_for_file(). "
+            "PATH lookup for 'python' may differ from sys.executable in mixed venv/conda environments."
+        )
+
+
 # --- Bug #156: Fix operation receives wrong test file ---
 
 def test_fix_operation_identifies_actual_failing_test_file(orchestration_fixture, tmp_path):
@@ -3604,3 +3663,202 @@ def test_run_example_without_resolve_fails(tmp_path, monkeypatch):
 
     # BUG: This fails with exit code 2 (file not found)
     assert returncode == 2, f"Expected bug to cause exit 2, got {returncode}"
+
+
+# --- Bug Fix: Pre-fix pytest should NOT use cwd ---
+
+def test_prefix_pytest_runs_from_project_root_not_test_directory(orchestration_fixture, tmp_path):
+    """
+    Bug fix: Pre-fix pytest should run from project root, not test directory.
+
+    When test_files contains paths like 'backend/tests/test_foo.py',
+    the subprocess should NOT use cwd='backend/tests' as that would
+    cause pytest to look for 'backend/tests/backend/tests/test_foo.py'.
+
+    This matches the pattern used by _run_tests_and_report (lines 729-731)
+    which correctly omits the cwd parameter.
+
+    Evidence from fix_errors.log:
+        ERROR: file or directory not found: backend/tests/test_generate_code.py
+        collected 0 items
+    """
+    from unittest.mock import patch, MagicMock
+
+    # Create test directory structure with paths relative to project root
+    test_dir = tmp_path / "backend" / "tests"
+    test_dir.mkdir(parents=True)
+    test_file_1 = test_dir / "test_foo.py"
+    test_file_2 = test_dir / "test_foo_0.py"
+    test_file_1.write_text("def test_pass(): pass")
+    test_file_2.write_text("def test_fail(): assert False")
+
+    # Also create required directories for sync (use exist_ok since fixture may create some)
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    (prompts_dir / "foo_python.prompt").write_text("# foo prompt")
+    src_dir = tmp_path / "backend"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "foo.py").write_text("# foo code")
+    (src_dir / "foo_example.py").write_text("# foo example")
+
+    # KEY: pdd_files contains paths like 'backend/tests/test_foo.py'
+    # (relative to project root, not the test directory)
+    orchestration_fixture['get_pdd_file_paths'].return_value = {
+        'prompt': prompts_dir / 'foo_python.prompt',
+        'code': src_dir / 'foo.py',
+        'example': src_dir / 'foo_example.py',
+        'test': test_file_1,
+        'test_files': [test_file_1, test_file_2],
+    }
+
+    # Capture subprocess.run calls including kwargs
+    subprocess_calls = []
+
+    def capture_subprocess(*args, **kwargs):
+        subprocess_calls.append({'args': args, 'kwargs': kwargs})
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = "FAILED test_foo_0.py::test_fail"
+        mock_result.stderr = ""
+        return mock_result
+
+    # Trigger fix operation
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_subprocess):
+        with patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'):
+            with patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+                sync_orchestration(basename="foo", language="python")
+
+    # Find pytest calls
+    pytest_calls = [c for c in subprocess_calls if 'pytest' in str(c['args'])]
+    assert pytest_calls, "pytest should have been invoked"
+
+    # CRITICAL ASSERTION: pytest should NOT have cwd parameter set
+    # Current buggy code sets cwd=str(pdd_files['test'].parent) which breaks path resolution
+    for call in pytest_calls:
+        assert 'cwd' not in call['kwargs'], \
+            f"Bug: Pre-fix pytest should NOT use cwd parameter. " \
+            f"This causes paths like 'backend/tests/test_foo.py' to fail when " \
+            f"cwd is 'backend/tests' (pytest looks for 'backend/tests/backend/tests/test_foo.py'). " \
+            f"Got cwd={call['kwargs'].get('cwd')}"
+
+
+class TestExampleVerificationConsistency:
+    """
+    Regression tests for example verification consistency in sync_orchestration.
+
+    crash_main (fix_code_loop.py:476) uses run_process_with_output() which:
+    1. Uses sys.executable (not 'python' from PATH)
+    2. Does NOT set cwd (inherits from pdd invocation directory)
+
+    Example verification in sync_orchestration.py must be consistent to avoid
+    infinite crash loops when examples depend on cwd-sensitive imports.
+    """
+
+    def test_run_example_with_error_detection_cwd_is_optional(self):
+        """
+        Bug fix: cwd parameter must be optional to allow inheriting parent's cwd.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        sig = inspect.signature(sync_mod._run_example_with_error_detection)
+        cwd_param = sig.parameters.get('cwd')
+
+        assert cwd_param is not None, "Should have cwd parameter"
+        assert cwd_param.default is not inspect.Parameter.empty, (
+            "REGRESSION BUG: cwd should have a default value (None) to allow "
+            "inheriting parent process's working directory"
+        )
+
+    def test_initial_crash_check_does_not_set_cwd(self):
+        """
+        Bug fix: Initial crash check must NOT set cwd to example's parent.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find all _run_example_with_error_detection calls in crash section
+        # and verify none have cwd=...example...
+        import re
+        crash_section_match = re.search(
+            r"elif operation == 'crash':.*?(?=elif operation ==|$)",
+            source,
+            re.DOTALL
+        )
+        assert crash_section_match, "Should find crash operation section"
+        crash_section = crash_section_match.group()
+
+        # Check that _run_example_with_error_detection calls don't have cwd with 'example'
+        has_bad_cwd = bool(re.search(
+            r"_run_example_with_error_detection\([^)]*cwd=.*example",
+            crash_section
+        ))
+
+        assert not has_bad_cwd, (
+            "REGRESSION BUG: Initial crash check should NOT set cwd to example's parent. "
+            "This breaks imports that rely on running from project root."
+        )
+
+    def test_post_crash_verification_does_not_set_cwd(self):
+        """
+        Bug fix: Post-crash verification must NOT set cwd to example's parent.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find post-crash verification section
+        import re
+        post_crash_match = re.search(
+            r"if success and operation == 'crash':.*?(?=if success and operation|if not success|$)",
+            source,
+            re.DOTALL
+        )
+        assert post_crash_match, "Should find post-crash verification section"
+        post_crash_section = post_crash_match.group()
+
+        has_bad_cwd = bool(re.search(
+            r"_run_example_with_error_detection\([^)]*cwd=.*example",
+            post_crash_section
+        ))
+
+        assert not has_bad_cwd, (
+            "REGRESSION BUG: Post-crash verification should NOT set cwd to example's parent. "
+            "This breaks imports that rely on running from project root."
+        )
+
+    def test_initial_crash_check_uses_sys_executable(self):
+        """
+        Bug fix: Initial crash check must use sys.executable, not get_run_command_for_file.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        import re
+        crash_section_match = re.search(
+            r"elif operation == 'crash':.*?(?=elif operation ==|$)",
+            source,
+            re.DOTALL
+        )
+        crash_section = crash_section_match.group()
+
+        # Should have sys.executable, not get_run_command_for_file
+        has_sys_executable = 'sys.executable' in crash_section
+        has_get_run_command = 'get_run_command_for_file' in crash_section
+
+        assert has_sys_executable, (
+            "REGRESSION BUG: Initial crash check should use sys.executable"
+        )
+        assert not has_get_run_command, (
+            "REGRESSION BUG: Initial crash check should NOT use get_run_command_for_file"
+        )

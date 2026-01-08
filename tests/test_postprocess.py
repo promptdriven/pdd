@@ -407,3 +407,94 @@ def test_default_parameters(mock_llm_invoke, mock_load_template):
     assert kwargs['time'] == DEFAULT_TIME # Default time
     assert kwargs['verbose'] == False   # Default verbose
     assert kwargs['output_pydantic'] == ExtractedCode
+
+
+# V. Regression Tests
+@patch('pdd.postprocess.load_prompt_template', return_value="test_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_extracted_code_with_focus_and_explanation_no_json_leakage(mock_llm_invoke, mock_load_template):
+    """
+    Regression test for JSON leakage bug.
+
+    When the LLM returns ExtractedCode with focus, explanation, and extracted_code fields,
+    only the extracted_code should be returned. The focus and explanation fields should
+    NOT leak into the output as JSON markers.
+
+    This bug occurred when the Pydantic schema only had extracted_code but the prompt
+    asked for 3 fields, causing some LLMs to embed the extra fields inside the
+    extracted_code string value.
+    """
+    complex_code = '''def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+def subtract(a: float, b: float) -> float:
+    """Subtract b from a."""
+    return a - b
+
+if __name__ == "__main__":
+    print(add(1, 2))'''
+
+    mock_llm_invoke.return_value = {
+        'result': ExtractedCode(
+            focus="Python arithmetic module",
+            explanation="The code implements basic arithmetic operations with type hints.",
+            extracted_code=complex_code
+        ),
+        'cost': 0.05,
+        'model_name': 'test_model'
+    }
+
+    result_code, cost, model_name = postprocess(
+        "some llm output",
+        "python",
+        strength=0.5
+    )
+
+    # Verify no JSON markers leaked into the extracted code
+    json_markers = ['"explanation":', '"focus":', '"description":', '"extracted_code":']
+    for marker in json_markers:
+        assert marker not in result_code, f"JSON marker '{marker}' leaked into extracted code"
+
+    # Verify the code is exactly what was in extracted_code
+    assert result_code == complex_code
+    assert cost == 0.05
+    assert model_name == 'test_model'
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="test_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_extracted_code_model_has_all_prompt_fields(mock_llm_invoke, mock_load_template):
+    """
+    Verify ExtractedCode model accepts focus and explanation fields.
+
+    The extract_code_LLM.prompt asks for 3 fields: focus, explanation, extracted_code.
+    The Pydantic model must accept all 3 to prevent LLMs from embedding extra fields
+    inside the extracted_code string.
+    """
+    # This should not raise any validation errors
+    extracted = ExtractedCode(
+        focus="test focus",
+        explanation="test explanation",
+        extracted_code="print('hello')"
+    )
+
+    assert extracted.focus == "test focus"
+    assert extracted.explanation == "test explanation"
+    assert extracted.extracted_code == "print('hello')"
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="test_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_extracted_code_model_optional_fields(mock_llm_invoke, mock_load_template):
+    """
+    Verify focus and explanation fields have defaults (are optional).
+
+    Some LLMs may only return extracted_code, so the other fields should be optional.
+    """
+    # This should not raise - focus and explanation should have defaults
+    extracted = ExtractedCode(extracted_code="print('hello')")
+
+    assert extracted.focus == ""
+    assert extracted.explanation == ""
+    assert extracted.extracted_code == "print('hello')"

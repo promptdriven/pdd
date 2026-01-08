@@ -303,8 +303,10 @@ def fix_verification_main(
     try:
         if loop:
             # Determine if loop should use cloud for LLM calls (hybrid mode)
-            # Only use cloud if explicitly requested via PDD_CLOUD_ONLY or PDD_NO_LOCAL_FALLBACK
-            use_cloud_for_loop = False
+            # Local verification execution stays local, but LLM fix calls can go to cloud
+            use_cloud_for_loop = not is_local_execution_preferred and not cloud_only
+
+            # If cloud_only is set but we're in loop mode, we still use hybrid approach
             if cloud_only and not is_local_execution_preferred:
                 use_cloud_for_loop = True
 

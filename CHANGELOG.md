@@ -1,8 +1,116 @@
+## v0.0.106 (2026-01-08)
+
+### Feat
+
+- auto-inject public OAuth keys for seamless cloud mode setup
+- enhance caching, timeout handling, and cloud detection
+
+### Fix
+
+- clean_env fixture now clears PDD_FORCE_LOCAL and cloud env vars
+
+## v0.0.105 (2026-01-07)
+
+### Feat
+
+- **Content-Hash Based Caching for `summarize_directory`:** Complete rewrite of `summarize_directory.py` using SHA-256 content hashing instead of timestamps for cache invalidation. CSV schema changed from `full_path,file_summary,date` to `full_path,file_summary,content_hash`. Enables accurate cache hits even when files are modified and reverted.
+
+- **False Positive Detection for Agentic Tasks (Issue #261):** Added `MIN_VALID_OUTPUT_LENGTH` constant (50 chars) to detect when providers return success but produce no meaningful work ($0.00 cost + minimal output). Prevents silent failures in multi-provider fallback chains.
+
+- **Step-Specific Timeouts for Agentic Orchestrator (Issue #261):** Propagate `STEP_TIMEOUTS` dictionary to `run_agentic_task()` calls in `agentic_bug_orchestrator.py`. Complex steps (7: generation) get 1000s timeout; others use appropriate values from 240-600s.
+
+### Fix
+
+- **Cloud Auto-Detection for Injected JWT Tokens:** Updated `CloudConfig.is_cloud_enabled()` to check for `PDD_JWT_TOKEN` environment variable first, enabling cloud mode in testing/CI scenarios without requiring device flow credentials (FIREBASE_API_KEY + GITHUB_CLIENT_ID).
+
+- **Hybrid Cloud Mode for Verify Loop:** Changed default behavior in `fix_verification_main.py` when `loop=True`. Now uses cloud for LLM fix generation while keeping verification execution local (`use_cloud_for_loop = not is_local_execution_preferred and not cloud_only`). Improves performance while maintaining local control flow.
+
+- **Optional Time Parameter in `llm_invoke`:** Changed `time` parameter type from `float = 0.25` to `Optional[float] = 0.25` and handle `None` by setting to `0.0`. Allows callers to explicitly disable reasoning token allocation.
+
+- **CSV Format Updates:** Updated `insert_includes.py` to use new CSV schema with `content_hash` instead of `date`. Updated example files (`summarize_directory_example.py`, `agentic_common_example.py`) with new CSV format and step timeout usage patterns.
+
+## v0.0.104 (2026-01-06)
+
+### Feat
+
+- **Cloud Execution for `llm_invoke` (PR #249):** Added cloud-first execution with automatic local fallback. Key changes:
+  - Add three new exception classes: `CloudFallbackError` (recoverable), `CloudInvocationError` (non-recoverable), `InsufficientCreditsError` (no fallback)
+  - Add `use_cloud` parameter to `llm_invoke()`: None (auto-detect), True (force cloud), False (force local)
+  - Implement `_llm_invoke_cloud()` to route LLM calls through `/llmInvoke` endpoint
+  - Add `_pydantic_to_json_schema()` and `_validate_with_pydantic()` for cloud transport
+  - Propagate `--local` CLI flag via `PDD_FORCE_LOCAL` environment variable
+  - Graceful fallback to local execution on cloud errors (except insufficient credits)
+
+### Fix
+
+- **Prevent Duplicate Sync PRs:** Use fixed branch name (`pdd/sync-from-public`) instead of unique run_id-based names. Force-push to update existing branch and skip PR creation if one already exists. Prevents accumulation of duplicate sync PRs (was 8+ open).
+
+- **Align ExtractedCode Schema with Prompt:** Added `focus` and `explanation` fields to `ExtractedCode` Pydantic model with default values. The `extract_code_LLM.prompt` asks for 3 JSON fields but the model only had 1, causing Gemini Flash to embed extra fields inside `extracted_code` string, resulting in invalid Python syntax and JSON markers leaking into code files.
+
+- **Lower EXTRACTION_STRENGTH from 0.75 to 0.5:** At strength=0.75, target ELO was ~1458.5, causing Claude Opus (ELO 1465) to be selected for extraction/postprocessing. Lowering to 0.5 selects gemini-3-flash-preview (ELO 1430) instead, reducing costs from $5/$25 to $0.50/$3 per M tokens.
+
+- **Narrow Console Boundary Bug (Issue #220, PR #227):** Fixed IndexError in `sync_animation.py` when console width is narrow (<=44 columns). The bug was an off-by-one boundary error in `_draw_connecting_lines_and_arrows()` where `max_x` could equal `console_width`, causing out-of-bounds array access.
+
+### Tests
+
+- Added 355+ lines of cloud execution tests in `test_llm_invoke.py` covering exception classes, Pydantic schema conversion, cloud execution paths (force local, force cloud, fallback), insufficient credits handling, and cloud detection.
+- Added 185 lines of narrow console boundary tests in `test_narrow_console_boundary.py` (6 failing tests at widths 20-44, 2 passing at widths 45+).
+- Added 91 lines of ExtractedCode schema tests in `test_postprocess.py` covering focus/explanation fields, JSON leakage prevention, and optional field validation.
+- Added 44 lines of retry logic for flakey tests in `test_cmd_test_main.py` and `test_fix_main.py`.
+- Added 433 lines of step 7 prompt tests in `test_agentic_bug_step7_prompt.py` for caller-mocking guidance (Issue #247).
+
+### Docs
+
+- Updated `postprocess_python.prompt` to reflect ExtractedCode schema changes.
+- Updated `cli_python.prompt` with PDD_FORCE_LOCAL documentation.
+- Updated `cloud_python.prompt` with llmInvoke endpoint.
+- Updated `llm_invoke_python.prompt` with use_cloud parameter and cloud execution specifications.
+- Rewrote `cli_example.py` with comprehensive CLI usage examples (430 lines).
+- Rewrote `llm_invoke_example.py` with cleaner examples showing structured output, batch processing, and reasoning features (271 lines).
+- Updated `agentic_bug_step7_generate_LLM.prompt` with caller-mocking guidance (20 lines added).
+- Updated `agentic_bug_step9_pr_LLM.prompt` with PR description improvements.
+
+## v0.0.103 (2026-01-05)
+
+### Feat
+
+- **Cloud Execution for `pdd bug` Command (PR #243):** Added cloud-first execution with automatic local fallback. Uses JWT authentication and posts to the `generateBugTest` endpoint. Non-recoverable errors (401/402/403/400) raise `UsageError`; recoverable errors (5xx, timeouts) fall back to local. Cloud request timeout set to 400s. Set `PDD_CLOUD_ONLY=1` or `PDD_NO_LOCAL_FALLBACK=1` to disable fallback.
+
+- **Centralized Path Resolution Module (Issue #240, PR #241):** Added new `path_resolution.py` module with `PathResolver` dataclass for standardized file path resolution across the codebase. Supports four resolution profiles:
+  - `resolve_include()`: cwd → package → repo fallback chain
+  - `resolve_prompt_template()`: PDD_PATH → repo → cwd for prompts
+  - `resolve_data_file()`: PDD_PATH only for data files
+  - `resolve_project_root()`: PDD_PATH → marker → cwd for project detection
+
+### Fix
+
+- **Repo Root Fallback (Issue #240):** Fixed `get_file_path` to properly fall back to repo root when resolving include paths in installed-package scenarios.
+
+### Tests
+
+- Added 643+ lines of tests in `test_bug_main.py` covering cloud success paths, fallback scenarios, non-recoverable HTTP errors, and cloud-only mode.
+- Added failing test for issue #240 repo root fallback behavior.
+
 ## v0.0.102 (2026-01-04)
 
 ### Feat
 
-- Add git worktree isolation for agentic bug workflow
+- **Git Worktree Isolation for Agentic Bug Workflow (PR #231):** Refactored `agentic_bug_orchestrator.py` to run bug investigations in isolated git worktrees. Each issue gets its own worktree at `.pdd/worktrees/fix-issue-{N}` with a dedicated branch `fix/issue-{N}`. Adds cleanup of stale worktrees/branches before starting. Prevents polluting the main branch during investigation.
+
+- **Configurable Timeouts for Agentic Bug Steps (Issue #256):** Added `STEP_TIMEOUTS` dictionary with per-step timeout configuration. Complex steps (reproduce, root cause, generate) get 600s timeouts; simpler steps use 240s default. Added `timeout` parameter to `run_agentic_task()` and `_run_with_provider()`.
+
+### Fix
+
+- **Backward Compatibility with v0.0.99 Projects (Issue #251):** Fixed path resolution for projects lacking `outputs` templates in `.pddrc`. v0.0.99 projects now sync correctly with v0.0.100+ binaries.
+
+- **CLI Results None Guard (Issue #253):** Added `results is not None` guard in `process_commands()` to prevent `TypeError: 'NoneType' object is not iterable` when results are None.
+
+### Tests
+
+- Added 636 lines of backward compatibility tests (`test_sync_backward_compat.py`) covering v0.0.99 projects, legacy `.pddrc`, mixed-version meta files, and bare projects.
+- Added 168 lines of timeout configuration tests in `test_agentic_common.py`.
+- Added regression tests for CLI None guard in `test_core_dump.py`.
+- Updated `test_agentic_bug_orchestrator.py` to mock worktree setup.
 
 ## v0.0.101 (2026-01-03)
 
