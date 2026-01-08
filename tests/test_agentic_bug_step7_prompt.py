@@ -271,10 +271,165 @@ def has_vertex_credentials() -> bool:
 
 
 def extract_python_code_blocks(text: str) -> list[str]:
-    """Extract Python code blocks from markdown-formatted text."""
-    pattern = r'```python\s*(.*?)```'
-    matches = re.findall(pattern, text, re.DOTALL)
-    return matches
+    """
+    Extract Python code blocks from markdown-formatted text.
+
+    Handles multiple formats:
+    1. Standard ```python blocks
+    2. ```py blocks
+    3. Bash heredocs (cat <<EOF > file.py ... EOF)
+    4. Generic ``` blocks containing Python-like code (imports, def, class)
+    """
+    results = []
+
+    # 1. Standard ```python blocks - use word boundary to ensure full match
+    python_pattern = r'```python\b\s*(.*?)```'
+    results.extend(re.findall(python_pattern, text, re.DOTALL))
+
+    # 2. ```py blocks - word boundary prevents matching ```python
+    py_pattern = r'```py\b\s*(.*?)```'
+    py_matches = re.findall(py_pattern, text, re.DOTALL)
+    # Filter out duplicates (in case both patterns match same content)
+    for match in py_matches:
+        if match not in results:
+            results.append(match)
+
+    # 3. Bash heredocs: cat <<EOF > *.py ... EOF or cat <<'EOF' > *.py ... EOF
+    heredoc_pattern = r"cat\s+<<'?EOF'?\s*>\s*\S+\.py\s*(.*?)EOF"
+    results.extend(re.findall(heredoc_pattern, text, re.DOTALL))
+
+    # 4. Generic ``` blocks that look like Python (fallback)
+    if not results:
+        generic_pattern = r'```\s*(.*?)```'
+        generic_matches = re.findall(generic_pattern, text, re.DOTALL)
+        for match in generic_matches:
+            # Check if it looks like Python code
+            python_indicators = [
+                'import ', 'from ', 'def ', 'class ',
+                'assert ', 'with ', '@pytest', '@patch'
+            ]
+            if any(indicator in match for indicator in python_indicators):
+                results.append(match)
+
+    # Clean up: strip whitespace from each result
+    return [r.strip() for r in results if r.strip()]
+
+
+class TestExtractPythonCodeBlocks:
+    """Unit tests for extract_python_code_blocks function."""
+
+    def test_extracts_standard_python_block(self) -> None:
+        """Test extraction of standard ```python blocks."""
+        text = "Here is some code:\n```python\ndef foo():\n    pass\n```\nDone."
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "def foo():" in result[0]
+
+    def test_extracts_py_block(self) -> None:
+        """Test extraction of ```py blocks."""
+        text = "Code:\n```py\nimport os\n```"
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "import os" in result[0]
+
+    def test_extracts_heredoc_python(self) -> None:
+        """Test extraction of Python code from bash heredocs."""
+        text = '''```bash
+mkdir -p tests
+cat <<EOF > tests/test_foo.py
+from unittest.mock import patch
+
+def test_example():
+    assert True
+EOF
+```'''
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "from unittest.mock import patch" in result[0]
+        assert "def test_example():" in result[0]
+
+    def test_extracts_heredoc_with_quoted_eof(self) -> None:
+        """Test extraction handles cat <<'EOF' variant."""
+        text = '''```bash
+cat <<'EOF' > src/module.py
+class MyClass:
+    pass
+EOF
+```'''
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "class MyClass:" in result[0]
+
+    def test_fallback_extracts_python_from_generic_block(self) -> None:
+        """Test fallback extraction from generic ``` blocks with Python indicators."""
+        text = "```\nfrom typing import List\n\ndef process(items: List[str]):\n    pass\n```"
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "from typing import List" in result[0]
+
+    def test_ignores_non_python_generic_blocks(self) -> None:
+        """Test that generic blocks without Python indicators are ignored."""
+        text = "```\necho hello\nls -la\n```"
+        result = extract_python_code_blocks(text)
+        assert len(result) == 0
+
+    def test_extracts_multiple_blocks(self) -> None:
+        """Test extraction of multiple Python blocks."""
+        text = '''```python
+def foo():
+    pass
+```
+
+```python
+def bar():
+    pass
+```'''
+        result = extract_python_code_blocks(text)
+        assert len(result) == 2
+
+    def test_real_world_llm_output_with_bash_heredoc(self) -> None:
+        """Test with realistic LLM output that wraps Python in bash."""
+        # This is the exact pattern that caused the original test failure
+        text = '''```bash
+# 1. Setup worktree environment
+ls -a ..
+
+# 2. Create the test file
+mkdir -p tests
+cat <<EOF > tests/test_recommendations.py
+from unittest.mock import patch
+from src.recommendations import get_recommendations
+
+def test_get_recommendations_uses_correct_parameter_name():
+    with patch('src.recommendations.search_similar_examples') as mock_search:
+        mock_search.return_value = []
+        get_recommendations(query="test", count=5)
+        assert 'k' in mock_search.call_args.kwargs
+EOF
+
+# 3. Run the test
+pytest tests/test_recommendations.py -v
+```'''
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "from unittest.mock import patch" in result[0]
+        assert "def test_get_recommendations_uses_correct_parameter_name():" in result[0]
+        assert "mock_search.call_args.kwargs" in result[0]
+
+    def test_backward_compat_no_newline_after_python(self) -> None:
+        """Test edge case: code on same line as language identifier (rare but valid)."""
+        text = "```python def test(): assert True```"
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "def test():" in result[0]
+
+    def test_py_pattern_does_not_match_python(self) -> None:
+        """Ensure ```py pattern doesn't incorrectly match ```python blocks."""
+        text = "```python\nfrom os import path\n```"
+        result = extract_python_code_blocks(text)
+        # Should get exactly 1 match (from python pattern), not 2
+        assert len(result) == 1
+        assert "from os import path" in result[0]
 
 
 def analyze_test_code_for_mocking_patterns(code: str) -> dict:

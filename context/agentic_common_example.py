@@ -9,7 +9,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.agentic_common import get_available_agents, run_agentic_task
+from pdd.agentic_common import get_available_agents, run_agentic_task, STEP_TIMEOUTS
 
 
 def main() -> None:
@@ -18,6 +18,7 @@ def main() -> None:
     1. Discover available agent providers (Claude, Gemini, Codex).
     2. Run a headless agentic task to create a file.
     3. Parse the results including cost and provider used.
+    4. Use step-specific timeouts for orchestrated workflows.
     """
     
     # 1. Setup the environment
@@ -78,6 +79,17 @@ def main() -> None:
             print("-" * 40)
         else:
             print(f"\n[Verification] Task succeeded, but file '{target_file.name}' was not found.")
+
+    # 7. Demonstrate STEP_TIMEOUTS usage (Issue #261)
+    # When orchestrating multi-step workflows, use step-specific timeouts:
+    print("\n--- Step Timeouts (for orchestrated workflows) ---")
+    print(f"STEP_TIMEOUTS: {STEP_TIMEOUTS}")
+    # Example: For step 7 (complex generation), use a longer timeout:
+    # success, output, cost, provider = run_agentic_task(
+    #     instruction="Generate comprehensive tests",
+    #     cwd=output_dir,
+    #     timeout=STEP_TIMEOUTS.get(7),  # 1000 seconds for complex steps
+    # )
 
 
 if __name__ == "__main__":

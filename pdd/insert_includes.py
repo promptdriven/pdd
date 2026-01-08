@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import Callable, Optional, Tuple
 from pathlib import Path
 from rich import print
@@ -62,7 +63,7 @@ def insert_includes(
         except FileNotFoundError:
             if verbose:
                 print(f"[yellow]CSV file {csv_filename} not found. Creating empty CSV.[/yellow]")
-            csv_content = "full_path,file_summary,date\n"
+            csv_content = "full_path,file_summary,content_hash\n"
             Path(csv_filename).write_text(csv_content)
 
         # Step 3: Preprocess the prompt template
