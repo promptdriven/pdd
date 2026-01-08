@@ -5,7 +5,7 @@
   It handles job submission, tracking, execution, and cancellation
   with support for concurrent job limits and WebSocket streaming integration.
 
-<include>context/python_preamble.prompt</include>
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
 
 % Documentation References
   - asyncio: https://docs.python.org/3/library/asyncio.html
@@ -57,12 +57,12 @@
      - Use locks where needed
 
 % Dependencies
-  <job_manager_example>
-  <include>context/job_manager_example.py</include>
-  </job_manager_example>
-  <models_note>
-  Use JobStatus enum from pdd/server/models.py
-  </models_note>
+  <server.jobs><include>context/job_manager_example.py</include></server.jobs>
+  <server.click_executor><include>context/click_executor_example.py</include></server.click_executor>
+  <server.models><include>context/models_example.py</include></server.models>
+  <server.executor><include>context/server/executor_example.py</include></server.executor>
+  <server.models><include>context/server/models_example.py</include></server.models>
+  <server.stream><include>context/server/stream_example.py</include></server.stream>
 
 % Instructions
   - Use dataclass for Job (not Pydantic - internal only)

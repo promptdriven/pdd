@@ -5,7 +5,7 @@
   It enables the web frontend to browse, read, and write files
   in the project directory with proper security validation.
 
-<include>context/python_preamble.prompt</include>
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
 
 % Documentation References
   - FastAPI Routers: https://fastapi.tiangolo.com/tutorial/bigger-applications/
@@ -53,13 +53,15 @@
 
 % Dependencies
   <fastapi_example>
-  <include>context/fastapi_example.py</include>
+  <server.main><include>context/fastapi_example.py</include></server.main>
   </fastapi_example>
+   Use models from pdd/server/models.py: FileMetadata, FileTreeNode, FileContent, WriteFileRequest, WriteResult
   <models_note>
-  Use models from pdd/server/models.py: FileMetadata, FileTreeNode, FileContent, WriteFileRequest, WriteResult
+  <server.models><include>context/models_example.py</include></server.models>
   </models_note>
   <security_note>
   Use PathValidator from pdd/server/security.py via dependency injection
+   <server.security><include>context/security_example.py</include></server.security>
   </security_note>
 
 % Instructions

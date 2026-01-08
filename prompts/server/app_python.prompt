@@ -54,14 +54,24 @@
 
 % Dependencies
   <fastapi_example>
-  <include>context/fastapi_example.py</include>
+  <pdd.server.app><include>context/fastapi_example.py</include></pdd.server.app>
   </fastapi_example>
-  <models_example>
   Models are defined in pdd/server/models.py - use ServerConfig, ServerStatus
+  <models_example>
+  <pdd.server.models><include>context/models_example.py</include></pdd.server.models>
   </models_example>
+   Security utilities in pdd/server/security.py - use PathValidator, configure_cors
   <security_example>
-  Security utilities in pdd/server/security.py - use PathValidator, configure_cors
+   <pdd.server.security><include>context/security_example.py</include></pdd.server.security>
   </security_example>
+  Job Manager utilities:
+  <job_manager_example>
+  <pdd.server.job_manager><include>context/job_manager_example.py</include></pdd.server.job_manager>
+  </job_manager_example>
+  WebSocket utilities:
+  <websocket_example>
+  <pdd.server.websocket><include>context/websocket_example.py</include></pdd.server.websocket>
+  </websocket_example>
 
 % Instructions
   - Use relative imports for server submodules

@@ -61,14 +61,12 @@
 
 % Dependencies
   <click_executor_example>
-  <include>context/click_executor_example.py</include>
+  <server.executor><include>context/click_executor_example.py</include></server.executor>
   </click_executor_example>
-  <cli_reference>
   Reference pdd/core/cli.py for OutputCapture pattern and ctx.obj structure
+  <cli_reference>
+  <core.cli><include>context/core/cli_example.py</include></core.cli>
   </cli_reference>
-  <sync_tui_reference>
-  Reference pdd/sync_tui.py for TUIStdinRedirector pattern
-  </sync_tui_reference>
 
 % Instructions
   - Use sys.stdout/stderr redirection for capture

@@ -38,7 +38,7 @@
      - {"type": "error", "message": "...", "traceback": "..."}
      - {"type": "file_change", "path": "...", "event": "modified"}
 
-     Client -> Server:
+     Client -> Client:
      - {"type": "cancel"}
      - {"type": "input", "data": "user input"}
 
@@ -54,12 +54,13 @@
      - Job not found -> close with error code
 
 % Dependencies
-  <websocket_example>
-  <include>context/websocket_example.py</include>
-  </websocket_example>
+   Use models from pdd/server/models.py: WSMessage, StdoutMessage, ProgressMessage, etc.
   <models_note>
-  Use models from pdd/server/models.py: WSMessage, StdoutMessage, ProgressMessage, etc.
+  <include>context/models_example.py</include>
   </models_note>
+
+  Use job manager for job status and control:
+  <server.jobs><include>context/job_manager_example.py</include></server.jobs>
 
 % Instructions
   - Create router with tags=["websocket"]

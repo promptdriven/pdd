@@ -52,13 +52,15 @@
 
 % Dependencies
   <websocket_example>
-  <include>context/websocket_example.py</include>
+  <server.websocket><include>context/websocket_example.py</include></server.websocket>
   </websocket_example>
-  <job_manager_note>
   Use JobManager and JobCallbacks from pdd/server/jobs.py
+  <job_manager_note>
+  <server.jobs><include>context/job_manager_example.py</include></server.jobs>
   </job_manager_note>
-  <cli_reference>
   Reference pdd/core/cli.py OutputCapture for ANSI stripping pattern
+  <cli_reference>
+  <core.cli><include>context/core/cli_example.py</include></core.cli>
   </cli_reference>
 
 % Instructions

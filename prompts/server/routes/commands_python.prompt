@@ -56,14 +56,18 @@
 
 % Dependencies
   <fastapi_example>
-  <include>context/fastapi_example.py</include>
+  <pdd.server.main><include>context/fastapi_example.py</include></pdd.server.main>
   </fastapi_example>
   <job_manager_example>
-  <include>context/job_manager_example.py</include>
+  <pdd.server.jobs><include>context/job_manager_example.py</include></pdd.server.jobs>
   </job_manager_example>
-  <models_note>
   Use models from pdd/server/models.py: CommandRequest, JobHandle, JobResult, JobStatus
+  <models_note>
+  <pdd.server.models><include>context/models_example.py</include></pdd.server.models>
   </models_note>
+  <cli_reference>
+  <pdd.cli><include>context/cli_example.py</include></pdd.cli>
+  </cli_reference>
 
 % Instructions
   - Create router with prefix="/api/v1/commands", tags=["commands"]

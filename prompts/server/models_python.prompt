@@ -48,9 +48,9 @@
      - Enums should serialize to string values
 
 % Dependencies
-  <fastapi_example>
-  <include>context/fastapi_example.py</include>
-  </fastapi_example>
+  <server.fastapi><include>context/fastapi_example.py</include></server.fastapi>
+  <server.job_manager><include>context/job_manager_example.py</include></server.job_manager>
+  <server.websocket><include>context/websocket_example.py</include></server.websocket>
 
 % Instructions
   - Use Pydantic v2 syntax (model_dump, field_validator, etc.)
