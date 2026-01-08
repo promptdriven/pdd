@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.105"
+version = "0.0.106"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -58,11 +58,7 @@ dependencies = [
     "python-dotenv==1.1.0",
     "PyYAML==6.0.1",
     "jsonschema==4.23.0",
-    "z3-solver",
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-    "websockets>=13.0",
-    "watchdog>=4.0.0"]
+    "z3-solver"]
 requires-python = ">=3.12"
 
 [project.urls]
@@ -103,7 +99,7 @@ dev = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.0.105"
+version = "0.0.106"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
