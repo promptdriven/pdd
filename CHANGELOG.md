@@ -1,14 +1,59 @@
+## v0.0.105 (2026-01-07)
+
+### Feat
+
+- add 'slow' marker to pytest configuration
+- add JSON metadata files for Python test results and configuration updates
+- add JSON metadata files for Python test results and configuration
+
+### Fix
+
+- improve CHANGELOG.md update process
+- add missing timeout parameters and false positive detection (#261)
+- prevent cloud routing in unit tests when cloud credentials present
+- enable cloud mode auto-detection for injected JWT tokens
+- enable cloud hybrid mode by default for verify loop
+
 ## v0.0.104 (2026-01-06)
 
 ### Feat
 
-- add cloud execution support for llm_invoke
+- **Cloud Execution for `llm_invoke` (PR #249):** Added cloud-first execution with automatic local fallback. Key changes:
+  - Add three new exception classes: `CloudFallbackError` (recoverable), `CloudInvocationError` (non-recoverable), `InsufficientCreditsError` (no fallback)
+  - Add `use_cloud` parameter to `llm_invoke()`: None (auto-detect), True (force cloud), False (force local)
+  - Implement `_llm_invoke_cloud()` to route LLM calls through `/llmInvoke` endpoint
+  - Add `_pydantic_to_json_schema()` and `_validate_with_pydantic()` for cloud transport
+  - Propagate `--local` CLI flag via `PDD_FORCE_LOCAL` environment variable
+  - Graceful fallback to local execution on cloud errors (except insufficient credits)
 
 ### Fix
 
-- prevent duplicate sync PRs by using fixed branch name
-- align ExtractedCode schema with extract_code_LLM prompt
-- lower EXTRACTION_STRENGTH from 0.75 to 0.5 to prevent Opus usage
+- **Prevent Duplicate Sync PRs:** Use fixed branch name (`pdd/sync-from-public`) instead of unique run_id-based names. Force-push to update existing branch and skip PR creation if one already exists. Prevents accumulation of duplicate sync PRs (was 8+ open).
+
+- **Align ExtractedCode Schema with Prompt:** Added `focus` and `explanation` fields to `ExtractedCode` Pydantic model with default values. The `extract_code_LLM.prompt` asks for 3 JSON fields but the model only had 1, causing Gemini Flash to embed extra fields inside `extracted_code` string, resulting in invalid Python syntax and JSON markers leaking into code files.
+
+- **Lower EXTRACTION_STRENGTH from 0.75 to 0.5:** At strength=0.75, target ELO was ~1458.5, causing Claude Opus (ELO 1465) to be selected for extraction/postprocessing. Lowering to 0.5 selects gemini-3-flash-preview (ELO 1430) instead, reducing costs from $5/$25 to $0.50/$3 per M tokens.
+
+- **Narrow Console Boundary Bug (Issue #220, PR #227):** Fixed IndexError in `sync_animation.py` when console width is narrow (<=44 columns). The bug was an off-by-one boundary error in `_draw_connecting_lines_and_arrows()` where `max_x` could equal `console_width`, causing out-of-bounds array access.
+
+### Tests
+
+- Added 355+ lines of cloud execution tests in `test_llm_invoke.py` covering exception classes, Pydantic schema conversion, cloud execution paths (force local, force cloud, fallback), insufficient credits handling, and cloud detection.
+- Added 185 lines of narrow console boundary tests in `test_narrow_console_boundary.py` (6 failing tests at widths 20-44, 2 passing at widths 45+).
+- Added 91 lines of ExtractedCode schema tests in `test_postprocess.py` covering focus/explanation fields, JSON leakage prevention, and optional field validation.
+- Added 44 lines of retry logic for flakey tests in `test_cmd_test_main.py` and `test_fix_main.py`.
+- Added 433 lines of step 7 prompt tests in `test_agentic_bug_step7_prompt.py` for caller-mocking guidance (Issue #247).
+
+### Docs
+
+- Updated `postprocess_python.prompt` to reflect ExtractedCode schema changes.
+- Updated `cli_python.prompt` with PDD_FORCE_LOCAL documentation.
+- Updated `cloud_python.prompt` with llmInvoke endpoint.
+- Updated `llm_invoke_python.prompt` with use_cloud parameter and cloud execution specifications.
+- Rewrote `cli_example.py` with comprehensive CLI usage examples (430 lines).
+- Rewrote `llm_invoke_example.py` with cleaner examples showing structured output, batch processing, and reasoning features (271 lines).
+- Updated `agentic_bug_step7_generate_LLM.prompt` with caller-mocking guidance (20 lines added).
+- Updated `agentic_bug_step9_pr_LLM.prompt` with PR description improvements.
 
 ## v0.0.103 (2026-01-05)
 

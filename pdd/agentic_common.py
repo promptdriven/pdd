@@ -42,6 +42,11 @@ STEP_TIMEOUTS: Dict[int, float] = {
     9: 240.0,  # Final Verify
 }
 
+# Issue #261: False positive detection
+# Minimum output length to consider a response as legitimate work
+# Responses shorter than this with $0.00 cost are likely false positives
+MIN_VALID_OUTPUT_LENGTH: int = 50
+
 
 @dataclass(frozen=True)
 class TokenPricing:
@@ -912,6 +917,19 @@ def run_agentic_task(
             total_cost += cost
 
             if success:
+                # Issue #261: Detect false positives (zero cost + minimal output)
+                # This can happen when a provider returns returncode 0 but didn't
+                # actually do any work (e.g., fallback provider short-circuits)
+                if cost == 0.0 and len(message.strip()) < MIN_VALID_OUTPUT_LENGTH:
+                    false_positive_msg = (
+                        f"Provider '{provider}' returned success but appears to be a "
+                        f"false positive (cost=$0.00, output length={len(message.strip())} chars). "
+                        "Treating as failure and trying next provider."
+                    )
+                    log_error(false_positive_msg, verbose=verbose, quiet=quiet, label=label)
+                    provider_errors.append(f"{provider}: {false_positive_msg}")
+                    continue  # Try next provider
+
                 log_info(
                     f"Provider '{provider}' completed successfully. "
                     f"Estimated cost: ${cost:.6f}",

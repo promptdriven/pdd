@@ -77,7 +77,8 @@ def test_vertex_ai_claude_opus_structured_output_integration():
                 strength=0.5,
                 temperature=0.1,
                 output_pydantic=SimpleOutput,
-                verbose=True
+                verbose=True,
+                use_cloud=False,  # Force local execution to test Vertex AI directly
             )
     finally:
         # Restore cache
@@ -136,7 +137,8 @@ def test_vertex_ai_deepseek_structured_output_integration():
             strength=0.5,
             temperature=0.1,
             output_pydantic=SimpleOutput,
-            verbose=True
+            verbose=True,
+            use_cloud=False,  # Force local execution to test Vertex AI directly
         )
 
     # Verify we got a valid response
@@ -225,7 +227,8 @@ def test_opus_validation_failure_triggers_fallback_integration():
                 strength=1.0,  # Highest strength = most expensive model first (Opus)
                 temperature=0.1,
                 output_pydantic=CodeFix,
-                verbose=True
+                verbose=True,
+                use_cloud=False,  # Force local execution to test Vertex AI directly
             )
     finally:
         # Restore cache

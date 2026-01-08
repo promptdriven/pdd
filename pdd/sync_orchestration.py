@@ -640,24 +640,23 @@ def _run_example_with_error_detection(
     # Check for errors in output
     has_errors, error_summary = _detect_example_errors(combined)
 
-    # Determine result:
-    # - Errors in output → failure
+    # Determine result (check returncode first, then use error detection for signal-killed):
+    # - Zero exit code → success (trust the exit code)
     # - Positive exit code (process failed normally, e.g., sys.exit(1)) → failure
     # - Negative exit code (killed by signal, e.g., -9 for SIGKILL) → check output
-    # - Zero exit code → success
     #
     # IMPORTANT: When we kill the process after timeout, returncode is negative
     # (the signal number). This is NOT a failure if output has no errors.
-    if has_errors:
-        return 1, stdout, stderr  # Errors detected in output
+    if proc.returncode is not None and proc.returncode == 0:
+        return 0, stdout, stderr  # Clean exit = success (trust exit code)
     elif proc.returncode is not None and proc.returncode > 0:
         return proc.returncode, stdout, stderr  # Process exited with error
     else:
-        # Success cases:
-        # - returncode == 0 (clean exit)
-        # - returncode < 0 (killed by signal, but no errors in output)
-        # - returncode is None (shouldn't happen after wait, but safe fallback)
-        return 0, stdout, stderr
+        # Killed by signal (returncode < 0 or None) - use error detection
+        # Server-style examples may run until timeout, need to check output
+        if has_errors:
+            return 1, stdout, stderr  # Errors detected in output
+        return 0, stdout, stderr  # No errors, server was running fine
 
 
 def _execute_tests_and_create_run_report(
@@ -1429,11 +1428,13 @@ def sync_orchestration(
                                             # Bug #156: Run pytest on ALL matching test files
                                             test_files = pdd_files.get('test_files', [pdd_files['test']])
                                             pytest_args = [python_executable, '-m', 'pytest'] + [str(f) for f in test_files] + ['-v', '--tb=short']
+                                            # Bug fix: Run from project root (no cwd), matching _run_tests_and_report pattern
+                                            # Using cwd=test.parent with paths like 'backend/tests/test_foo.py' causes
+                                            # pytest to look for 'backend/tests/backend/tests/test_foo.py' (not found)
                                             test_result = subprocess.run(
                                                 pytest_args,
                                                 capture_output=True, text=True, timeout=300,
-                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True,
-                                                cwd=str(pdd_files['test'].parent)
+                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
                                             )
                                         else:
                                             # Use shell command for non-Python

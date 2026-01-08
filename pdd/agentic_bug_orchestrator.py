@@ -7,7 +7,7 @@ from typing import List, Tuple, Optional, Dict, Any
 
 from rich.console import Console
 
-from .agentic_common import run_agentic_task
+from .agentic_common import run_agentic_task, STEP_TIMEOUTS
 from .load_prompt_template import load_prompt_template
 
 # Initialize console
@@ -221,7 +221,8 @@ def run_agentic_bug_orchestrator(
             cwd=current_cwd,
             verbose=verbose,
             quiet=quiet,
-            label=f"step{step_num}"
+            label=f"step{step_num}",
+            timeout=STEP_TIMEOUTS.get(step_num),
         )
 
         # Update tracking

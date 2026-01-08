@@ -653,6 +653,197 @@ def test_verbose_flag_propagation(
     )
 
 
+# -----------------------------------------------------------------------------
+# Tests for Hybrid Cloud Mode (Bug Fix)
+# -----------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_context_cloud_enabled(tmp_path):
+    """Creates a mock Click context with cloud enabled (local=False)."""
+    ctx = MagicMock(spec=click.Context)
+    ctx.obj = {
+        'strength': DEFAULT_STRENGTH,
+        'temperature': DEFAULT_TEMPERATURE,
+        'time': DEFAULT_TIME,
+        'force': False,
+        'quiet': False,
+        'verbose': False,
+        'local': False,  # Cloud/hybrid mode enabled
+    }
+    ctx.params = {}
+    return ctx
+
+
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_loop_mode_hybrid_cloud_enabled_by_default(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context_cloud_enabled, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify loop mode passes use_cloud=True when local=False (hybrid mode enabled by default).
+
+    This tests the bug fix where hybrid mode (local verification + cloud LLM calls)
+    should be enabled by default when the user hasn't specified --local.
+    """
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Final program',
+        'final_code': 'Final code',
+        'total_attempts': 2,
+        'total_cost': 0.5,
+        'model_name': 'cloud-model'
+    }
+
+    result = fix_verification_main(
+        ctx=mock_context_cloud_enabled,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=True,
+        verification_program=setup_files["verifier"]
+    )
+
+    mock_fix_loop.assert_called_once()
+    # Key assertion: use_cloud=True should be passed for hybrid mode
+    assert mock_fix_loop.call_args[1].get('use_cloud') is True, \
+        "use_cloud=True should be passed when local=False (hybrid mode)"
+    assert result[0] is True
+
+
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_loop_mode_local_flag_disables_cloud(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify loop mode does NOT pass use_cloud when local=True.
+
+    When the user specifies --local, all execution should stay local,
+    including LLM calls in the verification loop.
+    """
+    # mock_context already has local=True
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Final program',
+        'final_code': 'Final code',
+        'total_attempts': 1,
+        'total_cost': 0.3,
+        'model_name': 'local-model'
+    }
+
+    result = fix_verification_main(
+        ctx=mock_context,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=True,
+        verification_program=setup_files["verifier"]
+    )
+
+    mock_fix_loop.assert_called_once()
+    # Key assertion: use_cloud should NOT be in kwargs when local=True
+    assert 'use_cloud' not in mock_fix_loop.call_args[1], \
+        "use_cloud should not be passed when local=True"
+    assert result[0] is True
+
+
+@patch.dict(os.environ, {'PDD_CLOUD_ONLY': '1'})
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_loop_mode_cloud_only_env_enables_cloud(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context_cloud_enabled, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify loop mode passes use_cloud=True when PDD_CLOUD_ONLY=1.
+
+    When PDD_CLOUD_ONLY is set, hybrid mode should be enabled for the loop.
+    """
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Final program',
+        'final_code': 'Final code',
+        'total_attempts': 1,
+        'total_cost': 0.4,
+        'model_name': 'cloud-model'
+    }
+
+    result = fix_verification_main(
+        ctx=mock_context_cloud_enabled,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=True,
+        verification_program=setup_files["verifier"]
+    )
+
+    mock_fix_loop.assert_called_once()
+    # Key assertion: use_cloud=True should be passed when PDD_CLOUD_ONLY=1
+    assert mock_fix_loop.call_args[1].get('use_cloud') is True, \
+        "use_cloud=True should be passed when PDD_CLOUD_ONLY=1"
+    assert result[0] is True
+
+
+@patch.dict(os.environ, {'PDD_CLOUD_ONLY': '1'})
+@patch('pdd.fix_verification_main.fix_verification_errors_loop')
+@patch('pdd.fix_verification_main.fix_verification_errors')
+@patch('pdd.fix_verification_main.run_program')
+@patch('pdd.fix_verification_main.construct_paths')
+def test_loop_mode_local_flag_overrides_cloud_only(
+    mock_construct, mock_run_prog, mock_fix_errors, mock_fix_loop,
+    mock_context, setup_files, mock_construct_paths_response, tmp_path
+):
+    """Verify --local flag takes priority over PDD_CLOUD_ONLY env var.
+
+    When user specifies --local, it should override the cloud-only env var.
+    """
+    # mock_context has local=True
+    mock_construct.return_value = mock_construct_paths_response
+    mock_fix_loop.return_value = {
+        'success': True,
+        'final_program': 'Final program',
+        'final_code': 'Final code',
+        'total_attempts': 1,
+        'total_cost': 0.2,
+        'model_name': 'local-model'
+    }
+
+    result = fix_verification_main(
+        ctx=mock_context,
+        prompt_file=setup_files["prompt"],
+        code_file=setup_files["code"],
+        program_file=setup_files["program"],
+        output_results=None,
+        output_code=None,
+        output_program=None,
+        loop=True,
+        verification_program=setup_files["verifier"]
+    )
+
+    mock_fix_loop.assert_called_once()
+    # Key assertion: local=True should override PDD_CLOUD_ONLY
+    assert 'use_cloud' not in mock_fix_loop.call_args[1], \
+        "local=True should override PDD_CLOUD_ONLY env var"
+    assert result[0] is True
+
+
 @patch('pdd.fix_verification_main.fix_verification_errors_loop')
 @patch('pdd.fix_verification_main.fix_verification_errors')
 @patch('pdd.fix_verification_main.run_program')
