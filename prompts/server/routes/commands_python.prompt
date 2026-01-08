@@ -1,0 +1,77 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/commands.py`.
+
+% Role & Scope
+  This module provides REST API endpoints for PDD command execution.
+  It enables the web frontend to submit, monitor, and cancel CLI commands
+  through asynchronous job management.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - FastAPI Background Tasks: https://fastapi.tiangolo.com/tutorial/background-tasks/
+  - Click Programmatic Invocation: https://click.palletsprojects.com/en/8.1.x/api/#click.Context.invoke
+  - asyncio: https://docs.python.org/3/library/asyncio.html
+
+% Requirements
+  1. **POST /commands/execute**:
+     - Body: CommandRequest (command, args, options)
+     - Validates command is in allowed list
+     - Submits job to JobManager
+     - Returns: JobHandle with job_id and status "queued"
+     - Non-blocking - returns immediately
+
+  2. **GET /commands/jobs/{job_id}**:
+     - Path param: job_id
+     - Returns: JobResult with current status, result, error, cost
+     - 404 if job not found
+
+  3. **POST /commands/jobs/{job_id}/cancel**:
+     - Path param: job_id
+     - Attempts to cancel running job
+     - Returns: {"cancelled": bool, "message": str}
+     - 404 if job not found
+
+  4. **GET /commands/history**:
+     - Query param: limit (default 50)
+     - Query param: offset (default 0)
+     - Query param: status (optional filter)
+     - Returns: List of JobResult, ordered by created_at desc
+
+  5. **GET /commands/available**:
+     - Returns: List of available command names with descriptions
+     - Helps frontend build command UI
+
+  6. **Allowed commands** (MVP):
+     - sync: Synchronize prompts with code and tests
+     - update: Update prompts based on code changes
+     - bug: Generate unit test from bug (agentic mode)
+     - generate: Generate code from prompt
+     - test: Generate unit tests
+     - fix: Fix code based on test errors
+
+  7. **Error handling**:
+     - 400 for invalid command name
+     - 404 for unknown job_id
+     - 409 for job already completed (on cancel)
+
+% Dependencies
+  <fastapi_example>
+  <include>context/fastapi_example.py</include>
+  </fastapi_example>
+  <job_manager_example>
+  <include>context/job_manager_example.py</include>
+  </job_manager_example>
+  <models_note>
+  Use models from pdd/server/models.py: CommandRequest, JobHandle, JobResult, JobStatus
+  </models_note>
+
+% Instructions
+  - Create router with prefix="/api/v1/commands", tags=["commands"]
+  - Use Depends() for JobManager injection
+  - Command validation against whitelist
+  - Include command descriptions from Click command help
+  - Async job submission via JobManager.submit()
+
+% Deliverables
+  - Code: `pdd/server/routes/commands.py`
+  - Export: `commands_router`

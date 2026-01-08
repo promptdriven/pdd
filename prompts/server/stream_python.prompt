@@ -1,0 +1,73 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/stream.py`.
+
+% Role & Scope
+  This module provides WebSocket streaming utilities for the PDD server.
+  It bridges command execution output to WebSocket connections and handles
+  interactive input requests from CLI commands.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - FastAPI WebSockets: https://fastapi.tiangolo.com/advanced/websockets/
+  - asyncio Queue: https://docs.python.org/3/library/asyncio-queue.html
+  - Rich Console: https://rich.readthedocs.io/en/stable/console.html
+
+% Requirements
+  1. **OutputStreamer class**:
+     - __init__(manager: ConnectionManager, job_id: str, strip_ansi: bool)
+     - write_stdout(text) -> None: Stream stdout to connected clients
+     - write_stderr(text) -> None: Stream stderr to connected clients
+     - send_progress(current, total, message) -> None
+     - send_complete(success, result, cost) -> None
+     - send_error(message, traceback) -> None
+     - _strip_ansi_codes(text) -> str: Remove ANSI escape sequences
+
+  2. **WebSocketInputHandler class**:
+     - __init__(manager: ConnectionManager, conn: WebSocketConnection, timeout: float)
+     - request_input(prompt, password) -> str: Request input from client
+     - handle_message(message) -> bool: Process client message
+     - Uses asyncio.Queue for input responses
+     - Raises EOFError on timeout
+
+  3. **JobStreamBridge class**:
+     - Connects JobManager callbacks to WebSocket streaming
+     - __init__(manager: ConnectionManager, job_manager: JobManager)
+     - setup_job_streaming(job_id) -> None: Wire up callbacks
+     - Translates job events to WebSocket messages
+
+  4. **ConsoleCapture class**:
+     - Captures Rich Console output for streaming
+     - Compatible with existing pdd modules that use Console
+     - Forwards to OutputStreamer
+
+  5. **ANSI handling**:
+     - Strip ANSI codes for clean web display
+     - Optionally preserve raw output with codes
+     - Pattern: r'\x1b\[[0-9;]*m'
+
+  6. **Error handling**:
+     - Graceful handling of disconnected clients
+     - Queue timeout handling
+     - No exceptions on send to closed connection
+
+% Dependencies
+  <websocket_example>
+  <include>context/websocket_example.py</include>
+  </websocket_example>
+  <job_manager_note>
+  Use JobManager and JobCallbacks from pdd/server/jobs.py
+  </job_manager_note>
+  <cli_reference>
+  Reference pdd/core/cli.py OutputCapture for ANSI stripping pattern
+  </cli_reference>
+
+% Instructions
+  - All methods should be async
+  - Use re module for ANSI code stripping
+  - Buffer partial lines before sending (line-based streaming)
+  - Include timestamps in all messages
+  - Clean up resources on job completion
+
+% Deliverables
+  - Code: `pdd/server/stream.py`
+  - Export: OutputStreamer, WebSocketInputHandler, JobStreamBridge
