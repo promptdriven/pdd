@@ -17,7 +17,7 @@ Documentation references:
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Awaitable
 from uuid import uuid4
@@ -47,7 +47,7 @@ class Job:
     result: Optional[Any] = None
     error: Optional[str] = None
     cost: float = 0.0
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
@@ -149,7 +149,7 @@ class JobManager:
         """Execute a job with semaphore control."""
         async with self._semaphore:
             job.status = JobStatus.RUNNING
-            job.started_at = datetime.now(timezone.utc)
+            job.started_at = datetime.utcnow()
 
             try:
                 # Check for cancellation before starting
@@ -174,7 +174,7 @@ class JobManager:
                 job.error = str(e)
                 job.status = JobStatus.FAILED
             finally:
-                job.completed_at = datetime.now(timezone.utc)
+                job.completed_at = datetime.utcnow()
 
     async def _default_executor(self, job: Job) -> Dict[str, Any]:
         """
@@ -237,7 +237,7 @@ class JobManager:
         Returns:
             Number of jobs removed
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.utcnow()
         to_remove = []
 
         for job_id, job in self._jobs.items():
