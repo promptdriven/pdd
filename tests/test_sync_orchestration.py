@@ -3741,3 +3741,120 @@ def test_prefix_pytest_runs_from_project_root_not_test_directory(orchestration_f
             f"This causes paths like 'backend/tests/test_foo.py' to fail when " \
             f"cwd is 'backend/tests' (pytest looks for 'backend/tests/backend/tests/test_foo.py'). " \
             f"Got cwd={call['kwargs'].get('cwd')}"
+
+
+class TestExampleVerificationConsistency:
+    """
+    Regression tests for example verification consistency in sync_orchestration.
+
+    crash_main (fix_code_loop.py:476) uses run_process_with_output() which:
+    1. Uses sys.executable (not 'python' from PATH)
+    2. Does NOT set cwd (inherits from pdd invocation directory)
+
+    Example verification in sync_orchestration.py must be consistent to avoid
+    infinite crash loops when examples depend on cwd-sensitive imports.
+    """
+
+    def test_run_example_with_error_detection_cwd_is_optional(self):
+        """
+        Bug fix: cwd parameter must be optional to allow inheriting parent's cwd.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        sig = inspect.signature(sync_mod._run_example_with_error_detection)
+        cwd_param = sig.parameters.get('cwd')
+
+        assert cwd_param is not None, "Should have cwd parameter"
+        assert cwd_param.default is not inspect.Parameter.empty, (
+            "REGRESSION BUG: cwd should have a default value (None) to allow "
+            "inheriting parent process's working directory"
+        )
+
+    def test_initial_crash_check_does_not_set_cwd(self):
+        """
+        Bug fix: Initial crash check must NOT set cwd to example's parent.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find all _run_example_with_error_detection calls in crash section
+        # and verify none have cwd=...example...
+        import re
+        crash_section_match = re.search(
+            r"elif operation == 'crash':.*?(?=elif operation ==|$)",
+            source,
+            re.DOTALL
+        )
+        assert crash_section_match, "Should find crash operation section"
+        crash_section = crash_section_match.group()
+
+        # Check that _run_example_with_error_detection calls don't have cwd with 'example'
+        has_bad_cwd = bool(re.search(
+            r"_run_example_with_error_detection\([^)]*cwd=.*example",
+            crash_section
+        ))
+
+        assert not has_bad_cwd, (
+            "REGRESSION BUG: Initial crash check should NOT set cwd to example's parent. "
+            "This breaks imports that rely on running from project root."
+        )
+
+    def test_post_crash_verification_does_not_set_cwd(self):
+        """
+        Bug fix: Post-crash verification must NOT set cwd to example's parent.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find post-crash verification section
+        import re
+        post_crash_match = re.search(
+            r"if success and operation == 'crash':.*?(?=if success and operation|if not success|$)",
+            source,
+            re.DOTALL
+        )
+        assert post_crash_match, "Should find post-crash verification section"
+        post_crash_section = post_crash_match.group()
+
+        has_bad_cwd = bool(re.search(
+            r"_run_example_with_error_detection\([^)]*cwd=.*example",
+            post_crash_section
+        ))
+
+        assert not has_bad_cwd, (
+            "REGRESSION BUG: Post-crash verification should NOT set cwd to example's parent. "
+            "This breaks imports that rely on running from project root."
+        )
+
+    def test_initial_crash_check_uses_sys_executable(self):
+        """
+        Bug fix: Initial crash check must use sys.executable, not get_run_command_for_file.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        import re
+        crash_section_match = re.search(
+            r"elif operation == 'crash':.*?(?=elif operation ==|$)",
+            source,
+            re.DOTALL
+        )
+        crash_section = crash_section_match.group()
+
+        # Should have sys.executable, not get_run_command_for_file
+        has_sys_executable = 'sys.executable' in crash_section
+        has_get_run_command = 'get_run_command_for_file' in crash_section
+
+        assert has_sys_executable, (
+            "REGRESSION BUG: Initial crash check should use sys.executable"
+        )
+        assert not has_get_run_command, (
+            "REGRESSION BUG: Initial crash check should NOT use get_run_command_for_file"
+        )

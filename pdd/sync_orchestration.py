@@ -579,7 +579,7 @@ def _try_auto_fix_import_error(
 def _run_example_with_error_detection(
     cmd_parts: list[str],
     env: dict,
-    cwd: str,
+    cwd: Optional[str] = None,
     timeout: int = 60
 ) -> tuple[int, str, str]:
     """
@@ -1244,22 +1244,15 @@ def sync_orchestration(
                                     # Remove TUI-specific env vars that might contaminate subprocess
                                     for var in ['FORCE_COLOR', 'COLUMNS']:
                                         env.pop(var, None)
-                                    # Get language-appropriate run command from language_format.csv
-                                    # Bug fix: Use .resolve() to get absolute path, avoiding doubled paths
-                                    # when cwd is set to the parent directory
+                                    # Bug fix: Use sys.executable to match crash_main's Python interpreter
+                                    # and do NOT set cwd - inherit from pdd invocation directory
+                                    # to match crash_main behavior. Setting cwd to example's parent breaks imports.
                                     example_path = str(pdd_files['example'].resolve())
-                                    run_cmd = get_run_command_for_file(example_path)
-                                    if run_cmd:
-                                        # Use the language-specific interpreter (e.g., node for .js)
-                                        cmd_parts = run_cmd.split()
-                                    else:
-                                        # Fallback to Python if no run command found
-                                        cmd_parts = ['python', example_path]
+                                    cmd_parts = [sys.executable, example_path]
                                     # Use error-detection runner that handles server-style examples
                                     returncode, stdout, stderr = _run_example_with_error_detection(
                                         cmd_parts,
                                         env=env,
-                                        cwd=str(pdd_files['example'].resolve().parent),
                                         timeout=60
                                     )
 
@@ -1305,7 +1298,6 @@ def sync_orchestration(
                                         retry_returncode, retry_stdout, retry_stderr = _run_example_with_error_detection(
                                             cmd_parts,
                                             env=env,
-                                            cwd=str(pdd_files['example'].parent),
                                             timeout=60
                                         )
                                         if retry_returncode == 0:
@@ -1544,13 +1536,14 @@ def sync_orchestration(
                                  # crash_main (fix_code_loop.py:477). When both venv and conda are
                                  # active, PATH lookup for 'python' may resolve to a different
                                  # interpreter, causing infinite crash loops.
+                                 # Bug fix: Do NOT set cwd - inherit from pdd invocation directory
+                                 # to match crash_main behavior. Setting cwd to example's parent breaks imports.
                                  example_path = str(pdd_files['example'].resolve())
                                  cmd_parts = [sys.executable, example_path]
                                  # Use error-detection runner that handles server-style examples
                                  returncode, stdout, stderr = _run_example_with_error_detection(
                                      cmd_parts,
                                      env=clean_env,
-                                     cwd=str(pdd_files['example'].resolve().parent),
                                      timeout=60
                                  )
                                  # Include test_hash for staleness detection
