@@ -2311,3 +2311,35 @@ sys.exit(result.returncode)
     finally:
         # Clean up environment variable
         os.environ.pop('PDD_CLOUD_ONLY', None)
+
+
+def test_fix_errors_prompt_preserves_all_existing_tests():
+    """
+    Tests that the fix_errors_from_unit_tests LLM prompt includes explicit
+    instructions to preserve ALL existing test functions, not just the ones
+    being fixed.
+
+    This test ensures we don't regress on the bug where the LLM would drop
+    unrelated tests when fixing a subset of failing tests.
+
+    Related: Root cause was the LLM prompt instructing to write tests "in entirety"
+    without specifying that ALL original tests must be preserved.
+    """
+    from pathlib import Path
+    import pdd
+
+    # Get the path to the prompt file
+    pdd_package_dir = Path(pdd.__file__).parent
+    prompt_path = pdd_package_dir / "prompts" / "fix_errors_from_unit_tests_LLM.prompt"
+
+    assert prompt_path.exists(), f"Prompt file not found at {prompt_path}"
+
+    prompt_content = prompt_path.read_text()
+
+    # Verify the preservation instruction exists
+    assert "preserve ALL existing test functions" in prompt_content, \
+        "Prompt must instruct LLM to preserve all existing test functions"
+    assert "Do not remove, skip, or omit any test functions" in prompt_content, \
+        "Prompt must explicitly forbid removing test functions"
+    assert "every single test function from the input" in prompt_content, \
+        "Prompt must require output to include every input test function"

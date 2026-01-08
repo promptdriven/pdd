@@ -3600,3 +3600,85 @@ def test_run_example_without_resolve_fails(tmp_path, monkeypatch):
 
     # BUG: This fails with exit code 2 (file not found)
     assert returncode == 2, f"Expected bug to cause exit 2, got {returncode}"
+
+
+# --- Bug Fix: Pre-fix pytest should NOT use cwd ---
+
+def test_prefix_pytest_runs_from_project_root_not_test_directory(orchestration_fixture, tmp_path):
+    """
+    Bug fix: Pre-fix pytest should run from project root, not test directory.
+
+    When test_files contains paths like 'backend/tests/test_foo.py',
+    the subprocess should NOT use cwd='backend/tests' as that would
+    cause pytest to look for 'backend/tests/backend/tests/test_foo.py'.
+
+    This matches the pattern used by _run_tests_and_report (lines 729-731)
+    which correctly omits the cwd parameter.
+
+    Evidence from fix_errors.log:
+        ERROR: file or directory not found: backend/tests/test_generate_code.py
+        collected 0 items
+    """
+    from unittest.mock import patch, MagicMock
+
+    # Create test directory structure with paths relative to project root
+    test_dir = tmp_path / "backend" / "tests"
+    test_dir.mkdir(parents=True)
+    test_file_1 = test_dir / "test_foo.py"
+    test_file_2 = test_dir / "test_foo_0.py"
+    test_file_1.write_text("def test_pass(): pass")
+    test_file_2.write_text("def test_fail(): assert False")
+
+    # Also create required directories for sync (use exist_ok since fixture may create some)
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    (prompts_dir / "foo_python.prompt").write_text("# foo prompt")
+    src_dir = tmp_path / "backend"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "foo.py").write_text("# foo code")
+    (src_dir / "foo_example.py").write_text("# foo example")
+
+    # KEY: pdd_files contains paths like 'backend/tests/test_foo.py'
+    # (relative to project root, not the test directory)
+    orchestration_fixture['get_pdd_file_paths'].return_value = {
+        'prompt': prompts_dir / 'foo_python.prompt',
+        'code': src_dir / 'foo.py',
+        'example': src_dir / 'foo_example.py',
+        'test': test_file_1,
+        'test_files': [test_file_1, test_file_2],
+    }
+
+    # Capture subprocess.run calls including kwargs
+    subprocess_calls = []
+
+    def capture_subprocess(*args, **kwargs):
+        subprocess_calls.append({'args': args, 'kwargs': kwargs})
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = "FAILED test_foo_0.py::test_fail"
+        mock_result.stderr = ""
+        return mock_result
+
+    # Trigger fix operation
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='fix', reason='Tests failing'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_subprocess):
+        with patch('pdd.sync_orchestration.detect_host_python_executable', return_value='python'):
+            with patch('pdd.get_test_command.get_test_command_for_file', return_value='pytest'):
+                sync_orchestration(basename="foo", language="python")
+
+    # Find pytest calls
+    pytest_calls = [c for c in subprocess_calls if 'pytest' in str(c['args'])]
+    assert pytest_calls, "pytest should have been invoked"
+
+    # CRITICAL ASSERTION: pytest should NOT have cwd parameter set
+    # Current buggy code sets cwd=str(pdd_files['test'].parent) which breaks path resolution
+    for call in pytest_calls:
+        assert 'cwd' not in call['kwargs'], \
+            f"Bug: Pre-fix pytest should NOT use cwd parameter. " \
+            f"This causes paths like 'backend/tests/test_foo.py' to fail when " \
+            f"cwd is 'backend/tests' (pytest looks for 'backend/tests/backend/tests/test_foo.py'). " \
+            f"Got cwd={call['kwargs'].get('cwd')}"
