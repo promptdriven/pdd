@@ -163,6 +163,7 @@ def test_maybe_steer_operation_headless():
 
 def test_sync_app_env_isolation():
     """Verify SyncApp worker thread isolates environment variables."""
+
     def mock_worker():
         # Check if env vars are set inside the worker
         assert os.environ.get("FORCE_COLOR") == "1"
