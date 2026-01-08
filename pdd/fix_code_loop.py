@@ -215,19 +215,22 @@ def run_process_with_output(cmd_args, timeout=300):
     captured_stdout = []
     captured_stderr = []
 
-    def stream_pipe(pipe, sink, capture_list):
+    def stream_pipe(pipe, capture_list):
         while True:
             try:
-                chunk = pipe.read(1)
+                # Read a line (or chunk if line-buffered isn't working as expected)
+                chunk = pipe.readline()
                 if not chunk:
                     break
                 capture_list.append(chunk)
+                # Optionally, print to console here if real-time streaming is desired.
+                # For now, we only capture.
             except (ValueError, IOError, OSError):
                 # OSError can occur when pipe is closed during read
                 break
 
-    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout), daemon=True)
-    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr), daemon=True)
+    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, captured_stdout), daemon=True)
+    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, captured_stderr), daemon=True)
 
     t_out.start()
     t_err.start()
@@ -253,6 +256,11 @@ def run_process_with_output(cmd_args, timeout=300):
         except Exception:
             pass
 
+    # Wait for threads with timeout to prevent indefinite hangs
+    THREAD_JOIN_TIMEOUT = 5  # seconds
+    t_out.join(timeout=THREAD_JOIN_TIMEOUT)
+    t_err.join(timeout=THREAD_JOIN_TIMEOUT)
+
     # Close pipes to unblock reader threads
     try:
         proc.stdout.close()
@@ -262,11 +270,6 @@ def run_process_with_output(cmd_args, timeout=300):
         proc.stderr.close()
     except Exception:
         pass
-
-    # Wait for threads with timeout to prevent indefinite hangs
-    THREAD_JOIN_TIMEOUT = 5  # seconds
-    t_out.join(timeout=THREAD_JOIN_TIMEOUT)
-    t_err.join(timeout=THREAD_JOIN_TIMEOUT)
 
     # If threads are still alive after timeout, log it (they're daemon threads so won't block exit)
     if t_out.is_alive() or t_err.is_alive():

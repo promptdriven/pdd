@@ -486,6 +486,49 @@ class ThreadSafeRedirector(io.TextIOBase):
 
 
 class SyncApp(App):
+    def _reflow_log_widget(self, *, max_lines: int = 2000) -> None:
+        """Reflow historical log lines so wrapping matches the current width.
+
+        Textual/RichLog will repaint on resize, but it may not re-wrap already-added
+        renderables. We keep a plain-text log buffer via redirector wrappers; on
+        resize, clear and replay those lines.
+        """
+        if not hasattr(self, "log_widget") or self.log_widget is None:
+            return
+
+        # Prefer the redirector's captured logs when available; fall back to app property.
+        try:
+            lines = list(self.captured_logs)
+        except Exception:
+            lines = []
+
+        if not lines:
+            return
+
+        # Bound replay to avoid excessive work on huge logs.
+        if max_lines and len(lines) > max_lines:
+            lines = lines[-max_lines:]
+
+        # Clear and replay.
+        try:
+            self.log_widget.clear()
+        except Exception:
+            # If clear isn't available, do nothing.
+            return
+
+        log_pattern = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
+        for line in lines:
+            try:
+                text = Text.from_ansi(line)
+                if log_pattern.match(text.plain):
+                    text.style = Style(dim=True)
+                self.log_widget.write(text)
+            except Exception:
+                # Last resort: write raw.
+                try:
+                    self.log_widget.write(str(line))
+                except Exception:
+                    pass
     """Textual App for PDD Sync."""
 
     CSS = """
@@ -600,6 +643,9 @@ class SyncApp(App):
         # Track log widget width for proper text wrapping
         # Accounts for: log-container border (2), RichLog padding (2), scrollbar (2)
         self._log_width = 74  # Default fallback (80 - 6)
+        # Freeze UI rendering width to the initial terminal width (clamped to a minimum).
+        self._min_ui_width = 80
+        self._fixed_ui_width: Optional[int] = None
 
         # Reference to self for stdin redirector (using list for mutability)
         self._app_ref: List[Optional['SyncApp']] = [None]
@@ -650,7 +696,7 @@ class SyncApp(App):
     def on_mount(self) -> None:
         global _ACTIVE_SYNC_APP
         _ACTIVE_SYNC_APP = self
-        
+
         self.log_widget = self.query_one("#log", RichLog)
         self.progress_bar = self.query_one("#progress-bar", ProgressBar)
         self.progress_container = self.query_one("#progress-container", Container)
@@ -668,8 +714,10 @@ class SyncApp(App):
         self.particles = logo_animation._parse_logo_art(local_ascii_logo_art)
 
         # Set initial styles and formation targets
-        width = self.size.width if self.size.width > 0 else 80
-        height = 18 # Fixed animation height
+        width = self.size.width if self.size.width > 0 else self._min_ui_width
+        width = max(self._min_ui_width, int(width))
+        self._fixed_ui_width = width
+        height = 18  # Fixed animation height
 
         for p in self.particles:
             p.style = Style(color=logo_animation.ELECTRIC_CYAN)
@@ -689,12 +737,33 @@ class SyncApp(App):
         # Start animation timer (20 FPS for smoother logo)
         self.set_interval(0.05, self.update_animation)
 
-        # Calculate initial log width based on current size
-        if self.size.width > 0:
-            self._log_width = max(20, self.size.width - 6)
+        # Calculate initial log width based on frozen UI width
+        self._log_width = max(20, self._fixed_ui_width - 6)
+        os.environ["COLUMNS"] = str(self._log_width)
 
         # Start worker
         self.run_worker_task()
+
+    def on_resize(self, event) -> None:
+        """Handle terminal resizes.
+
+        Fixed-width mode: do not recompute animation/log widths. However, Textual can
+        leave RichLog in a visually stale state after *horizontal* resizes until a
+        later layout pass (often triggered by a vertical resize). Force an immediate
+        layout + repaint so the bottom panel doesn't glitch.
+        """
+        try:
+            # Recompute layout and repaint the screen.
+            try:
+                self.refresh(layout=True)
+            except Exception:
+                self.refresh()
+
+            # Force the log widget to repaint at its new viewport size.
+            if hasattr(self, "log_widget") and self.log_widget is not None:
+                self.log_widget.refresh()
+        except Exception:
+            return
 
     @work(thread=True)
     def run_worker_task(self) -> None:
@@ -805,18 +874,8 @@ class SyncApp(App):
         if self.stop_event.is_set():
             return
 
-        # We need the width of the app/screen.
-        width = self.size.width
-        if width == 0: # Not ready yet
-            width = 80
-
-        # Update log width and COLUMNS env var for resize handling
-        # This ensures Rich Panels created after resize use the new width
-        # Offset of 6 accounts for: border (2), padding (2), scrollbar (2)
-        new_log_width = max(20, width - 6)
-        if new_log_width != self._log_width:
-            self._log_width = new_log_width
-            os.environ["COLUMNS"] = str(self._log_width)
+        # Render at a frozen UI width (determined at mount time), ignoring resizes.
+        width = self._fixed_ui_width or self._min_ui_width
 
         # --- LOGO ANIMATION PHASE ---
         if self.logo_phase:

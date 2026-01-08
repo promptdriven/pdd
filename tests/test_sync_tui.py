@@ -5,7 +5,8 @@ import os
 import sys
 import io
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, PropertyMock
+from io import StringIO # Added import
 
 # We must patch 'textual.work' BEFORE importing SyncApp so the decorator 
 # doesn't wrap the methods with the real Textual worker logic during class definition.
@@ -23,6 +24,8 @@ with patch("textual.work", lambda **kwargs: (lambda func: func)):
 
 from textual.widgets import RichLog, ProgressBar, Static
 from textual.app import App
+from textual.events import Event, Size, Resize
+from unittest.mock import PropertyMock # Added import
 
 # --- Unit Tests ---
 
@@ -138,26 +141,42 @@ def test_sync_app_env_isolation():
         assert os.environ.get("TERM") == "xterm-256color"
         return {"success": True}
 
-    # Setup shared refs (10 positional ref arguments)
-    refs = [[""]] * 10 
-    stop_event = threading.Event()
+        # Setup shared refs (10 positional ref arguments)
+        refs = [[""]] * 10
+        stop_event = threading.Event()
     
-    app = SyncApp(
-        "test", 1.0, mock_worker, 
-        *refs, stop_event=stop_event
-    )
+        # Capture initial environment variables to verify restoration
+        original_force_color = os.environ.get("FORCE_COLOR")
+        original_term = os.environ.get("TERM")
+        original_columns = os.environ.get("COLUMNS")
     
-    # Mock the UI components to avoid initialization errors
-    app.log_widget = MagicMock()
-    app._log_width = 80
+        # Create a minimal SyncApp instance for testing
+        app = SyncApp(
+            "test", 1.0, mock_worker,
+            *refs, stop_event=stop_event
+        )
     
-    # Manually trigger the worker task logic
-    with patch.object(app, 'exit'):
-        app.run_worker_task()
-        
-    # Verify env vars are restored (assuming they weren't set before)
-    assert os.environ.get("FORCE_COLOR") != "1"
-
+        # Mock the UI components to avoid initialization errors
+        app.log_widget = MagicMock()
+        app._log_width = 80
+        app._app_ref = [app] # Mimic on_mount setting this for stdin redirector
+    
+        # Mock `asyncio.create_task` to prevent it from trying to start a real async task
+        # and `app.exit` since no actual app is running.
+        with patch("asyncio.create_task") as mock_create_task, \
+             patch.object(app, 'exit') as mock_app_exit, \
+             patch.object(app, 'run_worker') as mock_run_worker, \
+             patch.object(app, 'call_from_thread') as mock_call_from_thread, \
+             patch("sys.stdout", new_callable=StringIO) as mock_stdout, \
+             patch("sys.stderr", new_callable=StringIO) as mock_stderr:
+    
+            # Call run_worker_task, which should set environment variables
+            app.run_worker_task()
+    
+        # Verify env vars are restored to their original values after run_worker_task finishes
+        assert os.environ.get("FORCE_COLOR") == original_force_color
+        assert os.environ.get("TERM") == original_term
+        assert os.environ.get("COLUMNS") == original_columns
 def test_progress_callback_thread_safety():
     """Verify _update_progress schedules a UI update."""
     # Setup shared refs (10 positional ref arguments)
@@ -228,3 +247,77 @@ def test_steering_logic_safety_z3():
     solver.add(should_abort == False)
     assert solver.check().r == -1
     solver.pop()
+
+
+@pytest.mark.asyncio
+async def test_sync_app_on_resize():
+    """
+    Verifies that resizing the terminal window during pdd sync causes UI corruption
+    due to improper handling of resize events by SyncApp.
+
+    This test simulates a terminal resize and asserts that the log_widget
+    is not immediately refreshed and internal width calculations (_log_width)
+    are not updated to the new terminal width, leading to visual artifacts.
+    """
+    with patch("textual.work", lambda **kwargs: (lambda func: func)):
+        from pdd.sync_tui import SyncApp
+
+    # Mock a simple worker function
+    def mock_worker():
+        return {"success": True}
+
+    # Setup shared refs and stop_event
+    refs = [[""]] * 10
+    stop_event = threading.Event()
+
+    app = SyncApp(
+        "test", 1.0, mock_worker,
+        *refs, stop_event=stop_event
+    )
+
+    initial_app_width = 80 # Default fallback width during on_mount
+    initial_app_height = 24 # Arbitrary initial height for testing
+    expected_initial_log_width = max(20, initial_app_width - 6) # Should be 74
+
+    # Mock the `size` property of the SyncApp instance
+    # Use patch.object with new_callable=PropertyMock to mock a property
+    # and set its return value to a MagicMock that acts like a Size object.
+    with patch.object(type(app), 'size', new_callable=PropertyMock) as mock_size_property:
+        mock_size_property.return_value = MagicMock(width=initial_app_width, height=initial_app_height)
+
+        # Mock Textual UI components to avoid full rendering and focus on resize logic
+        app.log_widget = MagicMock(spec=RichLog)
+        app.animation_view = MagicMock(spec=Static)
+        app.query_one = MagicMock(return_value=app.animation_view) # To simulate query_one selecting animation_view
+
+        # Set initial _log_width and os.environ["COLUMNS"] based on how on_mount initializes it
+        app._log_width = expected_initial_log_width
+        os.environ["COLUMNS"] = str(expected_initial_log_width)
+        # Simulate mounting the app (necessary for on_resize to be called on a mounted widget)
+        # We need to simulate enough of the app lifecycle for on_resize to be relevant
+        with patch.object(app, 'mount') as mock_mount, \
+             patch.object(app, 'call_after_refresh') as mock_call_after_refresh:
+                # Manually call on_mount setup steps that on_resize might depend on
+                with patch.object(app, 'run_worker_task'), patch.object(app, 'exit'), \
+                     patch.object(app, 'set_interval'), patch.object(app, 'update_animation'):
+                    # Manually set the event loop to prevent "App is not running" RuntimeError
+                    app._loop = asyncio.get_running_loop()
+                    app.on_mount()
+
+                # Simulate a resize event
+                new_width = 100
+                new_height = 30
+                mock_size_property.return_value = MagicMock(width=new_width, height=new_height) # Update mock size
+                # Removed direct mock_on_resize assertion, as we're now testing the *effect* of on_resize.
+                app.on_resize(Resize(size=Size(width=new_width, height=new_height), virtual_size=Size(width=new_width, height=new_height)))
+
+                # With the fix, _log_width should be updated immediately by on_resize
+                expected_log_width = new_width - 6
+                assert app._log_width == expected_log_width
+                app.log_widget.refresh.assert_called_once()
+                app.animation_view.update.assert_called_once() # Animation view should be updated via update_animation
+
+                # Verify os.environ["COLUMNS"] is updated immediately by on_resize
+                assert os.environ["COLUMNS"] == str(expected_log_width)
+            # Clean up os.environ["COLUMNS"] if it was changed during the test run to avoid side effects
+    os.environ["COLUMNS"] = "80" # Reset to a default value for subsequent tests
