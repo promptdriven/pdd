@@ -1,6 +1,8 @@
 """
 Fix command.
 """
+from __future__ import annotations
+import os
 import click
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -11,8 +13,7 @@ from ..core.errors import handle_error
 @click.command("fix")
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
 @click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("unit_test_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
-@click.argument("error_file", type=click.Path(dir_okay=False))  # Allow non-existent for loop mode
+@click.argument("args", nargs=-1, type=click.Path(dir_okay=False))
 @click.option(
     "--output-test",
     type=click.Path(writable=True),
@@ -75,8 +76,7 @@ def fix(
     ctx: click.Context,
     prompt_file: str,
     code_file: str,
-    unit_test_files: Tuple[str, ...],
-    error_file: str,
+    args: Tuple[str, ...],
     output_test: Optional[str],
     output_code: Optional[str],
     output_results: Optional[str],
@@ -89,10 +89,37 @@ def fix(
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Fix code based on a prompt and unit test errors.
 
-    Accepts one or more UNIT_TEST_FILES. Each test file is processed separately,
-    allowing the AI to run and fix tests individually rather than as a concatenated blob.
+    Accepts one or more UNIT_TEST_FILES.
+    In non-loop mode, the last argument must be the ERROR_FILE.
+    In loop mode, all arguments after CODE_FILE are treated as UNIT_TEST_FILES.
     """
     try:
+        # Parse args into unit_test_files and error_file based on loop mode
+        unit_test_files: List[str] = []
+        error_file: Optional[str] = None
+
+        if not args:
+            raise click.BadArgumentUsage("Missing argument 'UNIT_TEST_FILES'.")
+
+        if loop:
+            # In loop mode, all args are test files, error file is optional/generated
+            unit_test_files = list(args)
+            error_file = None
+        else:
+            # In non-loop mode, the last arg is the error file
+            if len(args) < 2:
+                raise click.BadArgumentUsage(
+                    "Missing argument 'ERROR_FILE'. In non-loop mode, "
+                    "you must provide at least one unit test file and one error file."
+                )
+            unit_test_files = list(args[:-1])
+            error_file = args[-1]
+
+        # Validate existence of unit test files manually since we removed exists=True from the argument definition
+        for f in unit_test_files:
+            if not os.path.exists(f):
+                raise click.BadParameter(f"Path '{f}' does not exist.", param_hint='unit_test_files')
+
         all_results: List[Dict[str, Any]] = []
         total_cost = 0.0
         model_name = ""
