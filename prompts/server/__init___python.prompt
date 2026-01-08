@@ -1,0 +1,29 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/__init__.py`.
+
+% Role & Scope
+  This module is the package init for the PDD server.
+  It exports the main components needed to run the server.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. Export main components:
+     - `create_app` from `.app`
+     - `run_server` from `.app`
+     - `ServerConfig`, `ServerStatus` from `.models`
+     - `JobManager`, `Job` from `.jobs`
+     - `PathValidator`, `SecurityError` from `.security`
+     - `ConnectionManager` from `.routes.websocket`
+     - `execute_pdd_command` from `.executor`
+
+  2. Define `__all__` with all exports
+
+  3. Define `__version__` = "0.1.0"
+
+% Instructions
+  - Keep imports minimal at package level
+  - Use lazy imports if needed to avoid circular dependencies
+  - Include brief module docstring
+
+% Deliverables
+  - Code: `pdd/server/__init__.py`

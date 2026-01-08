@@ -1,0 +1,74 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/app.py`.
+
+% Role & Scope
+  This module provides the FastAPI application factory for the PDD server.
+  It creates and configures the web application with routes, middleware,
+  dependency injection, and lifecycle management.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - FastAPI: https://fastapi.tiangolo.com/
+  - FastAPI Lifespan: https://fastapi.tiangolo.com/advanced/events/
+  - Uvicorn: https://www.uvicorn.org/
+  - Dependency Injection: https://fastapi.tiangolo.com/tutorial/dependencies/
+
+% Requirements
+  1. **AppState class**:
+     - Holds server state: project_root, start_time, version
+     - Properties: uptime_seconds
+     - Thread-safe access to shared state (job manager, connections)
+
+  2. **create_app() factory function**:
+     - Parameters: project_root (Path), config (ServerConfig)
+     - Returns configured FastAPI application
+     - Sets up: CORS, security middleware, exception handlers
+     - Registers all route modules
+
+  3. **Lifespan management**:
+     - Startup: Initialize job manager, log server info
+     - Shutdown: Cancel active jobs, cleanup resources
+     - Use asynccontextmanager pattern
+
+  4. **Dependency injection**:
+     - `get_app_state()`: Returns AppState instance
+     - `get_path_validator()`: Returns PathValidator for current project
+     - `get_job_manager()`: Returns JobManager instance
+     - `get_connection_manager()`: Returns WebSocket ConnectionManager
+
+  5. **Exception handlers**:
+     - SecurityError -> 403 Forbidden
+     - FileNotFoundError -> 404 Not Found
+     - ValidationError -> 422 Unprocessable Entity
+     - Generic Exception -> 500 with safe error message
+
+  6. **Route registration**:
+     - Include routers from: routes.files, routes.commands, routes.websocket
+     - All under /api/v1 prefix
+     - Add /docs for OpenAPI documentation
+
+  7. **run_server() function**:
+     - Parameters: app, config (host, port)
+     - Runs uvicorn with the application
+     - Configurable log level
+
+% Dependencies
+  <fastapi_example>
+  <include>context/fastapi_example.py</include>
+  </fastapi_example>
+  <models_example>
+  Models are defined in pdd/server/models.py - use ServerConfig, ServerStatus
+  </models_example>
+  <security_example>
+  Security utilities in pdd/server/security.py - use PathValidator, configure_cors
+  </security_example>
+
+% Instructions
+  - Use relative imports for server submodules
+  - FastAPI app should have title="PDD Server", description, version
+  - Global state via module-level variable with getter dependency
+  - Exception handlers should not leak internal paths or sensitive info
+  - Log startup message with server URL and docs URL
+
+% Deliverables
+  - Code: `pdd/server/app.py`

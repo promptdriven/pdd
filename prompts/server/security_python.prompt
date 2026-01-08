@@ -1,0 +1,67 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/security.py`.
+
+% Role & Scope
+  This module provides security utilities for the PDD server including:
+  path validation, CORS configuration, and optional token authentication.
+  It prevents directory traversal attacks and restricts access to sensitive files.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - FastAPI Security: https://fastapi.tiangolo.com/tutorial/security/
+  - FastAPI CORS: https://fastapi.tiangolo.com/tutorial/cors/
+  - Starlette Middleware: https://www.starlette.io/middleware/
+  - Path Security: https://owasp.org/www-community/attacks/Path_Traversal
+
+% Requirements
+  1. **PathValidator class**:
+     - Initialize with project_root Path
+     - `validate(path: str) -> Path`: Resolve and validate path is within project root
+     - Raise `SecurityError` if path escapes project root (directory traversal)
+     - Raise `SecurityError` if path matches blacklist patterns
+     - Support both absolute and relative path inputs
+
+  2. **Blacklist patterns** (configurable):
+     - `.git`, `.git/**`
+     - `.env`, `.env.*`
+     - `node_modules`
+     - `__pycache__`, `*.pyc`
+     - `.DS_Store`
+     - `credentials*`, `*secret*`, `*.key`, `*.pem`
+     - Allow extending via constructor parameter
+
+  3. **SecurityError exception**:
+     - Custom exception with error code and message
+     - Codes: PATH_TRAVERSAL, BLACKLISTED_PATH, INVALID_PATH
+
+  4. **CORS configuration**:
+     - `configure_cors(app, allowed_origins)` function
+     - Default origins: localhost:3000, 127.0.0.1:3000, localhost:5173, 127.0.0.1:5173
+     - Allow credentials, standard HTTP methods, all headers
+     - Expose X-Job-Id, X-Total-Chunks headers
+
+  5. **Token authentication** (optional):
+     - `create_token_dependency(token: str)` factory function
+     - Returns FastAPI Depends that validates Bearer token
+     - Returns None if token is None (no auth required)
+     - Raise HTTPException 401 for invalid/missing token
+
+  6. **Request validation middleware**:
+     - Log all requests (path, method, client IP)
+     - Rate limiting support (optional, configurable)
+
+% Dependencies
+  <fastapi_example>
+  <include>context/fastapi_example.py</include>
+  </fastapi_example>
+
+% Instructions
+  - Use fnmatch for pattern matching against blacklist
+  - Path.resolve() to get canonical paths
+  - Path.relative_to() to check containment within project root
+  - Use FastAPI's CORSMiddleware for CORS
+  - Thread-safe implementation for validators
+  - Clear error messages that don't leak path information
+
+% Deliverables
+  - Code: `pdd/server/security.py`

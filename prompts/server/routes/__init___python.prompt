@@ -1,0 +1,23 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/__init__.py`.
+
+% Role & Scope
+  This module exports the API routers from the routes subpackage.
+  It provides a clean interface for the main app to import all routes.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. Import and export routers:
+     - `files_router` from `.files`
+     - `commands_router` from `.commands`
+     - `websocket_router` from `.websocket`
+
+  2. Export list:
+     - `__all__ = ["files_router", "commands_router", "websocket_router"]`
+
+% Instructions
+  - Keep this file minimal - just imports and exports
+  - Use relative imports
+
+% Deliverables
+  - Code: `pdd/server/routes/__init__.py`
