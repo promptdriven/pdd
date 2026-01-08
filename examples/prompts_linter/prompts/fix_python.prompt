@@ -18,8 +18,8 @@ Requirements
 Dependencies
 % Here are examples of how to use internal modules:
 <internal_example_modules>
-<src.utils.models><include>examples/models_example.py</include></src.utils.models>
 <src.utils.fix><include>examples/fix_example.py</include></src.utils.fix>
+<src.utils.models><include>examples/models_example.py</include></src.utils.models>
 </internal_example_modules>
 
 Prompt Dependencies:

@@ -22,8 +22,9 @@ Dependencies
 </pipeline>
 
 Prompt Dependencies:
-- pipeline_Python.prompt
-- models_Python.prompt
+<backend.api><include>examples/backend_api_example.py</include></backend.api>
+<utils.models><include>examples/models_example.py</include></utils.models>
+<utils.pipeline><include>examples/pipeline_example.py</include></utils.pipeline>
 
 Instructions
 - Initialize the `FastAPI` app with a title and description matching the project.

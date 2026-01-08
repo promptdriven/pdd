@@ -261,22 +261,26 @@ def test_lint_text_fix_generation_missing_module(mock_rules, mock_fix):
     assert len(sys_issues) == 1
     assert report.suggested_fix is None
 
-def test_lint_file_success(mock_rules):
+def test_lint_file_success(mock_rules, mock_llm):
     """Test lint_file reads file and returns report."""
     mock_rules.analyze_text.return_value = []
+    # Mock LLM to avoid real calls/warnings since lint_file uses default config (use_llm=True)
+    mock_llm.analyze_prompt.return_value = None
     
-    with patch("pathlib.Path.exists", return_value=True), \
-         patch("pathlib.Path.read_text", return_value="file content") as mock_read:
+    # Mock the helper function directly instead of pathlib internals
+    # This avoids issues with helpers.read_file_content doing extra checks (is_file, etc.)
+    with patch("src.utils.pipeline.helpers.read_file_content", return_value="file content") as mock_read:
         
         report = lint_file(Path("test.txt"))
         
         assert report.filepath == "test.txt"
         assert report.score == 100
-        mock_read.assert_called_once()
+        mock_read.assert_called_once_with("test.txt")
 
 def test_lint_file_not_found():
     """Test lint_file handles missing files."""
-    with patch("pathlib.Path.exists", return_value=False):
+    # Mock helper to raise FileNotFoundError
+    with patch("src.utils.pipeline.helpers.read_file_content", side_effect=FileNotFoundError("Not found")):
         report = lint_file(Path("missing.txt"))
         
         assert report.score == 0
@@ -285,8 +289,8 @@ def test_lint_file_not_found():
 
 def test_lint_file_read_error():
     """Test lint_file handles read exceptions."""
-    with patch("pathlib.Path.exists", return_value=True), \
-         patch("pathlib.Path.read_text", side_effect=PermissionError("Access denied")):
+    # Mock helper to raise PermissionError
+    with patch("src.utils.pipeline.helpers.read_file_content", side_effect=PermissionError("Access denied")):
         
         report = lint_file(Path("locked.txt"))
         
@@ -489,4 +493,152 @@ def test_scoring_unknown_category(mock_rules):
     report = lint_text("text", config)
     
     # Score should be 100 because the unknown category issue is skipped in calculation
+    assert report.score == 100
+
+# --- Test Plan ---
+# 1. Z3 Formal Verification: Weight Sum Integrity
+#    - Goal: Verify that the default weights defined in LintConfig sum exactly to 100.
+#    - Method: Instantiate LintConfig, extract weights, and assert sum equals 100 using Z3 or standard assertion (Z3 used for consistency with formal verification theme).
+#
+# 2. Unit Test: Default Configuration Behavior
+#    - Goal: Ensure lint_text functions correctly when no config object is provided (config=None).
+#    - Method: Call lint_text with None, verify it defaults to use_llm=True (checking mock calls).
+#
+# 3. Unit Test: Fix Generation Generic Exception
+#    - Goal: Verify robustness when the fix generation module raises a generic runtime exception (not just missing function).
+#    - Method: Mock fix.generate_scaffold to raise Exception. Verify report contains SYS003 warning.
+#
+# 4. Unit Test: File Linting Generic Exception
+#    - Goal: Verify lint_file handles unexpected exceptions during file reading (e.g., memory errors, weird system states).
+#    - Method: Mock helpers.read_file_content to raise a generic Exception. Verify report contains SYS006 error.
+#
+# 5. Unit Test: Scoring Precedence (Error vs Warning)
+#    - Goal: Confirm that within a single category, an ERROR (0.0 multiplier) overrides a WARNING (0.5 multiplier) regardless of count.
+#    - Method: Inject multiple Warnings and one Error for the same category. Verify category contribution is 0.
+#
+# 6. Unit Test: LLM Response Without Suggestions
+#    - Goal: Verify behavior when LLM analysis succeeds but returns no actionable suggestions.
+#    - Method: Mock LLM response with empty suggestions list. Verify no issues added, but summary is updated from LLM.
+
+# --- New Tests ---
+
+def test_z3_weight_sum_integrity():
+    """
+    Formally verify that the default weights configuration sums to exactly 100.
+    This ensures the maximum possible score is bounded correctly by the configuration itself.
+    """
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("z3-solver not installed")
+
+    config = LintConfig()
+    weights = config.weights
+    
+    solver = z3.Solver()
+    
+    # Create integer variables for weights
+    w_mod = z3.Int('w_mod')
+    w_con = z3.Int('w_con')
+    w_ctx = z3.Int('w_ctx')
+    w_det = z3.Int('w_det')
+    w_abs = z3.Int('w_abs')
+    
+    # Bind them to actual values
+    solver.add(w_mod == weights["modularity"])
+    solver.add(w_con == weights["contracts"])
+    solver.add(w_ctx == weights["context"])
+    solver.add(w_det == weights["determinism"])
+    solver.add(w_abs == weights["abstraction"])
+    
+    # Verify sum is 100
+    sum_weights = w_mod + w_con + w_ctx + w_det + w_abs
+    
+    solver.add(sum_weights != 100)
+    
+    result = solver.check()
+    assert result == z3.unsat, f"Default weights do not sum to 100. Found counterexample: {solver.model()}"
+
+def test_lint_text_default_config(mock_rules, mock_llm):
+    """Test that lint_text uses default configuration (use_llm=True) when config is None."""
+    mock_rules.analyze_text.return_value = []
+    mock_llm.analyze_prompt.return_value = None # Just to avoid processing
+    
+    # Call without config
+    lint_text("some text")
+    
+    # Verify LLM was attempted (default use_llm is True)
+    mock_llm.analyze_prompt.assert_called_once()
+
+def test_fix_generation_generic_exception(mock_rules, mock_fix):
+    """Test that generic exceptions during fix generation are caught and reported."""
+    config = LintConfig(use_llm=False, generate_fix=True)
+    mock_rules.analyze_text.return_value = []
+    
+    # Mock fix module to raise a generic exception
+    mock_fix.generate_scaffold.side_effect = Exception("Unexpected fix failure")
+    
+    report = lint_text("text", config)
+    
+    # Should contain a SYS003 warning
+    sys_issues = [i for i in report.issues if i.rule_id == "SYS003"]
+    assert len(sys_issues) == 1
+    assert "Unexpected fix failure" in sys_issues[0].description
+    assert report.suggested_fix is None
+
+def test_lint_file_generic_exception():
+    """Test that lint_file handles unexpected exceptions during file reading."""
+    # We need to mock helpers.read_file_content specifically
+    with patch("src.utils.pipeline.helpers.read_file_content", side_effect=Exception("Random system failure")):
+        report = lint_file(Path("weird_file.txt"))
+        
+        assert report.score == 0
+        assert len(report.issues) == 1
+        assert report.issues[0].rule_id == "SYS006"
+        assert "Random system failure" in report.issues[0].description
+
+def test_scoring_precedence_error_over_warning(mock_rules):
+    """
+    Test that a single ERROR in a category zeroes out the score for that category,
+    even if there are multiple WARNINGs in the same category.
+    """
+    config = LintConfig(use_llm=False)
+    
+    # Modularity weight is 30.
+    # We add 1 Error and 2 Warnings.
+    # If Warnings were additive or averaged incorrectly, score might be non-zero.
+    # Correct logic: Error sets multiplier to 0.0.
+    
+    issues = [
+        Issue(rule_id="MOD001", line_number=1, severity=Severity.WARNING, category=RuleCategory.MODULARITY, title="W1", description=".", fix_suggestion=""),
+        Issue(rule_id="MOD002", line_number=2, severity=Severity.ERROR, category=RuleCategory.MODULARITY, title="E1", description=".", fix_suggestion=""),
+        Issue(rule_id="MOD003", line_number=3, severity=Severity.WARNING, category=RuleCategory.MODULARITY, title="W2", description=".", fix_suggestion="")
+    ]
+    
+    mock_rules.analyze_text.return_value = issues
+    
+    report = lint_text("text", config)
+    
+    # Modularity (30) -> 0
+    # Others (20+20+15+15) -> 70
+    assert report.score == 70
+
+def test_llm_success_no_suggestions(mock_rules, mock_llm):
+    """Test behavior when LLM returns a valid response but empty suggestions."""
+    config = LintConfig(use_llm=True)
+    mock_rules.analyze_text.return_value = []
+    
+    mock_llm.analyze_prompt.return_value = LLMResponse(
+        guide_alignment_summary="Perfect prompt.",
+        top_fixes=[],
+        suggestions=[]
+    )
+    
+    report = lint_text("text", config)
+    
+    # No issues should be added
+    assert len(report.issues) == 0
+    # Summary should be updated from LLM
+    assert report.summary == "Perfect prompt."
+    # Score should be 100
     assert report.score == 100

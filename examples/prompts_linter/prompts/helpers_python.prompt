@@ -15,6 +15,7 @@ Dependencies
 </models>
 <internal_example_modules>
 <src.utils.models><include>examples/models_example.py</include></src.utils.models>
+<src.utils.helpers><include>examples/helpers_example.py</include></src.utils.helpers>
 </internal_example_modules>
 
 Prompt Dependencies:

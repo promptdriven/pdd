@@ -64,7 +64,7 @@ def _render_text(report: Report, output_path: Optional[str] = None) -> None:
 
                 table.add_row(
                     issue.rule_id,
-                    Text(issue.severity.value, style=sev_style),
+                    Text(issue.severity.value.lower(), style=sev_style),
                     str(issue.line_number),
                     issue.description
                 )
@@ -110,7 +110,7 @@ def _render_markdown(report: Report) -> str:
         
         for issue in report.issues:
             lines.append(
-                f"| {issue.rule_id} | {issue.severity.value} | {issue.line_number} | {issue.description} |"
+                f"| {issue.rule_id} | {issue.severity.value.lower()} | {issue.line_number} | {issue.description} |"
             )
     
     if report.llm_analysis:

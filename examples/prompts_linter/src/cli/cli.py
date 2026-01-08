@@ -49,6 +49,19 @@ class LLMProvider(str, Enum):
     GOOGLE = "google"
     CUSTOM = "custom"
 
+# Define a subclass of LintConfig to hold CLI-specific fields
+# that might not be in the base LintConfig definition yet.
+class CLIConfig(LintConfig):
+    provider: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_max_retries: Optional[int] = None
+    budget: Optional[int] = None
+    grounding: Optional[str] = None
+    assume_cloud_grounding: Optional[bool] = None
+    assume_local: Optional[bool] = None
+    
+    # Allow extra fields for forward compatibility
+    model_config = {"extra": "allow"}
 
 def _get_severity_rank(severity: Severity) -> int:
     """
@@ -238,15 +251,14 @@ def main(
         grounding_val = "local"
 
     try:
-        # Fix: Map CLI arguments to correct LintConfig attributes
-        config = LintConfig(
+        # Use CLIConfig to capture all flags, even those not yet in LintConfig
+        config = CLIConfig(
             use_llm=use_llm,
             generate_fix=fix,
-            llm_timeout=llm_timeout_seconds,  # Mapped from CLI arg to model field
-            llm_model_override=llm_model,     # Mapped from CLI arg to model field
+            llm_timeout=llm_timeout_seconds,
+            llm_model_override=llm_model,
             
-            # The following fields are passed to satisfy the requirement of implementing flags,
-            # even if the current LintConfig definition might ignore them (extra='ignore').
+            # Extra fields supported by CLIConfig
             provider=llm_provider.value,
             llm_max_retries=llm_max_retries,
             budget=llm_budget_tokens,
@@ -255,8 +267,8 @@ def main(
             assume_local=assume_local,
             grounding=grounding_val
         )
+        
     except TypeError as e:
-        # Fallback for robustness if LintConfig signature varies slightly in different versions
         console.print(f"[red]Configuration Error (TypeError): {e}[/red]")
         raise typer.Exit(code=1)
     except Exception as e:

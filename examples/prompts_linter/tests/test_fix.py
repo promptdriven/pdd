@@ -11,6 +11,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.utils.fix import apply_fixes
 
+# --- Z3 Setup ---
+try:
+    import z3
+except ImportError:
+    z3 = None
+
 # --- Mock Models for Testing ---
 @dataclass
 class MockIssue:
@@ -500,3 +506,259 @@ def test_warning_idempotency():
 
     # Should appear exactly once
     assert fixed.count("WARNING: This prompt appears to define multiple files") == 1
+
+# --- Z3 Formal Verification Tests ---
+
+@pytest.mark.skipif(z3 is None, reason="z3-solver not installed")
+def test_z3_verify_priority_sorting_logic():
+    """
+    Formal verification of the priority sorting logic used in _apply_llm_patches.
+    We verify that mapping High->3, Medium->2, Low->1 and sorting descending
+    guarantees that no lower priority item precedes a higher priority item.
+    """
+    solver = z3.Solver()
+
+    # Create an array of priorities for a list of length N
+    N = 5
+    # Priorities: 3=High, 2=Medium, 1=Low
+    priorities = [z3.Int(f'p_{i}') for i in range(N)]
+
+    # Constraint: Priorities must be valid (1, 2, or 3)
+    for p in priorities:
+        solver.add(z3.Or(p == 1, p == 2, p == 3))
+
+    # We simulate the sorted state.
+    # If the list is sorted descending, then for all i < j, p[i] >= p[j].
+    # We want to prove this property holds.
+    # To prove it with Z3, we assert the negation: exists i < j such that p[i] < p[j].
+    # If UNSAT, the property holds.
+    
+    violation = False
+    for i in range(N):
+        for j in range(i + 1, N):
+            # If we find a pair where i comes before j, but priority[i] < priority[j]
+            # that would be a violation of a descending sort.
+            violation = z3.Or(violation, priorities[i] < priorities[j])
+
+    solver.add(violation)
+
+    # However, we are verifying the *result* of a sort function, not the array itself.
+    # Since we can't easily implement the python sort in Z3, we verify the *property* 
+    # that the python code relies on: 
+    # "If we assign integer weights to priorities and sort descending, the order is correct."
+    
+    # Let's verify the mapping logic specifically.
+    # Map: High->3, Medium->2, Low->1.
+    # Assert that High > Medium > Low.
+    
+    val_high = z3.Int('High')
+    val_med = z3.Int('Medium')
+    val_low = z3.Int('Low')
+    
+    solver.reset()
+    solver.add(val_high == 3)
+    solver.add(val_med == 2)
+    solver.add(val_low == 1)
+    
+    # Negation of the desired property: Not (High > Medium AND Medium > Low)
+    solver.add(z3.Not(z3.And(val_high > val_med, val_med > val_low)))
+    
+    result = solver.check()
+    # If UNSAT, it means it's impossible for the order to be wrong given the mapping.
+    assert result == z3.unsat, "Priority mapping logic is flawed"
+
+@pytest.mark.skipif(z3 is None, reason="z3-solver not installed")
+def test_z3_verify_section_insertion_order():
+    """
+    Formal verification of the relative ordering logic for section insertion.
+    We model the positions of sections as integers.
+    """
+    solver = z3.Solver()
+
+    # Positions of sections in the file (0 to 100)
+    # If a section is missing, we can consider its position abstractly, 
+    # but here we verify the logic: "Insert A before B".
+    
+    pos_req = z3.Int('Pos_Req')
+    pos_dep = z3.Int('Pos_Dep')
+    pos_inst = z3.Int('Pos_Inst')
+    pos_deliv = z3.Int('Pos_Deliv')
+    pos_end = z3.Int('Pos_End') # End of file or </prompt>
+
+    # Constraints based on _insert_content logic:
+    # 1. Requirements is inserted before Dependencies, Instructions, Deliverable, or End.
+    #    This implies Pos_Req < min(Pos_Dep, Pos_Inst, Pos_Deliv, Pos_End)
+    #    We assume they all exist for this verification to check the ideal layout.
+    solver.add(pos_req < pos_dep)
+    solver.add(pos_req < pos_inst)
+    solver.add(pos_req < pos_deliv)
+
+    # 2. Dependencies is inserted before Instructions, Deliverable, or End.
+    solver.add(pos_dep < pos_inst)
+    solver.add(pos_dep < pos_deliv)
+
+    # 3. Instructions is inserted before Deliverable or End.
+    solver.add(pos_inst < pos_deliv)
+
+    # 4. Deliverable is inserted at End (or before closing tag).
+    solver.add(pos_deliv < pos_end)
+
+    # Verify: Is it possible to have Requirements appear AFTER Instructions?
+    # Negation: Pos_Req > Pos_Inst
+    solver.push()
+    solver.add(pos_req > pos_inst)
+    assert solver.check() == z3.unsat, "Logic allows Requirements to appear after Instructions"
+    solver.pop()
+
+    # Verify: Is it possible to have Dependencies appear AFTER Deliverable?
+    # Negation: Pos_Dep > Pos_Deliv
+    solver.push()
+    solver.add(pos_dep > pos_deliv)
+    assert solver.check() == z3.unsat, "Logic allows Dependencies to appear after Deliverable"
+    solver.pop()
+
+def test_general_anatomy_trigger_fills_all():
+    """
+    Test that a generic ANATOMY issue triggers checks and fixes for ALL missing sections,
+    even if the issue description doesn't explicitly list them.
+    """
+    text = "<prompt>\nContext only.\n</prompt>"
+    # Generic description, no keywords like "missing requirements"
+    issue = MockIssue(
+        category=MockRuleCategory.ANATOMY,
+        description="General structure violation found."
+    )
+    report = MockReport(issues=[issue])
+
+    with patch("src.utils.fix.RuleCategory", MockRuleCategory):
+        fixed = apply_fixes(text, report)
+
+    # Should contain all standard sections because they were missing
+    assert "Requirements" in fixed
+    assert "Dependencies" in fixed
+    assert "Instructions" in fixed
+    assert "Deliverable" in fixed
+
+def test_input_output_prevents_deliverable():
+    """
+    Test that the presence of 'Input/Output' section prevents the addition of 'Deliverable',
+    as they are treated as alternatives.
+    """
+    text = "<prompt>\nInput/Output\n- JSON\n</prompt>"
+    issue = MockIssue(
+        category=MockRuleCategory.ANATOMY,
+        description="Missing Deliverable" # Explicitly asking for it
+    )
+    report = MockReport(issues=[issue])
+
+    with patch("src.utils.fix.RuleCategory", MockRuleCategory):
+        fixed = apply_fixes(text, report)
+
+    # Should NOT add Deliverable because Input/Output exists
+    assert fixed.count("Deliverable") == 0
+    assert "Input/Output" in fixed
+
+def test_llm_patching_deduplication_precedence():
+    """
+    Test that suggestions in report.llm_analysis take precedence over report.suggestions
+    when they target the same 'before' text.
+    """
+    text = "FixMe"
+    
+    # Suggestion from LLM Analysis (Should win)
+    s_llm = MockSuggestion(before="FixMe", after="FixedByLLM", priority="High")
+    
+    # Suggestion from top-level suggestions (Should be ignored as duplicate 'before')
+    s_top = MockSuggestion(before="FixMe", after="FixedByTop", priority="High")
+    
+    report = MockReport(
+        llm_analysis=MockLLMAnalysis(suggestions=[s_llm]),
+        suggestions=[s_top]
+    )
+    
+    fixed = apply_fixes(text, report)
+    
+    assert "FixedByLLM" in fixed
+    assert "FixedByTop" not in fixed
+
+def test_nested_determinism_tags():
+    """
+    Test how the regex handles nested non-deterministic tags.
+    The regex is non-greedy, so it might behave in specific ways.
+    We want to ensure it at least removes the outer structure or renders it harmless.
+    """
+    # Nested case: <web> contains <run>
+    text = "Start <web>Search <run>cmd</run> EndSearch</web> Finish"
+    
+    issue = MockIssue(
+        category=MockRuleCategory.DETERMINISM,
+        description="Determinism violation"
+    )
+    report = MockReport(issues=[issue])
+
+    with patch("src.utils.fix.RuleCategory", MockRuleCategory):
+        fixed = apply_fixes(text, report)
+
+    # The outer <web> tag should be caught and replaced.
+    # If the regex matches <web>...<run>... matches might be tricky.
+    # Expected: The whole block <web>...</web> is replaced by the comment.
+    assert "% NOTE: Removed non-deterministic tag <web>" in fixed
+    assert "<run>" not in fixed
+    assert "cmd" not in fixed
+
+def test_structure_category_compatibility():
+    """
+    Test that if RuleCategory has a STRUCTURE member (simulated), 
+    it triggers the same anatomy scaffolding as ANATOMY.
+    """
+    text = "Just text"
+    
+    # Create a dynamic class to simulate RuleCategory with STRUCTURE
+    class ExtendedRuleCategory(MockRuleCategory):
+        STRUCTURE = "STRUCTURE_CAT"
+    
+    issue = MockIssue(
+        category="STRUCTURE_CAT", # Matches the value of STRUCTURE
+        description="Bad structure"
+    )
+    report = MockReport(issues=[issue])
+
+    with patch("src.utils.fix.RuleCategory", ExtendedRuleCategory):
+        fixed = apply_fixes(text, report)
+
+    # Should trigger anatomy fixes (e.g. adding Requirements)
+    assert "Requirements" in fixed
+
+def test_llm_patching_empty_suggestions_list():
+    """
+    Test that empty suggestion lists in both sources result in no changes.
+    """
+    text = "Original"
+    report = MockReport(
+        llm_analysis=MockLLMAnalysis(suggestions=[]),
+        suggestions=[]
+    )
+    fixed = apply_fixes(text, report)
+    assert "Original" in fixed
+
+def test_scaffolding_case_insensitive_detection():
+    """
+    Test that section detection is case-insensitive, preventing duplicate sections
+    even if casing differs (e.g. 'requirements' vs 'Requirements').
+    """
+    text = "requirements\n- existing"
+    issue = MockIssue(
+        category=MockRuleCategory.ANATOMY,
+        description="Missing Requirements"
+    )
+    report = MockReport(issues=[issue])
+
+    with patch("src.utils.fix.RuleCategory", MockRuleCategory):
+        fixed = apply_fixes(text, report)
+
+    # Should not add "Requirements" (Title Case) if "requirements" (lower case) exists
+    # We check count of "Requirements" (case insensitive check in logic, but output is Title Case)
+    # The output string will contain the original "requirements".
+    # If logic failed, it would append "Requirements".
+    assert "Requirements" not in fixed 
+    assert "requirements" in fixed

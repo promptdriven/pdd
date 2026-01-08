@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 # --- Path Setup ---
 # Add the project root to sys.path to allow imports from 'src'
@@ -78,8 +78,15 @@ async def lint_endpoint(request: LintRequest):
     
     try:
         # 1. Prepare Configuration
-        # Convert dict to LintConfig object (request.config defaults to {} if not provided)
-        config = LintConfig(**request.config)
+        try:
+            # Convert dict to LintConfig object (request.config defaults to {} if not provided)
+            config = LintConfig(**request.config)
+        except ValidationError as e:
+            logger.warning(f"Invalid configuration provided: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid configuration parameters: {str(e)}"
+            )
 
         # 2. Delegate to Pipeline
         # Note: lint_text is synchronous (CPU/Network bound).

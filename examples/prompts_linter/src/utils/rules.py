@@ -1,4 +1,7 @@
 import re
+import sys
+import os
+import textwrap
 from typing import List, Pattern, Dict
 
 # Internal imports based on the prompt description
@@ -100,8 +103,10 @@ def _check_anatomy(text: str) -> List[Issue]:
     
     for section_name, pattern in ANATOMY_PATTERNS.items():
         if not pattern.search(text):
+            # Find the index of the key to generate a stable ID (1-based)
+            rule_idx = list(ANATOMY_PATTERNS.keys()).index(section_name) + 1
             issues.append(Issue(
-                rule_id=f"ANA00{list(ANATOMY_PATTERNS.keys()).index(section_name) + 1}",
+                rule_id=f"ANA00{rule_idx}",
                 title=f"Missing {section_name} Section",
                 description=f"The prompt is missing a '{section_name}' section header.",
                 severity=Severity.WARNING,
@@ -291,3 +296,119 @@ def _check_attention_hierarchy(text: str) -> List[Issue]:
             start_index = idx + 1
             
     return issues
+
+# =============================================================================
+# Demonstration / CLI Entry Point
+# =============================================================================
+
+def print_issues(title: str, issues: list):
+    """Helper to pretty-print a list of issues."""
+    print(f"\n{'='*60}")
+    print(f"ANALYSIS: {title}")
+    print(f"{'='*60}")
+    
+    if not issues:
+        print("✅ No issues found! The prompt looks compliant.")
+        return
+
+    print(f"Found {len(issues)} issue(s):\n")
+    for i, issue in enumerate(issues, 1):
+        # Determine icon based on severity
+        icon = "🔴" if issue.severity == Severity.ERROR else \
+               "🟠" if issue.severity == Severity.WARNING else "🔵"
+        
+        print(f"{i}. {icon} [{issue.rule_id}] {issue.title}")
+        print(f"   Category: {issue.category.value}")
+        print(f"   Details:  {issue.description}")
+        print("-" * 40)
+
+def main():
+    """
+    Demonstrates the usage of rules.analyze_text() on various prompt examples.
+    """
+    
+    # -------------------------------------------------------------------------
+    # Example 1: A Compliant PDD Prompt
+    # -------------------------------------------------------------------------
+    # This prompt follows the PDD structure: Requirements, I/O, Dependencies, Instructions.
+    compliant_prompt = textwrap.dedent("""
+    # Requirements
+    1. Create a function that adds two numbers.
+    2. Handle type errors gracefully.
+
+    # Input/Output
+    - Input: Two integers
+    - Output: Integer sum
+
+    # Dependencies
+    - None
+
+    # Instructions
+    Please implement the `add` function in Python.
+    Ensure you add type hints.
+    """)
+
+    issues_1 = analyze_text(compliant_prompt)
+    print_issues("Compliant Prompt", issues_1)
+
+
+    # -------------------------------------------------------------------------
+    # Example 2: A Non-Deterministic Prompt
+    # -------------------------------------------------------------------------
+    # This prompt uses forbidden tags like [Error: firecrawl-py package not installed. Cannot scrape and <run>.
+    non_deterministic_prompt = textwrap.dedent("""
+    # Requirements
+    1. Fetch the latest stock prices.
+
+    # Instructions
+    <web>https://finance.yahoo.com]
+    
+    Please <run>python script.py</run> to verify the data.
+    """)
+
+    issues_2 = analyze_text(non_deterministic_prompt)
+    print_issues("Non-Deterministic Prompt", issues_2)
+
+
+    # -------------------------------------------------------------------------
+    # Example 3: A "Repo Dump" Prompt
+    # -------------------------------------------------------------------------
+    # This prompt dumps a massive amount of code directly into the context
+    # instead of using <include> tags, and lacks structure.
+    
+    # Generating fake code lines to trigger the ratio check
+    fake_code = "\n".join([f"    def function_{i}(): pass" for i in range(60)])
+    
+    repo_dump_prompt = f"""
+    Here is the entire codebase for you to fix.
+    
+    {fake_code}
+    
+    Fix the bugs in the full codebase.
+    """
+
+    issues_3 = analyze_text(repo_dump_prompt)
+    print_issues("Repo Dump Prompt", issues_3)
+
+
+    # -------------------------------------------------------------------------
+    # Example 4: Broken Anatomy & Modularity Violations
+    # -------------------------------------------------------------------------
+    # This prompt tries to define multiple files and misses required sections.
+    broken_prompt = textwrap.dedent("""
+    # file: src/main.py
+    print("Hello")
+    
+    ---
+    
+    # file: src/utils.py
+    def help(): pass
+    
+    Just write these files for me.
+    """)
+
+    issues_4 = analyze_text(broken_prompt)
+    print_issues("Broken Anatomy & Modularity", issues_4)
+
+if __name__ == "__main__":
+    main()

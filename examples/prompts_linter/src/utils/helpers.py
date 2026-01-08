@@ -80,6 +80,7 @@ def normalize_text(text: str) -> str:
 
     Returns:
         str: The normalized text.
+
     """
     # Unify newlines to \n
     text = text.replace('\r\n', '\n').replace('\r', '\n')
@@ -142,7 +143,7 @@ def count_tags(text: str, tag_name: str) -> int:
 
 def calculate_code_ratio(text: str) -> float:
     """
-    Calculates the ratio of \"code-like\" lines to total non-empty lines.
+    Calculates the ratio of "code-like" lines to total non-empty lines.
     
     This is a heuristic used to detect if a prompt is overly implementation-heavy
     rather than natural language instructions.
@@ -181,6 +182,7 @@ def calculate_code_ratio(text: str) -> float:
             code_score += 1
 
     return round(code_score / len(lines), 2)
+
 def find_line_number(text: str, index: int) -> int:
     """
     Calculates the line number (1-based) for a given character index.
