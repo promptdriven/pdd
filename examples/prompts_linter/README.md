@@ -24,6 +24,8 @@ pip install -e .
 
 ## Installation
 
+After installing PDD (see Prerequisites above), install the project dependencies:
+
 **Option 1: Using requirements.txt (recommended)**
 ```bash
 pip install -r requirements.txt
