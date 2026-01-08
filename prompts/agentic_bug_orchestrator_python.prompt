@@ -13,7 +13,7 @@ Orchestrator for the 9-step agentic bug investigation workflow. Runs each step a
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
 6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
-7. Pass extracted files to Step 9 via `files_to_stage` context variable (Issue #268 fix - prevents staging unrelated files in PR)
+7. Pass extracted files to Step 9 via `files_to_stage` context variable for explicit git staging
 
 % Step Execution
 For each step (1-9):
@@ -47,7 +47,7 @@ For each step (1-9):
 - Step 8 receives: issue_content, step1_output through step7_output
 - Step 9 receives: issue_content, step1_output through step8_output, worktree_path, files_to_stage
 
-% Files to Stage (Issue #268 Fix)
+% Files to Stage
 After Step 7 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Step 9:
 - `context["files_to_stage"] = ", ".join(changed_files)`
 - This ensures Step 9 knows exactly which files to `git add` (prevents staging unrelated files)
