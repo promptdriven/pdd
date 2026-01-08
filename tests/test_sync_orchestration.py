@@ -2451,6 +2451,65 @@ class TestStrengthTemperaturePropagation:
             "update_main call should include 'strength=strength' parameter"
 
 
+# --- Bug: Post-crash verification uses wrong Python interpreter ---
+
+class TestPythonInterpreterConsistency:
+    """
+    Regression tests for Python interpreter consistency in sync_orchestration.
+
+    The crash fix loop (fix_code_loop.py:477) uses sys.executable to run examples.
+    Post-crash verification in sync_orchestration.py must be consistent to avoid
+    PATH resolution issues when venv/conda environments are both active.
+    """
+
+    def test_post_crash_verification_uses_sys_executable(self):
+        """
+        Bug fix: Post-crash verification must use sys.executable, not 'python' from
+        get_run_command_for_file(), to match the Python interpreter used by crash_main.
+
+        Without this fix, when both venv and conda are active, PATH lookup for 'python'
+        may resolve to a different interpreter than sys.executable, causing:
+        1. crash_main verification passes (uses sys.executable = venv Python)
+        2. post-crash verification fails (uses 'python' = conda Python)
+        3. run_report saved with non-zero exit code
+        4. Infinite crash loop until MAX_CONSECUTIVE_CRASHES reached
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Find the post-crash verification section (after "if success and operation == 'crash':")
+        # and verify it uses sys.executable, not get_run_command_for_file
+
+        lines = source.split('\n')
+        in_post_crash_section = False
+        found_sys_executable = False
+        found_get_run_command = False
+
+        for line in lines:
+            if "if success and operation == 'crash':" in line:
+                in_post_crash_section = True
+            if in_post_crash_section:
+                if 'sys.executable' in line:
+                    found_sys_executable = True
+                if 'get_run_command_for_file' in line:
+                    found_get_run_command = True
+                # Exit section when we hit the next major block
+                if 'if success and operation ==' in line and 'crash' not in line:
+                    break
+
+        assert found_sys_executable, (
+            "REGRESSION BUG: Post-crash verification should use sys.executable "
+            "to match crash_main's Python interpreter. Using get_run_command_for_file() "
+            "or 'python' can resolve to wrong interpreter when venv/conda are both active."
+        )
+        assert not found_get_run_command, (
+            "REGRESSION BUG: Post-crash verification should NOT use get_run_command_for_file(). "
+            "PATH lookup for 'python' may differ from sys.executable in mixed venv/conda environments."
+        )
+
+
 # --- Bug #156: Fix operation receives wrong test file ---
 
 def test_fix_operation_identifies_actual_failing_test_file(orchestration_fixture, tmp_path):
