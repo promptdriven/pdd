@@ -1,1 +1,3 @@
-Write a Python function `add(a, b)` that takes two numbers as input and returns their sum. 
+Write a Python function `add(a, b)` that takes two numbers as input and returns their sum.
+
+Include an example usage block (`if __name__ == "__main__":`) that calls the `add` function with `5` and `3`, prints the result, then calls `add` with `10.5` and `2.5`, and prints that result as well.

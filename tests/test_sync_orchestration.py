@@ -1311,9 +1311,9 @@ async def test_tui_request_confirmation_completes_without_hanging():
     import threading
     import asyncio
     from unittest.mock import MagicMock, patch, AsyncMock
-
+    
+    from textual.widgets import RichLog, Static # Added import
     from pdd.sync_tui import SyncApp
-
     # Create a minimal SyncApp instance for testing
     app = SyncApp(
         basename="test",
@@ -1331,6 +1331,10 @@ async def test_tui_request_confirmation_completes_without_hanging():
         tests_color_ref=["blue"],
         stop_event=threading.Event(),
     )
+
+    # Mock Textual UI components to avoid full rendering and focus on resize logic
+    app.log_widget = MagicMock(spec=RichLog)
+    app.animation_view = MagicMock(spec=Static)
 
     # Use Textual's async test runner to properly run the app
     async with app.run_test() as pilot:
