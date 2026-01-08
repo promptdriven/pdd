@@ -20,8 +20,12 @@ Requirements
 8.  **Fix Presentation**: If the report includes a "Fixed Prompt" (rewritten scaffold), display it in a code block, ideally with a "Copy" button (native to Streamlit code blocks).
 
 Dependencies
-<utils.pipeline><include>examples/pipeline_example.py</include></utils.pipeline>
-<utils.models><include>examples/models_example.py</include></utils.models>
+<utils.pipeline>
+<include>examples/pipeline_example.py</include>
+</utils.pipeline>
+<utils.models>
+<include>examples/models_example.py</include>
+</utils.models>
 
 Instructions
 -   **Imports**: Import `streamlit` as `st` and `lint_text` from `utils.pipeline`.

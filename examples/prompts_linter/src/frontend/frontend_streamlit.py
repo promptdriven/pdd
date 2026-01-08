@@ -74,12 +74,16 @@ def main():
             # Prepare Configuration
             # Map empty strings to None
             model = llm_model_input.strip() if llm_model_input.strip() else None
+            api_key = api_key_input.strip() if api_key_input.strip() else None
+            provider = llm_provider_input if llm_provider_input != "Auto" else None
             
             # Create config with correct parameter names
             config = LintConfig(
                 use_llm=True,  # Always use LLM
-                llm_model_override=model,  # Correct parameter name
-                generate_fix=True  # Always generate fix
+                llm_provider=provider,
+                llm_model_override=model,
+                generate_fix=True,  # Always generate fix
+                api_key=api_key # Passing API key as per requirement
             )
             
             # Execute Pipeline
@@ -94,14 +98,7 @@ def main():
                     
                     # Log the report
                     logger = logging.getLogger(__name__)
-                    logger.info(f"Report generated - Score: {report.score}/100, Issues: {len(report.issues)}, Clean: {report.is_clean}, Summary: {report.summary}")
-                    if report.issues:
-                        error_count = sum(1 for i in report.issues if i.severity == Severity.ERROR)
-                        warning_count = sum(1 for i in report.issues if i.severity == Severity.WARNING)
-                        info_count = sum(1 for i in report.issues if i.severity == Severity.INFO)
-                        logger.info(f"Issue breakdown - Errors: {error_count}, Warnings: {warning_count}, Info: {info_count}")
-                    if hasattr(report, 'suggested_fix') and report.suggested_fix:
-                        logger.info(f"Suggested fix generated (length: {len(report.suggested_fix)} chars)")
+                    logger.info(f"Report generated - Score: {report.score}/100")
                 except Exception as e:
                     st.error(f"An error occurred during linting: {e}")
 
@@ -161,7 +158,7 @@ def main():
             if hasattr(report, 'suggested_fix') and report.suggested_fix:
                 st.code(report.suggested_fix, language="markdown")
             else:
-                st.info("No automated fix was generated for this prompt. This might be because the score is high or the LLM was not configured.")
+                st.info("No automated fix was generated for this prompt.")
 
 if __name__ == "__main__":
     main()

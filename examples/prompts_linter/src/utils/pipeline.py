@@ -15,6 +15,7 @@ from src.utils.models import (
 from src.utils import rules
 from src.utils import llm
 from src.utils import fix
+from src.utils import helpers
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -263,14 +264,16 @@ def lint_text(text: str, config: Optional[LintConfig] = None) -> Report:
 def lint_file(path: Path, config: Optional[LintConfig] = None) -> Report:
     """
     Wrapper around lint_text that handles file I/O.
+    Uses src.utils.helpers.read_file_content for consistent normalization.
     """
     if config is None:
         config = LintConfig()
 
-    path_obj = Path(path)
-    
-    # 1. Validate File
-    if not path_obj.exists():
+    # 1. Read Content using helpers
+    try:
+        # helpers.read_file_content handles existence checks and normalization
+        content = helpers.read_file_content(str(path))
+    except FileNotFoundError:
         return PipelineReport(
             filepath=str(path),
             score=0,
@@ -285,11 +288,7 @@ def lint_file(path: Path, config: Optional[LintConfig] = None) -> Report:
             )],
             summary="Fatal Error: File not found."
         )
-
-    # 2. Read Content
-    try:
-        content = path_obj.read_text(encoding="utf-8")
-    except Exception as e:
+    except (IOError, PermissionError) as e:
         return PipelineReport(
             filepath=str(path),
             score=0,
@@ -304,8 +303,24 @@ def lint_file(path: Path, config: Optional[LintConfig] = None) -> Report:
             )],
             summary="Fatal Error: Could not read file."
         )
+    except Exception as e:
+        # Catch-all for unexpected errors during read
+        return PipelineReport(
+            filepath=str(path),
+            score=0,
+            issues=[Issue(
+                rule_id="SYS006",
+                line_number=1,
+                severity=Severity.ERROR,
+                category=RuleCategory.ANATOMY,
+                title="System Error",
+                description=f"Unexpected error reading file: {str(e)}",
+                fix_suggestion="Check system logs."
+            )],
+            summary="Fatal Error: Unexpected system error."
+        )
 
-    # 3. Delegate to lint_text
+    # 2. Delegate to lint_text
     report = lint_text(content, config)
     
     # Update filepath in the report

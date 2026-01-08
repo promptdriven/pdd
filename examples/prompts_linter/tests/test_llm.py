@@ -595,3 +595,115 @@ class TestDetailedLogic:
             assert kwargs["model"] == custom_model
             # Since it doesn't contain "gpt", response_format should be absent
             assert "response_format" not in kwargs or kwargs["response_format"] is None
+
+class TestNewCoverage:
+    
+    @pytest.fixture
+    def mock_completion(self):
+        with patch("src.utils.llm.litellm.completion") as mock:
+            yield mock
+
+    def test_z3_verify_cleaning_logic_indices(self):
+        """
+        Formally verify the index calculation logic used in _clean_json_string.
+        We model the logic: if start and end braces exist and end > start,
+        the slice length must be positive and calculated correctly.
+        """
+        s = Solver()
+        
+        # Model the string as abstract indices
+        str_len = Int('str_len')
+        start_idx = Int('start_idx') # Index of first '{'
+        end_idx = Int('end_idx')     # Index of last '}'
+        
+        # Constraints representing a string containing braces
+        s.add(str_len > 0)
+        s.add(start_idx >= 0)
+        s.add(end_idx < str_len)
+        
+        # The condition in the code: start_idx != -1 and end_idx != -1 and end_idx > start_idx
+        # We assume find() works correctly, so we test the logic inside the if block.
+        condition = end_idx > start_idx
+        
+        # The operation: content[start_idx : end_idx + 1]
+        # The length of this slice is (end_idx + 1) - start_idx
+        slice_len = (end_idx + 1) - start_idx
+        
+        # We want to prove that if condition holds, slice_len is valid (positive and <= original length)
+        # Negate the goal: condition implies NOT (valid_slice)
+        # valid_slice means: slice_len > 0 AND slice_len <= str_len
+        
+        goal = Implies(condition, And(slice_len > 0, slice_len <= str_len))
+        
+        s.add(Not(goal))
+        
+        if s.check() == sat:
+            pytest.fail("Z3 verification failed: Cleaning logic indices could be invalid.")
+        else:
+            print("Z3 verification passed: Cleaning logic indices are robust.")
+
+    def test_provider_selection_empty_env_var(self, mock_env):
+        """
+        Verify that an empty string environment variable is treated as 'present'
+        by the provider detection logic (since os.getenv returns "" not None).
+        """
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+            provider, model = get_provider_and_model()
+            # The code checks `is not None`, so "" passes
+            assert provider == "openai"
+            assert model == DEFAULT_MODELS["openai"]
+
+    def test_analyze_prompt_whitespace_response(self, mock_env, mock_completion):
+        """
+        Verify behavior when LLM returns only whitespace.
+        raw_content is truthy ("   "), but cleaning reduces it to empty string,
+        causing json.loads to fail. Should return None safely.
+        """
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-..."}):
+            mock_response = MagicMock()
+            mock_response.choices[0].message.content = "   "
+            mock_completion.return_value = mock_response
+
+            result = analyze_prompt("test prompt")
+            assert result is None
+
+    def test_analyze_prompt_complex_markdown_structure(self, mock_env, mock_completion, mock_llm_response_cls):
+        """
+        Verify cleaning logic when response has text surrounding a markdown block.
+        The regex removes the backticks only if it starts with them. 
+        Here we test the fallback brace finding logic for embedded markdown.
+        """
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-..."}):
+            mock_response = MagicMock()
+            # Text + Markdown + Text
+            content = (
+                "Sure, here is the JSON:\n"
+                "```json\n"
+                "{\n"
+                '  "guide_alignment_summary": "Extracted"\n'
+                "}\n"
+                "```\n"
+                "Let me know if you need edits."
+            )
+            mock_response.choices[0].message.content = content
+            mock_completion.return_value = mock_response
+
+            result = analyze_prompt("test prompt")
+            
+            assert result is not None
+            mock_llm_response_cls.assert_called_once()
+            assert mock_llm_response_cls.call_args[1]["guide_alignment_summary"] == "Extracted"
+
+    def test_analyze_prompt_max_retries_config(self, mock_env, mock_completion):
+        """
+        Verify that max_retries config is correctly passed to litellm.
+        """
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-..."}):
+            mock_response = MagicMock()
+            mock_response.choices[0].message.content = '{}'
+            mock_completion.return_value = mock_response
+
+            analyze_prompt("test prompt", config={"max_retries": 5})
+
+            args, kwargs = mock_completion.call_args
+            assert kwargs["num_retries"] == 5

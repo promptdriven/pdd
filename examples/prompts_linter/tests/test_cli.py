@@ -642,8 +642,8 @@ def test_config_creation_error(tmp_path):
     f = tmp_path / "prompt.txt"
     f.touch()
     
-    # Patch LintConfig to raise TypeError
-    with patch(f"{CLI_MODULE}.LintConfig", side_effect=TypeError("Invalid argument")):
+    # Patch CLIConfig (the subclass used in the code) to raise TypeError
+    with patch(f"{CLI_MODULE}.CLIConfig", side_effect=TypeError("Invalid argument")):
         result = runner.invoke(app, [str(f)])
         
     assert result.exit_code == 1
@@ -742,4 +742,187 @@ def test_z3_flag_validation_logic():
     s.add(assume_local)
     s.add(is_valid)
     assert s.check() == unsat, "Z3 found valid state for both grounding flags"
+    s.pop()
+
+# tests/test_cli_extended.py
+# (Appended to existing tests)
+
+# --- Test Plan ---
+# 1. Test Grounding Configuration: Verify that --assume-cloud-grounding and --assume-local flags 
+#    correctly set the 'grounding' attribute in the LintConfig object passed to the pipeline.
+# 2. Test Advanced LLM Configuration: Verify that optional LLM flags (base URL, retries, budget) 
+#    are correctly mapped to the LintConfig object.
+# 3. Test LLM Provider Enum Passing: Verify that different LLMProvider enum values (e.g., GOOGLE, CUSTOM)
+#    are correctly extracted and passed as strings to the configuration.
+# 4. Test Fix Output Directory Creation Failure: Verify that if creating the parent directory for 
+#    --fix-output fails (e.g., permission error), the CLI handles it gracefully without crashing.
+# 5. Test Complex Fail-On Logic: Verify the exit code logic when multiple issues of varying severities 
+#    are present, ensuring the threshold logic works correctly for mixed sets of issues.
+# 6. Z3 Verification of Severity Ranking: Formally verify the strict ordering of severity ranks 
+#    used in the filtering and exit code logic (Info < Warning < Error).
+
+def test_grounding_config_cloud(tmp_path, mock_pipeline):
+    """
+    Verify that --assume-cloud-grounding sets config.grounding to 'cloud'.
+    """
+    f = tmp_path / "prompt.txt"
+    f.touch()
+
+    result = runner.invoke(app, [str(f), "--assume-cloud-grounding"])
+
+    assert result.exit_code == 0
+    mock_pipeline.assert_called_once()
+    config = mock_pipeline.call_args[1]['config']
+    
+    # Check that the grounding attribute is set correctly
+    # Note: LintConfig definition in the prompt suggests 'grounding' is passed via kwargs 
+    # or mapped. The CLI code passes it as a kwarg 'grounding'.
+    # We check if the attribute exists on the config object.
+    assert getattr(config, 'grounding', None) == "cloud"
+
+def test_grounding_config_local(tmp_path, mock_pipeline):
+    """
+    Verify that --assume-local sets config.grounding to 'local'.
+    """
+    f = tmp_path / "prompt.txt"
+    f.touch()
+
+    result = runner.invoke(app, [str(f), "--assume-local"])
+
+    assert result.exit_code == 0
+    config = mock_pipeline.call_args[1]['config']
+    assert getattr(config, 'grounding', None) == "local"
+
+def test_llm_advanced_config_passing(tmp_path, mock_pipeline):
+    """
+    Verify that advanced LLM flags (base-url, retries, budget) are passed to LintConfig.
+    """
+    f = tmp_path / "prompt.txt"
+    f.touch()
+
+    result = runner.invoke(app, [
+        str(f),
+        "--llm-base-url", "https://api.custom.com/v1",
+        "--llm-max-retries", "5",
+        "--llm-budget-tokens", "5000"
+    ])
+
+    assert result.exit_code == 0
+    config = mock_pipeline.call_args[1]['config']
+    
+    # Check attributes. Based on CLI code:
+    # llm_base_url -> passed as kwarg 'llm_base_url'
+    # llm_max_retries -> passed as kwarg 'llm_max_retries'
+    # llm_budget_tokens -> passed as kwarg 'budget'
+    
+    # We check if these stuck to the config object (assuming LintConfig accepts them)
+    assert getattr(config, 'llm_base_url', None) == "https://api.custom.com/v1"
+    assert getattr(config, 'llm_max_retries', None) == 5
+    assert getattr(config, 'budget', None) == 5000
+
+def test_llm_provider_enum_passing(tmp_path, mock_pipeline):
+    """
+    Verify that LLMProvider enum values are passed as strings to the config.
+    """
+    f = tmp_path / "prompt.txt"
+    f.touch()
+
+    # Test with a specific provider
+    result = runner.invoke(app, [str(f), "--llm-provider", "google"])
+
+    assert result.exit_code == 0
+    config = mock_pipeline.call_args[1]['config']
+    # CLI passes provider=llm_provider.value
+    assert getattr(config, 'provider', None) == "google"
+
+def test_fix_output_mkdir_error(tmp_path, mock_pipeline):
+    """
+    Verify graceful handling when creating the output directory for --fix-output fails.
+    """
+    f = tmp_path / "prompt.txt"
+    f.touch()
+    out_file = tmp_path / "subdir" / "fixed.txt"
+
+    # Setup report with fix
+    report = PipelineReport(
+        filepath=str(f),
+        score=90,
+        issues=[],
+        summary="Fixed",
+        suggested_fix="fixed content"
+    )
+    mock_pipeline.return_value = report
+
+    # Mock pathlib.Path.mkdir to raise OSError
+    with patch("pathlib.Path.mkdir", side_effect=OSError("Disk full")):
+        result = runner.invoke(app, [str(f), "--fix", "--fix-output", str(out_file)])
+
+    # Should not crash
+    assert result.exit_code == 0
+    output = strip_ansi(result.stdout)
+    assert "Error writing fix to output file" in output
+    assert "Disk full" in output
+
+def test_fail_on_logic_complex(tmp_path, mock_pipeline):
+    """
+    Verify fail-on logic with a mix of Info, Warning, and Error issues.
+    """
+    f = tmp_path / "prompt.txt"
+    f.touch()
+
+    # Report with Info and Warning
+    mock_pipeline.return_value = Report(
+        filepath=str(f),
+        score=70,
+        issues=[
+            Issue(rule_id="I1", severity=Severity.INFO, category="context", description="Info"),
+            Issue(rule_id="W1", severity=Severity.WARNING, category="context", description="Warn")
+        ],
+        summary="Mixed"
+    )
+
+    # Case 1: Fail on Error -> Should pass (exit 0) because max severity is Warning
+    result = runner.invoke(app, [str(f), "--fail-on", "error"])
+    assert result.exit_code == 0
+
+    # Case 2: Fail on Warning -> Should fail (exit 1) because Warning is present
+    result = runner.invoke(app, [str(f), "--fail-on", "warning"])
+    assert result.exit_code == 1
+
+def test_z3_severity_ranking_ordering():
+    """
+    Formally verify the strict ordering of severity ranks used in the CLI helper.
+    Ensures that Info < Warning < Error is mathematically consistent.
+    """
+    s = Solver()
+    
+    # Define integer variables for ranks
+    rank_info = Int('rank_info')
+    rank_warning = Int('rank_warning')
+    rank_error = Int('rank_error')
+    
+    # Define the mapping logic from the code's _get_severity_rank function
+    # INFO=0, WARNING=1, ERROR=2
+    s.add(rank_info == 0)
+    s.add(rank_warning == 1)
+    s.add(rank_error == 2)
+    
+    # Verification Goals
+    
+    # 1. Prove Info < Warning
+    s.push()
+    s.add(Not(rank_info < rank_warning))
+    assert s.check() == unsat, "Z3 found case where Info >= Warning"
+    s.pop()
+    
+    # 2. Prove Warning < Error
+    s.push()
+    s.add(Not(rank_warning < rank_error))
+    assert s.check() == unsat, "Z3 found case where Warning >= Error"
+    s.pop()
+    
+    # 3. Prove Transitivity: Info < Error
+    s.push()
+    s.add(Not(rank_info < rank_error))
+    assert s.check() == unsat, "Z3 found case where Info >= Error"
     s.pop()

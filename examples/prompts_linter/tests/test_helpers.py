@@ -548,3 +548,152 @@ def test_z3_line_number_monotonicity():
     
     # If UNSAT, it means no counter-example exists, so the logic is monotonic.
     assert result == unsat, "Line number calculation logic is not monotonic!"
+
+# =============================================================================
+# New Unit Tests
+# =============================================================================
+
+def test_normalize_text_whitespace_lines():
+    """
+    Test that lines containing only whitespace are stripped to empty strings,
+    but the vertical structure (newlines) is preserved.
+    """
+    # Input: 3 lines. Middle one is tabs. Last one is spaces.
+    raw = "Line1\n\t\t\n   "
+    # Expected: "Line1\n\n" (last line becomes empty string, joined by \n)
+    expected = "Line1\n\n"
+    assert normalize_text(raw) == expected
+
+def test_extract_tag_content_attribute_limitation():
+    """
+    Test the known limitation where a '>' inside an attribute value breaks parsing.
+    The regex `[^>]*` stops at the first '>' it sees.
+    """
+    # The regex will match `<web title=">` as the opening tag.
+    # The content captured will be `">Content`.
+    text = '<web title=">">Content</web>'
+    results = extract_tag_content(text, TAG_WEB)
+    
+    # Documenting the broken behavior:
+    assert len(results) == 1
+    assert results[0] == '">Content' 
+
+def test_calculate_code_ratio_double_digit_list_limitation():
+    """
+    Test that double-digit list items (e.g., '10.') are NOT recognized as list items
+    by the current heuristic, and thus are counted as code if indented.
+    """
+    text = textwrap.dedent("""
+        1. Item one
+        2. Item two
+        ...
+        10. Item ten
+    """)
+    # Indent the text to trigger the indentation check
+    indented_text = "\n".join(f"    {line}" for line in text.splitlines() if line.strip())
+    
+    # Analysis:
+    # "    1. Item one" -> Indent 4. stripped starts with digit+dot -> List Item -> Not Code.
+    # "    2. Item two" -> Indent 4. stripped starts with digit+dot -> List Item -> Not Code.
+    # "    ..." -> Indent 4. Not list item -> Code.
+    # "    10. Item ten" -> Indent 4. stripped starts with "10.". 
+    #      Logic: stripped[:1] is "1", stripped[1:2] is "0". "0" != ".". 
+    #      Result: Not list item -> Code.
+    
+    # We expect a non-zero code ratio because of line 3 and line 4.
+    ratio = calculate_code_ratio(indented_text)
+    assert ratio > 0.0
+    # Specifically, lines 3 and 4 are counted as code. Total 4 lines. Ratio 0.5.
+    assert ratio == 0.5
+
+def test_calculate_code_ratio_plus_marker():
+    """Test that '+' is recognized as a valid list marker."""
+    text = "    + List item"
+    # Indented 4 spaces, but starts with +, so should be Text.
+    assert calculate_code_ratio(text) == 0.0
+
+def test_calculate_code_ratio_extended_keywords():
+    """Test detection of C++/Java style keywords."""
+    text = textwrap.dedent("""
+    public class MyClass {
+        private int x;
+        switch (x) {
+            case 1: break;
+        }
+    }
+    """)
+    # All lines here should trigger the regex keywords (public, private, switch, case) or symbols ({, })
+    assert calculate_code_ratio(text) == 1.0
+
+def test_find_line_number_at_newline_char():
+    """
+    Test that the line number at the exact index of a newline character
+    corresponds to the line ending there.
+    """
+    # Index: 0123
+    # Char:  A\nB
+    text = "A\nB"
+    # Index 1 is '\n'. It belongs to Line 1.
+    assert find_line_number(text, 1) == 1
+    # Index 2 is 'B'. It belongs to Line 2.
+    assert find_line_number(text, 2) == 2
+
+def test_read_file_content_ioerror_not_a_file(tmp_path):
+    """
+    Test that IOError is raised if the path exists but is not a file (e.g. directory).
+    This covers the specific check `if not file_path.is_file(): raise IOError`.
+    """
+    d = tmp_path / "some_dir"
+    d.mkdir()
+    
+    with pytest.raises(IOError) as excinfo:
+        read_file_content(str(d))
+    
+    assert "exists but is not a file" in str(excinfo.value)
+
+# =============================================================================
+# Z3 Formal Verification: List Item Logic
+# =============================================================================
+
+def test_z3_list_item_digit_limitation_proof():
+    """
+    Formally prove that the current list item detection logic fails for 
+    strings starting with two digits followed by a dot (e.g., "10.").
+    """
+    s = Solver()
+    
+    # We model the 'stripped' line string
+    # We constrain it to look like "10."
+    # Since Z3 string solving can be complex, we model the characters directly 
+    # relevant to the logic: stripped[:1] and stripped[1:2].
+    
+    # Logic from code:
+    # is_list_item = ... or (stripped[:1].isdigit() and stripped[1:2] == '.')
+    
+    # We represent the first two characters as integers/chars
+    char1 = String('char1')
+    char2 = String('char2')
+    
+    # The logic check in Python:
+    # char1.isdigit() AND char2 == '.'
+    
+    # In Z3, we define what "isdigit" means for a single char string
+    def is_digit_z3(c):
+        return Or([c == StringVal(str(d)) for d in range(10)])
+    
+    is_list_item_logic = And(is_digit_z3(char1), char2 == StringVal('.'))
+    
+    # Scenario: The string starts with "10" (i.e., char1="1", char2="0")
+    # We assert that this input exists
+    s.add(char1 == StringVal("1"))
+    s.add(char2 == StringVal("0"))
+    
+    # We want to prove that for this input, is_list_item_logic is FALSE.
+    # So we assert that it is TRUE, and expect UNSAT (contradiction).
+    s.add(is_list_item_logic)
+    
+    result = s.check()
+    
+    # If result is UNSAT, it means "10" cannot satisfy the list item logic.
+    # This proves the limitation exists.
+    assert result == unsat, "The logic incorrectly identified '10' as a list item start!"

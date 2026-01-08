@@ -24,6 +24,9 @@ Requirements
 
 Dependencies
 <utils.models><include>examples/models_example.py</include></utils.models>
+<utils.report><include>examples/report_example.py</include></utils.report>
+<utils.report><include>examples/report_output.md</include></utils.report>
+<utils.report><include>examples/report_output.txt</include></utils.report>
 
 Prompt Dependencies:
 - models_Python.prompt

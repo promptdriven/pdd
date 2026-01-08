@@ -101,6 +101,9 @@ class LLMFixSuggestion(BaseModel):
     rationale: str = Field(..., description="Why this fix is important.")
     priority: str = Field(..., description="Priority level (e.g., High, Medium, Low).")
 
+    # Resilience: Ignore extra fields returned by the LLM
+    model_config = ConfigDict(extra='ignore')
+
 
 class LLMSuggestionDetail(BaseModel):
     """
@@ -112,6 +115,9 @@ class LLMSuggestionDetail(BaseModel):
     before: str = Field(..., description="The code snippet or text before the fix.")
     after: str = Field(..., description="The code snippet or text after the fix.")
     priority: str = Field(..., description="Priority level of this specific detail.")
+
+    # Resilience: Ignore extra fields returned by the LLM
+    model_config = ConfigDict(extra='ignore')
 
 
 class LLMResponse(BaseModel):
