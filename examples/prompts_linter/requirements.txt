@@ -97,7 +97,6 @@ openai==2.12.0
 orjson==3.11.5
 packaging==24.2
 pandas==2.2.3
--e git+https://github.com/Frostday/pdd.git@8df53aa2da1bc000832ad8038c2c092d99135bf1#egg=pdd_cli
 pillow==12.0.0
 pillow_heif==1.1.1
 platformdirs==4.5.1
