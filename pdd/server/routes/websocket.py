@@ -21,7 +21,7 @@ from ..models import (
     ProgressMessage,
     JobStatus,
 )
-from ..jobs import JobManager, Job, JobStatus as JobStatusEnum
+from ..jobs import JobManager, Job
 
 # Initialize console for logging
 console = Console()
@@ -116,20 +116,7 @@ class ConnectionManager:
                 await connection.send_text(data)
             except Exception:
                 to_remove.append(connection)
-
-        for connection in to_remove:
-            self.disconnect(connection)
-
-    async def broadcast_to_all(self, message: WSMessage):
-        """Send a message to ALL connected clients."""
-        data = message.model_dump_json()
-        to_remove = []
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(data)
-            except Exception:
-                to_remove.append(connection)
-
+        
         for connection in to_remove:
             self.disconnect(connection)
 
@@ -420,54 +407,18 @@ async def emit_job_complete(job_id: str, result: Any, success: bool, cost: float
     await manager.broadcast_job_message(job_id, msg)
 
 
-async def emit_spawned_job_complete(job_id: str, command: str, success: bool, exit_code: int):
-    """
-    Helper to emit spawned job completion to ALL connected clients.
-
-    Spawned terminal jobs don't have WebSocket subscriptions, so we broadcast
-    to all connected clients. The frontend dashboard can filter by job_id.
-    """
-    msg = WSMessage(
-        type="spawned_job_complete",
-        data={
-            "job_id": job_id,
-            "command": command,
-            "success": success,
-            "exit_code": exit_code,
-            "status": "completed" if success else "failed",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
-    )
-    await manager.broadcast_to_all(msg)
-
-
 # ============================================================================
 # App Integration
 # ============================================================================
 
-def create_websocket_routes(app, connection_manager: ConnectionManager, job_manager: JobManager = None):
+def create_websocket_routes(app, connection_manager: ConnectionManager):
     """
     Register WebSocket routes with the FastAPI application.
 
     Args:
         app: FastAPI application instance.
         connection_manager: ConnectionManager instance for handling WebSocket connections.
-        job_manager: JobManager instance for registering output callbacks.
     """
     global manager
     manager = connection_manager
     app.include_router(router)
-
-    # Register callbacks to stream job output to WebSocket clients
-    if job_manager:
-        async def on_job_output(job: Job, stream_type: str, text: str):
-            """Callback to broadcast job output to WebSocket subscribers."""
-            await emit_job_output(job.id, stream_type, text)
-
-        async def on_job_complete(job: Job):
-            """Callback to broadcast job completion to WebSocket subscribers."""
-            success = job.status == JobStatusEnum.COMPLETED
-            await emit_job_complete(job.id, job.result, success, job.cost)
-
-        job_manager.callbacks.on_output(on_job_output)
-        job_manager.callbacks.on_complete(on_job_complete)
