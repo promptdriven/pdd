@@ -130,15 +130,21 @@ def _map_llm_suggestion_to_issue(suggestion: LLMSuggestionDetail) -> Issue:
     # Default to Context category for LLM suggestions if not inferable
     category = RuleCategory.CONTEXT
     
+    # Sanitize rule_id to ensure it meets Issue model constraints (min_length=2)
+    # Fallback to "LLM01" if invalid
+    rid = suggestion.rule_id
+    if not rid or len(rid) < 2:
+        rid = "LLM01"
+    
     # Simple heuristic to map rule_id prefixes to categories
-    rid = suggestion.rule_id.upper()
-    if rid.startswith("MOD"): category = RuleCategory.MODULARITY
-    elif rid.startswith("CON"): category = RuleCategory.CONTRACTS
-    elif rid.startswith("DET"): category = RuleCategory.DETERMINISM
-    elif rid.startswith("ANA") or rid.startswith("STR"): category = RuleCategory.ANATOMY
+    rid_upper = rid.upper()
+    if rid_upper.startswith("MOD"): category = RuleCategory.MODULARITY
+    elif rid_upper.startswith("CON"): category = RuleCategory.CONTRACTS
+    elif rid_upper.startswith("DET"): category = RuleCategory.DETERMINISM
+    elif rid_upper.startswith("ANA") or rid_upper.startswith("STR"): category = RuleCategory.ANATOMY
     
     return Issue(
-        rule_id=suggestion.rule_id,
+        rule_id=rid,
         line_number=1, # LLM issues are often global or hard to pinpoint line numbers without diffing
         severity=Severity.WARNING, # LLM suggestions are usually warnings, not hard errors
         category=category,
