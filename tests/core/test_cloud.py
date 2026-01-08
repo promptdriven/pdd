@@ -64,12 +64,15 @@ def clean_env():
     # Store original values
     original_env = os.environ.copy()
     
-    # Clear relevant keys
+    # Clear relevant keys (including cloud environment detection vars)
     keys_to_clear = [
-        PDD_CLOUD_URL_ENV, 
-        PDD_JWT_TOKEN_ENV, 
-        FIREBASE_API_KEY_ENV, 
-        GITHUB_CLIENT_ID_ENV
+        PDD_CLOUD_URL_ENV,
+        PDD_JWT_TOKEN_ENV,
+        FIREBASE_API_KEY_ENV,
+        GITHUB_CLIENT_ID_ENV,
+        "PDD_FORCE_LOCAL",
+        "K_SERVICE",
+        "FUNCTIONS_EMULATOR",
     ]
     for key in keys_to_clear:
         if key in os.environ:
