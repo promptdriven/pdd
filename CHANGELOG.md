@@ -1,3 +1,19 @@
+## v0.0.105 (2026-01-07)
+
+### Feat
+
+- add 'slow' marker to pytest configuration
+- add JSON metadata files for Python test results and configuration updates
+- add JSON metadata files for Python test results and configuration
+
+### Fix
+
+- improve CHANGELOG.md update process
+- add missing timeout parameters and false positive detection (#261)
+- prevent cloud routing in unit tests when cloud credentials present
+- enable cloud mode auto-detection for injected JWT tokens
+- enable cloud hybrid mode by default for verify loop
+
 ## v0.0.104 (2026-01-06)
 
 ### Feat
