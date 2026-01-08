@@ -63,6 +63,16 @@ Export `STEP_TIMEOUTS: Dict[int, float]` mapping step numbers to timeout values:
 - Complex steps (4, 5, 8): 600 seconds (reproduce, root cause, verify)
 - Most complex step (7): 1000 seconds (generate fix)
 
+% False Positive Detection (Issue #261)
+Export `MIN_VALID_OUTPUT_LENGTH: int = 50`
+
+In `run_agentic_task()`, after a provider returns success, detect false positives:
+- If `cost == 0.0` AND `len(message.strip()) < MIN_VALID_OUTPUT_LENGTH`:
+  - This indicates no actual work was done (provider returned success without doing anything)
+  - Log error: "Provider '{provider}' returned success but appears to be a false positive"
+  - Treat as failure and try next provider (continue to fallback)
+- Only return success if provider produces legitimate output (>= 50 chars) OR has non-zero cost
+
 % Token Pricing (for providers that return tokens, not USD)
 - Gemini: Refer to current pricing from CLI documentation above
 - Codex: $1.50/1M input, $6/1M output (75% discount for cached tokens)
