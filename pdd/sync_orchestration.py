@@ -1540,15 +1540,12 @@ def sync_orchestration(
                                  clean_env = os.environ.copy()
                                  for var in ['FORCE_COLOR', 'COLUMNS']:
                                      clean_env.pop(var, None)
-                                 # Get language-appropriate run command
-                                 # Bug fix: Use .resolve() to get absolute path, avoiding doubled paths
-                                 # when cwd is set to the parent directory
+                                 # Bug fix: Use sys.executable to ensure same Python interpreter as
+                                 # crash_main (fix_code_loop.py:477). When both venv and conda are
+                                 # active, PATH lookup for 'python' may resolve to a different
+                                 # interpreter, causing infinite crash loops.
                                  example_path = str(pdd_files['example'].resolve())
-                                 run_cmd = get_run_command_for_file(example_path)
-                                 if run_cmd:
-                                     cmd_parts = run_cmd.split()
-                                 else:
-                                     cmd_parts = ['python', example_path]
+                                 cmd_parts = [sys.executable, example_path]
                                  # Use error-detection runner that handles server-style examples
                                  returncode, stdout, stderr = _run_example_with_error_detection(
                                      cmd_parts,
