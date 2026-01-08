@@ -100,6 +100,36 @@ contexts:
       max_attempts: 3
 
 
+  # Server routes context - prompts in prompts/server/routes/, output to pdd/server/routes/
+  server_routes:
+    paths: ["prompts/server/routes/**", "pdd/server/routes/**"]
+    defaults:
+      prompts_dir: "prompts/server/routes"
+      generate_output_path: "pdd/server/routes/"
+      test_output_path: "pdd/server/routes/tests/"
+      example_output_path: "pdd/server/routes/examples/"
+      default_language: "python"
+      target_coverage: 80.0
+      strength: 0.75
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
+  # Server context - prompts in prompts/server/, output to pdd/server/
+  server:
+    paths: ["prompts/server/**", "pdd/server/**"]
+    defaults:
+      prompts_dir: "prompts/server"
+      generate_output_path: "pdd/server/"
+      test_output_path: "pdd/server/tests/"
+      example_output_path: "pdd/server/examples/"
+      default_language: "python"
+      target_coverage: 80.0
+      strength: 0.75
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
   # Main PDD CLI codebase context
   pdd_cli:
     paths: ["pdd/**", "*.py", "prompts/**", "tests/**"]
