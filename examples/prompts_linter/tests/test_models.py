@@ -439,3 +439,161 @@ def test_z3_verify_severity_distinctness():
     
     # If UNSAT, it means no collision is possible (they are all distinct).
     assert s.check() == z3.unsat, "Severity enum values are not distinct strings"
+
+
+# -----------------------------------------------------------------------------
+# 10. Additional LLM Resilience Tests
+# -----------------------------------------------------------------------------
+
+def test_llm_response_nested_extra_fields_behavior():
+    """
+    Test behavior when nested objects (LLMFixSuggestion) contain extra fields.
+    The prompt requires resilience. We verify that nested models also ignore 
+    extra fields, ensuring the parser doesn't crash on LLM hallucinations.
+    """
+    raw_data = {
+        "guide_alignment_summary": "Summary",
+        "top_fixes": [
+            {
+                "title": "Fix 1", 
+                "rationale": "Because", 
+                "priority": "High",
+                "hallucinated_inner_field": "Should be ignored"
+            }
+        ],
+        "suggestions": []
+    }
+    
+    # Should NOT raise ValidationError
+    response = LLMResponse(**raw_data)
+    assert len(response.top_fixes) == 1
+    # Verify the extra field is not on the object
+    assert not hasattr(response.top_fixes[0], "hallucinated_inner_field")
+
+# -----------------------------------------------------------------------------
+# 11. Report Serialization Tests
+# -----------------------------------------------------------------------------
+
+def test_report_serialization_enum_values():
+    """
+    Verify that when a Report is dumped to JSON, Enums are serialized 
+    as their simple string values, not python objects.
+    """
+    issue = Issue(
+        rule_id="SER01",
+        severity=Severity.WARNING,
+        category=RuleCategory.DETERMINISM,
+        description="Serialization check"
+    )
+    report = Report(
+        filepath="test.json",
+        score=100,
+        summary="json test",
+        issues=[issue]
+    )
+    
+    json_output = report.model_dump_json()
+    data = json.loads(json_output)
+    
+    # Check Issue inside Report
+    issue_data = data["issues"][0]
+    assert issue_data["severity"] == "warning"
+    assert issue_data["category"] == "determinism"
+    # Ensure it's not "Severity.WARNING"
+    assert issue_data["severity"] != "Severity.WARNING"
+
+# -----------------------------------------------------------------------------
+# 12. Issue Model - Optional Fields
+# -----------------------------------------------------------------------------
+
+def test_issue_title_field():
+    """Test the optional 'title' field in Issue."""
+    issue = Issue(
+        rule_id="TIT01",
+        severity=Severity.INFO,
+        category=RuleCategory.ABSTRACTION,
+        description="Desc",
+        title="My Custom Title"
+    )
+    assert issue.title == "My Custom Title"
+    
+    issue_no_title = Issue(
+        rule_id="TIT02",
+        severity=Severity.INFO,
+        category=RuleCategory.ABSTRACTION,
+        description="Desc"
+    )
+    assert issue_no_title.title is None
+
+# -----------------------------------------------------------------------------
+# 13. Report Model - Default Factory Isolation
+# -----------------------------------------------------------------------------
+
+def test_report_issues_default_factory_isolation():
+    """
+    Verify that the default_factory for 'issues' creates a new list 
+    for each instance, preventing state leakage between reports.
+    """
+    r1 = Report(filepath="f1", score=10, summary="s")
+    r2 = Report(filepath="f2", score=10, summary="s")
+    
+    r1.issues.append(Issue(
+        rule_id="LEAK01", 
+        severity=Severity.ERROR, 
+        category=RuleCategory.ANATOMY, 
+        description="d"
+    ))
+    
+    assert len(r1.issues) == 1
+    assert len(r2.issues) == 0
+    assert r1.issues is not r2.issues
+
+# -----------------------------------------------------------------------------
+# 14. Z3 Formal Verification - RuleCategory
+# -----------------------------------------------------------------------------
+
+def test_z3_verify_rule_category_completeness():
+    """
+    Formal verification that RuleCategory covers the 7 PDD principles.
+    We map the enum values to a Z3 set and ensure all required strings are present.
+    """
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("z3-solver not installed")
+
+    s = z3.Solver()
+    
+    # The 7 pillars of PDD
+    required_principles = {
+        "modularity", "anatomy", "contracts", "context", 
+        "determinism", "abstraction", "attention"
+    }
+    
+    # Get actual values from the Enum class
+    actual_values = {e.value for e in RuleCategory}
+    
+    # We want to prove: required_principles is a subset of actual_values
+    # In Z3, we can model this by asserting that for every required string,
+    # there exists an equal string in the actual values.
+    
+    # However, since these are finite sets of strings, we can do a simpler
+    # logical proof: The intersection size must equal the required set size.
+    
+    # Let's do it by contradiction:
+    # Assert that there exists a 'p' in required_principles such that 'p' is NOT in actual_values.
+    
+    # We create a Z3 variable 'missing_principle' which can be any of the required strings
+    missing_principle = z3.String('missing_principle')
+    
+    # Constraint 1: missing_principle must be one of the required strings
+    is_required = z3.Or([missing_principle == z3.StringVal(p) for p in required_principles])
+    
+    # Constraint 2: missing_principle is NOT in the actual enum values
+    is_missing = z3.And([missing_principle != z3.StringVal(a) for a in actual_values])
+    
+    s.add(is_required)
+    s.add(is_missing)
+    
+    # If UNSAT, it means no required principle is missing.
+    assert s.check() == z3.unsat, f"RuleCategory is missing a PDD principle: {s.model()}"

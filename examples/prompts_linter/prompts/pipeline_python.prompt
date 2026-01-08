@@ -15,21 +15,11 @@ Requirements
 8.  **Performance**: Ensure the pipeline is efficient. Heuristics should be instantaneous. LLM calls should respect the timeout defined in the config/LLM module.
 
 Dependencies
-<models_py>
-  <include>examples/models_example.py</include>
-</models_py>
-<rules_py>
-  <include>examples/rules_example.py</include>
-</rules_py>
-<llm_py>
-  <include>examples/llm_example.py</include>
-</llm_py>
-<fix_py>
-  <include>examples/fix_example.py</include>
-</fix_py>
-<report_py>
-  <include>src/utils/report.py</include>
-</report_py>
+<utils.models><include>examples/models_example.py</include></utils.models>
+<utils.rules><include>examples/rules_example.py</include></utils.rules>
+<utils.llm><include>examples/llm_example.py</include></utils.llm>
+<utils.fix><include>examples/fix_example.py</include></utils.fix>
+<utils.helpers><include>examples/helpers_example.py</include></utils.helpers>
 
 Prompt Dependencies:
 - models_Python.prompt

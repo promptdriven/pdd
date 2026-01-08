@@ -149,7 +149,7 @@ def _apply_structural_scaffolding(text: str, report: Report) -> str:
         
         # Only trigger general anatomy scan if it's explicitly an ANATOMY category issue.
         # We avoid triggering on "Missing <prompt>" (STR001) by checking for section keywords or explicit category.
-        if cat == RuleCategory.ANATOMY:
+        if is_anatomy:
             has_general_anatomy_issue = True
             
         # Check for specific missing sections in description regardless of category

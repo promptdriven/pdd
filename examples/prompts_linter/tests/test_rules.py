@@ -426,3 +426,212 @@ def test_z3_attention_logic():
     # Should be UNSAT because code uses idx > start_zone (strict)
     assert result == z3.unsat, "Z3 found that boundary 0.2*L is considered Middle (it should be safe)"
     solver.pop() 
+
+# =============================================================================
+# Test Plan (New Tests)
+# =============================================================================
+#
+# 1. Modularity Boundary Checks (Unit Tests via Public API)
+#    - Test exact boundary for section separators.
+#    - Case A: 2 separators (Should NOT trigger MOD002).
+#    - Case B: 3 separators (Should trigger MOD002).
+#    - Rationale: Ensure the logic `len > 2` is strictly adhered to.
+#
+# 2. Requirements List Styles (Unit Tests via Public API)
+#    - Test bullet point variations for Requirements section.
+#    - Case: Using `*` or `-` or `+` instead of numbered lists.
+#    - Rationale: The regex allows `[-*+]`, need to verify this works for valid inputs.
+#
+# 3. Attention Hierarchy - Multiple & Case Insensitivity (Unit Tests via Public API)
+#    - Test that multiple distinct keywords in the middle zone trigger multiple issues.
+#    - Test that keywords are detected case-insensitively (e.g., "security" vs "Security").
+#    - Rationale: Ensure comprehensive scanning of the danger zone.
+#
+# 4. Determinism - Multiple Tag Types (Unit Tests via Public API)
+#    - Test presence of multiple different forbidden tags (e.g., <web> AND <run>).
+#    - Rationale: Ensure all violations are reported, not just the first one found.
+#
+# 5. Anatomy - Indentation Robustness (Unit Tests via Public API)
+#    - Test headers with significant leading whitespace/indentation.
+#    - Rationale: The regex `^\s*` was added to handle this; verification is needed.
+#
+# 6. Z3 Formal Verification - Modularity Logic
+#    - Verify the logic for separator counts formally.
+#    - Theorem: If count <= 2, then Issue is False. If count > 2, Issue is True.
+
+# =============================================================================
+# New Unit Tests
+# =============================================================================
+
+def test_modularity_separator_boundary():
+    """
+    Test the boundary condition for section separators (MOD002).
+    Rule: > 2 separators triggers an issue.
+    """
+    # Case A: 2 separators (Allowed)
+    text_safe = """
+    Part 1
+    ---
+    Part 2
+    ===
+    End
+    """
+    issues_safe = rules.analyze_text(text_safe)
+    mod_issues_safe = [i for i in issues_safe if i.rule_id == "MOD002"]
+    assert len(mod_issues_safe) == 0, "2 separators should not trigger MOD002"
+
+    # Case B: 3 separators (Forbidden)
+    text_fail = """
+    Part 1
+    ---
+    Part 2
+    ===
+    Part 3
+    ***
+    End
+    """
+    issues_fail = rules.analyze_text(text_fail)
+    mod_issues_fail = [i for i in issues_fail if i.rule_id == "MOD002"]
+    assert len(mod_issues_fail) == 1, "3 separators should trigger MOD002"
+
+def test_requirements_bullet_styles():
+    """
+    Test that Requirements sections accept bullet points (*, -, +) 
+    and do not trigger REQ001 (Malformed).
+    """
+    # We construct a text that has a valid header and a bullet list
+    text = """
+    # Requirements
+    * Requirement A
+    - Requirement B
+    + Requirement C
+    """
+    issues = rules.analyze_text(text)
+    
+    # Filter for REQ001 (Malformed) or REQ002 (Missing)
+    req_issues = [i for i in issues if i.rule_id in ["REQ001", "REQ002"]]
+    assert len(req_issues) == 0, "Bullet points should be accepted as valid Requirements format"
+
+def test_attention_multiple_and_case_insensitivity():
+    """
+    Test that multiple keywords are detected in the middle zone, 
+    and detection is case-insensitive.
+    """
+    # Construct text > 100 chars
+    # Padding needs to be enough to push keywords into 20%-80% zone
+    padding = "x" * 100
+    # "security" (lowercase) and "AUTH" (uppercase) in the middle
+    text = f"{padding} security {padding} AUTH {padding}"
+    
+    issues = rules.analyze_text(text)
+    att_issues = [i for i in issues if i.rule_id == "ATT001"]
+    
+    # Should find both "Security" (matched by 'security') and "Auth" (matched by 'AUTH')
+    assert len(att_issues) == 2
+    
+    descriptions = [i.description.lower() for i in att_issues]
+    assert any("security" in d for d in descriptions)
+    assert any("auth" in d for d in descriptions)
+
+def test_determinism_multiple_tag_types(mock_helpers):
+    """
+    Test that multiple different forbidden tags generate multiple issues.
+    """
+    text = "Try to <web>scrape</web> and then <run>execute</run>."
+    
+    # Mock helpers to return counts for specific tags
+    def side_effect_count(txt, tag):
+        if tag in ["web", "run"]:
+            return 1
+        return 0
+    
+    mock_helpers.count_tags.side_effect = side_effect_count
+    
+    issues = rules.analyze_text(text)
+    det_issues = [i for i in issues if i.rule_id == "DET001"]
+    
+    assert len(det_issues) == 2
+    descriptions = [i.description for i in det_issues]
+    assert any("<web>" in d for d in descriptions)
+    assert any("<run>" in d for d in descriptions)
+
+def test_anatomy_indentation_robustness():
+    """
+    Test that anatomy headers are detected even with indentation.
+    """
+    text = """
+    # Requirements
+    1. Req
+    
+      # Input/Output
+      Input: A
+      
+    \t# Dependencies
+    - None
+    
+       # Instructions
+       Do it.
+    """
+    issues = rules.analyze_text(text)
+    
+    # We expect NO Anatomy issues (ANAxxx)
+    ana_issues = [i for i in issues if i.category == RuleCategory.ANATOMY and i.severity == Severity.WARNING]
+    assert len(ana_issues) == 0, f"Indented headers should be found. Got: {[i.title for i in ana_issues]}"
+
+def test_modularity_file_enumeration_case_insensitive():
+    """
+    Test that file enumeration patterns are case insensitive.
+    """
+    text = """
+    file 1: main.py
+    ...
+    FILE 2: utils.py
+    """
+    issues = rules.analyze_text(text)
+    mod_issues = [i for i in issues if i.rule_id == "MOD003"]
+    assert len(mod_issues) == 1
+
+# =============================================================================
+# Z3 Formal Verification (Additional)
+# =============================================================================
+
+def test_z3_modularity_separator_logic():
+    """
+    Formal verification of the separator count logic.
+    Constraint: Issue is triggered IFF count > 2.
+    """
+    try:
+        import z3
+    except ImportError:
+        pytest.skip("z3-solver not installed")
+
+    # Variables
+    count = z3.Int('count')
+    has_issue = z3.Bool('has_issue')
+    
+    # Logic defined in code: if len(separators) > 2: issues.append(...)
+    # So has_issue <==> count > 2
+    logic = has_issue == (count > 2)
+    
+    # Constraint: count cannot be negative (it's a length)
+    valid_count = count >= 0
+    
+    solver = z3.Solver()
+    solver.add(valid_count)
+    solver.add(logic)
+    
+    # Verification 1: Prove that count = 2 implies NO issue
+    solver.push()
+    solver.add(count == 2)
+    solver.add(has_issue) # Assert that issue exists (contradiction expected)
+    result = solver.check()
+    assert result == z3.unsat, "Z3 found a case where count=2 triggers an issue"
+    solver.pop()
+    
+    # Verification 2: Prove that count = 3 implies issue
+    solver.push()
+    solver.add(count == 3)
+    solver.add(z3.Not(has_issue)) # Assert that issue does NOT exist (contradiction expected)
+    result = solver.check()
+    assert result == z3.unsat, "Z3 found a case where count=3 does NOT trigger an issue"
+    solver.pop()

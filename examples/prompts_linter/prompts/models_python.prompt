@@ -24,6 +24,9 @@ Dependencies
 <pydantic_docs>
   <include>[File not found: context/pydantic_v2_example.py]</include>
 </pydantic_docs>
+<utils.models>
+  <include>examples/models_example.py</include>
+</utils.models>
 
 Instructions
 -   Import `BaseModel`, `Field`, `validator` (or `field_validator`), and `Enum` from `pydantic` (and `typing`).

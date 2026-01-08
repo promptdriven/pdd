@@ -550,3 +550,113 @@ def test_render_text_file_handle_closed_on_error(mock_console_cls, mock_file_ope
     
     # Verify close was called on the file handle returned by open
     mock_file_open.return_value.close.assert_called_once()
+
+@patch("src.utils.report.Table")
+@patch("src.utils.report.console")
+def test_render_text_unknown_severity_default_style(mock_console, mock_table_cls):
+    """
+    Verify that an unknown severity defaults to 'white' style in the text renderer.
+    """
+    # Create a mock issue with a severity that won't match the standard enums
+    mock_issue = MagicMock()
+    mock_issue.rule_id = "UNK001"
+    mock_issue.line_number = 1
+    mock_issue.description = "Unknown severity"
+    
+    # The code compares using == Severity.ERROR, etc.
+    # We create a mock object for severity. It won't equal the Enum members.
+    # We also need severity.value.lower() to work for the text generation.
+    mock_sev = MagicMock()
+    mock_sev.value = "Critical"
+    # Ensure it doesn't accidentally equal the Enums (though MagicMock usually doesn't)
+    mock_issue.severity = mock_sev
+    
+    # Use a MagicMock for the report to bypass Pydantic validation of the 'issues' list
+    # which contains a MagicMock issue that isn't a valid Issue model.
+    report = MagicMock()
+    report.filepath = "unk.txt"
+    report.score = 50
+    report.issues = [mock_issue]
+    report.summary = "s"
+    report.llm_analysis = None
+    
+    mock_table_instance = mock_table_cls.return_value
+    
+    render_report(report, fmt="text")
+    
+    # Check the add_row call
+    # The code calls: table.add_row(..., Text(sev.value, style=sev_style), ...)
+    assert mock_table_instance.add_row.called
+    args, _ = mock_table_instance.add_row.call_args
+    
+    # args[1] is the severity Text object
+    sev_text = args[1]
+    
+    # Verify the style is the default "white"
+    assert "white" in str(sev_text.style)
+    # Verify the text content is the value we set
+    assert "critical" in str(sev_text)
+
+@patch("src.utils.report.console")
+def test_render_report_write_error_message(mock_console, sample_report):
+    """
+    Verify that the specific error message is printed to the console when file writing fails
+    for string-based formats (JSON/MD).
+    """
+    # Patch open to raise IOError
+    with patch("builtins.open", side_effect=IOError("Disk full")):
+        render_report(sample_report, fmt="json", output_path="bad_disk.json")
+    
+    # Verify console.print was called with the error message
+    # The code: console.print(f"[red]Error writing to file {output_path}: {e}[/red]")
+    assert mock_console.print.called
+    args, _ = mock_console.print.call_args
+    message = str(args[0]) # Rich objects or strings
+    
+    assert "Error writing to file" in message
+    assert "bad_disk.json" in message
+    assert "Disk full" in message
+
+@patch("src.utils.report.Table")
+@patch("src.utils.report.console")
+def test_render_text_table_columns(mock_console, mock_table_cls, sample_issue):
+    """
+    Verify that the Rich Table is initialized with the correct columns.
+    """
+    report = Report(filepath="cols.txt", score=50, issues=[sample_issue], summary="s")
+    render_report(report, fmt="text")
+    
+    mock_table_instance = mock_table_cls.return_value
+    
+    # Check add_column calls
+    # Expected columns: "Rule", "Severity", "Line", "Description"
+    calls = mock_table_instance.add_column.call_args_list
+    assert len(calls) == 4
+    
+    # Verify headers (first argument of add_column)
+    assert calls[0][0][0] == "Rule"
+    assert calls[1][0][0] == "Severity"
+    assert calls[2][0][0] == "Line"
+    assert calls[3][0][0] == "Description"
+
+def test_render_markdown_special_chars(capsys):
+    """
+    Verify behavior of Markdown rendering with special characters in description.
+    The current implementation does not escape them, so we verify they appear as-is.
+    """
+    issue = Issue(
+        rule_id="SPC001",
+        line_number=1,
+        severity=Severity.INFO,
+        description="Check for <script> tags & | pipes.",
+        category=RuleCategory.MODULARITY, # Changed from SECURITY to match available enums
+        fix_suggestion="None"
+    )
+    report = Report(filepath="spec.txt", score=100, issues=[issue], summary="s")
+    
+    render_report(report, fmt="md")
+    captured = capsys.readouterr()
+    
+    # Verify the pipe in description is present in the output row
+    # The code uses f-strings: f"| ... | {issue.description} |"
+    assert "| Check for <script> tags & | pipes. |" in captured.out
