@@ -2,17 +2,21 @@
 
 ### Feat
 
-- add 'slow' marker to pytest configuration
-- add JSON metadata files for Python test results and configuration updates
-- add JSON metadata files for Python test results and configuration
+- **Content-Hash Based Caching for `summarize_directory`:** Complete rewrite of `summarize_directory.py` using SHA-256 content hashing instead of timestamps for cache invalidation. CSV schema changed from `full_path,file_summary,date` to `full_path,file_summary,content_hash`. Enables accurate cache hits even when files are modified and reverted.
+
+- **False Positive Detection for Agentic Tasks (Issue #261):** Added `MIN_VALID_OUTPUT_LENGTH` constant (50 chars) to detect when providers return success but produce no meaningful work ($0.00 cost + minimal output). Prevents silent failures in multi-provider fallback chains.
+
+- **Step-Specific Timeouts for Agentic Orchestrator (Issue #261):** Propagate `STEP_TIMEOUTS` dictionary to `run_agentic_task()` calls in `agentic_bug_orchestrator.py`. Complex steps (7: generation) get 1000s timeout; others use appropriate values from 240-600s.
 
 ### Fix
 
-- improve CHANGELOG.md update process
-- add missing timeout parameters and false positive detection (#261)
-- prevent cloud routing in unit tests when cloud credentials present
-- enable cloud mode auto-detection for injected JWT tokens
-- enable cloud hybrid mode by default for verify loop
+- **Cloud Auto-Detection for Injected JWT Tokens:** Updated `CloudConfig.is_cloud_enabled()` to check for `PDD_JWT_TOKEN` environment variable first, enabling cloud mode in testing/CI scenarios without requiring device flow credentials (FIREBASE_API_KEY + GITHUB_CLIENT_ID).
+
+- **Hybrid Cloud Mode for Verify Loop:** Changed default behavior in `fix_verification_main.py` when `loop=True`. Now uses cloud for LLM fix generation while keeping verification execution local (`use_cloud_for_loop = not is_local_execution_preferred and not cloud_only`). Improves performance while maintaining local control flow.
+
+- **Optional Time Parameter in `llm_invoke`:** Changed `time` parameter type from `float = 0.25` to `Optional[float] = 0.25` and handle `None` by setting to `0.0`. Allows callers to explicitly disable reasoning token allocation.
+
+- **CSV Format Updates:** Updated `insert_includes.py` to use new CSV schema with `content_hash` instead of `date`. Updated example files (`summarize_directory_example.py`, `agentic_common_example.py`) with new CSV format and step timeout usage patterns.
 
 ## v0.0.104 (2026-01-06)
 
