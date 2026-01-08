@@ -20,6 +20,13 @@
 
   3. Define `__version__` = "0.1.0"
 
+% Here are the internal modules to export:
+<pdd.server.app><include>context/server/app_example.py</include></pdd.server.app>
+<pdd.server.models><include>context/server/models_example.py</include></pdd.server.models>
+<pdd.server.jobs><include>context/server/jobs_example.py</include></pdd.server.jobs>
+<pdd.server.security><include>context/server/security_example.py</include></pdd.server.security>
+<pdd.server.executor><include>context/server/executor_example.py</include></pdd.server.executor>
+
 % Instructions
   - Keep imports minimal at package level
   - Use lazy imports if needed to avoid circular dependencies

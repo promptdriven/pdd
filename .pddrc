@@ -100,14 +100,29 @@ contexts:
       max_attempts: 3
 
 
+  # Commands context - prompts in prompts/commands/, output to pdd/commands/
+  commands:
+    paths: ["prompts/commands/**", "pdd/commands/**"]
+    defaults:
+      prompts_dir: "prompts/commands"
+      generate_output_path: "pdd/commands/"
+      test_output_path: "tests/commands/"
+      example_output_path: "context/commands/"
+      default_language: "python"
+      target_coverage: 90.0
+      strength: 1
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
   # Server routes context - prompts in prompts/server/routes/, output to pdd/server/routes/
   server_routes:
     paths: ["prompts/server/routes/**", "pdd/server/routes/**"]
     defaults:
       prompts_dir: "prompts/server/routes"
       generate_output_path: "pdd/server/routes/"
-      test_output_path: "tests/"
-      example_output_path: "context/"
+      test_output_path: "tests/server/routes/"
+      example_output_path: "context/server/routes/"
       default_language: "python"
       target_coverage: 90.0
       strength: 1
@@ -121,8 +136,8 @@ contexts:
     defaults:
       prompts_dir: "prompts/server"
       generate_output_path: "pdd/server/"
-      test_output_path: "tests/"
-      example_output_path: "context/"
+      test_output_path: "tests/server/"
+      example_output_path: "context/server/"
       default_language: "python"
       target_coverage: 90.0
       strength: 1

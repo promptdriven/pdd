@@ -57,12 +57,12 @@
      - Clean up server resources
 
 % Dependencies
-  <server_module>
-  Use pdd.server: create_app, run_server, ServerConfig
-  </server_module>
-  <track_cost_example>
-  <include>context/track_cost_example.py</include>
-  </track_cost_example>
+  <server_app_example>
+  <include>context/server/app_example.py</include>
+  </server_app_example>
+
+<pdd.commands.misc><include>context/commands/misc_example.py</include></pdd.commands.misc>
+<pdd.commands><include>context/commands/__init___example.py</include></pdd.commands>
 
 % Instructions
   - Use @click.command("connect")

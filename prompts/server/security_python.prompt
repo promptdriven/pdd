@@ -54,6 +54,7 @@
   <fastapi_example>
   <include>context/fastapi_example.py</include>
   </fastapi_example>
+  <utils.auth_client><include>context/get_jwt_token_example.py</include></utils.auth_client>
 
 % Instructions
   - Use fnmatch for pattern matching against blacklist
