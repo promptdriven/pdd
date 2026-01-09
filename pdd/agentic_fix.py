@@ -479,7 +479,13 @@ def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, lab
             "After reading the instructions, fix the failing tests."
         )
 
-        claude_bin = shutil.which("claude") or "claude"
+        claude_path = shutil.which("claude")
+        if claude_path is None:
+            raise FileNotFoundError(
+                "The 'claude' CLI binary was not found in your PATH. "
+                "Please install the Anthropic CLI and ensure 'claude' is available on your PATH."
+            )
+        claude_bin = claude_path
 
         variants = [
             [claude_bin, "--dangerously-skip-permissions", agentic_instruction],
