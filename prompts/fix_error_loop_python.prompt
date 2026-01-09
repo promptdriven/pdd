@@ -13,7 +13,11 @@ The module supports both local and cloud execution modes:
 3.  **Structured XML Logging:** Implement a dictionary-based log structure. This must be formatted into a string using XML tags (`<pytest_output>`, `<fix_attempt>`, `<verification_output>`) for each iteration and written to `error_log_file`.
 4.  **Best State Recovery:** If the final iteration is not the most successful (prioritizing lowest errors, then fails, then warnings), the module must restore the file contents from the best recorded iteration backups.
 5.  **Verification Step:** After every code update, run a verification program using `detect_host_python_executable`. If the verification returns a non-zero exit code, restore the previous code backup immediately and log the restoration.
-6.  **Agentic Fallback:** If the loop finishes without total success and budget remains, invoke `run_agentic_fix`. Ensure the `error_log_file` is populated with the current state before the agent is called.
+6.  **Agentic Fallback:** If the loop finishes without total success and budget remains, invoke `run_agentic_fix`. This includes:
+    - Normal loop exhaustion (max_attempts reached)
+    - Early exits due to errors within the loop (backup creation failures, file read errors, pytest exceptions) - these must use `break` rather than `return`
+    - Initial test/verification exceptions (before the loop starts) - trigger agentic fallback directly if `agentic_fallback=True`
+    Ensure the `error_log_file` is populated with the current state before the agent is called.
 7.  **Non-Python Support:** Detect non-Python files by extension. Use `default_verify_cmd_for` to run initial verification. If it fails, skip the standard pytest loop and go directly to the agentic fallback.
 8.  **Cost & Budget Management:** Accumulate `total_cost` from LLM calls and stop the loop immediately if the `budget` is exceeded.
 9.  **Cloud Execution Support:** Implement `cloud_fix_errors` function that calls the cloud fixCode endpoint with the same interface as `fix_errors_from_unit_tests`. This enables hybrid mode where LLM calls go to the cloud while test execution stays local.
@@ -69,8 +73,9 @@ def fix_error_loop(
 ```
 
 ### Control Flow Summary:
-1. Validate files exist, initialize stats with `sys.maxsize` for best iteration comparison
+1. Validate files exist, determine `is_python` before try block, initialize stats with `sys.maxsize` for best iteration comparison
 2. Run initial test (pytest for Python, `default_verify_cmd_for` for non-Python)
+   - If initial test throws exception and `agentic_fallback=True`: trigger agentic fallback directly, return result
 3. Non-Python files: if initial verification fails, trigger agentic fallback directly; if passes, return success
 4. Python files: enter fix loop regardless of initial test result
    - If tests pass, read files and break (set `best_iteration=0`)
@@ -87,9 +92,13 @@ stateDiagram-v2
 
     Init --> InitialTest: run pytest or verify cmd
 
+    InitialTest --> InitialTestFallback: exception && agentic_fallback=True
+    InitialTest --> Return: exception && agentic_fallback=False
     InitialTest --> NonPythonFallback: non-Python && fails
     InitialTest --> NonPythonPass: non-Python && passes
     InitialTest --> FixLoop: Python (always enters loop)
+
+    InitialTestFallback --> Return: trigger agentic directly
 
     state FixLoop {
         [*] --> CheckSuccess
@@ -97,7 +106,10 @@ stateDiagram-v2
         ReadFiles_InLoop --> [*]: break (files read HERE for initially_passing!)
 
         CheckSuccess --> CreateBackups: success=false
-        CreateBackups --> UpdateBestIteration
+        CreateBackups --> [*]: error → success=false, break
+        CreateBackups --> ReadInputFiles: success
+        ReadInputFiles --> [*]: error → success=false, break
+        ReadInputFiles --> UpdateBestIteration
         UpdateBestIteration --> CallLLMFix: fix_errors_from_unit_tests
         CallLLMFix --> IncrementAttempts: fix_attempts++
         IncrementAttempts --> WriteFiles
@@ -105,6 +117,7 @@ stateDiagram-v2
         RunVerification --> RestoreBackup: verification fails
         RestoreBackup --> RerunPytest
         RunVerification --> RerunPytest: verification passes
+        RerunPytest --> [*]: exception → success=false, break
         RerunPytest --> CheckSuccess: update success
     }
 
@@ -131,6 +144,9 @@ Notes:
 - Initially-passing: CheckSuccess → ReadFiles_InLoop → break → PostLoop → SetFinal (stats="final")
 - `fix_attempts` counts LLM calls, not loop iterations
 - PostLoop skips file read for initially_passing (already read in loop)
+- Error conditions within loop (backup, file read, pytest) use `break` not `return` to allow agentic fallback
+- Initial test exceptions trigger agentic fallback directly (before entering the loop) if `agentic_fallback=True`
+- `is_python` must be determined BEFORE the try block so it's available in exception handlers
 
 ### Dependencies:
 <python_preamble>

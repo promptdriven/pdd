@@ -818,3 +818,292 @@ def test_agentic_fallback_cwd_is_project_root_not_prompt_parent(tmp_path, monkey
     assert cwd_value is None or cwd_value == tmp_path, \
         f"BUG: cwd should be None or project root, but got {cwd_value}. " \
         f"This causes path resolution failures when prompt is in a subdirectory!"
+
+
+# ============================================================================
+# Bug Fix Tests - Issue #266: Early Returns Bypass Agentic Fallback
+# ============================================================================
+
+def test_pytest_exception_triggers_agentic_fallback(setup_files):
+    """
+    BUG TEST (Issue #266): When pytest throws an exception during iteration
+    (Line 760), the fix_error_loop should trigger agentic fallback instead
+    of returning early.
+
+    Current behavior: Returns early with `return False, "", "", fix_attempts, total_cost, model_name`
+    Expected behavior: Should break from loop and continue to agentic fallback at line 835
+
+    This test fails on the current (buggy) code and should pass once the bug is fixed.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix, \
+         patch("pdd.fix_error_loop.run_agentic_fix") as mock_agentic:
+
+        # First call: return failures to trigger the fix loop
+        # Second call (Line 730): raise an exception to trigger Line 760
+        mock_pytest.side_effect = [
+            (1, 0, 0, "Initial test failure"),  # Initial test fails
+            Exception("Pytest collection error: import failed"),  # Exception during iteration
+        ]
+
+        # Mock fix_errors_from_unit_tests to return a "fix" that triggers second pytest run
+        mock_fix.return_value = (
+            True, True,  # updated_unit_test, updated_code
+            files["test_file"].read_text(),
+            "def add(a, b): return a + b  # fixed",
+            "Analysis text",
+            0.1,
+            "mock-model"
+        )
+
+        # Agentic fallback should succeed
+        mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=True,  # Enable agentic fallback
+        )
+
+    # THE BUG: Agentic fallback is NOT called because line 760 returns early
+    # THE FIX: Convert return to break so the code continues to agentic fallback
+    assert mock_agentic.called, \
+        "BUG (Issue #266): Agentic fallback was NOT triggered after pytest exception. " \
+        "Line 760's early return bypasses the agentic fallback code at line 835."
+
+
+def test_backup_creation_error_triggers_agentic_fallback(setup_files, monkeypatch):
+    """
+    BUG TEST (Issue #266): When backup file creation fails (Line 582),
+    the fix_error_loop should trigger agentic fallback instead of returning early.
+
+    Current behavior: Returns early at line 582
+    Expected behavior: Should continue to agentic fallback
+    """
+    files = setup_files
+
+    # Make shutil.copy fail
+    def failing_copy(*args, **kwargs):
+        raise OSError("Disk full - cannot create backup")
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.run_agentic_fix") as mock_agentic, \
+         patch("shutil.copy", side_effect=failing_copy):
+
+        # Return failures to trigger the fix loop
+        mock_pytest.return_value = (1, 0, 0, "Test failure")
+
+        # Agentic fallback should succeed
+        mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=True,
+        )
+
+    # THE BUG: Agentic fallback is NOT called because line 582 returns early
+    assert mock_agentic.called, \
+        "BUG (Issue #266): Agentic fallback was NOT triggered after backup creation error. " \
+        "Line 582's early return bypasses the agentic fallback code at line 835."
+
+
+def test_file_read_error_triggers_agentic_fallback(setup_files):
+    """
+    BUG TEST (Issue #266): When reading input files fails (Line 605),
+    the fix_error_loop should trigger agentic fallback instead of returning early.
+
+    Current behavior: Returns early at line 605
+    Expected behavior: Should continue to agentic fallback
+    """
+    files = setup_files
+
+    original_open = open
+
+    def failing_open(path, mode="r", *args, **kwargs):
+        # Fail when reading code_file during the iteration (not initial)
+        if "r" in mode and str(files["code_file"]) in str(path):
+            # Allow first read (initial exists check passes), fail on iteration read
+            if not hasattr(failing_open, "_first_read_done"):
+                failing_open._first_read_done = True
+                return original_open(path, mode, *args, **kwargs)
+            raise IOError("Permission denied - cannot read file")
+        return original_open(path, mode, *args, **kwargs)
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.run_agentic_fix") as mock_agentic, \
+         patch("builtins.open", side_effect=failing_open):
+
+        # Return failures to trigger fix loop
+        mock_pytest.return_value = (1, 0, 0, "Test failure")
+
+        # Agentic fallback should succeed
+        mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=True,
+        )
+
+    # THE BUG: Agentic fallback is NOT called because line 605 returns early
+    assert mock_agentic.called, \
+        "BUG (Issue #266): Agentic fallback was NOT triggered after file read error. " \
+        "Line 605's early return bypasses the agentic fallback code at line 835."
+
+
+def test_agentic_fallback_not_called_when_disabled(setup_files):
+    """
+    REGRESSION TEST: When agentic_fallback=False, agentic fallback should NOT
+    be called even when the fix loop fails.
+
+    This ensures the fix for Issue #266 doesn't accidentally trigger agentic
+    fallback when it's explicitly disabled.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix, \
+         patch("pdd.fix_error_loop.run_agentic_fix") as mock_agentic:
+
+        # All attempts fail
+        mock_pytest.return_value = (1, 0, 0, "Test failure")
+        mock_fix.return_value = (False, False, "", "", "No fix", 0.1, "mock-model")
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=False,  # Explicitly disabled
+        )
+
+    # Agentic should NOT be called when explicitly disabled
+    assert not mock_agentic.called, \
+        "REGRESSION: Agentic fallback was called even though agentic_fallback=False"
+    assert success is False
+
+
+def test_agentic_fallback_success_after_loop_failure(setup_files):
+    """
+    BUG TEST (Issue #266): When the fix loop exhausts max_attempts and fails,
+    agentic fallback should be triggered and its success should be returned.
+
+    This test verifies the return values are correct when agentic fallback succeeds.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix, \
+         patch("pdd.fix_error_loop.run_agentic_fix") as mock_agentic:
+
+        # All fix attempts fail
+        mock_pytest.return_value = (1, 0, 0, "Test failure")
+        mock_fix.return_value = (False, False, "", "", "No fix", 0.1, "mock-model")
+
+        # Agentic fallback succeeds
+        mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", ["code.py"])
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=1,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=True,
+        )
+
+    # Agentic was called and succeeded
+    assert mock_agentic.called, "Agentic fallback should have been triggered"
+    assert success is True, "Success should be True after agentic fallback succeeds"
+    assert "claude-cli" in model or model == "claude-cli", \
+        f"Model should reflect agentic fallback, got: {model}"
+
+
+def test_initial_test_exception_triggers_agentic_fallback(setup_files):
+    """
+    BUG TEST (Issue #266): When the INITIAL pytest run throws an exception
+    (Line 425), the fix_error_loop should trigger agentic fallback instead
+    of returning early.
+
+    This is different from test_pytest_exception_triggers_agentic_fallback
+    which tests exceptions during the loop iteration (Line 760).
+
+    Current behavior: Returns early at line 425 with `return False, "", "", fix_attempts, total_cost, model_name`
+    Expected behavior: Should continue to agentic fallback section
+
+    This test fails on the current (buggy) code and should pass once the bug is fixed.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.run_agentic_fix") as mock_agentic:
+
+        # Initial pytest run throws an exception (e.g., collection error, import error)
+        mock_pytest.side_effect = Exception("Initial pytest collection error: cannot import module")
+
+        # Agentic fallback should succeed
+        mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=True,  # Enable agentic fallback
+        )
+
+    # THE BUG: Agentic fallback is NOT called because line 425 returns early
+    # THE FIX: Should continue to agentic fallback section instead of returning
+    assert mock_agentic.called, \
+        "BUG (Issue #266): Agentic fallback was NOT triggered after initial pytest exception. " \
+        "Line 425's early return bypasses the agentic fallback code."
