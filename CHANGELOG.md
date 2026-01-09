@@ -1,3 +1,16 @@
+## v0.0.106 (2026-01-08)
+
+### Feat
+
+- auto-inject public OAuth keys for seamless cloud mode setup
+- enhance caching, timeout handling, and cloud detection
+
+### Fix
+
+- **Infinite Crash Loop in `pdd sync` (credit_helpers example):** Fixed `_run_example_with_error_detection()` to respect `returncode==0` as success instead of overriding it with error log detection. Root cause: Example verification was setting `cwd` to example's parent directory, causing import failures for examples that must run from project root. Fixed by using `sys.executable` instead of language-specific interpreters and removing `cwd` parameter to inherit parent's working directory, matching `crash_main` behavior (sync_orchestration.py:650-659, 1244-1300, 1532-1548).
+
+- **Python Interpreter Mismatch in venv+conda Scenarios:** When both venv and conda are active, PATH lookup for `python` could resolve to a different interpreter than the one running `pdd`, causing infinite crash loops. Fixed by using `sys.executable` to ensure same Python interpreter as parent process (sync_orchestration.py:1250, 1541).
+
 ## v0.0.105 (2026-01-07)
 
 ### Feat
