@@ -1,3 +1,17 @@
+## v0.0.107 (2026-01-08)
+
+### Fix
+
+- convert early returns to breaks for agentic fallback (Issue #266)
+- resolve infinite crash loop and Python interpreter mismatch in pdd sync
+- **orchestrator**: pass files_to_stage context variable to Step 9
+- **gitignore**: exclude entire .pdd/ directory from version control
+- **prompts**: add explicit git staging instructions to Step 9 prompt
+
+### Refactor
+
+- enhance auto_deps_main function and add concurrency handling
+
 ## v0.0.106 (2026-01-08)
 
 ### Feat
