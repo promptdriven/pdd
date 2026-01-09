@@ -54,6 +54,9 @@ shared:
   - prompts/test_other_python.prompt
   - prompts/encode_message_python.prompt
 
+  # LLM prompts (preprocessed for PyPI, also sync to public repo)
+  - prompts/*_LLM.prompt
+
 # Files synced ONLY for pdd_cap repo (includes all prompts)
 # Note: pdd_cap has prompts at pdd/prompts/, but private repo has them at prompts/
 # Due to inverted symlink structure (pdd/prompts -> ../prompts), patterns work correctly
