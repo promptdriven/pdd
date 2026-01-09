@@ -11,6 +11,9 @@ __pycache__/
 pdd/litellm_cache.sqlite/cache.db
 litellm_cache.sqlite/
 
+# Auto-deps lock files (created by filelock for concurrent access prevention)
+*.csv.lock
+
 # Claude folder
 .claude/
 

@@ -58,7 +58,11 @@ Do NOT create a new branch - just stage, commit, and push.
 
 1. **Prepare the commit**
    - You are already on branch `fix/issue-{issue_number}` in an isolated worktree
-   - Stage the generated test file(s)
+   - **CRITICAL: Stage ONLY the test file(s) created in Step 7**
+   - Get the exact file paths from Step 7's `FILES_CREATED:` or `FILES_MODIFIED:` output in the `<step7_output>` section above
+   - Stage each file individually: `git add <exact_file_path>`
+   - **DO NOT use `git add .` or `git add -A`** - these will stage unrelated files and pollute the PR
+   - Verify only the intended files are staged: `git status --short` (should show only the test file(s))
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
@@ -145,6 +149,7 @@ Your comment should follow this format:
 To auto-fix this bug using PDD:
 
 ```bash
+cd {{worktree_path}}
 pdd --force fix --loop --max-attempts 5 --verification-program context/{{module_name}}_example.py {{prompt_file}} {{code_file_path}} {{test_file_path}} fix-issue-{{issue_number}}.log
 ```
 

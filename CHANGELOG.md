@@ -1,3 +1,17 @@
+## v0.0.107 (2026-01-08)
+
+### Fix
+
+- convert early returns to breaks for agentic fallback (Issue #266)
+- resolve infinite crash loop and Python interpreter mismatch in pdd sync
+- **orchestrator**: pass files_to_stage context variable to Step 9
+- **gitignore**: exclude entire .pdd/ directory from version control
+- **prompts**: add explicit git staging instructions to Step 9 prompt
+
+### Refactor
+
+- enhance auto_deps_main function and add concurrency handling
+
 ## v0.0.106 (2026-01-08)
 
 ### Feat
@@ -7,7 +21,9 @@
 
 ### Fix
 
-- clean_env fixture now clears PDD_FORCE_LOCAL and cloud env vars
+- **Infinite Crash Loop in `pdd sync` (credit_helpers example):** Fixed `_run_example_with_error_detection()` to respect `returncode==0` as success instead of overriding it with error log detection. Root cause: Example verification was setting `cwd` to example's parent directory, causing import failures for examples that must run from project root. Fixed by using `sys.executable` instead of language-specific interpreters and removing `cwd` parameter to inherit parent's working directory, matching `crash_main` behavior (sync_orchestration.py:650-659, 1244-1300, 1532-1548).
+
+- **Python Interpreter Mismatch in venv+conda Scenarios:** When both venv and conda are active, PATH lookup for `python` could resolve to a different interpreter than the one running `pdd`, causing infinite crash loops. Fixed by using `sys.executable` to ensure same Python interpreter as parent process (sync_orchestration.py:1250, 1541).
 
 ## v0.0.105 (2026-01-07)
 
