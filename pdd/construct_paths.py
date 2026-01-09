@@ -321,7 +321,7 @@ def _resolve_config_hierarchy(
         'generate_output_path': 'PDD_GENERATE_OUTPUT_PATH',
         'test_output_path': 'PDD_TEST_OUTPUT_PATH',
         'example_output_path': 'PDD_EXAMPLE_OUTPUT_PATH',
-        'prompts_dir': 'PDD_PROMPTS_DIR',
+        'prompts_dir': None,
         'default_language': 'PDD_DEFAULT_LANGUAGE',
         'target_coverage': 'PDD_TEST_COVERAGE_TARGET',
         'strength': None,
@@ -341,6 +341,21 @@ def _resolve_config_hierarchy(
         elif env_var and env_var in env_vars:
             resolved[config_key] = env_vars[env_var]
         # 4. Defaults are handled elsewhere
+
+    # --- Prompt path resolution ---
+    def _first_non_none(*vals: Any) -> Any:
+        for v in vals:
+            if v is not None:
+                return v
+        return None
+
+    prompts_from_cli = _first_non_none(cli_options.get("prompts_dir"), cli_options.get("prompt_path"))
+    prompts_from_ctx = _first_non_none(context_config.get("prompts_dir"), context_config.get("prompt_path"))
+    prompts_from_env = _first_non_none(env_vars.get("PDD_PROMPT_PATH"), env_vars.get("PDD_PROMPTS_DIR"))
+
+    prompts_dir_value = _first_non_none(prompts_from_cli, prompts_from_ctx, prompts_from_env)
+    if prompts_dir_value is not None:
+        resolved["prompts_dir"] = prompts_dir_value
 
     # Issue #237: Pass through 'outputs' config for template-based path generation
     # This enables extensible project layouts (Next.js, Vue, Python, Go, etc.)
@@ -1138,9 +1153,11 @@ def construct_paths(
 
     # Add resolved paths to the config that gets returned
     resolved_config.update(output_file_paths_str_return)
-    # Also add inferred directory paths
+    # Only infer prompts_dir if it wasn't provided via CLI/.pddrc/env.
+    # Previously this overwrote configured prompt locations.
     gen_path = Path(resolved_config.get("generate_output_path", "src"))
-    resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
+    if "prompts_dir" not in resolved_config or not resolved_config.get("prompts_dir"):
+        resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
 
