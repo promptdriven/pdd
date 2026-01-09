@@ -1,16 +1,20 @@
 ## v0.0.107 (2026-01-08)
 
+### Feat
+
+- **JWT File Caching (Issue #273):** File-based JWT cache at `~/.pdd/jwt_cache` avoids repeated keyring access and password prompts. Cache checks occur before keyring with 5-minute expiration buffer. Secure permissions (0600) and corruption handling included.
+
+- **Auto-deps Concurrency Handling:** Added `filelock` to serialize concurrent CSV cache access, preventing race conditions when multiple `pdd` processes run simultaneously.
+
 ### Fix
 
-- convert early returns to breaks for agentic fallback (Issue #266)
-- resolve infinite crash loop and Python interpreter mismatch in pdd sync
-- **orchestrator**: pass files_to_stage context variable to Step 9
-- **gitignore**: exclude entire .pdd/ directory from version control
-- **prompts**: add explicit git staging instructions to Step 9 prompt
+- **Agentic Fallback Bypass (Issue #266):** Early returns in `fix_error_loop.py` were bypassing agentic fallback entirely. Converted to `break` statements so fallback logic runs on backup creation errors, file read errors, and pytest failures. Also triggers agentic fallback when initial test fails with exception.
 
-### Refactor
+- **Orchestrator Step 9 File Staging:** Pass explicit `files_to_stage` context variable to Step 9 PR prompt for precise git staging instead of relying on heuristics.
 
-- enhance auto_deps_main function and add concurrency handling
+### Chore
+
+- **gitignore:** Exclude entire `.pdd/` directory and added `*.csv.lock` pattern for auto-deps lock files.
 
 ## v0.0.106 (2026-01-08)
 
