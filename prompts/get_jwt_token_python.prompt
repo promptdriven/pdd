@@ -80,9 +80,10 @@
     - Poll with interval specified in response
 
 % User Experience in Terminal:
-    - CopyTo authenticate, visit: https://github.com/login/device
+    - To authenticate, visit: https://github.com/login/device
     - Enter code: ABCD-EFGH
     - Waiting for authentication...
+    - Authentication successful!
 
 % Token Storage:
     - Store refresh token in system keyring
