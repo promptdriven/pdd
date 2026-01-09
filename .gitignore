@@ -205,6 +205,4 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 
-# PDD internal directory (backups, locks, meta, worktrees, etc.)
-.pdd/
-Makefile.test-staging
+/.pdd

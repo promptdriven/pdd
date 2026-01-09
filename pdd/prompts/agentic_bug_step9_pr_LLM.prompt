@@ -54,11 +54,6 @@ You are operating in an isolated git worktree at: {worktree_path}
 This worktree is already checked out to branch `fix/issue-{issue_number}`.
 Do NOT create a new branch - just stage, commit, and push.
 
-% Files to Stage
-
-**IMPORTANT: Only stage these specific files:**
-{files_to_stage}
-
 % Your Task
 
 1. **Prepare the commit**

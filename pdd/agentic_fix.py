@@ -479,8 +479,16 @@ def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, lab
             "After reading the instructions, fix the failing tests."
         )
 
+        claude_path = shutil.which("claude")
+        if claude_path is None:
+            raise FileNotFoundError(
+                "The 'claude' CLI binary was not found in your PATH. "
+                "Please install the Anthropic CLI and ensure 'claude' is available on your PATH."
+            )
+        claude_bin = claude_path
+
         variants = [
-            ["claude", "--dangerously-skip-permissions", agentic_instruction],
+            [claude_bin, "--dangerously-skip-permissions", agentic_instruction],
         ]
         per_attempt = 300
         last: Optional[subprocess.CompletedProcess] = None
@@ -1155,7 +1163,33 @@ def run_agentic_fix(
                 _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
                 continue
 
-            # PRIMARY-FIRST: Try the full agent approach first (allows exploration, debugging)
+            # HARVEST-FIRST: Try a strict harvest-only pass first (deterministic + fast)
+            if provider in ("google", "openai", "anthropic"):
+                _info("[cyan]Trying harvest-first approach...[/cyan]")
+                est_cost += _AGENT_COST_PER_CALL
+                try:
+                    if _try_harvest_then_verify(
+                        provider,
+                        code_path,
+                        unit_test_file,
+                        orig_code,
+                        prompt_content,
+                        test_content,
+                        error_content,
+                        working_dir,
+                        verify_cmd=verify_cmd,
+                        verify_enabled=verify_enabled,
+                        changed_files=changed_files,
+                    ):
+                        try:
+                            instruction_file.unlink()
+                        except Exception:
+                            pass
+                        return True, f"Agentic fix successful with {provider.capitalize()} (harvest-first).", est_cost, used_model, changed_files
+                except subprocess.TimeoutExpired:
+                    _info(f"[yellow]{provider.capitalize()} harvest-first attempt timed out.[/yellow]")
+
+            # PRIMARY: Try the full agent approach (allows exploration, debugging)
             _info(f"[cyan]Trying primary approach with {provider.capitalize()}...[/cyan]")
             est_cost += _AGENT_COST_PER_CALL
             
@@ -1231,7 +1265,7 @@ def run_agentic_fix(
                         pass
                     return True, f"Agentic fix successful with {provider.capitalize()}.", est_cost, used_model, changed_files
 
-            # PRIMARY FAILED - Try harvest as a quick fallback before moving to next provider
+            # PRIMARY FAILED - Harvest retry (fallback)
             if provider in ("google", "openai", "anthropic"):
                 _info("[yellow]Primary attempt did not pass; trying harvest fallback...[/yellow]")
                 est_cost += _AGENT_COST_PER_CALL
