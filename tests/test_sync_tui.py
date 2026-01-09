@@ -28,9 +28,6 @@ from textual.app import App
 
 
 # --- Event loop fixture for sync tests ---
-import pytest
-import asyncio
-
 @pytest.fixture(autouse=True)
 def _ensure_asyncio_event_loop():
     """Ensure sync tests have a default asyncio loop.
