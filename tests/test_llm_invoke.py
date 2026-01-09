@@ -1740,7 +1740,7 @@ def test_vertex_ai_claude_opus_passes_response_format_for_structured_output(mock
         )
 
     # Verify CSV has structured_output=True
-    assert opus_data.iloc[0]['structured_output'] is True, \
+    assert opus_data.iloc[0]['structured_output'], \
         "vertex_ai/claude-opus-4-5 should have structured_output=True in CSV"
 
     with patch('pdd.llm_invoke._load_model_data', return_value=opus_data):
