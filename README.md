@@ -1633,7 +1633,10 @@ If no agentic CLI is available, the command automatically falls back to the lega
 2.  **Single-File Mode**: When you provide file arguments, the command operates on a specific file. There are three distinct use cases for this mode:
 
     **A) Prompt Generation / Regeneration**
-    To generate a brand new prompt for a code file from scratch, or to regenerate an existing prompt, simply provide the path to that code file. This will create a new prompt file or overwrite an existing one.
+    To generate a brand new prompt for a code file from scratch, provide the path to that code file. This will create a new prompt file.
+
+    If a corresponding prompt file already exists, this mode will **create a new prompt file rather than overwriting the existing one**.
+
     ```bash
     pdd update <path/to/your_code_file.py>
     ```
