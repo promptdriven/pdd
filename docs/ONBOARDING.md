@@ -260,10 +260,11 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
   ```
 - [ ] **No merge conflicts** - Rebase on latest `main` and resolve all conflicts before requesting review
 
+- [ ] **PR linked to GitHub issue** - Reference the issue in your PR description using keywords like `Fixes #123` or `Closes #123`. This automatically closes the issue when the PR is merged.
+
 ### Required for Bug Fixes
 
 - [ ] **Failing test reproduces the bug** - Write a test that fails before your fix and passes after. This proves the fix works.
-- [ ] **Link to GitHub issue** - Reference the issue being fixed (e.g., "Fixes #123")
 
 ### Required for New Features
 
