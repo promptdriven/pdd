@@ -353,9 +353,10 @@ def fix_error_loop(unit_test_file: str,
 
     # We do up to max_attempts fix attempts or until budget is exceeded
     iteration = 0
+    # Determine if target is Python (needed for exception handling)
+    is_python = str(code_file).lower().endswith(".py")
     # Run an initial test to determine starting state
     try:
-        is_python = str(code_file).lower().endswith(".py")
         if is_python:
             initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file)
         else:
@@ -422,7 +423,43 @@ def fix_error_loop(unit_test_file: str,
         }
     except Exception as e:
         rprint(f"[red]Error running initial test/verification:[/red] {e}")
-        return False, "", "", fix_attempts, total_cost, model_name
+        # Instead of returning early, trigger agentic fallback if enabled (Issue #266)
+        if agentic_fallback:
+            rprint("[cyan]Initial test failed with exception. Triggering agentic fallback...[/cyan]")
+            error_log_path = Path(error_log_file)
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(error_log_path, "w") as f:
+                f.write(f"Initial test/verification failed with exception:\n{e}\n")
+
+            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
+                prompt_file=prompt_file,
+                code_file=code_file,
+                unit_test_file=unit_test_file,
+                error_log_file=error_log_file,
+                cwd=None,
+            )
+            if not success:
+                rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
+            if agent_changed_files:
+                rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+                for f in agent_changed_files:
+                    rprint(f"  • {f}")
+            final_unit_test = ""
+            final_code = ""
+            try:
+                with open(unit_test_file, "r") as f:
+                    final_unit_test = f.read()
+            except Exception:
+                pass
+            try:
+                with open(code_file, "r") as f:
+                    final_code = f.read()
+            except Exception:
+                pass
+            return success, final_unit_test, final_code, 1, agent_cost, agent_model
+        else:
+            # Agentic fallback disabled, return failure
+            return False, "", "", fix_attempts, total_cost, model_name
 
     # If target is not a Python file, trigger agentic fallback if tests fail
     if not is_python:
