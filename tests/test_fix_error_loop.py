@@ -1060,3 +1060,50 @@ def test_agentic_fallback_success_after_loop_failure(setup_files):
     assert success is True, "Success should be True after agentic fallback succeeds"
     assert "claude-cli" in model or model == "claude-cli", \
         f"Model should reflect agentic fallback, got: {model}"
+
+
+def test_initial_test_exception_triggers_agentic_fallback(setup_files):
+    """
+    BUG TEST (Issue #266): When the INITIAL pytest run throws an exception
+    (Line 425), the fix_error_loop should trigger agentic fallback instead
+    of returning early.
+
+    This is different from test_pytest_exception_triggers_agentic_fallback
+    which tests exceptions during the loop iteration (Line 760).
+
+    Current behavior: Returns early at line 425 with `return False, "", "", fix_attempts, total_cost, model_name`
+    Expected behavior: Should continue to agentic fallback section
+
+    This test fails on the current (buggy) code and should pass once the bug is fixed.
+    """
+    files = setup_files
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.run_agentic_fix") as mock_agentic:
+
+        # Initial pytest run throws an exception (e.g., collection error, import error)
+        mock_pytest.side_effect = Exception("Initial pytest collection error: cannot import module")
+
+        # Agentic fallback should succeed
+        mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
+
+        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=True,  # Enable agentic fallback
+        )
+
+    # THE BUG: Agentic fallback is NOT called because line 425 returns early
+    # THE FIX: Should continue to agentic fallback section instead of returning
+    assert mock_agentic.called, \
+        "BUG (Issue #266): Agentic fallback was NOT triggered after initial pytest exception. " \
+        "Line 425's early return bypasses the agentic fallback code."
