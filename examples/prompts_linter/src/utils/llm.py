@@ -2,10 +2,18 @@ import os
 import json
 import logging
 import re
+import warnings
 from typing import Optional, Dict, Any, Tuple
 
 import litellm
 from pydantic import ValidationError
+
+# Suppress known Pydantic serialization warnings from litellm internal code
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*Pydantic serializer warnings.*"
+)
 
 # Import internal models
 # Assumes src is in the python path

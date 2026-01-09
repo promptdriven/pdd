@@ -33,7 +33,7 @@ pip install -r requirements.txt
 
 **Option 2: Manual installation**
 ```bash
-pip install typer rich pydantic fastapi uvicorn streamlit litellm httpx
+pip install typer==0.21.1 rich==14.2.0 pydantic==2.12.5 fastapi==0.128.0 uvicorn==0.40.0 streamlit==1.52.2 litellm==1.80.12 google-auth
 ```
 
 ## Usage
