@@ -41,18 +41,36 @@
     - Clear user instructions in terminal
     - Automatic token refresh through Firebase
 
-% Authentication Flow:
+% Token Storage Architecture:
+    - REFRESH TOKEN: Stored in system keyring (long-lived, ~months)
+    - ID TOKEN (JWT): Cached in ~/.pdd/jwt_cache file (short-lived, ~1 hour)
+    - This two-tier approach minimizes keyring access to avoid password prompts
 
-    - Check for existing valid Firebase ID token in keyring
-    - If valid token exists, return it
-    - If no token or expired:
-        a. Request device code from GitHub's OAuth device endpoint
-        b. Display user code and verification URL in terminal
-        c. Poll GitHub's OAuth endpoint for completion
-        d. Exchange device code for GitHub token
-        e. Exchange GitHub token for Firebase token
-        f. Store Firebase token in keyring
-        g. Return token
+% JWT File Cache (Required - Issue #273):
+    - Path: ~/.pdd/jwt_cache (use pathlib Path.home() / ".pdd" / "jwt_cache")
+    - Define module-level constant: JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
+    - Format: JSON with fields: jwt, expires_at (unix timestamp), cached_at (unix timestamp)
+    - Check cache FIRST before any keyring access
+    - Return cached JWT immediately if valid (not expired, with 5-min buffer before expiration)
+    - Cache new JWT after obtaining it (from refresh or device flow)
+    - File permissions: 0600 (user read/write only) using os.chmod()
+    - Handle corruption gracefully: delete cache file and fall back to keyring
+    - Implement helper functions: _get_cached_jwt() -> Optional[str], _cache_jwt(jwt: str, expires_in: int = 3600)
+
+% Authentication Flow:
+    1. Check ~/.pdd/jwt_cache for valid cached JWT → return immediately if valid (NO keyring access)
+    2. If cache miss or expired:
+        a. Check keyring for refresh token
+        b. If refresh token exists: call Firebase to get new JWT, cache it, return it
+        c. If no refresh token or refresh fails:
+            i. Request device code from GitHub's OAuth device endpoint
+            ii. Display user code and verification URL in terminal
+            iii. Poll GitHub's OAuth endpoint for completion
+            iv. Exchange device code for GitHub token
+            v. Exchange GitHub token for Firebase token
+            vi. Store refresh token in keyring
+            vii. Cache JWT in file
+            viii. Return JWT
 
 % Technical Details:
 

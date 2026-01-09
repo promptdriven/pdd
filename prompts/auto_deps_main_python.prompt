@@ -10,7 +10,8 @@
     - `directory_path` (`str`): Path to the directory containing potential dependency files (can include glob patterns, e.g., "context/*_example.py").
     - `auto_deps_csv_path` (`Optional[str]`): Preferred CSV file path for auto-dependency information (passed into path construction; may be overridden by resolved paths).
     - `output` (`Optional[str]`): File path (or directory) to save the modified prompt file with auto-dependencies.
-    - 'force_scan' (`Optional[bool]`): Flag to force a rescan of the directory. This is done by deleting the resolved CSV file if it exists (see Behavior below).
+    - `force_scan` (`Optional[bool]`): Flag to force a rescan of the directory. This is done by deleting the resolved CSV file if it exists (see Behavior below).
+    - `progress_callback` (`Optional[Callable[[int, int], None]]`): Optional callback for progress updates (current, total) for each file processed. Defaults to None.
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
@@ -39,7 +40,7 @@
         • `time_budget = ctx.obj.get('time', DEFAULT_TIME)`
       Compute verbosity as `verbose = not ctx.obj.get('quiet', False)` and pass to downstream calls.
     - Call `insert_includes` as:
-        • `insert_includes(input_prompt=input_strings["prompt_file"], directory_path=directory_path, csv_filename=csv_path, strength=strength, temperature=temperature, time=time_budget, verbose=verbose)`
+        • `insert_includes(input_prompt=input_strings["prompt_file"], directory_path=directory_path, csv_filename=csv_path, prompt_filename=prompt_file, strength=strength, temperature=temperature, time=time_budget, verbose=verbose, progress_callback=progress_callback)`
       Capture `(modified_prompt, csv_output, total_cost, model_name)`.
     - Save outputs:
         • Write `modified_prompt` to `output_file_paths["output"]` (UTF-8).
@@ -50,6 +51,11 @@
         • "[bold]Total cost:[/bold] ${total_cost:.6f}"
         • "[bold]Modified prompt saved to:[/bold] {output_path}"
         • "[bold]Dependency information saved to:[/bold] {csv_path}"
+    - Concurrency: Acquire an exclusive file lock (using the CSV path as the lock identifier)
+      before beginning any work. This ensures only one auto-deps process runs at a time,
+      preventing redundant LLM calls when multiple processes target the same CSV cache.
+      The lock should be held for the entire operation (from CSV read through CSV write).
+      Use a `.lock` suffix file (e.g., `{csv_path}.lock`) for the lock.
     - Error handling:
         • On `click.Abort` exception: re-raise to allow the orchestrator to stop the sync loop.
         • On any other exception: print a red error message (unless `quiet`) and return an error tuple `("", 0.0, f"Error: {exc}")` instead of calling `sys.exit(1)`. This allows the orchestrator to handle failures gracefully.
