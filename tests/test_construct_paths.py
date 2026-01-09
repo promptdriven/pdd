@@ -3,10 +3,9 @@
 import pytest
 import click
 from pathlib import Path
-from unittest import mock
-from unittest.mock import patch, MagicMock, ANY
-import sys
+from unittest.mock import patch, ANY
 import os
+import inspect
 
 # Mock generate_output_paths before importing construct_paths if it's needed globally
 # Or mock within each test as currently done.
@@ -17,6 +16,50 @@ from pdd.construct_paths import construct_paths, list_available_contexts, _resol
 # Helper to create absolute path for comparison
 def resolve_path(relative_path_str, base_dir):
     return str(Path(base_dir) / relative_path_str)
+
+# Helper to call _resolve_config_hierarchy with signature tolerance
+def call_resolve_config_hierarchy(*, cli_overrides=None, pddrc_config=None, env_overrides=None, context_name=None):
+    """Call _resolve_config_hierarchy with best-effort kwargs based on its signature.
+
+    This keeps tests resilient to small refactors of the resolver interface.
+    """
+    sig = inspect.signature(_resolve_config_hierarchy)
+    kwargs = {}
+
+    for name in sig.parameters.keys():
+        # CLI overrides
+        if name in {"cli_config", "cli_options", "cli_overrides", "command_options", "overrides"}:
+            kwargs[name] = cli_overrides or {}
+
+        # Full parsed .pddrc config
+        elif name in {"pddrc_config", "file_config", "config"}:
+            kwargs[name] = pddrc_config or {}
+
+        # Some resolver signatures require the *selected* context config separately
+        elif name in {"context_config", "ctx_config"}:
+            contexts = (pddrc_config or {}).get("contexts", {})
+            # Context blocks in .pddrc may either be the context dict itself or wrap defaults under "defaults"
+            selected = contexts.get(context_name) if context_name else None
+            if isinstance(selected, dict) and "defaults" in selected and isinstance(selected["defaults"], dict):
+                kwargs[name] = selected["defaults"]
+            elif isinstance(selected, dict):
+                kwargs[name] = selected
+            else:
+                kwargs[name] = {}
+
+        # Some resolver signatures require raw env vars separately
+        elif name in {"env_vars", "environment", "environ"}:
+            kwargs[name] = env_overrides or {}
+
+        # Env overrides / env config
+        elif name in {"env_config", "env_overrides", "env"}:
+            kwargs[name] = env_overrides or {}
+
+        # Optional context name/id
+        elif name in {"context", "context_name", "context_id"}:
+            kwargs[name] = context_name
+
+    return _resolve_config_hierarchy(**kwargs)
 
 def test_construct_paths_load_input_files(tmpdir):
     """
@@ -2907,3 +2950,69 @@ contexts:
         assert resolved_config["_matched_context"] == "frontend-components"
         assert resolved_config["prompts_dir"] == "prompts"
         assert Path(resolved_config["code_dir"]).as_posix().endswith("frontend/src/components")
+
+
+def test_resolve_config_hierarchy_env_prompt_path_precedence(monkeypatch):
+    """PDD_PROMPT_PATH should take precedence over PDD_PROMPTS_DIR when both are set."""
+    monkeypatch.setenv("PDD_PROMPT_PATH", "/tmp/custom_prompts")
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "/tmp/other_prompts")
+
+    resolved = call_resolve_config_hierarchy(
+        cli_overrides={},
+        pddrc_config={"contexts": {}},
+        env_overrides={
+            "PDD_PROMPT_PATH": os.environ.get("PDD_PROMPT_PATH"),
+            "PDD_PROMPTS_DIR": os.environ.get("PDD_PROMPTS_DIR"),
+        },
+        context_name=None,
+    )
+
+    # We only assert the key if the resolver provides it.
+    assert "prompts_dir" in resolved
+    assert resolved["prompts_dir"] == "/tmp/custom_prompts"
+
+
+def test_resolve_config_hierarchy_pddrc_prompt_path_alias_used(monkeypatch):
+    """The .pddrc key `prompt_path` should act as an alias for the prompt directory."""
+    monkeypatch.delenv("PDD_PROMPT_PATH", raising=False)
+    monkeypatch.delenv("PDD_PROMPTS_DIR", raising=False)
+
+    pddrc_cfg = {
+        "contexts": {
+            "default": {
+                "defaults": {
+                    # Alias form
+                    "prompt_path": "my_prompts",
+                }
+            }
+        }
+    }
+
+    resolved = call_resolve_config_hierarchy(
+        cli_overrides={},
+        pddrc_config=pddrc_cfg,
+        env_overrides={},
+        context_name="default",
+    )
+
+    assert "prompts_dir" in resolved
+    assert resolved["prompts_dir"] == "my_prompts"
+
+
+def test_resolve_config_hierarchy_cli_prompts_dir_wins_over_prompt_path(monkeypatch):
+    """If both prompts_dir and prompt_path are provided via CLI overrides, prompts_dir wins."""
+    monkeypatch.delenv("PDD_PROMPT_PATH", raising=False)
+    monkeypatch.delenv("PDD_PROMPTS_DIR", raising=False)
+
+    resolved = call_resolve_config_hierarchy(
+        cli_overrides={
+            "prompts_dir": "cli_prompts",
+            "prompt_path": "cli_prompt_path",
+        },
+        pddrc_config={"contexts": {}},
+        env_overrides={},
+        context_name=None,
+    )
+
+    assert "prompts_dir" in resolved
+    assert resolved["prompts_dir"] == "cli_prompts"
