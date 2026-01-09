@@ -26,6 +26,7 @@ def mock_ctx():
     return ctx
 
 @pytest.mark.parametrize("csv_path_return", [None, "custom_deps.csv"])
+@patch("builtins.open", new_callable=MagicMock)
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
 @patch("pdd.auto_deps_main.Path")
@@ -33,6 +34,7 @@ def test_auto_deps_normal_operation(
     mock_path,  # pylint: disable=unused-argument
     mock_insert_includes,
     mock_construct_paths,
+    mock_open,  # pylint: disable=unused-argument
     mock_ctx,  # pylint: disable=redefined-outer-name
     csv_path_return
 ):
@@ -96,6 +98,7 @@ def test_auto_deps_normal_operation(
     # Note: File writing behavior is verified by functional tests
     # The mock assertions here verify insert_includes is called correctly
 
+@patch("builtins.open", new_callable=MagicMock)
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
 @patch("pdd.auto_deps_main.Path")
@@ -103,6 +106,7 @@ def test_auto_deps_force_scan_operation(
     mock_path,  # pylint: disable=unused-argument
     mock_insert_includes,
     mock_construct_paths,
+    mock_open,  # pylint: disable=unused-argument
     mock_ctx  # pylint: disable=redefined-outer-name
 ):
     """
