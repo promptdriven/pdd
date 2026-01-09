@@ -2082,10 +2082,15 @@ def _has_cloud_credentials() -> bool:
 
 
 def _has_cloud_jwt_token() -> bool:
-    """Check if a JWT token is available (either injected or via stored refresh token)."""
+    """Check if a JWT token is available (env var, cache file, or stored refresh token)."""
     import os
+    from pathlib import Path
     # First check for env var (fast path)
     if os.environ.get("PDD_JWT_TOKEN"):
+        return True
+    # Check for JWT cache file
+    jwt_cache_file = Path.home() / ".pdd" / "jwt_cache"
+    if jwt_cache_file.exists() and jwt_cache_file.stat().st_size > 0:
         return True
     # Check for stored refresh token (requires keyring)
     try:
