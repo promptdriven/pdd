@@ -453,7 +453,7 @@ def test_files_to_stage_passed_to_step9(mock_dependencies, default_args):
 
     assert step9_call is not None, "Step 9 should have been called"
     instruction = step9_call.kwargs['instruction']
-    assert "Files to stage: tests/test_bug_fix.py" == instruction
+    assert instruction == "Files to stage: tests/test_bug_fix.py"
 
 
 def test_files_to_stage_with_multiple_files(mock_dependencies, default_args):
