@@ -579,7 +579,8 @@ def fix_error_loop(unit_test_file: str,
                 rprint(f"[green]Created backup for code file:[/green] {code_backup}")
         except Exception as e:
             rprint(f"[red]Error creating backup files:[/red] {e}")
-            return False, "", "", fix_attempts, total_cost, model_name
+            success = False
+            break  # Exit loop but continue to agentic fallback (Issue #266)
 
         # Update best iteration if needed:
         if (errors < best_iteration_info["errors"] or
@@ -602,7 +603,8 @@ def fix_error_loop(unit_test_file: str,
                 code_contents = f.read()
         except Exception as e:
             rprint(f"[red]Error reading input files:[/red] {e}")
-            return False, "", "", fix_attempts, total_cost, model_name
+            success = False
+            break  # Exit loop but continue to agentic fallback (Issue #266)
 
         # Call fix (cloud or local based on use_cloud parameter):
         try:
@@ -757,7 +759,8 @@ def fix_error_loop(unit_test_file: str,
             stats["final_warnings"] = warnings
         except Exception as e:
             rprint(f"[red]Error running pytest for next iteration:[/red] {e}")
-            return False, "", "", fix_attempts, total_cost, model_name
+            success = False
+            break  # Exit loop but continue to agentic fallback (Issue #266)
 
     # Possibly restore best iteration if the final run is not as good:
     if best_iteration_info["attempt"] is not None and not success:
