@@ -13,12 +13,13 @@ from pdd.get_jwt_token import (
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator.verify_firebase_token", return_value=True)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token", return_value="new_id_token_123")
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value="stored_refresh_token")
 async def test_get_jwt_token_with_valid_stored_token(
-    mock_get_stored_token, mock_refresh_token, mock_verify, mock_cache
+    mock_get_stored_token, mock_refresh_token, mock_verify, mock_cache_read, mock_cache_write
 ):
     """
     If a valid refresh token is stored, get_jwt_token should refresh it and skip the Device Flow.
@@ -31,6 +32,7 @@ async def test_get_jwt_token_with_valid_stored_token(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
 @patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
@@ -53,7 +55,8 @@ async def test_get_jwt_token_with_invalid_stored_token_reauth(
     mock_poll_for_token,
     mock_exchange_github,
     mock_store_refresh,
-    mock_cache
+    mock_cache_read,
+    mock_cache_write
 ):
     """
     If the refresh token is invalid or refresh fails, get_jwt_token should invoke the Device Flow.
@@ -67,6 +70,7 @@ async def test_get_jwt_token_with_invalid_stored_token_reauth(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
 @patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("new_id_token", "new_refresh_token"))
@@ -85,7 +89,8 @@ async def test_get_jwt_token_no_stored_token_triggers_device_flow(
     mock_poll_for_token,
     mock_exchange_github,
     mock_store_refresh,
-    mock_cache
+    mock_cache_read,
+    mock_cache_write
 ):
     """
     If there is no stored refresh token, get_jwt_token should prompt the Device Flow and complete auth.
