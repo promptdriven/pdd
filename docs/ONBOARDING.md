@@ -310,10 +310,9 @@ xdg-open htmlcov/index.html  # Linux
 
 **Recommended test execution order:**
 Run tests in this order to catch issues early:
-1. **Unit tests first:** `make test` or `pytest -vv tests/` (takes 17 minutes)
-2. **Regression tests:** `make regression` (takes 20 minutes)
-3. **Sync regression tests:** `make sync-regression` (takes 15 minutes)
-4. **Cloud regression tests:** `make cloud-regression` (takes 10 minutes) or `make all-cloud-regression` to really be sure you're covered
+1. **Unit tests first:** `make test` or `pytest -vv tests/` (17 min)
+2. **All regression tests:** `make all-regression` (45 min total)
+   - Or run individually: `regression` (20 min), `sync-regression` (15 min), `cloud-regression` (10 min)
 
 **Sync regression tests:**
 ```bash
