@@ -1,40 +1,36 @@
-"""Main function for the auto-deps command."""
+from __future__ import annotations
 import sys
 from pathlib import Path
-from typing import Callable, Tuple, Optional
+from typing import Optional, Tuple, Callable
 import click
 from rich import print as rprint
+from filelock import FileLock
 
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 
-def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
+
+def auto_deps_main(
     ctx: click.Context,
     prompt_file: str,
     directory_path: str,
     auto_deps_csv_path: Optional[str],
     output: Optional[str],
-    force_scan: Optional[bool],
+    force_scan: Optional[bool] = False,
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> Tuple[str, float, str]:
     """
-    Main function to analyze and insert dependencies into a prompt file.
+    Main function to analyze a prompt file and insert dependencies found in a directory.
 
-    Args:
-        ctx: Click context containing command-line parameters.
-        prompt_file: Path to the input prompt file.
-        directory_path: Path to directory containing potential dependency files.
-        auto_deps_csv_path: Path to CSV file containing auto-dependency information.
-        output: Optional path to save the modified prompt file.
-        force_scan: Flag to force rescan of directory by deleting CSV file.
-        progress_callback: Callback for progress updates (current, total) for each file.
-
-    Returns:
-        Tuple containing:
-        - str: Modified prompt with auto-dependencies added
-        - float: Total cost of the operation
-        - str: Name of the model used
+    :param ctx: Click context containing command-line parameters.
+    :param prompt_file: Path to the input prompt file.
+    :param directory_path: Path to the directory or glob pattern containing potential dependency files.
+    :param auto_deps_csv_path: Preferred CSV file path for dependency info (may be overridden by resolved paths).
+    :param output: File path (or directory) to save the modified prompt file.
+    :param force_scan: Flag to force a rescan by deleting the existing CSV cache.
+    :param progress_callback: Optional callback for progress updates (current, total).
+    :return: A tuple containing the modified prompt, total cost, and model name used.
     """
     try:
         # Construct file paths
@@ -45,7 +41,7 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
             "output": output,
             "csv": auto_deps_csv_path
         }
-
+        
         resolved_config, input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),
@@ -56,50 +52,64 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
             confirm_callback=ctx.obj.get('confirm_callback')
         )
 
-        # Get the CSV file path
+        # Resolve CSV path
         csv_path = output_file_paths.get("csv", "project_dependencies.csv")
 
-        # Handle force_scan option
+        # Handle force scan option
         if force_scan and Path(csv_path).exists():
             if not ctx.obj.get('quiet', False):
-                rprint(
-                    "[yellow]Removing existing CSV file due to "
-                    f"--force-scan option: {csv_path}[/yellow]"
-                )
-            Path(csv_path).unlink()
+                rprint(f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]")
+            try:
+                Path(csv_path).unlink()
+            except OSError as e:
+                if not ctx.obj.get('quiet', False):
+                    rprint(f"[yellow]Warning: Could not delete CSV file: {e}[/yellow]")
 
-        # Get strength and temperature from context
-        strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
-        temperature = ctx.obj.get('temperature', 0)
-        time_budget = ctx.obj.get('time', DEFAULT_TIME)
+        # Acquire lock to prevent concurrent access to the CSV cache
+        lock_path = f"{csv_path}.lock"
+        lock = FileLock(lock_path)
+        
+        with lock:
+            # Load input file
+            prompt_content = input_strings["prompt_file"]
 
-        # Call insert_includes with the prompt content and directory path
-        modified_prompt, csv_output, total_cost, model_name = insert_includes(
-            input_prompt=input_strings["prompt_file"],
-            directory_path=directory_path,
-            csv_filename=csv_path,
-            prompt_filename=prompt_file,
-            strength=strength,
-            temperature=temperature,
-            time=time_budget,
-            verbose=not ctx.obj.get('quiet', False),
-            progress_callback=progress_callback
-        )
+            # Get LLM parameters
+            strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
+            temperature = ctx.obj.get('temperature', 0.0)
+            time_budget = ctx.obj.get('time', DEFAULT_TIME)
+            verbose = not ctx.obj.get('quiet', False)
 
-        # Save the modified prompt to the output file
-        output_path = output_file_paths["output"]
-        Path(output_path).write_text(modified_prompt, encoding="utf-8")
+            # Run the dependency analysis and insertion
+            modified_prompt, csv_output, total_cost, model_name = insert_includes(
+                input_prompt=prompt_content,
+                directory_path=directory_path,
+                csv_filename=csv_path,
+                prompt_filename=prompt_file,
+                strength=strength,
+                temperature=temperature,
+                time=time_budget,
+                verbose=verbose,
+                progress_callback=progress_callback
+            )
 
-        # Save the CSV output if it was generated
-        if csv_output:
-            Path(csv_path).write_text(csv_output, encoding="utf-8")
+            # Save the modified prompt
+            output_path = output_file_paths["output"]
+            if output_path:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write(modified_prompt)
+
+            # Save the CSV output if content exists
+            if csv_output:
+                with open(csv_path, 'w', encoding='utf-8') as f:
+                    f.write(csv_output)
 
         # Provide user feedback
         if not ctx.obj.get('quiet', False):
             rprint("[bold green]Successfully analyzed and inserted dependencies![/bold green]")
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-            rprint(f"[bold]Modified prompt saved to:[/bold] {output_path}")
+            if output_path:
+                rprint(f"[bold]Modified prompt saved to:[/bold] {output_path}")
             rprint(f"[bold]Dependency information saved to:[/bold] {csv_path}")
 
         return modified_prompt, total_cost, model_name
@@ -107,8 +117,8 @@ def auto_deps_main(  # pylint: disable=too-many-arguments, too-many-locals
     except click.Abort:
         # User cancelled - re-raise to stop the sync loop
         raise
-    except Exception as exc:
+    except Exception as e:
         if not ctx.obj.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {str(exc)}")
+            rprint(f"[bold red]Error:[/bold red] {str(e)}")
         # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
-        return "", 0.0, f"Error: {exc}"
+        return "", 0.0, f"Error: {e}"
