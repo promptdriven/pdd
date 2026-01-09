@@ -456,6 +456,7 @@ contexts:
       - "backend/**"
     defaults:
       prompts_dir: "prompts/backend"
+      generate_output_path: "backend"
 '''
     (repo_path / ".pddrc").write_text(pddrc_content)
 
@@ -498,7 +499,7 @@ contexts:
         )
 
     # Assert: Prompt should be saved to prompts/backend/, not prompts/
-    expected_prompt_path = repo_path / "prompts" / "backend" / "backend" / "some_module_python.prompt"
+    expected_prompt_path = repo_path / "prompts" / "backend" / "some_module_python.prompt"
     wrong_prompt_path = repo_path / "prompts" / "some_module_python.prompt"
 
     assert expected_prompt_path.exists(), \
