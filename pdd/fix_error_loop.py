@@ -353,7 +353,7 @@ def fix_error_loop(unit_test_file: str,
 
     # We do up to max_attempts fix attempts or until budget is exceeded
     iteration = 0
-    # Determine if target is Python (needed for exception handling)
+    # Determine if target is Python (moved before try block for use in exception handler)
     is_python = str(code_file).lower().endswith(".py")
     # Run an initial test to determine starting state
     try:
