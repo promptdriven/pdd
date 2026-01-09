@@ -119,39 +119,58 @@ def which(
                 kwargs[name] = cli_overrides.get("prompt_path")
             else:
                 kwargs[name] = cli_overrides.get("prompts_dir")
-        # Quiet flag to suppress debug output
-        elif name == "quiet":
-            kwargs[name] = True
 
     try:
         effective = resolve_effective_config(**kwargs)
     except TypeError:
         # Fall back to calling without kwargs if the resolver has a different interface.
         effective = resolve_effective_config()
+        
     
-    # Unpack the tuple returned by resolve_effective_config:
-    # (context, pddrc_path, context_config, resolved_config, original_context_config)
-    if isinstance(effective, tuple) and len(effective) == 5:
-        selected_context, pddrc_path, _, resolved, _ = effective
-        # Normalize context to string
-        selected_context = selected_context or "none"
-        # Convert Path to string if needed
-        if isinstance(pddrc_path, Path):
-            pddrc_path = str(pddrc_path)
-    elif isinstance(effective, dict):
-        # Fallback for unexpected dict return (shouldn't happen based on signature)
-        selected_context = effective.get("context") or "none"
-        pddrc_path = effective.get("pddrc_path")
-        resolved = effective.get("resolved_config") or {}
-        if isinstance(pddrc_path, Path):
-            pddrc_path = str(pddrc_path)
+    if isinstance(effective, dict):
+        effective_dict: dict[str, Any] = effective
+    elif isinstance(effective, tuple):
+        # Best-effort: infer fields by type and common keys.
+        effective_dict = {"pddrc_path": None, "context": None, "resolved_config": {}}
+        for item in effective:
+            if isinstance(item, dict):
+                # Prefer a nested resolved_config if present; otherwise treat as the resolved config itself.
+                if "resolved_config" in item or "context" in item or "pddrc_path" in item:
+                    effective_dict.update(item)
+                else:
+                    effective_dict["resolved_config"] = item
+            elif isinstance(item, Path):
+                # Most resolvers return the rc path as a Path
+                effective_dict["pddrc_path"] = str(item)
+            elif isinstance(item, str):
+                s = item
+                # Treat as pddrc path only if it clearly looks like one
+                if s.endswith(".pddrc"):
+                    effective_dict["pddrc_path"] = s
+                elif ("/" in s or "\\" in s) and (s.endswith(".yml") or s.endswith(".yaml") or s.endswith(".json") or s.endswith(".toml") or s.endswith(".ini")):
+                    # Some resolvers may return a config path; keep it as pddrc_path for visibility
+                    effective_dict["pddrc_path"] = s
+                else:
+                    effective_dict["context"] = s
+        # Some tuple shapes may be (resolved_config, context_name) or (context_name, resolved_config)
+        if effective_dict.get("context") is None and len(effective) >= 2:
+            a, b = effective[0], effective[1]
+            if isinstance(a, str) and isinstance(b, dict):
+                effective_dict["context"] = a
+                effective_dict["resolved_config"] = b
+            elif isinstance(a, dict) and isinstance(b, str):
+                effective_dict["resolved_config"] = a
+                effective_dict["context"] = b
     else:
-        # Fallback for unexpected return type
-        selected_context = "none"
-        pddrc_path = None
-        resolved = {}
+        effective_dict = {"pddrc_path": None, "context": None, "resolved_config": {}}
 
-    # Try to find pddrc_path in resolved config as fallback (shouldn't normally be needed)
+    pddrc_path = effective_dict.get("pddrc_path")
+    selected_context = effective_dict.get("context") or "none"
+    resolved = effective_dict.get("resolved_config") or {}
+
+    # Coerce Path objects and try common fallback keys for the rc/config path.
+    if isinstance(pddrc_path, Path):
+        pddrc_path = str(pddrc_path)
     if not pddrc_path and isinstance(resolved, dict):
         for key in ("pddrc_path", "pddrc", "rc_path", "config_path"):
             val = resolved.get(key)
@@ -199,7 +218,7 @@ def which(
     prompts_candidates_raw.append(str(env_prompts_dir or ""))
     # .pddrc / resolved config (lowest among explicit settings)
     prompts_candidates_raw.append(str(_get_resolved_path("prompts_dir", "prompt_dir") or ""))
-    prompts_candidates_raw.append(str(_get_resolved_path("prompt_path") or ""))
+    prompts_candidates_raw.append(str(_get_resolved_path("prompt_path",) or ""))
 
     # Conventional fallbacks construct_paths commonly implies
     # (relative to config_base)
@@ -218,9 +237,9 @@ def which(
     tests_candidates_raw.append(str(os.environ.get("PDD_TEST_OUTPUT_PATH", "")))
     generate_candidates_raw.append(str(os.environ.get("PDD_GENERATE_OUTPUT_PATH", "")))
 
-    examples_candidates_raw.append(str(_get_resolved_path("example_output_path") or ""))
-    tests_candidates_raw.append(str(_get_resolved_path("test_output_path") or ""))
-    generate_candidates_raw.append(str(_get_resolved_path("generate_output_path") or ""))
+    examples_candidates_raw.append(str(_get_resolved_path("example_output_path",) or ""))
+    tests_candidates_raw.append(str(_get_resolved_path("test_output_path",) or ""))
+    generate_candidates_raw.append(str(_get_resolved_path("generate_output_path",) or ""))
 
     # Conventional defaults (relative)
     examples_candidates_raw.append("context")
