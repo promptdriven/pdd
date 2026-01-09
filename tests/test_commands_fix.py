@@ -411,4 +411,4 @@ def test_cli_fix_non_loop_mode_requires_error_file(tmp_path):
     ])
 
     assert result.exit_code != 0
-    assert "Missing argument" in result.output or "Error" in result.output
+    assert "Missing argument 'ERROR_FILE'" in result.output

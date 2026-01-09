@@ -109,13 +109,13 @@ def fix(
             # In non-loop mode, the last arg is the error file
             if len(args) < 2:
                 raise click.BadArgumentUsage(
-                    "Missing argument 'ERROR_FILE'. In non-loop mode, "
-                    "you must provide at least one unit test file and one error file."
+                    "Missing argument 'ERROR_FILE'. In non-loop mode, you must provide at "
+                    "least one UNIT_TEST_FILE followed by ERROR_FILE (minimum 2 arguments required)."
                 )
             unit_test_files = list(args[:-1])
             error_file = args[-1]
 
-        # Validate existence of unit test files manually since we removed exists=True from the argument definition
+        # Validate existence of unit test files manually since we removed exists=True from the args argument definition
         for f in unit_test_files:
             if not os.path.exists(f):
                 raise click.BadParameter(f"Path '{f}' does not exist.", param_hint='unit_test_files')
