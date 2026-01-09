@@ -216,6 +216,9 @@ def run_process_with_output(cmd_args, timeout=300):
     captured_stderr = []
 
     def stream_pipe(pipe, capture_list):
+        """
+        Read from a pipe and append each line to capture_list for later aggregation.
+        """
         while True:
             try:
                 # Read a line (or chunk if line-buffered isn't working as expected)
