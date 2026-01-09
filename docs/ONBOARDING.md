@@ -222,6 +222,32 @@ The script will print a detailed, color-coded report to the console for each tes
 
 This allows you to quickly identify which cases are failing and why, so you can refine your prompt accordingly.
 
+## Claiming Issues
+
+Before starting work on an issue, claim it to avoid duplicate effort.
+
+### How to Claim an Issue
+
+1. **Comment on the issue** with your intent to work on it
+2. **Include your GitHub handle** so others know who's working on it
+3. **Set a target completion date** to help maintainers track progress
+
+**Example claiming comment:**
+```
+I'd like to work on this issue.
+
+Assignee: @username
+Target completion: 2024-01-20
+```
+
+If you have repository permissions, also assign yourself to the issue. Otherwise, a maintainer will assign you.
+
+### Keeping Issues Updated
+
+- Post progress updates if your timeline changes
+- If you can no longer work on an issue, comment to release it for others
+- Maintainers may reassign stale issues on a case-by-case basis
+
 ## Pull Request Completeness Checklist
 
 Before submitting a PR, ensure you have completed all applicable items. Incomplete PRs will be sent back for revisions.
