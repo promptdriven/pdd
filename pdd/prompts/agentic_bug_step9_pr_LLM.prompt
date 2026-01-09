@@ -48,10 +48,16 @@ You are working on step 9 of 9 (final step) in an agentic bug investigation work
 {step8_output}
 </step8_output>
 
+% Worktree Information
+
+You are operating in an isolated git worktree at: {worktree_path}
+This worktree is already checked out to branch `fix/issue-{issue_number}`.
+Do NOT create a new branch - just stage, commit, and push.
+
 % Your Task
 
-1. **Prepare the branch**
-   - Create a new branch named `fix/issue-{issue_number}` or similar
+1. **Prepare the commit**
+   - You are already on branch `fix/issue-{issue_number}` in an isolated worktree
    - Stage the generated test file(s)
    - Commit with a descriptive message referencing the issue
 
@@ -139,6 +145,7 @@ Your comment should follow this format:
 To auto-fix this bug using PDD:
 
 ```bash
+cd {{worktree_path}}
 pdd --force fix --loop --max-attempts 5 --verification-program context/{{module_name}}_example.py {{prompt_file}} {{code_file_path}} {{test_file_path}} fix-issue-{{issue_number}}.log
 ```
 
@@ -151,5 +158,5 @@ pdd --force fix --loop --max-attempts 5 --verification-program context/{{module_
 - Create a DRAFT PR (not ready for review) since it only contains the failing test
 - The PR should clearly state that a fix is still needed
 - Use "Fixes #{issue_number}" to auto-link the PR to the issue
-- If branch creation fails (e.g., branch exists), try an alternative name
+- Do NOT create a new branch - you are already on the correct branch in the worktree
 - Always post your findings as a GitHub comment before completing
