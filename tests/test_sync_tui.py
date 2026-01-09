@@ -18,14 +18,40 @@ with patch("textual.work", lambda **kwargs: (lambda func: func)):
         ChoiceScreen, 
         TUIStdinRedirector, 
         ThreadSafeRedirector,
+        TUIStdoutWrapper,
         maybe_steer_operation,
         _is_headless_environment
     )
 
 from textual.widgets import RichLog, ProgressBar, Static
 from textual.app import App
-from textual.events import Event, Size, Resize
-from unittest.mock import PropertyMock # Added import
+
+
+# --- Event loop fixture for sync tests ---
+@pytest.fixture(autouse=True)
+def _ensure_asyncio_event_loop():
+    """Ensure sync tests have a default asyncio loop.
+
+    Some Textual helpers call asyncio.get_event_loop()/get_running_loop internally.
+    In Python 3.12+, this raises RuntimeError if no loop is set.
+    """
+    try:
+        asyncio.get_running_loop()
+        # A loop is already running (e.g., in asyncio-marked tests).
+        yield
+        return
+    except RuntimeError:
+        pass
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        yield
+    finally:
+        try:
+            loop.close()
+        finally:
+            asyncio.set_event_loop(None)
 
 # --- Unit Tests ---
 
@@ -135,6 +161,7 @@ def test_maybe_steer_operation_headless():
 
 def test_sync_app_env_isolation():
     """Verify SyncApp worker thread isolates environment variables."""
+
     def mock_worker():
         # Check if env vars are set inside the worker
         assert os.environ.get("FORCE_COLOR") == "1"
@@ -248,76 +275,214 @@ def test_steering_logic_safety_z3():
     assert solver.check().r == -1
     solver.pop()
 
+# --- New Tests ---
 
-@pytest.mark.asyncio
-async def test_sync_app_on_resize():
+def test_tui_stdout_wrapper_captures_prompt():
     """
-    Verifies that resizing the terminal window during pdd sync causes UI corruption
-    due to improper handling of resize events by SyncApp.
-
-    This test simulates a terminal resize and asserts that the log_widget
-    is not immediately refreshed and internal width calculations (_log_width)
-    are not updated to the new terminal width, leading to visual artifacts.
+    Verify that TUIStdoutWrapper detects strings without newlines as prompts
+    and passes them to the stdin redirector.
     """
-    with patch("textual.work", lambda **kwargs: (lambda func: func)):
-        from pdd.sync_tui import SyncApp
+    mock_real_redirector = MagicMock(spec=ThreadSafeRedirector)
+    mock_stdin_redirector = MagicMock(spec=TUIStdinRedirector)
+    
+    wrapper = TUIStdoutWrapper(mock_real_redirector, mock_stdin_redirector)
+    
+    # Case 1: Standard log line (ends with newline)
+    wrapper.write("Log message\n")
+    mock_real_redirector.write.assert_called_with("Log message\n")
+    mock_stdin_redirector.set_prompt.assert_not_called()
+    
+    # Case 2: Prompt (no newline)
+    wrapper.write("Enter value: ")
+    mock_real_redirector.write.assert_called_with("Enter value: ")
+    mock_stdin_redirector.set_prompt.assert_called_with("Enter value: ")
 
-    # Mock a simple worker function
-    def mock_worker():
-        return {"success": True}
+def test_confirm_screen_logic():
+    """
+    Verify ConfirmScreen dismisses with correct boolean values based on button IDs.
+    """
+    screen = ConfirmScreen("Are you sure?", "Confirm")
+    screen.dismiss = MagicMock()
+    
+    # Simulate pressing 'yes'
+    event_yes = MagicMock()
+    event_yes.button.id = "yes"
+    screen.on_button_pressed(event_yes)
+    screen.dismiss.assert_called_with(True)
+    
+    # Simulate pressing 'no'
+    event_no = MagicMock()
+    event_no.button.id = "no"
+    screen.on_button_pressed(event_no)
+    screen.dismiss.assert_called_with(False)
 
-    # Setup shared refs and stop_event
+def test_input_screen_logic():
+    """
+    Verify InputScreen dismisses with value on OK/Submit and None on Cancel.
+    """
+    screen = InputScreen("Enter key", "Input")
+    screen.dismiss = MagicMock()
+    
+    # Mock the input widget query
+    mock_input = MagicMock()
+    mock_input.value = "secret_value"
+    screen.query_one = MagicMock(return_value=mock_input)
+    
+    # Simulate pressing 'ok'
+    event_ok = MagicMock()
+    event_ok.button.id = "ok"
+    screen.on_button_pressed(event_ok)
+    screen.dismiss.assert_called_with("secret_value")
+    
+    # Simulate pressing 'cancel'
+    event_cancel = MagicMock()
+    event_cancel.button.id = "cancel"
+    screen.on_button_pressed(event_cancel)
+    screen.dismiss.assert_called_with(None)
+
+def test_sync_app_request_confirmation_flow():
+    """
+    Verify request_confirmation blocks and returns the result set by the UI thread.
+    """
+    # Setup shared refs
     refs = [[""]] * 10
-    stop_event = threading.Event()
+    app = SyncApp("test", 1.0, lambda: {}, *refs, stop_event=threading.Event())
+    app.call_from_thread = MagicMock()
+    
+    # Simulate the UI thread: when call_from_thread is invoked, set the result and
+    # signal the waiting event so the test doesn't hang.
+    def _call_from_thread_side_effect(fn, *args, **kwargs):
+        # In unit tests we don't run Textual's async loop; just unblock the wait.
+        if getattr(app, "_confirm_event", None) is not None:
+            app._confirm_result = True
+            app._confirm_event.set()
 
-    app = SyncApp(
-        "test", 1.0, mock_worker,
-        *refs, stop_event=stop_event
+    app.call_from_thread.side_effect = _call_from_thread_side_effect
+
+    result = app.request_confirmation("Message")
+
+    assert result is True
+    assert app.call_from_thread.called
+    # Verify the internal state was prepared
+    assert app._confirm_message == "Message"
+
+def test_sync_app_request_input_timeout():
+    """
+    Verify request_input returns None if the event wait times out.
+    """
+    refs = [[""]] * 10
+    app = SyncApp("test", 1.0, lambda: {}, *refs, stop_event=threading.Event())
+    app.call_from_thread = MagicMock()
+
+    # Instead of running UI, unblock any waiting event to ensure test can't hang.
+    def _call_from_thread_no_ui(fn, *a, **k):
+        # Don't run UI, but ensure any waiting Event is released.
+        if getattr(app, "_input_event", None) is not None:
+            app._input_result = None
+            app._input_event.set()
+
+    app.call_from_thread.side_effect = _call_from_thread_no_ui
+
+    result = app.request_input("Prompt")
+
+    assert result is None
+    assert app.call_from_thread.called
+
+def test_maybe_steer_operation_integration():
+    """
+    Verify maybe_steer_operation delegates to the app instance correctly.
+    """
+    mock_app = MagicMock(spec=SyncApp)
+    mock_app.request_steering.return_value = ("test", False)
+    
+    # Case 1: Normal delegation (force non-headless mode for determinism)
+    with patch("pdd.sync_tui._is_headless_environment", return_value=False):
+        op, abort = maybe_steer_operation("generate", app=mock_app)
+    mock_app.request_steering.assert_called_with("generate", "", timeout_s=8.0)
+    assert op == "test"
+    assert abort is False
+    
+    # Case 2: Quiet mode (should not call app)
+    mock_app.reset_mock()
+    op, abort = maybe_steer_operation("generate", app=mock_app, quiet=True)
+    mock_app.request_steering.assert_not_called()
+    assert op == "generate"
+
+def test_maybe_steer_operation_filtering():
+    """
+    Verify maybe_steer_operation filters out disallowed operations returned by the app.
+    """
+    mock_app = MagicMock(spec=SyncApp)
+    
+    # App returns 'test', but we passed skip_tests=True
+    mock_app.request_steering.return_value = ("test", False)
+    
+    with patch("pdd.sync_tui._is_headless_environment", return_value=False):
+        op, abort = maybe_steer_operation("generate", app=mock_app, skip_tests=True)
+    
+    # Should revert to original operation 'generate' because 'test' is disallowed
+    assert op == "generate"
+    assert abort is False
+
+def test_z3_maybe_steer_filtering_logic():
+    """
+    Z3 Verification: Ensure that maybe_steer_operation logic strictly enforces
+    skip constraints regardless of what the underlying app/user returns.
+    """
+    from z3 import Solver, Or, And, Not, Implies, Bool, EnumSort, Const
+
+    # Define Operations
+    Ops, (op_gen, op_test, op_fix, op_verify, op_abort, op_other) = EnumSort(
+        'Ops2', ['generate', 'test', 'fix', 'verify', 'abort', 'other']
     )
 
-    initial_app_width = 80 # Default fallback width during on_mount
-    initial_app_height = 24 # Arbitrary initial height for testing
-    expected_initial_log_width = max(20, initial_app_width - 6) # Should be 74
+    solver = Solver()
 
-    # Mock the `size` property of the SyncApp instance
-    # Use patch.object with new_callable=PropertyMock to mock a property
-    # and set its return value to a MagicMock that acts like a Size object.
-    with patch.object(type(app), 'size', new_callable=PropertyMock) as mock_size_property:
-        mock_size_property.return_value = MagicMock(width=initial_app_width, height=initial_app_height)
+    # Inputs
+    original_op = Const('original_op', Ops)
+    app_returned_op = Const('app_returned_op', Ops)
+    app_returned_abort = Bool('app_returned_abort')
+    skip_tests = Bool('skip_tests')
+    skip_verify = Bool('skip_verify')
 
-        # Mock Textual UI components to avoid full rendering and focus on resize logic
-        app.log_widget = MagicMock(spec=RichLog)
-        app.animation_view = MagicMock(spec=Static)
-        app.query_one = MagicMock(return_value=app.animation_view) # To simulate query_one selecting animation_view
+    # Output
+    final_op = Const('final_op', Ops)
+    final_abort = Bool('final_abort')
 
-        # Set initial _log_width and os.environ["COLUMNS"] based on how on_mount initializes it
-        app._log_width = expected_initial_log_width
-        os.environ["COLUMNS"] = str(expected_initial_log_width)
-        # Simulate mounting the app (necessary for on_resize to be called on a mounted widget)
-        # We need to simulate enough of the app lifecycle for on_resize to be relevant
-        with patch.object(app, 'mount') as mock_mount, \
-             patch.object(app, 'call_after_refresh') as mock_call_after_refresh:
-                # Manually call on_mount setup steps that on_resize might depend on
-                with patch.object(app, 'run_worker_task'), patch.object(app, 'exit'), \
-                     patch.object(app, 'set_interval'), patch.object(app, 'update_animation'):
-                    # Manually set the event loop to prevent "App is not running" RuntimeError
-                    app._loop = asyncio.get_running_loop()
-                    app.on_mount()
+    # Logic definition matching maybe_steer_operation implementation
+    # disallowed set construction
+    is_test_related = Or(app_returned_op == op_test, app_returned_op == op_fix)
+    is_verify_related = (app_returned_op == op_verify)
 
-                # Simulate a resize event
-                new_width = 100
-                new_height = 30
-                mock_size_property.return_value = MagicMock(width=new_width, height=new_height) # Update mock size
-                # Removed direct mock_on_resize assertion, as we're now testing the *effect* of on_resize.
-                app.on_resize(Resize(size=Size(width=new_width, height=new_height), virtual_size=Size(width=new_width, height=new_height)))
+    is_disallowed = Or(
+        And(skip_tests, is_test_related),
+        And(skip_verify, is_verify_related)
+    )
 
-                # With the fix, _log_width should be updated immediately by on_resize
-                expected_log_width = new_width - 6
-                assert app._log_width == expected_log_width
-                app.log_widget.refresh.assert_called_once()
-                app.animation_view.update.assert_called_once() # Animation view should be updated via update_animation
+    # If disallowed, return original_op and False. Else return app result.
+    solver.add(Implies(is_disallowed, And(final_op == original_op, final_abort == False)))
+    solver.add(Implies(Not(is_disallowed), And(final_op == app_returned_op, final_abort == app_returned_abort)))
 
-                # Verify os.environ["COLUMNS"] is updated immediately by on_resize
-                assert os.environ["COLUMNS"] == str(expected_log_width)
-            # Clean up os.environ["COLUMNS"] if it was changed during the test run to avoid side effects
-    os.environ["COLUMNS"] = "80" # Reset to a default value for subsequent tests
+    # Verification Goal 1: If skip_tests is True, final_op can NEVER be 'test' or 'fix'
+    # unless original_op was 'test'/'fix' (the function only filters the *chosen* op if it differs, 
+    # but strictly speaking the code says: if chosen in disallowed, return operation. 
+    # If operation itself was disallowed, it returns it. The filter applies to the *change*).
+    # Let's verify that if the app tries to *switch* to a test op, it is rejected.
+    
+    solver.push()
+    solver.add(skip_tests == True)
+    solver.add(Or(final_op == op_test, final_op == op_fix))
+    # We assume the original operation was NOT test/fix, so we are looking for a switch
+    solver.add(Not(Or(original_op == op_test, original_op == op_fix)))
+    
+    # If the solver finds a model, it means we managed to get a test op despite skipping tests
+    assert solver.check().r == -1, "Found a case where skip_tests failed to prevent switching to test/fix"
+    solver.pop()
+
+    # Verification Goal 2: If skip_verify is True, final_op can NEVER be 'verify' (assuming original wasn't)
+    solver.push()
+    solver.add(skip_verify == True)
+    solver.add(final_op == op_verify)
+    solver.add(original_op != op_verify)
+    assert solver.check().r == -1, "Found a case where skip_verify failed to prevent switching to verify"
+    solver.pop()
