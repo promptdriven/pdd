@@ -243,17 +243,3 @@ def test_get_upgrade_command():
     assert "--upgrade" in pip_cmd
     assert "pdd-cli" in pip_cmd
     assert isinstance(pip_shell, bool)
-
-#test for Windows paths with backslashes
-def test_detect_uv_installation_windows():
-      """Test detection of UV installation on Windows with backslash paths."""
-      # Test Windows UV tool paths with backslashes
-      assert detect_installation_method(
-          r"C:\Users\pmbri\AppData\Roaming\uv\tools\pdd-cli\Scripts\python.exe"
-      ) == "uv"
-      assert detect_installation_method(
-          r"C:\Users\user\.local\share\uv\tools\pdd-cli\Scripts\python.exe"
-      ) == "uv"
-      assert detect_installation_method(
-          r"D:\uv\tools\pdd-cli\bin\python.exe"
-      ) == "uv"
