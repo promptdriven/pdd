@@ -458,6 +458,15 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                       <label className="flex items-center gap-2 cursor-pointer group">
                         <input
                           type="checkbox"
+                          checked={globalOptions.local ?? false}
+                          onChange={(e) => setGlobalOptions(prev => ({ ...prev, local: e.target.checked }))}
+                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
+                        />
+                        <span className="text-xs text-surface-300 group-hover:text-white">Run locally (not cloud)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <input
+                          type="checkbox"
                           checked={globalOptions.verbose ?? false}
                           onChange={(e) => setGlobalOptions(prev => ({ ...prev, verbose: e.target.checked }))}
                           className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"

@@ -7,6 +7,8 @@ export enum CommandType {
   EXAMPLE = 'example',
   FIX = 'fix',
   BUG = 'bug',
+  CRASH = 'crash',
+  VERIFY = 'verify',
   // Advanced operations
   SPLIT = 'split',
   CHANGE = 'change',
@@ -42,6 +44,7 @@ export interface GlobalDefaults {
   verbose: boolean;
   quiet: boolean;
   force: boolean;
+  local: boolean;
   reviewExamples: boolean;
 }
 
