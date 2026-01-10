@@ -3,6 +3,7 @@ import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, Generation
 import DependencyViewer from './DependencyViewer';
 import FileBrowser from './FileBrowser';
 import GenerationProgressModal from './GenerationProgressModal';
+import PromptOrderModal from './PromptOrderModal';
 import { GLOBAL_DEFAULTS } from '../constants';
 
 interface ArchitectureViewProps {
@@ -46,6 +47,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   } | null>(null);
   const [promptGenerationResults, setPromptGenerationResults] = useState<PromptGenerationResult[] | null>(null);
   const [showProgressModal, setShowProgressModal] = useState(false);
+  const [showOrderModal, setShowOrderModal] = useState(false);
 
   // Global options state
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
@@ -178,17 +180,25 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     setMode('editor');
   }, []);
 
-  // Handle generate prompts from architecture
-  const handleGeneratePrompts = useCallback(async () => {
+  // Open the order modal before generating prompts
+  const handleGeneratePrompts = useCallback(() => {
     if (!architecture || architecture.length === 0) return;
+    setShowOrderModal(true);
+  }, [architecture]);
+
+  // Handle generation with user-selected order
+  const handleConfirmGeneratePrompts = useCallback(async (orderedModules: ArchitectureModule[]) => {
+    setShowOrderModal(false);
+
+    if (orderedModules.length === 0) return;
 
     cancelRequestedRef.current = false;
     setIsGeneratingPrompts(true);
     setPromptGenerationResults(null);
     setShowProgressModal(true);
 
-    // Parse module info from filenames
-    const moduleRequests = architecture.map(m => {
+    // Parse module info from filenames in the user-specified order
+    const moduleRequests = orderedModules.map(m => {
       // Parse "orders_Python.prompt" → { module: "orders", langOrFramework: "Python" }
       const match = m.filename.match(/^(.+)_([^_]+)\.prompt$/);
       return {
@@ -223,7 +233,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       setIsGeneratingPrompts(false);
       setPromptGenerationProgress(null);
     }
-  }, [architecture, prdPath, techStackPath, globalOptions]);
+  }, [prdPath, techStackPath, globalOptions]);
 
   // Cancel prompt generation and current running command
   const handleCancelPromptGeneration = useCallback(async () => {
@@ -541,6 +551,16 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           onClose={() => setShowFileBrowser(null)}
           filter=".md"
           title={showFileBrowser === 'prd' ? 'Select PRD File' : 'Select Tech Stack File'}
+        />
+      )}
+
+      {/* Prompt Order Selection Modal */}
+      {showOrderModal && architecture && (
+        <PromptOrderModal
+          isOpen={showOrderModal}
+          modules={architecture}
+          onClose={() => setShowOrderModal(false)}
+          onConfirm={handleConfirmGeneratePrompts}
         />
       )}
 
