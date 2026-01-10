@@ -2,15 +2,31 @@
 
 ### Feat
 
-- add prompt order selection modal for architecture generation
-- update prompt and add tests for cloud JSON fence stripping
-- add frontend web interface for pdd connect
-- add pdd connect command with FastAPI server backend
+- **`pdd connect` Command (Issue #276):** New CLI command launches local FastAPI server (default port 9876) with REST API and WebSocket support for IDE/frontend integration. Complete backend implementation includes:
+  - 13 server modules (3,803 lines): FastAPI app, Click command executor, job manager, security layer, token counter, WebSocket handler
+  - 4 REST route groups: commands, files, prompts, websocket
+  - Authentication via bearer tokens, CORS configuration, rate limiting
+  - Comprehensive test suite (5,369+ lines across 16 test files)
+
+- **React Frontend Interface:** Full-featured web UI (13,174 lines) served via `pdd connect`, featuring:
+  - PromptSpace workspace with architecture visualization, dependency graph, file browser
+  - Interactive prompt editor with PDD directives autocomplete (`@include`, `@context`, `@example`)
+  - Project settings for budget, model selection, strength/temperature tuning
+  - Real-time command execution with WebSocket streaming
+  - Built with Vite+React+TypeScript, bundled in `frontend/dist/`
+
+- **Prompt Order Selection Modal:** Users can customize prompt generation order in architecture view with drag-to-reorder UI, select/deselect modules, and priority/language badges per module. Generated prompts follow user-specified order instead of default architecture.json ordering.
+
+- **Cloud JSON Fence Stripping:** Updated `code_generator_main_python.prompt` to document automatic stripping of ```json markdown fences from LLM responses. Added 125 lines of tests covering various fence formats, case-insensitive language detection, and non-JSON response preservation.
 
 ### Fix
 
-- handle broken symlinks in file tree endpoint
-- resolve merge conflict with main and fix websocket prompt typo
+- **Broken Symlinks in File Tree (Server):** `/api/files/tree` endpoint now gracefully handles dangling symlinks by catching `FileNotFoundError`/`OSError` in `_build_file_tree()` and filtering out `None` entries. Prevents 500 errors when projects contain broken symlinks (files.py:314-323).
+
+### Chore
+
+- **Dependency Updates:** Pinned versions for stability: `firecrawl-py==2.5.3`, `pydantic==2.11.4`, `pytest==8.3.5`, `z3-solver==4.14.1.0`. Added server dependencies: `fastapi>=0.115.0`, `uvicorn[standard]>=0.32.0`, `websockets>=13.0`, `watchdog>=4.0.0`, `tiktoken>=0.7.0`. Upgraded `psutil>=7.0.0`.
+- Package data now includes `frontend/dist/**` for bundled web UI distribution.
 
 ## v0.0.107 (2026-01-08)
 
