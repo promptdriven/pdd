@@ -13,7 +13,7 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 10.0
-      strength: 0.75
+      strength: 1.0
       temperature: 0.0
       budget: 10.0
       max_attempts: 3
@@ -29,7 +29,7 @@ contexts:
       example_output_path: "context/"
       default_language: "python"
       target_coverage: 85.0
-      strength: 0.75
+      strength: 1.0
 
   # Examples and demonstrations
   examples:
@@ -40,7 +40,7 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 80.0
-      strength: 0.75
+      strength: 1.0
 
   # Utilities and tooling
   utils:
@@ -51,7 +51,7 @@ contexts:
       example_output_path: "utils/examples/"
       default_language: "python"
       target_coverage: 85.0
-      strength: 0.75
+      strength: 1.0
 
   # Documentation and config
   docs:
@@ -62,7 +62,7 @@ contexts:
       example_output_path: "docs/examples/"
       default_language: "markdown"
       target_coverage: 70.0
-      strength: 0.75
+      strength: 1.0
 
   # Backend cloud functions (if applicable)
   backend:
@@ -73,7 +73,7 @@ contexts:
       example_output_path: "backend/examples/"
       default_language: "python"
       target_coverage: 95.0
-      strength: 0.75
+      strength: 1.0
 
   # Frontend web interface (if applicable)
   frontend:
@@ -84,7 +84,7 @@ contexts:
       example_output_path: "frontend/examples/"
       default_language: "typescript"
       target_coverage: 85.0
-      strength: 0.75
+      strength: 1.0
 
   # Default fallback context for unmatched paths
   default:
@@ -94,7 +94,7 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 10.0
-      strength: 0.75
+      strength: 1.0
       temperature: 0.0
       budget: 10.0
       max_attempts: 3
