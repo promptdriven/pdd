@@ -155,6 +155,7 @@ export interface GenerationGlobalOptions {
   verbose?: boolean;
   quiet?: boolean;
   force?: boolean;
+  local?: boolean;        // Run locally instead of cloud
 }
 
 export interface GenerateArchitectureRequest {
