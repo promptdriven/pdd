@@ -11,9 +11,15 @@
      - `files_router` from `.files`
      - `commands_router` from `.commands`
      - `websocket_router` from `.websocket`
+     - `prompts_router` from `.prompts`
 
-  2. Export list:
-     - `__all__ = ["files_router", "commands_router", "websocket_router"]`
+  2. Import modules directly for namespace access:
+     - `from . import files`
+     - `from . import commands`
+     - `from . import prompts`
+
+  3. Export list:
+     - `__all__ = ["files", "commands", "prompts", "files_router", "commands_router", "websocket_router", "prompts_router"]`
 
 % Instructions
   - Keep this file minimal - just imports and exports

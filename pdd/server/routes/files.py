@@ -271,6 +271,245 @@ async def write_file(
         )
 
 
+# Known language suffixes for prompt files (e.g., "calculator_python.prompt")
+KNOWN_LANGUAGES = ["python", "typescript", "javascript", "java", "go", "rust", "cpp", "c", "csharp", "ruby", "swift", "kotlin"]
+
+# Map language to file extensions
+LANGUAGE_EXTENSIONS = {
+    "python": [".py"],
+    "typescript": [".ts", ".tsx"],
+    "javascript": [".js", ".jsx"],
+    "java": [".java"],
+    "go": [".go"],
+    "rust": [".rs"],
+    "cpp": [".cpp", ".cc", ".cxx"],
+    "c": [".c"],
+    "csharp": [".cs"],
+    "ruby": [".rb"],
+    "swift": [".swift"],
+    "kotlin": [".kt"],
+}
+
+
+def load_pddrc(project_root: Path) -> dict:
+    """
+    Load .pddrc configuration file if it exists.
+
+    Returns parsed YAML config or empty dict.
+    """
+    import fnmatch
+    pddrc_path = project_root / ".pddrc"
+    if not pddrc_path.exists():
+        return {}
+
+    try:
+        import yaml
+        with open(pddrc_path) as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
+def match_context(prompt_path: str, pddrc: dict) -> dict:
+    """
+    Match a prompt path to a context in .pddrc and return its defaults.
+
+    Args:
+        prompt_path: Relative path to prompt file (e.g., "prompts/calculator_python.prompt")
+        pddrc: Parsed .pddrc configuration
+
+    Returns:
+        Dict with generate_output_path, test_output_path, example_output_path
+    """
+    import fnmatch
+
+    contexts = pddrc.get("contexts", {})
+
+    # Try each context in order (order matters for matching)
+    for context_name, context_config in contexts.items():
+        paths = context_config.get("paths", [])
+        defaults = context_config.get("defaults", {})
+
+        for pattern in paths:
+            if fnmatch.fnmatch(prompt_path, pattern):
+                return defaults
+
+    # Return default context if exists, otherwise empty
+    default_context = contexts.get("default", {})
+    return default_context.get("defaults", {})
+
+
+def parse_prompt_stem(stem: str) -> tuple:
+    """
+    Parse sync_basename and language from prompt stem.
+
+    Example: "calculator_python" -> ("calculator", "python")
+    Example: "simple_math_typescript" -> ("simple_math", "typescript")
+    Example: "unknown" -> ("unknown", None)
+    """
+    for lang in KNOWN_LANGUAGES:
+        suffix = f"_{lang}"
+        if stem.endswith(suffix):
+            return stem[:-len(suffix)], lang
+    return stem, None
+
+
+@router.get("/prompts")
+async def list_prompt_files(
+    validator: PathValidator = Depends(get_path_validator),
+):
+    """
+    List all .prompt files in the project.
+
+    Returns a list of prompt files with their related dev-unit files
+    (code, tests, examples) if they exist.
+
+    Uses .pddrc configuration if available to determine correct paths.
+
+    Each result includes:
+    - prompt: Full path to .prompt file
+    - sync_basename: Basename for sync command (without language suffix)
+    - language: Detected language (e.g., "python")
+    - code, test, example: Paths to related files if they exist
+    """
+    project_root = validator.project_root
+    prompts_dir = project_root / "prompts"
+
+    # Load .pddrc for context-specific paths
+    pddrc = load_pddrc(project_root)
+
+    results = []
+
+    # Find all .prompt files using set to avoid duplicates
+    prompt_files = set()
+
+    # 1. prompts/ directory (recursive)
+    if prompts_dir.exists():
+        prompt_files.update(prompts_dir.rglob("*.prompt"))
+
+    # 2. Project root
+    prompt_files.update(project_root.glob("*.prompt"))
+
+    # 3. Check prompts_dir from contexts
+    for context_name, context_config in pddrc.get("contexts", {}).items():
+        defaults = context_config.get("defaults", {})
+        custom_prompts_dir = defaults.get("prompts_dir")
+        if custom_prompts_dir:
+            custom_path = project_root / custom_prompts_dir
+            if custom_path.exists():
+                prompt_files.update(custom_path.rglob("*.prompt"))
+
+    for prompt_path in sorted(prompt_files):
+        relative_path = str(prompt_path.relative_to(project_root))
+        full_stem = prompt_path.stem  # e.g., "calculator_python"
+
+        # Parse language suffix to get sync_basename
+        sync_basename, language = parse_prompt_stem(full_stem)  # e.g., ("calculator", "python")
+
+        # Get context-specific paths from .pddrc
+        context_defaults = match_context(relative_path, pddrc)
+
+        # Get file extensions for this language
+        extensions = LANGUAGE_EXTENSIONS.get(language, [".py", ".ts", ".js", ".java"]) if language else [".py", ".ts", ".tsx", ".js", ".jsx", ".java"]
+
+        # Try to find related files (code, test, example)
+        related = {
+            "prompt": relative_path,
+            "sync_basename": sync_basename,  # For sync command: "calculator"
+            "language": language,            # Detected language: "python"
+        }
+
+        # ===== CODE FILE DETECTION =====
+        # Use generate_output_path from .pddrc if available
+        code_dirs = []
+
+        # Priority 1: .pddrc generate_output_path
+        pddrc_code_dir = context_defaults.get("generate_output_path")
+        if pddrc_code_dir:
+            # Strip trailing slash
+            pddrc_code_dir = pddrc_code_dir.rstrip("/")
+            code_dirs.append(pddrc_code_dir)
+
+        # Priority 2: Default locations
+        code_dirs.extend(["src", ""])  # Empty string for project root
+
+        for code_dir in code_dirs:
+            for ext in extensions:
+                if code_dir:
+                    code_path = project_root / code_dir / f"{sync_basename}{ext}"
+                else:
+                    code_path = project_root / f"{sync_basename}{ext}"
+                if code_path.exists():
+                    related["code"] = str(code_path.relative_to(project_root))
+                    break
+            if "code" in related:
+                break
+
+        # ===== TEST FILE DETECTION =====
+        # Use test_output_path from .pddrc if available
+        test_dirs = []
+
+        pddrc_test_dir = context_defaults.get("test_output_path")
+        if pddrc_test_dir:
+            pddrc_test_dir = pddrc_test_dir.rstrip("/")
+            test_dirs.append(pddrc_test_dir)
+
+        test_dirs.extend(["tests", "test", ""])  # Empty string for project root
+        test_prefixes = ["test_", ""]
+        test_suffixes = ["", "_test"]
+
+        for test_dir in test_dirs:
+            found = False
+            for prefix in test_prefixes:
+                for suffix in test_suffixes:
+                    # Skip invalid combination (no prefix and no suffix with just basename)
+                    if not prefix and not suffix:
+                        continue
+                    for ext in extensions:
+                        test_name = f"{prefix}{sync_basename}{suffix}{ext}"
+                        if test_dir:
+                            test_path = project_root / test_dir / test_name
+                        else:
+                            test_path = project_root / test_name
+                        if test_path.exists():
+                            related["test"] = str(test_path.relative_to(project_root))
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+            if found:
+                break
+
+        # ===== EXAMPLE FILE DETECTION =====
+        # Use example_output_path from .pddrc if available
+        example_dirs = []
+
+        pddrc_example_dir = context_defaults.get("example_output_path")
+        if pddrc_example_dir:
+            pddrc_example_dir = pddrc_example_dir.rstrip("/")
+            example_dirs.append(pddrc_example_dir)
+
+        example_dirs.extend(["examples", ""])  # Empty string for project root
+
+        for example_dir in example_dirs:
+            for ext in extensions:
+                if example_dir:
+                    example_path = project_root / example_dir / f"{sync_basename}_example{ext}"
+                else:
+                    example_path = project_root / f"{sync_basename}_example{ext}"
+                if example_path.exists():
+                    related["example"] = str(example_path.relative_to(project_root))
+                    break
+            if "example" in related:
+                break
+
+        results.append(related)
+
+    return results
+
+
 @router.get("/metadata", response_model=List[FileMetadata])
 async def get_file_metadata(
     paths: Annotated[List[str], Query(description="List of paths to check")],

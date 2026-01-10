@@ -3,15 +3,18 @@
 % Role & Scope
   This module provides the FastAPI application factory for the PDD server.
   It creates and configures the web application with routes, middleware,
-  dependency injection, and lifecycle management.
+  dependency injection, lifecycle management, and optional frontend serving.
 
 <include>context/python_preamble.prompt</include>
 
 % Documentation References
-  - FastAPI: https://fastapi.tiangolo.com/
-  - FastAPI Lifespan: https://fastapi.tiangolo.com/advanced/events/
-  - Uvicorn: https://www.uvicorn.org/
-  - Dependency Injection: https://fastapi.tiangolo.com/tutorial/dependencies/
+  - FastAPI: 
+    <web>https://fastapi.tiangolo.com/</web>
+  - FastAPI Lifespan: 
+    <web>https://fastapi.tiangolo.com/advanced/events/</web>
+  - Uvicorn:
+    <web>https://www.uvicorn.org/</web>
+   
 
 % Requirements
   1. **AppState class**:
@@ -20,13 +23,13 @@
      - Thread-safe access to shared state (job manager, connections)
 
   2. **create_app() factory function**:
-     - Parameters: project_root (Path), config (ServerConfig)
+     - Parameters: project_root (Path), config (ServerConfig), allowed_origins (List[str])
      - Returns configured FastAPI application
      - Sets up: CORS, security middleware, exception handlers
-     - Registers all route modules
+     - Registers all route modules (files, commands, prompts, websocket)
 
   3. **Lifespan management**:
-     - Startup: Initialize job manager, log server info
+     - Startup: Log server info
      - Shutdown: Cancel active jobs, cleanup resources
      - Use asynccontextmanager pattern
 
@@ -38,40 +41,35 @@
 
   5. **Exception handlers**:
      - SecurityError -> 403 Forbidden
-     - FileNotFoundError -> 404 Not Found
-     - ValidationError -> 422 Unprocessable Entity
+     - RequestValidationError -> 422 Unprocessable Entity
      - Generic Exception -> 500 with safe error message
 
   6. **Route registration**:
-     - Include routers from: routes.files, routes.commands, routes.websocket
-     - All under /api/v1 prefix
-     - Add /docs for OpenAPI documentation
+     - Include routers from: routes.files, routes.commands, routes.prompts
+     - WebSocket routes via create_websocket_routes()
+     - Status endpoint at /api/v1/status returning ServerStatus
+     - /docs and /redoc for OpenAPI documentation
 
-  7. **run_server() function**:
-     - Parameters: app, config (host, port)
+  7. **Frontend serving** (optional):
+     - If pdd/frontend/dist exists, serve static files
+     - Mount /assets for JS/CSS bundles
+     - SPA fallback: serve index.html for non-API routes
+     - Skip API, docs, and WebSocket paths
+
+  8. **run_server() function**:
+     - Parameters: project_root, host, port, log_level, allowed_origins, app, config
+     - Config object takes precedence over individual args
      - Runs uvicorn with the application
-     - Configurable log level
 
 % Dependencies
-  <fastapi_example>
-  <pdd.server.app><include>context/fastapi_example.py</include></pdd.server.app>
-  </fastapi_example>
   Models are defined in pdd/server/models.py - use ServerConfig, ServerStatus
-  <models_example>
-  <pdd.server.models><include>context/models_example.py</include></pdd.server.models>
-  </models_example>
-   Security utilities in pdd/server/security.py - use PathValidator, configure_cors
-  <security_example>
-   <pdd.server.security><include>context/security_example.py</include></pdd.server.security>
-  </security_example>
-  Job Manager utilities:
-  <job_manager_example>
-  <pdd.server.job_manager><include>context/job_manager_example.py</include></pdd.server.job_manager>
-  </job_manager_example>
-  WebSocket utilities:
-  <websocket_example>
-  <pdd.server.websocket><include>context/websocket_example.py</include></pdd.server.websocket>
-  </websocket_example>
+  <include>context/server/models_example.py</include>
+  Security utilities in pdd/server/security.py - use PathValidator, SecurityError, configure_cors, SecurityLoggingMiddleware
+  <include>context/server/security_example.py</include>
+  Job manager in pdd/server/jobs.py
+  <include>context/server/jobs_example.py</include>
+  Routes: routes.files, routes.commands, routes.prompts, routes.websocket
+  
 
 % Instructions
   - Use relative imports for server submodules

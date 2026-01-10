@@ -3,67 +3,77 @@
 % Role & Scope
   This module provides REST API endpoints for PDD command execution.
   It enables the web frontend to submit, monitor, and cancel CLI commands
-  through asynchronous job management.
+  through both asynchronous job management and synchronous terminal execution.
 
 <include>context/python_preamble.prompt</include>
 
 % Documentation References
-  - FastAPI Background Tasks: https://fastapi.tiangolo.com/tutorial/background-tasks/
-  - Click Programmatic Invocation: https://click.palletsprojects.com/en/8.1.x/api/#click.Context.invoke
+  - FastAPI Background Tasks:
+    <web>https://fastapi.tiangolo.com/tutorial/background-tasks/</web>
+  - Click Programmatic Invocation:
+    <web>https://click.palletsprojects.com/en/8.1.x/api/#click.Context.invoke</web>
   - asyncio: https://docs.python.org/3/library/asyncio.html
 
 % Requirements
-  1. **POST /commands/execute**:
-     - Body: CommandRequest (command, args, options)
-     - Validates command is in allowed list
-     - Submits job to JobManager
-     - Returns: JobHandle with job_id and status "queued"
-     - Non-blocking - returns immediately
+  1. **Asynchronous Job API** (uses JobManager):
+     - POST /commands/execute: Submit command, returns JobHandle immediately
+     - GET /commands/jobs/{job_id}: Get job status/result (404 if not found)
+     - POST /commands/jobs/{job_id}/cancel: Cancel running job (404/409 on error)
+     - GET /commands/history: Paginated job history with status filter
 
-  2. **GET /commands/jobs/{job_id}**:
-     - Path param: job_id
-     - Returns: JobResult with current status, result, error, cost
-     - 404 if job not found
+  2. **Synchronous Terminal API** (subprocess-based):
+     - POST /commands/run: Execute command as subprocess, block until done
+       - Output goes directly to server terminal (inherited stdio)
+       - Sets CI=1, PDD_FORCE=1, TERM=dumb for headless mode
+       - 409 if a command is already running
+     - POST /commands/cancel: Cancel current running subprocess
+     - GET /commands/status: Check if command is running and its info
 
-  3. **POST /commands/jobs/{job_id}/cancel**:
-     - Path param: job_id
-     - Attempts to cancel running job
-     - Returns: {"cancelled": bool, "message": str}
-     - 404 if job not found
+  3. **GET /commands/available**: List allowed commands with descriptions
 
-  4. **GET /commands/history**:
-     - Query param: limit (default 50)
-     - Query param: offset (default 0)
-     - Query param: status (optional filter)
-     - Returns: List of JobResult, ordered by created_at desc
+  4. **Allowed commands** (ALLOWED_COMMANDS dict):
+     - Basic: sync, update, bug, generate, test, example, fix
+     - Advanced: split, change, detect, auto-deps, conflicts, preprocess
 
-  5. **GET /commands/available**:
-     - Returns: List of available command names with descriptions
-     - Helps frontend build command UI
+  5. **Error handling**: 400 invalid command, 404 unknown job, 409 conflicts
 
-  6. **Allowed commands** (MVP):
-     - sync: Synchronize prompts with code and tests
-     - update: Update prompts based on code changes
-     - bug: Generate unit test from bug (agentic mode)
-     - generate: Generate code from prompt
-     - test: Generate unit tests
-     - fix: Fix code based on test errors
+  6. **ProcessTracker**: Thread-safe singleton tracking current subprocess
+     - Graceful termination (SIGTERM then SIGKILL after timeout)
+     - Methods: set_process, clear_process, cancel, is_running, get_command_info
 
-  7. **Error handling**:
-     - 400 for invalid command name
-     - 404 for unknown job_id
-     - 409 for job already completed (on cancel)
+  7. **CLI argument builder** (`_build_pdd_command_args`):
+     - GLOBAL_OPTIONS set: force, strength, temperature, time, verbose, quiet,
+       output_cost, review_examples, local, context, list_contexts, core_dump
+     - Global options placed BEFORE subcommand
+     - POSITIONAL_ARGS mapping for command-specific positional arguments:
+       - sync: ["basename"]
+       - generate: ["prompt_file"]
+       - test: ["prompt_file", "code_file"]
+       - example: ["prompt_file", "code_file"]
+       - fix: ["prompt_file", "code_file", "unit_test_files", "error_file"]
+       - bug, update, detect: ["args"] (special: args contains positional list)
+       - split: ["input_prompt", "input_code", "example_code"]
+       - change: ["change_prompt_file", "input_code", "input_prompt_file"]
+       - auto-deps: ["prompt_file", "directory_path"]
+       - conflicts: ["prompt_file", "prompt2"]
+       - preprocess: ["prompt_file"]
+     - `_find_pdd_executable()`: Find pdd in PATH or Python env bin dir
+     - Fallback: python -c "from pdd.cli import cli; sys.exit(cli())"
+
+  8. **Response models**:
+     - RunResult: success, message, exit_code
+     - CancelResult: cancelled, message
 
 % Dependencies
   <fastapi_example>
   <pdd.server.main><include>context/fastapi_example.py</include></pdd.server.main>
   </fastapi_example>
-  <job_manager_example>
-  <pdd.server.jobs><include>context/job_manager_example.py</include></pdd.server.jobs>
-  </job_manager_example>
+  <pdd.server.jobs>
+  <include>context/job_manager_example.py</include>
+  </pdd.server.jobs>
   Use models from pdd/server/models.py: CommandRequest, JobHandle, JobResult, JobStatus
   <models_note>
-  <pdd.server.models><include>context/models_example.py</include></pdd.server.models>
+  <pdd.server.models><include>context/server/models_example.py</include></pdd.server.models>
   </models_note>
   <cli_reference>
   <pdd.cli><include>context/cli_example.py</include></pdd.cli>
@@ -72,10 +82,10 @@
 % Instructions
   - Create router with prefix="/api/v1/commands", tags=["commands"]
   - Use Depends() for JobManager injection
-  - Command validation against whitelist
-  - Include command descriptions from Click command help
-  - Async job submission via JobManager.submit()
+  - Define RunResult and CancelResult Pydantic models for terminal API
+  - Use rich Console for terminal output with color formatting
+  - Handle timezone-aware datetime for duration calculations
 
 % Deliverables
   - Code: `pdd/server/routes/commands.py`
-  - Export: `commands_router`
+  - Export: `commands_router` (alias: router)

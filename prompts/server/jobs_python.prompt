@@ -1,75 +1,40 @@
 % You are an expert Python engineer. Your goal is to write `pdd/server/jobs.py`.
 
 % Role & Scope
-  This module provides job queue management for async command execution.
-  It handles job submission, tracking, execution, and cancellation
-  with support for concurrent job limits and WebSocket streaming integration.
+  Job queue manager for async command execution with job submission, tracking,
+  execution control (via semaphore), and cancellation support.
 
 <context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
 
-% Documentation References
-  - asyncio: https://docs.python.org/3/library/asyncio.html
-  - asyncio.Semaphore: https://docs.python.org/3/library/asyncio-sync.html#asyncio.Semaphore
-  - concurrent.futures: https://docs.python.org/3/library/concurrent.futures.html
-  - ThreadPoolExecutor: https://docs.python.org/3/library/concurrent.futures.html#threadpoolexecutor
-
 % Requirements
-  1. **Job dataclass**:
-     - id: UUID string
-     - command: str (e.g., "sync", "generate")
-     - args: Dict[str, Any]
-     - options: Dict[str, Any]
-     - status: JobStatus enum
-     - result: Optional[Any]
-     - error: Optional[str]
-     - cost: float
-     - created_at, started_at, completed_at: datetime
-     - to_dict() method for JSON serialization
+  1. **Job dataclass**: id (UUID), command, args, options, status (JobStatus enum),
+     result, error, cost, created_at/started_at/completed_at (UTC-aware datetimes),
+     to_dict() for JSON serialization
 
-  2. **JobManager class**:
-     - __init__(max_concurrent=1, executor=None)
-     - submit(command, args, options) -> Job: Queue a new job
-     - get_job(job_id) -> Optional[Job]
-     - get_all_jobs() -> Dict[str, Job]
-     - get_active_jobs() -> Dict[str, Job]: Running or queued
-     - cancel(job_id) -> bool: Attempt to cancel
-     - cleanup_old_jobs(max_age_seconds) -> int: Remove old completed jobs
-     - shutdown() -> None: Cancel all and cleanup
+  2. **JobCallbacks class**: Event-based async callbacks (on_start, on_output,
+     on_progress, on_complete) with emit_* methods for WebSocket streaming integration
 
-  3. **Execution control**:
-     - Use asyncio.Semaphore for concurrency limit
-     - Jobs run in background via asyncio.create_task()
-     - Support cancellation via asyncio.Event
-     - Execute Click commands via ClickCommandExecutor
+  3. **JobManager class**:
+     - __init__(max_concurrent=1, executor=None): Semaphore-based concurrency
+     - submit(command, args, options) -> Job: Background task execution
+     - get_job(job_id), get_all_jobs(), get_active_jobs(): Query methods
+     - cancel(job_id) -> bool: Cooperative cancellation via Event + Task.cancel()
+     - cleanup_old_jobs(max_age_seconds) -> int: Remove completed jobs by age
+     - shutdown(): Cancel active jobs and cleanup ThreadPoolExecutor
 
-  4. **Callback integration**:
-     - on_start, on_output, on_progress, on_complete callbacks
-     - Used by WebSocket routes for streaming
-     - Async callback functions
+  4. **Default executor**: Execute Click commands via ClickCommandExecutor in thread pool
 
-  5. **Error handling**:
-     - Catch exceptions during execution
-     - Set job.error and job.status = FAILED
-     - Never leave job in RUNNING state after error
-
-  6. **Thread safety**:
-     - Safe for concurrent access from multiple requests
-     - Use locks where needed
+  5. **Error handling**: Catch exceptions, set job.error/status=FAILED, ensure completed_at set
 
 % Dependencies
-  <server.jobs><include>context/job_manager_example.py</include></server.jobs>
+  <server.jobs><include>context/server/jobs_example.py</include></server.jobs>
   <server.click_executor><include>context/click_executor_example.py</include></server.click_executor>
-  <server.models><include>context/models_example.py</include></server.models>
-  <server.executor><include>context/server/executor_example.py</include></server.executor>
   <server.models><include>context/server/models_example.py</include></server.models>
-  <server.stream><include>context/server/stream_example.py</include></server.stream>
 
 % Instructions
-  - Use dataclass for Job (not Pydantic - internal only)
-  - JobManager should be singleton-like (one per app)
-  - Default executor calls ClickCommandExecutor
-  - Store jobs in memory (Dict[str, Job])
-  - Cancel event per job for cooperative cancellation
+  - Import JobStatus from .models (not defined locally)
+  - Use robust fallback imports for rich.console and click_executor
+  - Store jobs in Dict[str, Job], track tasks in Dict[str, asyncio.Task]
 
 % Deliverables
   - Code: `pdd/server/jobs.py`
