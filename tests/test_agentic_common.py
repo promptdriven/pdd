@@ -2,12 +2,8 @@
 import pytest
 import json
 import os
-import sys
 from unittest.mock import patch, MagicMock, ANY
 from pathlib import Path
-
-# Add the parent directory to sys.path to allow imports if running from tests directory
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from pdd.agentic_common import get_available_agents, run_agentic_task
 

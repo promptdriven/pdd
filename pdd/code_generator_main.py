@@ -796,6 +796,17 @@ def code_generator_main(
                         total_cost = float(response_data.get("totalCost", 0.0))
                         model_name = response_data.get("modelName", "cloud_model")
 
+                        # Strip markdown code fences if present (cloud API returns fenced JSON)
+                        if generated_code_content and isinstance(language, str) and language.strip().lower() == "json":
+                            cleaned = generated_code_content.strip()
+                            if cleaned.startswith("```json"):
+                                cleaned = cleaned[7:]
+                            elif cleaned.startswith("```"):
+                                cleaned = cleaned[3:]
+                            if cleaned.endswith("```"):
+                                cleaned = cleaned[:-3]
+                            generated_code_content = cleaned.strip()
+
                         if not generated_code_content:
                             if cloud_only:
                                 console.print("[red]Cloud execution returned no code.[/red]")

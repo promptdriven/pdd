@@ -467,6 +467,131 @@ def test_full_gen_cloud_success(
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
 
 
+# Tests for JSON fence stripping from cloud responses
+@pytest.mark.parametrize("fenced_code,expected_output", [
+    ('```json\n{"key": "value"}\n```', '{"key": "value"}'),
+    ('```\n{"key": "value"}\n```', '{"key": "value"}'),
+    ('```json\n\n{"nested": {"a": 1}}\n\n```', '{"nested": {"a": 1}}'),
+    ('{"key": "value"}', '{"key": "value"}'),  # No fences, unchanged
+    ('  ```json\n{"key": "value"}\n```  ', '{"key": "value"}'),  # With whitespace
+])
+def test_cloud_json_response_fence_stripping(
+    fenced_code, expected_output, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that markdown code fences are stripped from JSON responses in cloud mode."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "json_fence_prompt.prompt"
+    create_file(prompt_file_path, "Generate JSON")
+
+    output_file_name = "fence_output.json"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate JSON"},
+        {"output": output_file_path_str},
+        "json"  # JSON language triggers fence stripping
+    )
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": fenced_code,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    assert code == expected_output
+    assert not incremental
+    assert (temp_dir_setup["output_dir"] / output_file_name).exists()
+    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == expected_output
+
+
+def test_cloud_non_json_response_not_stripped(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that code fences are NOT stripped for non-JSON language responses."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "python_fence_prompt.prompt"
+    create_file(prompt_file_path, "Generate Python")
+
+    output_file_name = "fence_output.py"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    # Python code that happens to have backticks in it
+    python_code_with_backticks = '```python\ndef hello(): pass\n```'
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate Python"},
+        {"output": output_file_path_str},
+        "python"  # Non-JSON language should NOT trigger fence stripping
+    )
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": python_code_with_backticks,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    # For non-JSON, the code should remain unchanged (with fences)
+    assert code == python_code_with_backticks
+    assert (temp_dir_setup["output_dir"] / output_file_name).read_text() == python_code_with_backticks
+
+
+def test_cloud_json_case_insensitive_language(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture, mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that JSON fence stripping works with case-insensitive language check."""
+    mock_ctx.obj['local'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "json_case_prompt.prompt"
+    create_file(prompt_file_path, "Generate JSON")
+
+    output_file_name = "case_output.json"
+    output_file_path_str = str(temp_dir_setup["output_dir"] / output_file_name)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate JSON"},
+        {"output": output_file_path_str},
+        "JSON"  # Uppercase JSON
+    )
+
+    fenced_json = '```json\n{"test": true}\n```'
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": fenced_json,
+        "totalCost": 0.001,
+        "modelName": "cloud_model"
+    }
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+    )
+
+    assert code == '{"test": true}'
+
+
 @pytest.mark.parametrize("cloud_error, local_fallback_expected", [
     (AuthError("Auth failed"), True),
     (requests.exceptions.Timeout("Timeout"), True),

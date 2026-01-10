@@ -474,6 +474,7 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
         device_code_response["interval"],
         device_code_response["expires_in"],
     )
+    print("Authentication successful!")
 
     # Exchange GitHub token for Firebase token
     id_token, refresh_token = await firebase_auth.exchange_github_token_for_firebase_token(github_token)
