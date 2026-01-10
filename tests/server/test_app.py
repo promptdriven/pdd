@@ -10,7 +10,7 @@ import importlib
 import pytest
 import z3
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi import FastAPI, Request, APIRouter
@@ -76,7 +76,7 @@ class MockJobStatus(str, Enum):
 class MockJobHandle(BaseModel):
     job_id: str
     status: MockJobStatus = MockJobStatus.QUEUED
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class MockJobResult(BaseModel):
@@ -145,6 +145,7 @@ def app_module_with_mocks():
         "pdd.server.routes.files",
         "pdd.server.routes.commands",
         "pdd.server.routes.websocket",
+        "pdd.server.routes.prompts",
     ]
 
     # Save and remove ALL pdd.server modules to ensure clean slate
@@ -199,7 +200,16 @@ def app_module_with_mocks():
         _mock_routes_ws.ConnectionManager = MagicMock()
         _mock_routes_ws.create_websocket_routes = MagicMock()
         _mock_routes_ws.router = APIRouter()
+        _mock_routes_ws.get_job_manager = MagicMock(__name__="ws_get_job_manager_mock")
+        _mock_routes_ws.get_connection_manager = MagicMock(__name__="ws_get_connection_manager_mock")
+        _mock_routes_ws.get_project_root = MagicMock(__name__="ws_get_project_root_mock")
         sys.modules["pdd.server.routes.websocket"] = _mock_routes_ws
+
+        _mock_routes_prompts = types.ModuleType("pdd.server.routes.prompts")
+        _mock_routes_prompts.router = APIRouter()
+        _mock_routes_prompts.get_path_validator = MagicMock(__name__="get_path_validator_mock")
+        _mock_routes_prompts.set_path_validator = MagicMock(__name__="set_path_validator_mock")
+        sys.modules["pdd.server.routes.prompts"] = _mock_routes_prompts
 
         # Remove cached app module if any
         if "pdd.server.app" in sys.modules:

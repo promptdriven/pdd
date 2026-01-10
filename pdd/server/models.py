@@ -7,7 +7,7 @@ in file operations, command execution, job management, and WebSocket messaging.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -124,7 +124,7 @@ class JobHandle(BaseModel):
     """Initial response after submitting a command."""
     job_id: str = Field(..., description="Unique identifier for the job")
     status: JobStatus = Field(JobStatus.QUEUED, description="Current status")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="Submission timestamp")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Submission timestamp")
 
 
 class JobResult(BaseModel):
@@ -145,7 +145,7 @@ class JobResult(BaseModel):
 class WSMessage(BaseModel):
     """Base model for all WebSocket messages."""
     type: str = Field(..., description="Message type discriminator")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Message timestamp")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Message timestamp")
     data: Optional[Any] = Field(None, description="Generic payload")
 
 
