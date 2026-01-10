@@ -461,6 +461,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 - **[`bug`](#14-bug)**: Generates a unit test from a GitHub issue via an agentic workflow that analyzes, reproduces, and creates failing tests.
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
 - **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
+- **[`connect`](#17-connect)**: Launches a local REST server with a web frontend for interacting with PDD through a browser-based interface.
 
 ## Global Options
 
@@ -1915,6 +1916,46 @@ pdd verify --max-attempts 5 --budget 2.5 --output-code src/calc_verified.py --ou
 ```
 
 **When to use**: Use `verify` after `generate` and `example` for an initial round of functional validation and automated fixing based on *LLM judgment of program output against the prompt*. This helps ensure the code produces results aligned with the prompt's intent for a key scenario before proceeding to more granular unit testing (`test`) or fixing specific runtime errors (`crash`) or unit test failures (`fix`).
+
+### 17. connect
+
+Launches a local REST server that exposes PDD functionality via a REST API and serves a web-based frontend interface. This allows you to interact with PDD through your browser instead of the command line.
+
+```bash
+pdd [GLOBAL OPTIONS] connect [OPTIONS]
+```
+
+Options:
+- `--port INT`: Port to listen on (default: 9876).
+- `--host TEXT`: Host to bind to (default: 127.0.0.1).
+- `--allow-remote`: Allow non-localhost connections. When enabled, the server binds to 0.0.0.0 to accept external connections.
+- `--token TEXT`: Bearer token for authentication. Recommended when using `--allow-remote`.
+- `--no-browser`: Don't open the browser automatically when starting the server.
+- `--frontend-url TEXT`: Custom frontend URL to open instead of the default.
+
+The command starts a FastAPI server and automatically opens the web interface in your default browser. The server provides:
+- A REST API for programmatic access to PDD commands
+- API documentation at `http://localhost:9876/docs`
+- A web-based frontend for interactive use
+
+Security Notes:
+- By default, the server only accepts connections from localhost (127.0.0.1).
+- Using `--allow-remote` without `--token` will display a security warning and require confirmation.
+- For remote access, always use the `--token` option to require authentication.
+
+Example:
+```bash
+# Start the server with default settings (opens browser automatically)
+pdd connect
+
+# Start on a custom port without opening the browser
+pdd connect --port 8080 --no-browser
+
+# Allow remote connections with authentication
+pdd connect --allow-remote --token "your-secret-token"
+```
+
+**When to use**: Use `connect` when you prefer a graphical interface for working with PDD, when demonstrating PDD to others, or when integrating PDD with other tools that can communicate via REST APIs.
 
 ## Example Review Process
 
