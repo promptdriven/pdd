@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.106"
+version = "0.0.107"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -36,18 +36,18 @@ dependencies = [
     "Requests==2.32.3",
     "aiofiles==24.1.0",
     "click==8.1.7",
-    "firecrawl-py",
+    "firecrawl-py==2.5.3",
     "firebase_admin==6.6.0",
     "keyring==25.6.0",
     "nest_asyncio==1.6.0",
     "pandas==2.2.3",
-    "psutil==5.9.0",
-    "pydantic==2.11.2",
+    "psutil>=7.0.0",
+    "pydantic==2.11.4",
     "litellm[caching]>=1.80.0",
     "rich==14.0.0",
     "semver==3.0.2",
     "setuptools",
-    "pytest",
+    "pytest==8.3.5",
     "pytest-cov==5.0.0",
     "boto3==1.35.99",
     "google-cloud-aiplatform>=1.3",
@@ -58,7 +58,7 @@ dependencies = [
     "python-dotenv==1.1.0",
     "PyYAML==6.0.1",
     "jsonschema==4.23.0",
-    "z3-solver",
+    "z3-solver==4.14.1.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "websockets>=13.0",
@@ -106,7 +106,7 @@ dev = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.0.106"
+version = "0.0.107"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
