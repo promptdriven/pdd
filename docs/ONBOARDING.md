@@ -294,9 +294,24 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
 
 ### Required for New Features
 
+**Before implementation**, follow the documentation-first workflow:
+
+1. [ ] **Update documentation first** - Before writing code, update the README or relevant docs to describe:
+   - What the feature does
+   - How users will use it (CLI flags, API, etc.)
+   - Example usage and expected output
+
+2. [ ] **Post to Discord for feedback** - Share your documentation changes in the `#feedback` channel to get early review from maintainers. This prevents wasted effort on features that need changes.
+
+3. [ ] **Wait for approval** - Get a 👍 or approval comment before starting implementation
+
+4. [ ] **Use docs to drive prompt changes** - Your approved documentation describes the intended behavior. Use it to guide your prompt modifications in `pdd_cap`.
+
+**After implementation:**
+
 - [ ] **Manual testing performed** - Document what manual testing you did in the PR description
 - [ ] **A/B comparison provided** - For significant features, show before/after examples demonstrating the improvement
-- [ ] **README/documentation updated** - If adding user-facing functionality, update relevant documentation
+- [ ] **Final documentation review** - Ensure docs match the actual implementation
 
 ### Required if Prompt Files Changed
 
