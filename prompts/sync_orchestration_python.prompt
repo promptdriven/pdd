@@ -194,6 +194,7 @@ Detect headless environments (no TTY, CI environment variable, or `quiet=True`) 
 - Set `PDD_FORCE=1` to skip API key prompts
 - Run `sync_worker_logic()` directly instead of via SyncApp
 - Skip exit animation in headless mode
+- `get_confirm_callback()` must return a wrapper that calls `click.confirm` AND sets `user_confirmed_overwrite[0]=True`, so subsequent calls auto-confirm (prevents repeated prompts)
 
 ### State Persistence
 
