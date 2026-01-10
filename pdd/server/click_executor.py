@@ -225,11 +225,14 @@ class ClickCommandExecutor:
         obj = {**self._base_context_obj, **(options or {})}
 
         # Merge args and options into params
+        # Convert hyphens to underscores in keys (CLI uses hyphens, Python uses underscores)
         params = {}
         if args:
-            params.update(args)
+            for key, value in args.items():
+                params[key.replace("-", "_")] = value
         if options:
-            params.update(options)
+            for key, value in options.items():
+                params[key.replace("-", "_")] = value
 
         # Create isolated context
         ctx = create_isolated_context(command, obj)
@@ -357,6 +360,11 @@ def get_pdd_command(command_name: str) -> Optional[click.Command]:
             from pdd.commands.analysis import crash
             _command_cache[command_name] = crash
             return crash
+
+        elif command_name == "verify":
+            from pdd.commands.utility import verify
+            _command_cache[command_name] = verify
+            return verify
 
         else:
             return None
