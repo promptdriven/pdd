@@ -10,7 +10,7 @@ import importlib
 import pytest
 import z3
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi import FastAPI, Request, APIRouter
@@ -76,7 +76,7 @@ class MockJobStatus(str, Enum):
 class MockJobHandle(BaseModel):
     job_id: str
     status: MockJobStatus = MockJobStatus.QUEUED
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class MockJobResult(BaseModel):

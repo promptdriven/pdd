@@ -14,7 +14,7 @@ def _load_firebase_api_key(pdd_env: str) -> str:
     # Choose env file based on target environment
     project_root = Path(__file__).resolve().parents[2]
     if pdd_env == "staging":
-        candidate = project_root / "frontend" / ".env.local"
+        candidate = project_root / "frontend" / ".env.staging"
     elif pdd_env == "prod":
         candidate = project_root / "frontend" / ".env.production"
     else:
