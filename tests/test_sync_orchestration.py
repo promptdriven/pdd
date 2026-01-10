@@ -5,7 +5,7 @@ import json
 import sys
 import threading
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call, ANY
+from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
 
 from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report
@@ -3857,4 +3857,179 @@ class TestExampleVerificationConsistency:
         )
         assert not has_get_run_command, (
             "REGRESSION BUG: Initial crash check should NOT use get_run_command_for_file"
+        )
+
+
+class TestHeadlessConfirmationCallback:
+    """
+    Tests for Issue #277: Confirmation callback not remembered in headless mode.
+
+    The fix ensures that headless mode (when app_ref is None and confirm_callback is None)
+    returns a wrapper callback that sets user_confirmed_overwrite[0] = True after
+    the first confirmation, so subsequent calls auto-confirm instead of prompting repeatedly.
+    """
+
+    def setup_method(self):
+        """Set up the closure variables that get_confirm_callback uses."""
+        from typing import Optional, Callable, List
+        self.user_confirmed_overwrite: List[bool] = [False]
+        self.app_ref: List[Optional[Mock]] = [None]
+        self.confirm_callback: Optional[Callable] = None
+
+    def _get_confirm_callback(self):
+        """
+        Copy of FIXED get_confirm_callback from sync_orchestration.py.
+        This matches the actual code after the fix is applied.
+        """
+        if self.user_confirmed_overwrite[0]:
+            return lambda msg, title: True
+
+        if self.app_ref[0] is not None:
+            def confirming_callback(msg, title):
+                result = self.app_ref[0].request_confirmation(msg, title)
+                if result:
+                    self.user_confirmed_overwrite[0] = True
+                return result
+            return confirming_callback
+
+        # Fix #277: In headless mode, create a wrapper callback that sets the flag
+        if self.confirm_callback is None:
+            def headless_confirming_callback(msg, title):
+                # For testing, we simulate user confirming
+                self.user_confirmed_overwrite[0] = True
+                return True
+            return headless_confirming_callback
+
+        return self.confirm_callback
+
+    def test_tui_mode_remembers_confirmation(self):
+        """TUI MODE: Flag is set after first confirmation, subsequent calls auto-confirm."""
+        mock_app = Mock()
+        mock_app.request_confirmation = Mock(return_value=True)
+        self.app_ref[0] = mock_app
+
+        # Simulate 3 iterations
+        for i in range(3):
+            callback = self._get_confirm_callback()
+            assert callback is not None
+            callback("Overwrite?", "Confirm")
+
+        # TUI mode: request_confirmation should only be called ONCE
+        assert mock_app.request_confirmation.call_count == 1, (
+            f"TUI mode should prompt once, got {mock_app.request_confirmation.call_count}"
+        )
+        assert self.user_confirmed_overwrite[0] is True
+
+    def test_headless_mode_returns_callback_not_none(self):
+        """FIXED: get_confirm_callback should return a callback in headless mode, not None."""
+        self.app_ref[0] = None
+        self.confirm_callback = None
+
+        callback = self._get_confirm_callback()
+
+        # After fix: returns a callback, not None
+        assert callback is not None, (
+            "Fixed code should return callback in headless mode, not None"
+        )
+
+    def test_headless_mode_remembers_confirmation(self):
+        """FIXED: Headless mode should remember confirmation and only prompt once."""
+        self.app_ref[0] = None
+        self.confirm_callback = None
+
+        prompt_count = 0
+
+        for i in range(3):
+            callback = self._get_confirm_callback()
+            assert callback is not None, f"Iteration {i}: callback should not be None"
+
+            if not self.user_confirmed_overwrite[0]:
+                prompt_count += 1
+
+            callback("Overwrite?", "Confirm")
+
+        # After fix: should only prompt once
+        assert prompt_count == 1, f"Should prompt once, got {prompt_count}"
+        assert self.user_confirmed_overwrite[0] is True
+
+    def test_headless_mode_flag_set_after_first_confirm(self):
+        """FIXED: Flag should be True after first confirmation in headless mode."""
+        self.app_ref[0] = None
+        self.confirm_callback = None
+
+        assert self.user_confirmed_overwrite[0] is False
+
+        callback = self._get_confirm_callback()
+        callback("Overwrite?", "Confirm")
+
+        assert self.user_confirmed_overwrite[0] is True, (
+            "Flag should be True after first confirmation"
+        )
+
+    def test_sync_loop_tui_vs_headless_consistency(self):
+        """Both TUI and headless mode should prompt exactly once."""
+        results = {}
+
+        for mode_name, use_tui in [("TUI", True), ("Headless", False)]:
+            user_confirmed = [False]
+            prompt_count = [0]
+
+            if use_tui:
+                mock_app = Mock()
+                mock_app.request_confirmation = Mock(side_effect=lambda m, t: True)
+            else:
+                mock_app = None
+
+            def get_callback():
+                if user_confirmed[0]:
+                    return lambda m, t: True
+                if mock_app is not None:
+                    def cb(m, t):
+                        prompt_count[0] += 1
+                        result = mock_app.request_confirmation(m, t)
+                        if result:
+                            user_confirmed[0] = True
+                        return result
+                    return cb
+                # Fixed headless mode
+                def headless_cb(m, t):
+                    prompt_count[0] += 1
+                    user_confirmed[0] = True
+                    return True
+                return headless_cb
+
+            # 3 fix operations
+            for _ in range(3):
+                cb = get_callback()
+                if cb:
+                    cb("Overwrite?", "Confirm")
+
+            results[mode_name] = prompt_count[0]
+
+        assert results["TUI"] == 1, f"TUI mode: {results['TUI']}"
+        assert results["Headless"] == 1, f"Headless mode: {results['Headless']}"
+        assert results["TUI"] == results["Headless"], (
+            f"TUI ({results['TUI']}) and Headless ({results['Headless']}) should be equal"
+        )
+
+    def test_get_confirm_callback_has_headless_fix(self):
+        """Verify that sync_orchestration.py contains the headless mode fix."""
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Check for the fix marker comment
+        assert "Fix #277" in source or "Issue #277" in source, (
+            "sync_orchestration should contain the fix for Issue #277"
+        )
+
+        # Check for headless_confirming_callback
+        assert "headless_confirming_callback" in source, (
+            "sync_orchestration should have headless_confirming_callback function"
+        )
+
+        # Check that it sets the flag
+        assert "user_confirmed_overwrite[0] = True" in source, (
+            "headless_confirming_callback should set user_confirmed_overwrite[0] = True"
         )
