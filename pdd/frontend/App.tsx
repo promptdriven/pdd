@@ -5,18 +5,35 @@ import PromptSelector from './components/PromptSelector';
 import PromptSpace from './components/PromptSpace';
 import ArchitectureView from './components/ArchitectureView';
 import ProjectSettings from './components/ProjectSettings';
-import { api, PromptInfo } from './api';
+import { api, PromptInfo, RunResult } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
 
 type View = 'architecture' | 'prompts' | 'bug' | 'settings';
 
+// Parse URL hash to get initial view and prompt path
+const parseHash = (): { view: View; promptPath?: string } => {
+  const hash = window.location.hash.slice(1); // Remove #
+  if (!hash) return { view: 'architecture' };
+
+  const [viewPart, ...promptParts] = hash.split('/');
+  const promptPath = promptParts.length > 0 ? promptParts.join('/') : undefined;
+
+  const validViews: View[] = ['architecture', 'prompts', 'bug', 'settings'];
+  const view = validViews.includes(viewPart as View) ? (viewPart as View) : 'architecture';
+
+  return { view, promptPath };
+};
+
 const App: React.FC = () => {
-  const [view, setView] = useState<View>('architecture');
+  const initialState = parseHash();
+  const [view, setView] = useState<View>(initialState.view);
+  const [pendingPromptPath, setPendingPromptPath] = useState<string | undefined>(initialState.promptPath);
   const [selectedPrompt, setSelectedPrompt] = useState<PromptInfo | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<PromptInfo | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'failed'>('idle');
   const [lastCommand, setLastCommand] = useState<string | null>(null);
+  const [lastRunResult, setLastRunResult] = useState<RunResult | null>(null);
   const [serverConnected, setServerConnected] = useState(false);
 
   // Bug command state
@@ -28,6 +45,46 @@ const App: React.FC = () => {
       .then(() => setServerConnected(true))
       .catch(() => setServerConnected(false));
   }, []);
+
+  // Update URL hash when view or editingPrompt changes
+  useEffect(() => {
+    if (editingPrompt) {
+      window.location.hash = `prompts/${editingPrompt.prompt}`;
+    } else {
+      window.location.hash = view;
+    }
+  }, [view, editingPrompt]);
+
+  // Handle browser back/forward navigation
+  useEffect(() => {
+    const handleHashChange = () => {
+      const { view: newView, promptPath } = parseHash();
+      setView(newView);
+      if (promptPath) {
+        setPendingPromptPath(promptPath);
+      } else {
+        setEditingPrompt(null);
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  // Load pending prompt path (from URL) when server connects
+  useEffect(() => {
+    if (serverConnected && pendingPromptPath) {
+      api.listPrompts().then(prompts => {
+        const found = prompts.find(p => p.prompt === pendingPromptPath);
+        if (found) {
+          setEditingPrompt(found);
+        }
+        setPendingPromptPath(undefined);
+      }).catch(() => {
+        setPendingPromptPath(undefined);
+      });
+    }
+  }, [serverConnected, pendingPromptPath]);
 
   const handleRunCommand = async (command: CommandType, prompt: PromptInfo, commandOptions?: Record<string, any>) => {
     if (!serverConnected) {
@@ -160,6 +217,26 @@ const App: React.FC = () => {
       } else if (command === CommandType.PREPROCESS) {
         // Preprocess command: pdd preprocess PROMPT_FILE [--output] [--xml] [--recursive] [--double]
         args.prompt_file = prompt.prompt;
+      } else if (command === CommandType.CRASH) {
+        // Crash command: pdd crash PROMPT_FILE CODE_FILE PROGRAM_FILE ERROR_FILE [options]
+        args.prompt_file = prompt.prompt;
+        args.code_file = codeFile;
+        if (options['program-file']) {
+          args.program_file = options['program-file'];
+          delete options['program-file'];
+        }
+        if (options['error-file']) {
+          args.error_file = options['error-file'];
+          delete options['error-file'];
+        }
+      } else if (command === CommandType.VERIFY) {
+        // Verify command: pdd verify PROMPT_FILE CODE_FILE VERIFICATION_PROGRAM [options]
+        args.prompt_file = prompt.prompt;
+        args.code_file = codeFile;
+        if (options['verification-program']) {
+          args.verification_program = options['verification-program'];
+          delete options['verification-program'];
+        }
       }
 
       const result = await api.runCommand({
@@ -168,20 +245,28 @@ const App: React.FC = () => {
         options,
       });
 
+      setLastRunResult(result);
       setExecutionStatus(result.success ? 'success' : 'failed');
 
-      // Reset status after 5 seconds
+      // Reset status after 5 seconds (keep error details visible longer)
       setTimeout(() => {
         setExecutionStatus('idle');
         setLastCommand(null);
-      }, 5000);
+        if (result.success) setLastRunResult(null);
+      }, result.success ? 5000 : 10000);
     } catch (error: any) {
       console.error('Failed to execute command:', error);
+      setLastRunResult({
+        success: false,
+        message: error.message || 'Failed to execute command',
+        exit_code: 1,
+        error_details: error.message,
+      });
       setExecutionStatus('failed');
       setTimeout(() => {
         setExecutionStatus('idle');
         setLastCommand(null);
-      }, 5000);
+      }, 10000);
     } finally {
       setIsExecuting(false);
     }
@@ -258,6 +343,7 @@ const App: React.FC = () => {
         isExecuting={isExecuting}
         executionStatus={executionStatus}
         lastCommand={lastCommand}
+        lastRunResult={lastRunResult}
         onCancelCommand={handleCancelCommand}
       />
     );

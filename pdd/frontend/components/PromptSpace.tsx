@@ -6,9 +6,10 @@ import { completionKeymap } from '@codemirror/autocomplete';
 import { markdown } from '@codemirror/lang-markdown';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked, Marked } from 'marked';
-import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics } from '../api';
+import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics, RunResult } from '../api';
 import { CommandType, CommandConfig, CommandOption, GlobalOption } from '../types';
 import { COMMANDS, GLOBAL_OPTIONS, GLOBAL_DEFAULTS } from '../constants';
+import type { GlobalDefaults } from '../types';
 import PromptMetricsBar from './PromptMetricsBar';
 import GuidanceSidebar from './GuidanceSidebar';
 import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
@@ -348,7 +349,7 @@ const CommandOptionsModal: React.FC<{
                   {/* Execution Options Group */}
                   <div className="space-y-1 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
                     <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-2">Execution Options</div>
-                    {GLOBAL_OPTIONS.filter(opt => ['verbose', 'quiet', 'force', 'review-examples'].includes(opt.name)).map(opt => (
+                    {GLOBAL_OPTIONS.filter(opt => ['local', 'verbose', 'quiet', 'force', 'review-examples'].includes(opt.name)).map(opt => (
                       <OptionInput
                         key={opt.name}
                         option={opt}
@@ -392,6 +393,7 @@ interface PromptSpaceProps {
   isExecuting: boolean;
   executionStatus?: 'idle' | 'running' | 'success' | 'failed';
   lastCommand?: string | null;
+  lastRunResult?: RunResult | null;
   onCancelCommand?: () => void;
 }
 
@@ -402,6 +404,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   isExecuting,
   executionStatus = 'idle',
   lastCommand = null,
+  lastRunResult = null,
   onCancelCommand,
 }) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
@@ -905,12 +908,22 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
             </svg>
             Done
           </span>}
-          {executionStatus === 'failed' && <span className="flex items-center justify-center gap-2">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-            Failed
-          </span>}
+          {executionStatus === 'failed' && (
+            <div className="flex flex-col items-center gap-2">
+              <span className="flex items-center justify-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Failed
+                {lastRunResult?.exit_code ? ` (exit code: ${lastRunResult.exit_code})` : ''}
+              </span>
+              {lastRunResult?.error_details && (
+                <div className="text-xs text-red-200/80 max-w-xl text-center px-4">
+                  {lastRunResult.error_details}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1061,6 +1074,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 onViewModeChange={handleViewModeChange}
                 isLoading={isAnalyzing}
                 preprocessingError={analysisResult?.preprocessing_error}
+                timeValue={GLOBAL_DEFAULTS.time}
               />
 
               {/* Editor path bar - responsive */}

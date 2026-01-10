@@ -83,6 +83,9 @@ export interface RunResult {
   success: boolean;
   message: string;
   exit_code: number;
+  stdout?: string | null;
+  stderr?: string | null;
+  error_details?: string | null;
 }
 
 export interface CancelResult {
