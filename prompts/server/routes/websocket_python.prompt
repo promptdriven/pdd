@@ -41,7 +41,7 @@
      - {"type": "error", "message": "...", "traceback": "..."}
      - {"type": "file_change", "path": "...", "event": "modified"}
 
-     Client -> Client:
+     Client -> Server:
      - {"type": "cancel"}
      - {"type": "input", "data": "user input"}
 

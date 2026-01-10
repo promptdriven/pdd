@@ -32,13 +32,6 @@ import importlib
 #    - Missing submodules: Verified by the fact that we must mock them for the test to pass.
 #    - Missing `router` attribute in submodules: Verified implicitly; if our mock lacks it, import fails.
 
-# --- Setup ---
-
-# Add the project root to sys.path to allow imports
-current_dir = Path(__file__).resolve().parent
-project_root = current_dir.parent
-sys.path.insert(0, str(project_root))
-
 # --- Tests ---
 
 def test_routes_module_exports():
@@ -50,15 +43,18 @@ def test_routes_module_exports():
     mock_files_module = MagicMock()
     mock_commands_module = MagicMock()
     mock_websocket_module = MagicMock()
+    mock_prompts_module = MagicMock()
 
     # 2. Define the 'router' objects that should be imported
     mock_files_router = MagicMock(name="files_router_obj")
     mock_commands_router = MagicMock(name="commands_router_obj")
     mock_websocket_router = MagicMock(name="websocket_router_obj")
+    mock_prompts_router = MagicMock(name="prompts_router_obj")
 
     mock_files_module.router = mock_files_router
     mock_commands_module.router = mock_commands_router
     mock_websocket_module.router = mock_websocket_router
+    mock_prompts_module.router = mock_prompts_router
 
     # 3. Patch sys.modules to simulate the existence of the submodules
     # We use a dict to update sys.modules temporarily
@@ -66,6 +62,7 @@ def test_routes_module_exports():
         "pdd.server.routes.files": mock_files_module,
         "pdd.server.routes.commands": mock_commands_module,
         "pdd.server.routes.websocket": mock_websocket_module,
+        "pdd.server.routes.prompts": mock_prompts_module,
     }
 
     with patch.dict(sys.modules, module_patches):
@@ -73,24 +70,27 @@ def test_routes_module_exports():
         # We must ensure it's reloaded if it was already imported, to pick up our mocks
         if "pdd.server.routes" in sys.modules:
             del sys.modules["pdd.server.routes"]
-        
+
         import pdd.server.routes as routes_module
 
         # 5. Assertions
-        
+
         # Verify attributes exist and point to the correct mock objects
         assert hasattr(routes_module, "files_router")
         assert routes_module.files_router is mock_files_router
-        
+
         assert hasattr(routes_module, "commands_router")
         assert routes_module.commands_router is mock_commands_router
-        
+
         assert hasattr(routes_module, "websocket_router")
         assert routes_module.websocket_router is mock_websocket_router
 
+        assert hasattr(routes_module, "prompts_router")
+        assert routes_module.prompts_router is mock_prompts_router
+
         # Verify __all__ definition
         assert hasattr(routes_module, "__all__")
-        expected_all = ["files", "commands", "files_router", "commands_router", "websocket_router"]
+        expected_all = ["files", "commands", "prompts", "files_router", "commands_router", "websocket_router", "prompts_router"]
         assert sorted(routes_module.__all__) == sorted(expected_all)
 
 def test_routes_import_failure():
@@ -99,19 +99,20 @@ def test_routes_import_failure():
     This ensures the code is actually looking for 'router' and not just importing the module.
     """
     # Mock a module that exists but lacks the 'router' attribute
-    bad_mock_module = MagicMock(spec=[]) # Empty spec, no attributes
-    
+    bad_mock_module = MagicMock(spec=[])  # Empty spec, no attributes
+
     module_patches = {
         "pdd.server.routes.files": bad_mock_module,
         # We don't strictly need the others for this specific failure test
-        "pdd.server.routes.commands": MagicMock(), 
+        "pdd.server.routes.commands": MagicMock(),
         "pdd.server.routes.websocket": MagicMock(),
+        "pdd.server.routes.prompts": MagicMock(),
     }
 
     with patch.dict(sys.modules, module_patches):
         if "pdd.server.routes" in sys.modules:
             del sys.modules["pdd.server.routes"]
-            
+
         # Expect an ImportError because 'router' cannot be imported from 'files'
         with pytest.raises(ImportError):
             import pdd.server.routes

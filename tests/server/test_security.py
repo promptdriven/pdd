@@ -1,4 +1,3 @@
-import sys
 import os
 import pytest
 import fnmatch
@@ -8,31 +7,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials
 import z3
 
-# Add the project root to sys.path to allow imports
-# Assuming test file is in pdd/tests/ and code is in pdd/server/
-current_dir = Path(__file__).resolve().parent
-project_root = current_dir.parent.parent  # Adjust based on actual structure
-sys.path.insert(0, str(project_root))
-
-try:
-    from pdd.server.security import (
-        PathValidator,
-        SecurityError,
-        configure_cors,
-        create_token_dependency,
-        SecurityLoggingMiddleware,
-        DEFAULT_BLACKLIST
-    )
-except ImportError:
-    # Fallback for different directory structures
-    sys.path.append(str(current_dir.parent))
-    from pdd.server.security import (
-        PathValidator,
-        SecurityError,
-        configure_cors,
-        create_token_dependency,
-        SecurityLoggingMiddleware,
-        DEFAULT_BLACKLIST
+from pdd.server.security import (
+    PathValidator,
+    SecurityError,
+    configure_cors,
+    create_token_dependency,
+    SecurityLoggingMiddleware,
+    DEFAULT_BLACKLIST
     )
 
 # --- Fixtures ---

@@ -149,14 +149,16 @@ def test_create_isolated_context_defaults():
     assert source.name == "DEFAULT"
 
 def test_create_isolated_context_overrides():
-    """Test that provided obj overrides defaults."""
+    """Test that provided obj replaces defaults entirely."""
     cmd = click.Command("test")
     overrides = {"strength": 0.9, "new_param": "value"}
     ctx = create_isolated_context(cmd, obj=overrides)
 
+    # When obj is provided, it completely replaces defaults (no merge)
     assert ctx.obj["strength"] == 0.9
     assert ctx.obj["new_param"] == "value"
-    assert ctx.obj["temperature"] == 0.1  # Default preserved
+    # Default keys are NOT preserved when obj is provided
+    assert "temperature" not in ctx.obj
 
 # ============================================================================
 # Tests for ClickCommandExecutor

@@ -1,7 +1,10 @@
 import asyncio
+import json
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 # Cross-platform keyring import with fallback for WSL compatibility
@@ -40,6 +43,58 @@ class UserCancelledError(AuthError):
 class RateLimitError(AuthError):
     """Raised when rate limits are exceeded."""
     pass
+
+
+# JWT file cache path (Issue #273 - reduces keyring access to avoid password prompts)
+JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
+
+
+def _get_cached_jwt() -> Optional[str]:
+    """
+    Get cached JWT if it exists and is not expired.
+
+    Returns:
+        Optional[str]: The cached JWT if valid, None otherwise.
+    """
+    if not JWT_CACHE_FILE.exists():
+        return None
+    try:
+        with open(JWT_CACHE_FILE, 'r') as f:
+            cache = json.load(f)
+        # Check expiration with 5 minute buffer
+        if cache.get('expires_at', 0) > time.time() + 300:
+            return cache.get('jwt')
+    except (json.JSONDecodeError, IOError, KeyError):
+        # Cache corrupted, delete it
+        try:
+            JWT_CACHE_FILE.unlink()
+        except OSError:
+            pass
+    return None
+
+
+def _cache_jwt(jwt: str, expires_in: int = 3600) -> None:
+    """
+    Cache JWT with expiration time.
+
+    Args:
+        jwt: The JWT token to cache.
+        expires_in: Time in seconds until the JWT expires (default: 3600 = 1 hour).
+    """
+    try:
+        JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cache = {
+            'jwt': jwt,
+            'expires_at': time.time() + expires_in,
+            'cached_at': time.time()
+        }
+        with open(JWT_CACHE_FILE, 'w') as f:
+            json.dump(cache, f)
+        # Secure the file (user read/write only)
+        os.chmod(JWT_CACHE_FILE, 0o600)
+    except (IOError, OSError) as e:
+        # Cache write failed, continue without caching
+        print(f"Warning: Failed to cache JWT: {e}")
 
 
 def _macos_force_delete_keychain_item(service_name: str, account_name: str) -> bool:
@@ -377,15 +432,21 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
         NetworkError: If there are connectivity issues
         TokenError: If token exchange fails
     """
+    # Check JWT cache FIRST to avoid keyring access (Issue #273)
+    cached_jwt = _get_cached_jwt()
+    if cached_jwt:
+        return cached_jwt
+
     firebase_auth = FirebaseAuthenticator(firebase_api_key, app_name)
 
-    # Check for existing refresh token
+    # Check for existing refresh token in keyring
     refresh_token = firebase_auth._get_stored_refresh_token()
     if refresh_token:
         try:
             # Attempt to refresh the token
             id_token = await firebase_auth._refresh_firebase_token(refresh_token)
             if firebase_auth.verify_firebase_token(id_token):
+                _cache_jwt(id_token)  # Cache for next time
                 return id_token
             else:
                 print("Refreshed token is invalid. Attempting re-authentication.")
@@ -413,11 +474,15 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
         device_code_response["interval"],
         device_code_response["expires_in"],
     )
+    print("Authentication successful!")
 
     # Exchange GitHub token for Firebase token
     id_token, refresh_token = await firebase_auth.exchange_github_token_for_firebase_token(github_token)
 
-    # Store refresh token
+    # Store refresh token in keyring
     firebase_auth._store_refresh_token(refresh_token)
+
+    # Cache JWT for subsequent calls
+    _cache_jwt(id_token)
 
     return id_token
