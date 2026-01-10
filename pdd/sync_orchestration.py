@@ -1002,8 +1002,9 @@ def sync_orchestration(
             def headless_confirming_callback(msg: str, title: str) -> bool:
                 """Headless mode callback that remembers user confirmation."""
                 try:
+                    prompt = msg or "Overwrite existing files?"
                     result = click.confirm(
-                        click.style("Overwrite existing files?", fg="yellow"),
+                        click.style(prompt, fg="yellow"),
                         default=True,
                         show_default=True
                     )
