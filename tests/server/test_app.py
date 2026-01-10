@@ -10,7 +10,7 @@ import importlib
 import pytest
 import z3
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi import FastAPI, Request, APIRouter
@@ -76,7 +76,7 @@ class MockJobStatus(str, Enum):
 class MockJobHandle(BaseModel):
     job_id: str
     status: MockJobStatus = MockJobStatus.QUEUED
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class MockJobResult(BaseModel):
@@ -145,8 +145,6 @@ def app_module_with_mocks():
         "pdd.server.routes.files",
         "pdd.server.routes.commands",
         "pdd.server.routes.websocket",
-        "pdd.server.routes.prompts",
-        "pdd.server.routes.config",
     ]
 
     # Save and remove ALL pdd.server modules to ensure clean slate
@@ -187,10 +185,6 @@ def app_module_with_mocks():
         _mock_routes.__path__ = []
         sys.modules["pdd.server.routes"] = _mock_routes
 
-        _mock_routes_architecture = types.ModuleType("pdd.server.routes.architecture")
-        _mock_routes_architecture.router = APIRouter()
-        sys.modules["pdd.server.routes.architecture"] = _mock_routes_architecture
-
         _mock_routes_files = types.ModuleType("pdd.server.routes.files")
         _mock_routes_files.router = APIRouter()
         _mock_routes_files.get_path_validator = MagicMock(__name__="get_path_validator_mock")
@@ -199,43 +193,13 @@ def app_module_with_mocks():
         _mock_routes_commands = types.ModuleType("pdd.server.routes.commands")
         _mock_routes_commands.router = APIRouter()
         _mock_routes_commands.get_job_manager = MagicMock(__name__="get_job_manager_mock")
-        _mock_routes_commands.get_project_root = MagicMock(__name__="get_project_root_mock")
-        _mock_routes_commands.set_project_root = MagicMock(__name__="set_project_root_mock")
-        _mock_routes_commands.get_server_port = MagicMock(__name__="get_server_port_mock")
-        _mock_routes_commands.set_server_port = MagicMock(__name__="set_server_port_mock")
         sys.modules["pdd.server.routes.commands"] = _mock_routes_commands
 
         _mock_routes_ws = types.ModuleType("pdd.server.routes.websocket")
         _mock_routes_ws.ConnectionManager = MagicMock()
         _mock_routes_ws.create_websocket_routes = MagicMock()
         _mock_routes_ws.router = APIRouter()
-        _mock_routes_ws.get_job_manager = MagicMock(__name__="ws_get_job_manager_mock")
-        _mock_routes_ws.get_connection_manager = MagicMock(__name__="ws_get_connection_manager_mock")
-        _mock_routes_ws.get_project_root = MagicMock(__name__="ws_get_project_root_mock")
         sys.modules["pdd.server.routes.websocket"] = _mock_routes_ws
-
-        _mock_routes_prompts = types.ModuleType("pdd.server.routes.prompts")
-        _mock_routes_prompts.router = APIRouter()
-        _mock_routes_prompts.get_path_validator = MagicMock(__name__="get_path_validator_mock")
-        _mock_routes_prompts.set_path_validator = MagicMock(__name__="set_path_validator_mock")
-        sys.modules["pdd.server.routes.prompts"] = _mock_routes_prompts
-
-        _mock_routes_auth = types.ModuleType("pdd.server.routes.auth")
-        _mock_routes_auth.router = APIRouter()
-        sys.modules["pdd.server.routes.auth"] = _mock_routes_auth
-
-        _mock_routes_config = types.ModuleType("pdd.server.routes.config")
-        _mock_routes_config.router = APIRouter()
-        sys.modules["pdd.server.routes.config"] = _mock_routes_config
-
-        # Set submodules as attributes on the routes module (required for 'from .routes import X')
-        _mock_routes.architecture = _mock_routes_architecture
-        _mock_routes.files = _mock_routes_files
-        _mock_routes.commands = _mock_routes_commands
-        _mock_routes.websocket = _mock_routes_ws
-        _mock_routes.prompts = _mock_routes_prompts
-        _mock_routes.auth = _mock_routes_auth
-        _mock_routes.config = _mock_routes_config
 
         # Remove cached app module if any
         if "pdd.server.app" in sys.modules:
@@ -310,10 +274,7 @@ def test_app_state_initialization(app_module_with_mocks, mock_project_root, mock
     assert isinstance(state.uptime_seconds, float)
 
     mock_managers["PathValidator"].assert_called_once_with(state.project_root)
-    # JobManager is called with max_concurrent and project_root
-    mock_managers["JobManager"].assert_called_once_with(
-        max_concurrent=3, project_root=state.project_root
-    )
+    mock_managers["JobManager"].assert_called_once_with(max_concurrent=2)
     mock_managers["ConnectionManager"].assert_called_once()
 
 

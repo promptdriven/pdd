@@ -101,12 +101,6 @@ class MockJobManager:
 import sys
 from types import ModuleType
 
-# CRITICAL: Save originals BEFORE patching to avoid polluting sys.modules during pytest collection
-# See context/pytest_isolation_example.py Pattern 7 for the correct approach
-_saved = {}
-_saved["pdd.server.models"] = sys.modules.get("pdd.server.models")
-_saved["pdd.server.jobs"] = sys.modules.get("pdd.server.jobs")
-
 # Create fake modules
 models_mod = ModuleType("pdd.server.models")
 models_mod.CommandRequest = CommandRequest
@@ -120,14 +114,6 @@ jobs_mod.JobManager = MockJobManager
 # Register them
 sys.modules["pdd.server.models"] = models_mod
 sys.modules["pdd.server.jobs"] = jobs_mod
-
-# RESTORE originals immediately after setting up mocks
-# This prevents polluting sys.modules for other test files during pytest collection
-for key, original in _saved.items():
-    if original is None:
-        sys.modules.pop(key, None)
-    else:
-        sys.modules[key] = original
 
 # Now we can import the router module
 from fastapi import APIRouter, Depends, HTTPException, Query

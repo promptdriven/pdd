@@ -7,7 +7,7 @@ in file operations, command execution, job management, and WebSocket messaging.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -32,8 +32,6 @@ __all__ = [
     "FileChangeMessage",
     "ServerStatus",
     "ServerConfig",
-    "RemoteSessionInfo",
-    "SessionListItem",
 ]
 
 
@@ -126,7 +124,7 @@ class JobHandle(BaseModel):
     """Initial response after submitting a command."""
     job_id: str = Field(..., description="Unique identifier for the job")
     status: JobStatus = Field(JobStatus.QUEUED, description="Current status")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Submission timestamp")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Submission timestamp")
 
 
 class JobResult(BaseModel):
@@ -147,7 +145,7 @@ class JobResult(BaseModel):
 class WSMessage(BaseModel):
     """Base model for all WebSocket messages."""
     type: str = Field(..., description="Message type discriminator")
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Message timestamp")
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Message timestamp")
     data: Optional[Any] = Field(None, description="Generic payload")
 
 
@@ -216,26 +214,3 @@ class ServerConfig(BaseModel):
     allow_remote: bool = Field(False, description="Allow remote connections")
     allowed_origins: Optional[List[str]] = Field(None, description="CORS allowed origins")
     log_level: str = Field("info", description="Logging level")
-
-
-# ============================================================================
-# Remote Session Models
-# ============================================================================
-
-class RemoteSessionInfo(BaseModel):
-    """Information about the current server's remote session registration."""
-    session_id: Optional[str] = Field(None, description="Session ID if registered")
-    cloud_url: Optional[str] = Field(None, description="Cloud access URL (e.g., https://pdd.dev/connect/{session_id})")
-    registered: bool = Field(False, description="Whether session is registered with cloud")
-    registered_at: Optional[datetime] = Field(None, description="When session was registered")
-
-
-class SessionListItem(BaseModel):
-    """Session item for list display."""
-    session_id: str = Field(..., description="Unique session identifier")
-    cloud_url: str = Field(..., description="Cloud access URL for remote access")
-    project_name: str = Field(..., description="Project directory name")
-    created_at: datetime = Field(..., description="When session was created")
-    last_heartbeat: datetime = Field(..., description="Last heartbeat timestamp")
-    status: Literal["active", "stale"] = Field(..., description="Session status")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")

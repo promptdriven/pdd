@@ -11,37 +11,12 @@ This module provides functionality to programmatically execute Click commands wi
 from __future__ import annotations
 
 import io
-import os
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 from unittest.mock import MagicMock
 
 import click
-
-
-def _setup_headless_environment():
-    """
-    Set up environment variables for headless command execution.
-
-    This ensures commands run in non-interactive mode without TUI,
-    which is necessary when running programmatically through the server.
-
-    NOTE: This should only be called when actually executing commands through
-    the server, NOT at module import time. Calling at import time would
-    affect ALL pdd commands (including CLI usage) because the connect command
-    imports this module transitively.
-    """
-    # Skip if already configured (idempotent)
-    if os.environ.get('CI') == '1':
-        return
-    os.environ['CI'] = '1'  # Triggers headless mode in sync and other commands
-    os.environ['PDD_FORCE'] = '1'  # Skip confirmation prompts
-    os.environ['TERM'] = 'dumb'  # Disable fancy terminal features
-
-
-# NOTE: Do NOT call _setup_headless_environment() here at import time!
-# It will be called by ClickCommandExecutor when executing commands.
 
 
 # ============================================================================
@@ -189,98 +164,6 @@ def create_isolated_context(
 # Command Executor
 # ============================================================================
 
-# Options that should be integers when passed to Click commands
-INTEGER_OPTIONS = {
-    'max_attempts', 'target_coverage', 'depth', 'limit',
-    'max_tokens', 'timeout', 'retries', 'iterations',
-}
-
-# Options that should be floats when passed to Click commands
-FLOAT_OPTIONS = {
-    'strength', 'temperature', 'time', 'threshold', 'budget',
-}
-
-# Options that should be booleans when passed to Click commands
-BOOLEAN_OPTIONS = {
-    'verbose', 'quiet', 'force', 'loop', 'skip_verify', 'skip_tests',
-    'local', 'dry_run', 'auto_submit', 'recursive',
-}
-
-
-def _convert_option_type(key: str, value: Any) -> Any:
-    """
-    Convert option value to the appropriate type based on the option name.
-
-    Args:
-        key: The option name (with underscores, not hyphens)
-        value: The value to convert
-
-    Returns:
-        The value converted to the appropriate type
-    """
-    if value is None:
-        return None
-
-    normalized_key = key.replace("-", "_")
-
-    # Handle integers
-    if normalized_key in INTEGER_OPTIONS:
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            try:
-                return int(value)
-            except ValueError:
-                return value
-        return value
-
-    # Handle floats
-    if normalized_key in FLOAT_OPTIONS:
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            try:
-                return float(value)
-            except ValueError:
-                return value
-        return value
-
-    # Handle booleans
-    if normalized_key in BOOLEAN_OPTIONS:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.lower() in ('true', '1', 'yes', 'on')
-        return bool(value)
-
-    return value
-
-
-def _get_command_positional_args(command: click.Command) -> List[str]:
-    """Extract positional argument names from Click command in order."""
-    positionals = []
-    for param in command.params:
-        if isinstance(param, click.Argument):
-            positionals.append(param.name)
-    return positionals
-
-
-def _is_variadic_argument(command: click.Command, param_name: str) -> bool:
-    """Check if a parameter is a variadic argument (nargs=-1)."""
-    for param in command.params:
-        if param.name == param_name and isinstance(param, click.Argument):
-            return param.nargs == -1
-    return False
-
-
-def _is_multiple_option(command: click.Command, param_name: str) -> bool:
-    """Check if an option accepts multiple values (multiple=True)."""
-    for param in command.params:
-        if param.name == param_name and isinstance(param, click.Option):
-            return param.multiple
-    return False
-
-
 class ClickCommandExecutor:
     """
     Executes Click commands programmatically with output capture.
@@ -338,107 +221,15 @@ class ClickCommandExecutor:
         Returns:
             CapturedOutput with stdout, stderr, exit_code
         """
-        # Set up headless environment for server-executed commands
-        _setup_headless_environment()
+        # Merge context objects
+        obj = {**self._base_context_obj, **(options or {})}
 
-        # Global options that belong in ctx.obj, not passed as command params
-        # These match the global options defined in pdd/core/cli.py
-        GLOBAL_OPTIONS = {
-            "force", "strength", "temperature", "time", "verbose", "quiet",
-            "output_cost", "review_examples", "local", "context", "list_contexts", "core_dump"
-        }
-
-        # 1. Build ctx.obj with ONLY global options
-        obj = {**self._base_context_obj}
-        if options:
-            for key, value in options.items():
-                normalized_key = key.replace("-", "_")
-                if normalized_key in GLOBAL_OPTIONS:
-                    obj[normalized_key] = value
-
-        # 2. Build params dict for command execution
+        # Merge args and options into params
         params = {}
-
-        # Manual mode file key mappings for fix/change commands
-        # These commands use variadic "args" for BOTH modes, but the frontend sends semantic keys
-        # for manual mode which we need to convert to ordered positional arguments
-        MANUAL_MODE_FILE_KEYS = {
-            "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
-            "change": ["change_prompt_file", "input_code", "input_prompt_file"],
-        }
-
-        # Handle fix/change manual mode: convert semantic file keys to positional args
-        command_name = command.name if hasattr(command, 'name') else str(command)
-        if command_name in MANUAL_MODE_FILE_KEYS and args and "args" not in args:
-            file_keys = MANUAL_MODE_FILE_KEYS[command_name]
-            if any(k in args for k in file_keys):
-                # Convert file keys to ordered positional args list (order matters!)
-                positional_values = []
-                for key in file_keys:
-                    if key in args and args[key] is not None:
-                        positional_values.append(str(args[key]))
-                # Collect remaining args that aren't file keys (e.g., verification_program)
-                remaining_args = {k: v for k, v in args.items() if k not in file_keys}
-                # Build new args with positional values
-                args = {"args": positional_values}
-                # Add --manual flag to options
-                if options is None:
-                    options = {}
-                options["manual"] = True
-                # Move remaining args to options (they should be CLI options like --verification-program)
-                for key, value in remaining_args.items():
-                    options[key] = value
-
-        # Handle args dict
         if args:
-            # Special case: "args" key with list (for bug, fix, change)
-            # These commands have @click.argument("args", nargs=-1)
-            if "args" in args and isinstance(args["args"], list):
-                # This is a variadic positional - pass as tuple
-                params["args"] = tuple(args["args"])
-            else:
-                # Regular positional arguments
-                for key, value in args.items():
-                    normalized_key = key.replace("-", "_")
-
-                    # Skip if this is a global option (shouldn't be in args, but be safe)
-                    if normalized_key in GLOBAL_OPTIONS:
-                        continue
-
-                    # Check if it's a variadic argument (nargs=-1)
-                    if _is_variadic_argument(command, normalized_key):
-                        # Convert list to tuple for variadic arguments
-                        if isinstance(value, list):
-                            params[normalized_key] = tuple(value)
-                        elif value is not None:
-                            # Single value - wrap in tuple
-                            params[normalized_key] = (value,)
-                        else:
-                            params[normalized_key] = ()
-                    else:
-                        # Regular argument - apply type conversion
-                        params[normalized_key] = _convert_option_type(normalized_key, value)
-
-        # Handle options (command-specific only)
+            params.update(args)
         if options:
-            for key, value in options.items():
-                normalized_key = key.replace("-", "_")
-
-                # Skip global options - already in ctx.obj
-                if normalized_key in GLOBAL_OPTIONS:
-                    continue
-
-                # Check if it's a multiple option (multiple=True)
-                if _is_multiple_option(command, normalized_key):
-                    # Convert list to tuple for multiple options
-                    if isinstance(value, list):
-                        params[normalized_key] = tuple(value)
-                    else:
-                        # Single value or other type - keep as-is
-                        params[normalized_key] = value
-                else:
-                    # Regular option - apply type conversion
-                    params[normalized_key] = _convert_option_type(normalized_key, value)
+            params.update(options)
 
         # Create isolated context
         ctx = create_isolated_context(command, obj)
@@ -562,20 +353,10 @@ def get_pdd_command(command_name: str) -> Optional[click.Command]:
             _command_cache[command_name] = bug
             return bug
 
-        elif command_name == "change":
-            from pdd.commands.modify import change
-            _command_cache[command_name] = change
-            return change
-
         elif command_name == "crash":
             from pdd.commands.analysis import crash
             _command_cache[command_name] = crash
             return crash
-
-        elif command_name == "verify":
-            from pdd.commands.utility import verify
-            _command_cache[command_name] = verify
-            return verify
 
         else:
             return None

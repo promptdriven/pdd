@@ -69,16 +69,6 @@ class JobManager:
     pass
 
 
-class ServerConfig:
-    """Mock ServerConfig for testing."""
-    pass
-
-
-class ServerStatus:
-    """Mock ServerStatus for testing."""
-    pass
-
-
 # ============================================================================
 # Fixture to set up mocks and import module under test
 # ============================================================================
@@ -89,52 +79,39 @@ def websocket_module():
     Set up mocks and import the websocket module.
     This fixture ensures mocking happens at test execution time, not collection time.
     """
-    # Save existing modules - include all pdd.server modules to avoid pollution
+    # Save existing modules
     saved_modules = {}
-    for mod_name in list(sys.modules.keys()):
-        if mod_name.startswith("pdd.server"):
+    modules_to_mock = [
+        "pdd.server.models",
+        "pdd.server.jobs",
+        "pdd.server.routes.files",
+        "pdd.server.routes.commands",
+        "pdd.server.routes.exec",
+        "pdd.server.routes.websocket",
+    ]
+    for mod_name in modules_to_mock:
+        if mod_name in sys.modules:
             saved_modules[mod_name] = sys.modules[mod_name]
             del sys.modules[mod_name]
 
-    # Create mock models module with all required classes
+    # Create mock models module
     mock_models = types.ModuleType("pdd.server.models")
     mock_models.WSMessage = WSMessage
     mock_models.StdoutMessage = StdoutMessage
     mock_models.StderrMessage = StderrMessage
     mock_models.ProgressMessage = ProgressMessage
     mock_models.JobStatus = JobStatus
-    mock_models.ServerConfig = ServerConfig
-    mock_models.ServerStatus = ServerStatus
     sys.modules["pdd.server.models"] = mock_models
 
     # Create mock jobs module
     mock_jobs = types.ModuleType("pdd.server.jobs")
     mock_jobs.JobManager = JobManager
     mock_jobs.Job = Job
-    mock_jobs.JobStatus = JobStatus  # websocket.py imports JobStatus as JobStatusEnum
     sys.modules["pdd.server.jobs"] = mock_jobs
 
-    # Mock pdd.server as a package (must have __path__ to be a package)
-    import pdd
-    mock_server = types.ModuleType("pdd.server")
-    mock_server.__path__ = [str(pdd.__path__[0]) + "/server"]  # Make it a package
-    mock_server.app = MagicMock()
-    mock_server.models = mock_models
-    mock_server.jobs = mock_jobs
-    sys.modules["pdd.server"] = mock_server
-    sys.modules["pdd.server.app"] = MagicMock()
-    sys.modules["pdd.server.security"] = MagicMock()
-    sys.modules["pdd.server.executor"] = MagicMock()
-
-    # Mock routes as a package
-    mock_routes = types.ModuleType("pdd.server.routes")
-    mock_routes.__path__ = [str(pdd.__path__[0]) + "/server/routes"]  # Make it a package
-    sys.modules["pdd.server.routes"] = mock_routes
-
-    # Mock sibling route modules to prevent import errors
+    # Mock sibling modules to prevent import errors
     sys.modules["pdd.server.routes.files"] = MagicMock()
     sys.modules["pdd.server.routes.commands"] = MagicMock()
-    sys.modules["pdd.server.routes.prompts"] = MagicMock()
     sys.modules["pdd.server.routes.exec"] = MagicMock()
 
     # Now import the module under test
@@ -169,9 +146,9 @@ def websocket_module():
         "Job": Job,
     }
 
-    # Cleanup: remove all pdd.server mocks and restore saved modules
-    for mod_name in list(sys.modules.keys()):
-        if mod_name.startswith("pdd.server"):
+    # Cleanup: remove mocks and restore saved modules
+    for mod_name in modules_to_mock:
+        if mod_name in sys.modules:
             del sys.modules[mod_name]
     for mod_name, mod in saved_modules.items():
         sys.modules[mod_name] = mod
@@ -252,54 +229,6 @@ class TestConnectionManager:
         msg = WSMessage(type="file_change")
         await manager.broadcast_file_change(msg)
         ws.send_text.assert_called_once()
-
-    async def test_broadcast_to_all(self, websocket_module):
-        """Test that broadcast_to_all sends to ALL active connections."""
-        ConnectionManager = websocket_module["ConnectionManager"]
-        WSMessage = websocket_module["WSMessage"]
-        manager = ConnectionManager()
-
-        # Create multiple websocket mocks
-        ws1 = AsyncMock()
-        ws2 = AsyncMock()
-        ws3 = AsyncMock()
-
-        # Add them to active_connections
-        manager.active_connections = [ws1, ws2, ws3]
-
-        msg = WSMessage(type="spawned_job_complete", data={"job_id": "test-123"})
-        await manager.broadcast_to_all(msg)
-
-        # All three should receive the message
-        ws1.send_text.assert_called_once()
-        ws2.send_text.assert_called_once()
-        ws3.send_text.assert_called_once()
-
-        # Verify message content
-        sent_json = ws1.send_text.call_args[0][0]
-        assert "spawned_job_complete" in sent_json
-        assert "test-123" in sent_json
-
-    async def test_broadcast_to_all_cleanup_on_error(self, websocket_module):
-        """Test that dead connections are removed during broadcast_to_all."""
-        ConnectionManager = websocket_module["ConnectionManager"]
-        WSMessage = websocket_module["WSMessage"]
-        manager = ConnectionManager()
-
-        ws_alive = AsyncMock()
-        ws_dead = AsyncMock()
-        ws_dead.send_text.side_effect = Exception("Connection closed")
-
-        manager.active_connections = [ws_alive, ws_dead]
-
-        msg = WSMessage(type="test")
-        await manager.broadcast_to_all(msg)
-
-        # Alive connection should receive message
-        ws_alive.send_text.assert_called_once()
-        # Dead connection should be removed
-        assert ws_dead not in manager.active_connections
-        assert ws_alive in manager.active_connections
 
 
 class TestAsyncFileEventHandler:

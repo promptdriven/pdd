@@ -54,11 +54,7 @@ from pdd.server.click_executor import (
     create_isolated_context,
     ClickCommandExecutor,
     get_pdd_command,
-    _command_cache,
-    _convert_option_type,
-    INTEGER_OPTIONS,
-    FLOAT_OPTIONS,
-    BOOLEAN_OPTIONS,
+    _command_cache
 )
 
 # ============================================================================
@@ -153,16 +149,14 @@ def test_create_isolated_context_defaults():
     assert source.name == "DEFAULT"
 
 def test_create_isolated_context_overrides():
-    """Test that provided obj replaces defaults entirely."""
+    """Test that provided obj overrides defaults."""
     cmd = click.Command("test")
     overrides = {"strength": 0.9, "new_param": "value"}
     ctx = create_isolated_context(cmd, obj=overrides)
 
-    # When obj is provided, it completely replaces defaults (no merge)
     assert ctx.obj["strength"] == 0.9
     assert ctx.obj["new_param"] == "value"
-    # Default keys are NOT preserved when obj is provided
-    assert "temperature" not in ctx.obj
+    assert ctx.obj["temperature"] == 0.1  # Default preserved
 
 # ============================================================================
 # Tests for ClickCommandExecutor
@@ -373,116 +367,3 @@ def test_get_pdd_command_mappings():
                 
             result = get_pdd_command(cmd_name)
             assert result == mock_cmd
-
-
-# ============================================================================
-# Tests for _convert_option_type
-# ============================================================================
-
-def test_convert_option_type_integer():
-    """Test integer option conversion."""
-    # From string
-    assert _convert_option_type("max_attempts", "5") == 5
-    assert _convert_option_type("depth", "10") == 10
-
-    # Already integer
-    assert _convert_option_type("limit", 42) == 42
-
-    # Invalid string returns original
-    assert _convert_option_type("max_tokens", "not_a_number") == "not_a_number"
-
-
-def test_convert_option_type_float():
-    """Test float option conversion."""
-    # From string
-    assert _convert_option_type("strength", "0.8") == 0.8
-    assert _convert_option_type("temperature", "0.5") == 0.5
-
-    # From int
-    assert _convert_option_type("time", 1) == 1.0
-
-    # Already float
-    assert _convert_option_type("threshold", 0.75) == 0.75
-
-    # Invalid string returns original
-    assert _convert_option_type("budget", "invalid") == "invalid"
-
-
-def test_convert_option_type_boolean():
-    """Test boolean option conversion."""
-    # From string
-    assert _convert_option_type("verbose", "true") is True
-    assert _convert_option_type("quiet", "false") is False
-    assert _convert_option_type("force", "1") is True
-    assert _convert_option_type("local", "yes") is True
-    assert _convert_option_type("dry_run", "on") is True
-
-    # Already boolean
-    assert _convert_option_type("auto_submit", True) is True
-    assert _convert_option_type("recursive", False) is False
-
-
-def test_convert_option_type_hyphen_normalization():
-    """Test that hyphens are normalized to underscores."""
-    # max-attempts should work like max_attempts
-    assert _convert_option_type("max-attempts", "5") == 5
-    assert _convert_option_type("dry-run", "true") is True
-
-
-def test_convert_option_type_none_passthrough():
-    """Test that None values are passed through."""
-    assert _convert_option_type("max_attempts", None) is None
-    assert _convert_option_type("verbose", None) is None
-
-
-def test_convert_option_type_unknown_option():
-    """Test that unknown options are passed through unchanged."""
-    assert _convert_option_type("unknown_option", "value") == "value"
-    assert _convert_option_type("custom_flag", 123) == 123
-
-
-# ============================================================================
-# Tests for verify command mapping
-# ============================================================================
-
-def test_get_pdd_command_verify():
-    """Test that verify command is properly mapped."""
-    _command_cache.clear()
-
-    mock_verify_cmd = MagicMock(spec=click.Command)
-    mock_module = MagicMock(verify=mock_verify_cmd)
-
-    with patch.dict("sys.modules", {"pdd.commands.utility": mock_module}):
-        result = get_pdd_command("verify")
-        assert result == mock_verify_cmd
-        assert "verify" in _command_cache
-
-
-# ============================================================================
-# Tests for executor with hyphen-to-underscore normalization
-# ============================================================================
-
-def test_executor_normalizes_option_keys():
-    """Test that executor normalizes option keys from hyphens to underscores."""
-    @click.command()
-    @click.option("--max-attempts", type=int)
-    @click.option("--dry-run", is_flag=True)
-    def cmd(max_attempts, dry_run):
-        if max_attempts:
-            click.echo(f"Attempts: {max_attempts}")
-        if dry_run:
-            click.echo("Dry run mode")
-        return "success"
-
-    executor = ClickCommandExecutor()
-
-    # Use hyphenated keys (like from frontend)
-    result = executor.execute(
-        cmd,
-        options={"max-attempts": "3", "dry-run": "true"},
-        capture_output=True
-    )
-
-    assert result.exit_code == 0
-    assert "Attempts: 3" in result.stdout
-    assert "Dry run mode" in result.stdout

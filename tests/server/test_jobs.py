@@ -360,45 +360,46 @@ class TestShutdown:
 @pytest.mark.asyncio
 class TestClickExecutorIntegration:
     async def test_run_click_command_success(self, jobs_module):
-        """Test the _run_click_command logic with mocked subprocess."""
-        from unittest.mock import patch
+        """Test the _run_click_command logic with mocked ClickCommandExecutor."""
         Job = jobs_module["Job"]
         JobManager = jobs_module["JobManager"]
+        mock_click_exec = jobs_module["mock_click_exec"]
 
         manager = JobManager()
 
-        # Mock subprocess.Popen to simulate successful command execution
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = ["output\n", ""]
-        mock_process.stderr.readline.side_effect = [""]
-        mock_process.wait.return_value = 0
-        mock_process.returncode = 0
+        mock_instance = mock_click_exec.ClickCommandExecutor.return_value
 
-        with patch("pdd.server.jobs.subprocess.Popen", return_value=mock_process):
-            job = Job(command="test_click")
+        mock_captured = MagicMock()
+        mock_captured.exit_code = 0
+        mock_captured.stdout = "output"
+        mock_captured.stderr = ""
 
-            result = await manager._run_click_command(job)
+        mock_instance.execute.return_value = mock_captured
 
-            assert "output" in result["stdout"]
-            assert result["exit_code"] == 0
+        job = Job(command="test_click")
+
+        result = await manager._run_click_command(job)
+
+        assert result["stdout"] == "output"
+        assert result["exit_code"] == 0
 
     async def test_run_click_command_failure(self, jobs_module):
         """Test _run_click_command raises RuntimeError on non-zero exit code."""
-        from unittest.mock import patch
         Job = jobs_module["Job"]
         JobManager = jobs_module["JobManager"]
+        mock_click_exec = jobs_module["mock_click_exec"]
 
         manager = JobManager()
 
-        # Mock subprocess.Popen to simulate failed command execution
-        mock_process = MagicMock()
-        mock_process.stdout.readline.side_effect = [""]
-        mock_process.stderr.readline.side_effect = ["error occurred\n", ""]
-        mock_process.wait.return_value = 1
-        mock_process.returncode = 1
+        mock_instance = mock_click_exec.ClickCommandExecutor.return_value
 
-        with patch("pdd.server.jobs.subprocess.Popen", return_value=mock_process):
-            job = Job(command="fail_click")
+        mock_captured = MagicMock()
+        mock_captured.exit_code = 1
+        mock_captured.stderr = "error occurred"
 
-            with pytest.raises(RuntimeError, match="error occurred"):
-                await manager._run_click_command(job)
+        mock_instance.execute.return_value = mock_captured
+
+        job = Job(command="fail_click")
+
+        with pytest.raises(RuntimeError, match="error occurred"):
+            await manager._run_click_command(job)

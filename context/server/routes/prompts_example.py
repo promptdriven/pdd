@@ -11,13 +11,6 @@ from fastapi.testclient import TestClient
 # Since the module relies on other parts of the 'pdd' package (security, token_counter, preprocess),
 # we need to mock them before importing the module to make this example standalone.
 
-# CRITICAL: Save originals BEFORE patching to avoid polluting sys.modules during pytest collection
-# See context/pytest_isolation_example.py Pattern 7 for the correct approach
-_saved = {}
-_saved["pdd.security"] = sys.modules.get("pdd.security")
-_saved["pdd.token_counter"] = sys.modules.get("pdd.token_counter")
-_saved["pdd.preprocess"] = sys.modules.get("pdd.preprocess")
-
 # Mock pdd.security
 sys.modules["pdd.security"] = MagicMock()
 from pdd.security import PathValidator, SecurityError
@@ -55,14 +48,6 @@ def mock_preprocess(content, recursive=True, double_curly_brackets=True):
     return content.replace("{{variable}}", "EXPANDED_VALUE")
 
 sys.modules["pdd.preprocess"].preprocess = mock_preprocess
-
-# RESTORE originals immediately after setting up mocks
-# This prevents polluting sys.modules for other test files during pytest collection
-for key, original in _saved.items():
-    if original is None:
-        sys.modules.pop(key, None)
-    else:
-        sys.modules[key] = original
 
 # -----------------------------------------------------------------------------
 # 2. Importing the Module

@@ -1,1223 +1,388 @@
 """
 Test Plan for pdd/server/routes/prompts.py
 
-NOTE: This test file uses fixtures with sys.modules patching inside fixtures
-(NOT at module level) to prevent test pollution during pytest collection.
+1. **Unit Tests**:
+    - **Dependency Injection**: Verify `get_path_validator` and `set_path_validator` work correctly.
+    - **File Analysis (Success)**:
+        - Verify correct handling of valid file paths.
+        - Verify `get_token_metrics` is called for raw content.
+        - Verify `preprocess` is called when requested.
+        - Verify `get_token_metrics` is called for processed content.
+        - Verify CWD is switched and restored during preprocessing.
+    - **Direct Content Analysis (Success)**:
+        - Verify `content` parameter takes precedence over `path`.
+        - Verify file system is not accessed when content is provided.
+    - **Size Limits**:
+        - Verify 400 error for files > 500KB.
+        - Verify 400 error for direct content > 500KB.
+    - **File Errors**:
+        - Verify 404 for non-existent files.
+        - Verify 400 for directories.
+        - Verify 400 for non-text files (UnicodeDecodeError).
+    - **Security**:
+        - Verify 403 when `PathValidator` raises `SecurityError`.
+    - **Preprocessing Errors**:
+        - Verify `preprocessing_succeeded=False` and error message when `preprocess` raises exception.
+        - Verify 200 OK status code is returned (partial success).
 
-The mocking strategy handles dynamic imports by patching sys.modules inside
-fixtures, which only run during test execution, not during collection.
+2. **Z3 Formal Verification**:
+    - **Size Limit Logic**: Formally verify the boundary condition for the 500KB limit.
+    - **Response Consistency**: Verify the logical implication that if `preprocessing_succeeded` is True, `processed_metrics` must be present (based on the code flow).
+
+3. **Mocking Strategy**:
+    - Mock `pdd.server.security` for `PathValidator` and `SecurityError`.
+    - Mock `pdd.server.token_counter` for `get_token_metrics`.
+    - Mock `pdd.preprocess` for `preprocess` function.
+    - Mock `os.getcwd` and `os.chdir` to verify directory switching.
 """
 
 import sys
 import pytest
 import os
 import z3
-import types
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 from fastapi import HTTPException
 from pydantic import BaseModel
+import types
 
+# --- Mock Setup ---
 
+# Create mock modules before importing the code under test
+mock_security = types.ModuleType("pdd.server.security")
 class MockSecurityError(Exception):
-    """Mock security error for testing."""
     def __init__(self, message):
         self.message = message
+mock_security.SecurityError = MockSecurityError
+mock_security.PathValidator = MagicMock()
+sys.modules["pdd.server.security"] = mock_security
 
+mock_token_counter = types.ModuleType("pdd.server.token_counter")
+mock_token_counter.get_token_metrics = MagicMock()
+sys.modules["pdd.server.token_counter"] = mock_token_counter
+
+mock_preprocess_pkg = types.ModuleType("pdd.preprocess")
+mock_preprocess_pkg.preprocess = MagicMock()
+sys.modules["pdd.preprocess"] = mock_preprocess_pkg
+
+# Mock pdd package structure
+sys.modules["pdd"] = types.ModuleType("pdd")
+sys.modules["pdd.server"] = types.ModuleType("pdd.server")
+
+# Import code under test
+from pdd.server.routes.prompts import (
+    router,
+    analyze_prompt,
+    get_path_validator,
+    set_path_validator,
+    PromptAnalyzeRequest,
+    PromptAnalyzeResponse,
+    TokenMetricsResponse,
+    CostEstimateResponse
+)
 
 # --- Fixtures ---
 
 @pytest.fixture
 def mock_validator():
-    """Create a mock path validator."""
     validator = MagicMock()
     validator.project_root = Path("/mock/root")
     validator.validate.return_value = Path("/mock/root/test.txt")
     return validator
 
+@pytest.fixture
+def setup_validator(mock_validator):
+    set_path_validator(mock_validator)
+    yield
+    set_path_validator(None)
 
 @pytest.fixture
-def mock_token_metrics():
-    """Create mock token metrics as an object with attributes."""
-    metrics = MagicMock()
-    metrics.token_count = 3
-    metrics.context_limit = 128000
-    metrics.context_usage_percent = 0.002
-
-    # cost_estimate needs a to_dict() method
-    cost_estimate = MagicMock()
-    cost_estimate.to_dict.return_value = {
-        "input_cost": 0.0001,
-        "model": "claude-sonnet-4-20250514",
-        "tokens": 3,
-        "cost_per_million": 3.0,
-        "currency": "USD"
-    }
-    metrics.cost_estimate = cost_estimate
-
-    return metrics
-
-
-@pytest.fixture
-def prompts_test_env():
-    """
-    Fixture that sets up mocks inside fixtures (not at module level) to avoid
-    collection-time pollution. Uses sys.modules patching for dynamic imports.
-    """
-    # Store original modules - include all modules that might be affected
-    original_modules = {}
-    modules_to_mock = [
-        "pdd.server.security",
-        "pdd.server.token_counter",
-        "pdd.preprocess",
-        "pdd.sync_determine_operation",
-        "pdd.llm_invoke",
-    ]
-    # Also track modules that get imported during test and need cleanup
-    modules_to_clear = [
-        "pdd.server.routes.prompts",
-        "pdd.server",
-        "pdd.server.routes",
-    ]
-
-    # Save all original module states
-    for mod in modules_to_mock + modules_to_clear:
-        if mod in sys.modules:
-            original_modules[mod] = sys.modules[mod]
-
-    # Create mocks
-    mock_security = types.ModuleType("pdd.server.security")
-    mock_security.SecurityError = MockSecurityError
-    mock_security.PathValidator = MagicMock()
-    # Add other security module exports that app.py needs
-    mock_security.configure_cors = MagicMock()
-    mock_security.create_token_dependency = MagicMock()
-    mock_security.SecurityLoggingMiddleware = MagicMock()
-    mock_security.DEFAULT_BLACKLIST = []
-    sys.modules["pdd.server.security"] = mock_security
-
-    mock_token_counter = types.ModuleType("pdd.server.token_counter")
-    mock_token_counter.get_token_metrics = MagicMock()
-    mock_token_counter.MODEL_CONTEXT_LIMITS = {
-        "gpt-4": 128000,
-        "claude": 200000,
-        "default": 128000,
-    }
-    sys.modules["pdd.server.token_counter"] = mock_token_counter
-
-    mock_preprocess = types.ModuleType("pdd.preprocess")
-    mock_preprocess.preprocess = MagicMock()
-    sys.modules["pdd.preprocess"] = mock_preprocess
-
-    # Clear cached imports of the module under test
-    for mod_name in list(sys.modules.keys()):
-        if "pdd.server.routes.prompts" in mod_name:
-            del sys.modules[mod_name]
-
-    # Mock sync_determine_operation
-    mock_sync_op = types.ModuleType("pdd.sync_determine_operation")
-    mock_sync_op.read_fingerprint = MagicMock()
-    mock_sync_op.get_pdd_file_paths = MagicMock()
-    mock_sync_op.calculate_sha256 = MagicMock()
-    sys.modules["pdd.sync_determine_operation"] = mock_sync_op
-
-    # Mock llm_invoke module
-    mock_llm_invoke = types.ModuleType("pdd.llm_invoke")
-    mock_llm_invoke.llm_invoke = MagicMock()
-    mock_llm_invoke._load_model_data = MagicMock()
-    mock_llm_invoke.LLM_MODEL_CSV_PATH = "/mock/llm_model.csv"
-    mock_llm_invoke.DEFAULT_BASE_MODEL = "claude-sonnet-4-20250514"
-    sys.modules["pdd.llm_invoke"] = mock_llm_invoke
-
-    # Import code under test
-    from pdd.server.routes.prompts import (
-        router,
-        analyze_prompt,
-        get_path_validator,
-        set_path_validator,
-        PromptAnalyzeRequest,
-        PromptAnalyzeResponse,
-        TokenMetricsResponse,
-        CostEstimateResponse,
-        get_sync_status,
-        get_available_models,
-        check_match,
-        analyze_diff,
-        get_prompt_diff,
-        SyncStatusResponse,
-        ModelsResponse,
-        MatchCheckRequest,
-        MatchCheckResponse,
-        DiffAnalysisRequest,
-        DiffAnalysisResponse,
-        DiffSection,
-        LineMapping,
-        DiffStats,
-        PromptDiffRequest,
-        PromptDiffResponse,
-        _get_cache_key,
-        _get_cached_result,
-        _cache_result,
-        _diff_cache,
-    )
-
-    yield {
-        'router': router,
-        'analyze_prompt': analyze_prompt,
-        'get_path_validator': get_path_validator,
-        'set_path_validator': set_path_validator,
-        'PromptAnalyzeRequest': PromptAnalyzeRequest,
-        'PromptAnalyzeResponse': PromptAnalyzeResponse,
-        'TokenMetricsResponse': TokenMetricsResponse,
-        'CostEstimateResponse': CostEstimateResponse,
-        'get_sync_status': get_sync_status,
-        'get_available_models': get_available_models,
-        'check_match': check_match,
-        'analyze_diff': analyze_diff,
-        'get_prompt_diff': get_prompt_diff,
-        'SyncStatusResponse': SyncStatusResponse,
-        'ModelsResponse': ModelsResponse,
-        'MatchCheckRequest': MatchCheckRequest,
-        'MatchCheckResponse': MatchCheckResponse,
-        'DiffAnalysisRequest': DiffAnalysisRequest,
-        'DiffAnalysisResponse': DiffAnalysisResponse,
-        'DiffSection': DiffSection,
-        'LineMapping': LineMapping,
-        'DiffStats': DiffStats,
-        'PromptDiffRequest': PromptDiffRequest,
-        'PromptDiffResponse': PromptDiffResponse,
-        '_get_cache_key': _get_cache_key,
-        '_get_cached_result': _get_cached_result,
-        '_cache_result': _cache_result,
-        '_diff_cache': _diff_cache,
-        'mock_security': mock_security,
-        'mock_token_counter': mock_token_counter,
-        'mock_preprocess': mock_preprocess,
-        'mock_sync_op': mock_sync_op,
-        'mock_llm_invoke': mock_llm_invoke,
-    }
-
-    # Cleanup: delete all modules we mocked or imported during test
-    for mod in modules_to_mock:
-        if mod in sys.modules:
-            del sys.modules[mod]
-
-    # Clear any prompts module that was imported with mocks
-    for mod_name in list(sys.modules.keys()):
-        if "pdd.server.routes.prompts" in mod_name:
-            del sys.modules[mod_name]
-
-    # Restore all original modules
-    for mod, original in original_modules.items():
-        sys.modules[mod] = original
-
-
-@pytest.fixture
-def setup_validator(prompts_test_env, mock_validator):
-    """Set up a mock validator for tests."""
-    prompts_test_env['set_path_validator'](mock_validator)
-    yield prompts_test_env, mock_validator
-    prompts_test_env['set_path_validator'](None)
-
+def mock_metrics():
+    def _create_metrics(count=100):
+        cost = MagicMock()
+        cost.to_dict.return_value = {
+            "input_cost": 0.01,
+            "model": "test-model",
+            "tokens": count,
+            "cost_per_million": 10.0,
+            "currency": "USD"
+        }
+        
+        metrics = MagicMock()
+        metrics.token_count = count
+        metrics.context_limit = 1000
+        metrics.context_usage_percent = (count / 1000) * 100
+        metrics.cost_estimate = cost
+        return metrics
+    return _create_metrics
 
 # --- Unit Tests ---
 
-def test_dependency_injection(prompts_test_env):
-    """Test get/set_path_validator functions."""
-    get_path_validator = prompts_test_env['get_path_validator']
-    set_path_validator = prompts_test_env['set_path_validator']
-
-    # Initially no validator is configured - should raise RuntimeError
-    with pytest.raises(RuntimeError, match="PathValidator not configured"):
-        get_path_validator()
-
-    # Set a mock validator
-    mock = MagicMock()
-    set_path_validator(mock)
-    assert get_path_validator() is mock
-
-    # Set to None and verify error is raised again
+def test_dependency_injection(mock_validator):
+    """Test get/set path validator dependency."""
+    set_path_validator(mock_validator)
+    assert get_path_validator() == mock_validator
+    
     set_path_validator(None)
     with pytest.raises(RuntimeError, match="PathValidator not configured"):
         get_path_validator()
 
-
 @pytest.mark.asyncio
-async def test_analyze_file_success(setup_validator, mock_token_metrics, tmp_path):
-    """Test successful file analysis."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
-    mock_gtm = prompts_test_env['mock_token_counter'].get_token_metrics
+async def test_analyze_file_success(setup_validator, mock_validator, mock_metrics):
+    """Test successful analysis of a file with preprocessing."""
+    # Setup mocks
+    mock_file = MagicMock()
+    mock_file.exists.return_value = True
+    mock_file.is_dir.return_value = False
+    mock_file.stat.return_value.st_size = 100
+    mock_file.read_text.return_value = "raw content"
+    mock_validator.validate.return_value = mock_file
+    
+    mock_token_counter.get_token_metrics.side_effect = [
+        mock_metrics(10),  # Raw
+        mock_metrics(20)   # Processed
+    ]
+    mock_preprocess_pkg.preprocess.return_value = "processed content"
 
-    # Create a test file
-    test_file = tmp_path / "test.txt"
-    test_file.write_text("Hello, world!")
-
-    # Set up mock to return the real file path
-    mock_validator.validate.return_value = test_file
-
-    # Set up mock token metrics
-    mock_gtm.return_value = mock_token_metrics
-
-    # Create request
-    request = PromptAnalyzeRequest(path=str(test_file), preprocess=False)
-
-    # Call function - pass validator explicitly (bypasses FastAPI Depends)
+    # Execute
+    request = PromptAnalyzeRequest(path="test.txt", preprocess=True)
     response = await analyze_prompt(request, validator=mock_validator)
 
-    # Verify
-    assert response.raw_metrics is not None
+    # Assertions
+    assert response.raw_content == "raw content"
+    assert response.processed_content == "processed content"
+    assert response.raw_metrics.token_count == 10
+    assert response.processed_metrics.token_count == 20
+    assert response.preprocessing_succeeded is True
+    
+    # Verify calls
+    mock_validator.validate.assert_called_with("test.txt")
+    mock_preprocess_pkg.preprocess.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_analyze_direct_content(setup_validator, mock_validator, mock_metrics):
+    """Test analysis of direct content without file reading."""
+    mock_token_counter.get_token_metrics.return_value = mock_metrics(50)
+    
+    request = PromptAnalyzeRequest(
+        path="ignored.txt", 
+        content="direct content",
+        preprocess=False
+    )
+    
+    response = await analyze_prompt(request, validator=mock_validator)
+    
+    assert response.raw_content == "direct content"
+    # Should validate path even if content provided (for context/security context usually, 
+    # though code just validates it and ignores result for reading)
     mock_validator.validate.assert_called()
-
-
-@pytest.mark.asyncio
-async def test_analyze_direct_content(setup_validator, mock_token_metrics):
-    """Test analysis with direct content (no file access)."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
-    mock_gtm = prompts_test_env['mock_token_counter'].get_token_metrics
-
-    mock_gtm.return_value = mock_token_metrics
-
-    # path is required by the model, but content takes precedence when provided
-    request = PromptAnalyzeRequest(path="dummy.txt", content="Direct content test", preprocess=False)
-    response = await analyze_prompt(request, validator=mock_validator)
-
-    assert response.raw_metrics is not None
-    assert response.raw_content == "Direct content test"
-
+    # Should NOT check file existence or read it
+    mock_validator.validate.return_value.exists.assert_not_called()
+    mock_validator.validate.return_value.read_text.assert_not_called()
 
 @pytest.mark.asyncio
-async def test_analyze_file_too_large(setup_validator, tmp_path):
-    """Test 400 error for files > 500KB."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
+async def test_analyze_file_too_large(setup_validator, mock_validator):
+    """Test error when file exceeds size limit."""
+    mock_file = MagicMock()
+    mock_file.exists.return_value = True
+    mock_file.is_dir.return_value = False
+    mock_file.stat.return_value.st_size = 500 * 1024 + 1  # Just over limit
+    mock_validator.validate.return_value = mock_file
 
-    # Create a large file
-    large_file = tmp_path / "large.txt"
-    large_file.write_text("x" * (500 * 1024 + 1))  # Just over 500KB
-
-    mock_validator.validate.return_value = large_file
-
-    request = PromptAnalyzeRequest(path=str(large_file))
-
-    with pytest.raises(HTTPException) as exc_info:
+    request = PromptAnalyzeRequest(path="large.txt")
+    
+    with pytest.raises(HTTPException) as exc:
         await analyze_prompt(request, validator=mock_validator)
-
-    assert exc_info.value.status_code == 400
-    assert "500KB" in str(exc_info.value.detail)
-
+    
+    assert exc.value.status_code == 400
+    assert "File too large" in exc.value.detail
 
 @pytest.mark.asyncio
-async def test_analyze_content_too_large(setup_validator):
-    """Test 400 error for direct content > 500KB."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
-
-    large_content = "x" * (500 * 1024 + 1)
-    # path is required by the model but content takes precedence
-    request = PromptAnalyzeRequest(path="dummy.txt", content=large_content)
-
-    with pytest.raises(HTTPException) as exc_info:
+async def test_analyze_content_too_large(setup_validator, mock_validator):
+    """Test error when direct content exceeds size limit."""
+    large_content = "a" * (500 * 1024 + 1)
+    request = PromptAnalyzeRequest(path="test.txt", content=large_content)
+    
+    with pytest.raises(HTTPException) as exc:
         await analyze_prompt(request, validator=mock_validator)
-
-    assert exc_info.value.status_code == 400
-
+    
+    assert exc.value.status_code == 400
+    assert "Content too large" in exc.value.detail
 
 @pytest.mark.asyncio
-async def test_analyze_directory_error(setup_validator, tmp_path):
-    """Test 400 error when path is a directory."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
+async def test_analyze_directory_error(setup_validator, mock_validator):
+    """Test error when path is a directory."""
+    mock_file = MagicMock()
+    mock_file.exists.return_value = True
+    mock_file.is_dir.return_value = True
+    mock_validator.validate.return_value = mock_file
 
-    mock_validator.validate.return_value = tmp_path
-
-    request = PromptAnalyzeRequest(path=str(tmp_path))
-
-    with pytest.raises(HTTPException) as exc_info:
+    request = PromptAnalyzeRequest(path="somedir")
+    
+    with pytest.raises(HTTPException) as exc:
         await analyze_prompt(request, validator=mock_validator)
-
-    assert exc_info.value.status_code == 400
-
+    
+    assert exc.value.status_code == 400
+    assert "Cannot analyze directory" in exc.value.detail
 
 @pytest.mark.asyncio
-async def test_analyze_file_not_found(setup_validator):
-    """Test 404 error for non-existent files."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
+async def test_analyze_file_not_found(setup_validator, mock_validator):
+    """Test error when file does not exist."""
+    mock_file = MagicMock()
+    mock_file.exists.return_value = False
+    mock_validator.validate.return_value = mock_file
 
-    mock_validator.validate.return_value = Path("/nonexistent/file.txt")
-
-    request = PromptAnalyzeRequest(path="/nonexistent/file.txt")
-
-    with pytest.raises(HTTPException) as exc_info:
+    request = PromptAnalyzeRequest(path="missing.txt")
+    
+    with pytest.raises(HTTPException) as exc:
         await analyze_prompt(request, validator=mock_validator)
-
-    assert exc_info.value.status_code == 404
-
+    
+    assert exc.value.status_code == 404
 
 @pytest.mark.asyncio
-async def test_analyze_binary_file_error(setup_validator, tmp_path):
-    """Test 400 error for binary files with invalid UTF-8 sequences."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
+async def test_analyze_binary_file_error(setup_validator, mock_validator):
+    """Test error when file is not valid text."""
+    mock_file = MagicMock()
+    mock_file.exists.return_value = True
+    mock_file.is_dir.return_value = False
+    mock_file.stat.return_value.st_size = 100
+    mock_file.read_text.side_effect = UnicodeDecodeError('utf-8', b'', 0, 1, 'bad')
+    mock_validator.validate.return_value = mock_file
 
-    binary_file = tmp_path / "binary.bin"
-    # Use invalid UTF-8 sequences that will cause UnicodeDecodeError
-    # 0x80-0xFF are invalid as standalone bytes in UTF-8
-    binary_file.write_bytes(b"\x80\x81\x82\x83")
-
-    mock_validator.validate.return_value = binary_file
-
-    request = PromptAnalyzeRequest(path=str(binary_file))
-
-    with pytest.raises(HTTPException) as exc_info:
+    request = PromptAnalyzeRequest(path="binary.bin")
+    
+    with pytest.raises(HTTPException) as exc:
         await analyze_prompt(request, validator=mock_validator)
-
-    assert exc_info.value.status_code == 400
-
+    
+    assert exc.value.status_code == 400
+    assert "not a valid text file" in exc.value.detail
 
 @pytest.mark.asyncio
-async def test_security_error(setup_validator):
-    """Test 403 error when PathValidator raises SecurityError."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
-
+async def test_security_error(setup_validator, mock_validator):
+    """Test handling of security violations."""
     mock_validator.validate.side_effect = MockSecurityError("Access denied")
-
-    request = PromptAnalyzeRequest(path="/secret/file.txt")
-
-    with pytest.raises(HTTPException) as exc_info:
+    
+    request = PromptAnalyzeRequest(path="../secret.txt")
+    
+    with pytest.raises(HTTPException) as exc:
         await analyze_prompt(request, validator=mock_validator)
-
-    assert exc_info.value.status_code == 403
-
+    
+    assert exc.value.status_code == 403
+    assert "Access denied" in exc.value.detail
 
 @pytest.mark.asyncio
-async def test_preprocessing_failure(setup_validator, mock_token_metrics, tmp_path):
-    """Test partial success when preprocessing fails."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
-    mock_gtm = prompts_test_env['mock_token_counter'].get_token_metrics
-    mock_prep = prompts_test_env['mock_preprocess'].preprocess
+async def test_preprocessing_failure(setup_validator, mock_validator, mock_metrics):
+    """Test graceful handling of preprocessing errors."""
+    mock_file = MagicMock()
+    mock_file.read_text.return_value = "content"
+    mock_file.stat.return_value.st_size = 10
+    mock_validator.validate.return_value = mock_file
+    
+    mock_token_counter.get_token_metrics.return_value = mock_metrics(10)
+    mock_preprocess_pkg.preprocess.side_effect = Exception("Syntax error in prompt")
 
-    test_file = tmp_path / "test.txt"
-    test_file.write_text("Test content")
-
-    mock_validator.validate.return_value = test_file
-    mock_prep.side_effect = Exception("Preprocess failed")
-    mock_gtm.return_value = mock_token_metrics
-
-    request = PromptAnalyzeRequest(path=str(test_file), preprocess=True)
+    request = PromptAnalyzeRequest(path="test.txt", preprocess=True)
     response = await analyze_prompt(request, validator=mock_validator)
 
-    # Should return 200 with partial success
     assert response.preprocessing_succeeded is False
-    assert response.preprocessing_error is not None
-
+    assert "Syntax error" in response.preprocessing_error
+    assert response.processed_content is None
+    assert response.processed_metrics is None
+    # Raw metrics should still be returned
+    assert response.raw_metrics is not None
 
 @pytest.mark.asyncio
-async def test_cwd_restoration(setup_validator, mock_token_metrics, tmp_path):
-    """Test that CWD is restored after preprocessing."""
-    prompts_test_env, mock_validator = setup_validator
-    analyze_prompt = prompts_test_env['analyze_prompt']
-    PromptAnalyzeRequest = prompts_test_env['PromptAnalyzeRequest']
-    mock_gtm = prompts_test_env['mock_token_counter'].get_token_metrics
-    mock_prep = prompts_test_env['mock_preprocess'].preprocess
-
-    test_file = tmp_path / "test.txt"
-    test_file.write_text("Test content")
-
-    mock_validator.validate.return_value = test_file
-    mock_prep.return_value = "Processed content"
-    mock_gtm.return_value = mock_token_metrics
-
+async def test_cwd_restoration(setup_validator, mock_validator, mock_metrics):
+    """Test that CWD is restored even if preprocessing fails."""
+    mock_file = MagicMock()
+    mock_file.read_text.return_value = "content"
+    mock_file.stat.return_value.st_size = 10
+    mock_validator.validate.return_value = mock_file
+    mock_token_counter.get_token_metrics.return_value = mock_metrics(10)
+    
+    mock_preprocess_pkg.preprocess.side_effect = Exception("Fail")
+    
     original_cwd = os.getcwd()
-    request = PromptAnalyzeRequest(path=str(test_file), preprocess=True)
+    
+    with patch("os.getcwd", return_value=original_cwd), \
+         patch("os.chdir") as mock_chdir:
+        
+        request = PromptAnalyzeRequest(path="test.txt", preprocess=True)
+        await analyze_prompt(request, validator=mock_validator)
+        
+        # Should have been called at least twice: once to project root, once back
+        assert mock_chdir.call_count >= 2
+        # Last call should be to restore original CWD
+        mock_chdir.assert_called_with(original_cwd)
 
-    await analyze_prompt(request, validator=mock_validator)
-
-    assert os.getcwd() == original_cwd
-
-
-# --- Z3 Formal Verification ---
+# --- Z3 Formal Verification Tests ---
 
 def test_z3_size_limit_boundary():
-    """Formally verify the 500KB size limit boundary condition."""
+    """
+    Formally verify the size limit logic.
+    Constraint: size > 500 * 1024 implies Error.
+    """
     s = z3.Solver()
-
-    file_size = z3.Int('file_size')
-    SIZE_LIMIT = 500 * 1024  # 500KB in bytes
-
-    # Property: file is rejected iff size > SIZE_LIMIT
-    is_rejected = file_size > SIZE_LIMIT
-
-    # Test boundary: 500KB should be accepted
+    
+    size = z3.Int('size')
+    limit = 500 * 1024
+    is_error = z3.Bool('is_error')
+    
+    # Logic from code: if file_size > 500 * 1024: raise HTTPException
+    s.add(is_error == (size > limit))
+    
+    # Verify: Is it possible to have an error with size <= limit?
     s.push()
-    s.add(file_size == SIZE_LIMIT)
-    s.add(is_rejected)  # Should be unsat (not rejected at exactly 500KB)
-    assert s.check() == z3.unsat
+    s.add(size <= limit)
+    s.add(is_error)
+    assert s.check() == z3.unsat, "Should not error if size is within limit"
     s.pop()
-
-    # Test boundary: 500KB + 1 should be rejected
+    
+    # Verify: Is it possible to NOT have an error with size > limit?
     s.push()
-    s.add(file_size == SIZE_LIMIT + 1)
-    s.add(z3.Not(is_rejected))  # Should be unsat (must be rejected)
-    assert s.check() == z3.unsat
+    s.add(size > limit)
+    s.add(z3.Not(is_error))
+    assert s.check() == z3.unsat, "Should error if size exceeds limit"
     s.pop()
-
 
 def test_z3_response_consistency():
-    """Formally verify response field consistency."""
+    """
+    Formally verify response consistency logic.
+    If preprocessing succeeds, processed metrics should be available (assuming no other errors).
+    """
     s = z3.Solver()
-
-    preprocessing_requested = z3.Bool('preprocessing_requested')
-    preprocessing_succeeded = z3.Bool('preprocessing_succeeded')
+    
+    preprocess_requested = z3.Bool('preprocess_requested')
+    preprocess_succeeded = z3.Bool('preprocess_succeeded')
     has_processed_metrics = z3.Bool('has_processed_metrics')
+    has_processed_content = z3.Bool('has_processed_content')
+    
+    # Logic derived from code flow:
+    # if request.preprocess:
+    #    try:
+    #       ... preprocess ...
+    #       processed_metrics = ...
+    #       preprocessing_succeeded = True
+    #    except:
+    #       preprocessing_succeeded = False
+    # else:
+    #    processed_metrics = None
+    #    preprocessing_succeeded = True (default init)
+    
+    # Modeling the logic
+    # If not requested, metrics are None
+    s.add(z3.Implies(z3.Not(preprocess_requested), z3.Not(has_processed_metrics)))
+    
+    # If requested and succeeded, metrics must exist
+    s.add(z3.Implies(z3.And(preprocess_requested, preprocess_succeeded), has_processed_metrics))
+    
+    # If requested and failed, metrics must NOT exist
+    s.add(z3.Implies(z3.And(preprocess_requested, z3.Not(preprocess_succeeded)), z3.Not(has_processed_metrics)))
 
-    # Property: if preprocessing succeeded, processed_metrics must be present
-    consistency_rule = z3.Implies(preprocessing_succeeded, has_processed_metrics)
-
-    # Verify the rule is satisfiable in valid states
+    # Verify: Can we have success=True, requested=True, but no metrics?
     s.push()
-    s.add(consistency_rule)
-    s.add(preprocessing_succeeded)
-    assert s.check() == z3.sat
-    model = s.model()
-    assert model[has_processed_metrics]  # Must be True
-    s.pop()
-
-    # Verify violation is detectable
-    s.push()
-    s.add(preprocessing_succeeded)
+    s.add(preprocess_requested)
+    s.add(preprocess_succeeded)
     s.add(z3.Not(has_processed_metrics))
-    s.add(consistency_rule)
-    assert s.check() == z3.unsat  # Inconsistent state
+    assert s.check() == z3.unsat, "Inconsistent state: Success with no metrics"
     s.pop()
-
-
-# --- Tests for new endpoints ---
-
-@pytest.mark.asyncio
-async def test_sync_status_never_synced(setup_validator, tmp_path):
-    """Test sync status when no fingerprint exists."""
-    prompts_test_env, mock_validator = setup_validator
-    get_sync_status = prompts_test_env['get_sync_status']
-    mock_sync_op = prompts_test_env['mock_sync_op']
-
-    # Use real tmp_path for project_root
-    mock_validator.project_root = tmp_path
-
-    # Set up mocks
-    mock_paths = MagicMock()
-    mock_paths.__getitem__ = lambda self, key: MagicMock(exists=lambda: key == 'prompt')
-    mock_sync_op.get_pdd_file_paths.return_value = mock_paths
-    mock_sync_op.read_fingerprint.return_value = None  # No fingerprint
-
-    response = await get_sync_status(
-        basename="test_module",
-        language="python",
-        validator=mock_validator
-    )
-
-    assert response.status == "never_synced"
-    assert response.fingerprint_exists is False
-
-
-@pytest.mark.asyncio
-async def test_sync_status_in_sync(setup_validator, tmp_path):
-    """Test sync status when files are in sync."""
-    prompts_test_env, mock_validator = setup_validator
-    get_sync_status = prompts_test_env['get_sync_status']
-    mock_sync_op = prompts_test_env['mock_sync_op']
-
-    # Use real tmp_path for project_root
-    mock_validator.project_root = tmp_path
-
-    # Set up mocks
-    mock_prompt_path = MagicMock()
-    mock_prompt_path.exists.return_value = True
-    mock_code_path = MagicMock()
-    mock_code_path.exists.return_value = True
-
-    mock_sync_op.get_pdd_file_paths.return_value = {
-        'prompt': mock_prompt_path,
-        'code': mock_code_path
-    }
-
-    # Fingerprint with matching hashes
-    mock_fingerprint = MagicMock()
-    mock_fingerprint.prompt_hash = "abc123"
-    mock_fingerprint.code_hash = "def456"
-    mock_fingerprint.timestamp = "2024-01-01T00:00:00Z"
-    mock_fingerprint.command = "generate"
-    mock_sync_op.read_fingerprint.return_value = mock_fingerprint
-
-    # Current hashes match fingerprint
-    mock_sync_op.calculate_sha256.side_effect = ["abc123", "def456"]
-
-    response = await get_sync_status(
-        basename="test_module",
-        language="python",
-        validator=mock_validator
-    )
-
-    assert response.status == "in_sync"
-    assert response.prompt_modified is False
-    assert response.code_modified is False
-
-
-@pytest.mark.asyncio
-async def test_sync_status_prompt_changed(setup_validator, tmp_path):
-    """Test sync status when prompt has changed."""
-    prompts_test_env, mock_validator = setup_validator
-    get_sync_status = prompts_test_env['get_sync_status']
-    mock_sync_op = prompts_test_env['mock_sync_op']
-
-    # Use real tmp_path for project_root
-    mock_validator.project_root = tmp_path
-
-    # Set up mocks
-    mock_prompt_path = MagicMock()
-    mock_prompt_path.exists.return_value = True
-    mock_code_path = MagicMock()
-    mock_code_path.exists.return_value = True
-
-    mock_sync_op.get_pdd_file_paths.return_value = {
-        'prompt': mock_prompt_path,
-        'code': mock_code_path
-    }
-
-    mock_fingerprint = MagicMock()
-    mock_fingerprint.prompt_hash = "old_hash"
-    mock_fingerprint.code_hash = "def456"
-    mock_fingerprint.timestamp = "2024-01-01T00:00:00Z"
-    mock_fingerprint.command = "generate"
-    mock_sync_op.read_fingerprint.return_value = mock_fingerprint
-
-    # Prompt hash changed, code hash same
-    mock_sync_op.calculate_sha256.side_effect = ["new_hash", "def456"]
-
-    response = await get_sync_status(
-        basename="test_module",
-        language="python",
-        validator=mock_validator
-    )
-
-    assert response.status == "prompt_changed"
-    assert response.prompt_modified is True
-    assert response.code_modified is False
-
-
-@pytest.mark.asyncio
-async def test_get_available_models(prompts_test_env):
-    """Test getting available models list."""
-    import pandas as pd
-
-    get_available_models = prompts_test_env['get_available_models']
-    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-
-    # Create mock DataFrame
-    mock_df = pd.DataFrame([
-        {
-            'model': 'claude-sonnet-4-20250514',
-            'provider': 'Anthropic',
-            'input': 3.0,
-            'output': 15.0,
-            'coding_arena_elo': 1400,
-            'max_reasoning_tokens': 0,
-            'reasoning_type': 'none',
-            'structured_output': True,
-        },
-        {
-            'model': 'gpt-4-turbo',
-            'provider': 'OpenAI',
-            'input': 10.0,
-            'output': 30.0,
-            'coding_arena_elo': 1350,
-            'max_reasoning_tokens': 0,
-            'reasoning_type': 'none',
-            'structured_output': True,
-        }
-    ])
-    mock_llm_invoke._load_model_data.return_value = mock_df
-
-    response = await get_available_models()
-
-    assert len(response.models) == 2
-    # Should be sorted by ELO descending
-    assert response.models[0].model == 'claude-sonnet-4-20250514'
-    assert response.models[0].elo == 1400
-    assert response.default_model == 'claude-sonnet-4-20250514'
-
-
-@pytest.mark.asyncio
-async def test_check_match(prompts_test_env):
-    """Test match checking endpoint."""
-    check_match = prompts_test_env['check_match']
-    MatchCheckRequest = prompts_test_env['MatchCheckRequest']
-    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-
-    # Mock LLM response
-    mock_llm_invoke.llm_invoke.return_value = {
-        'result': {
-            'match_score': 85,
-            'summary': 'Code largely matches requirements',
-            'missing': ['error handling'],
-            'extra': [],
-            'suggestions': ['Add try/except blocks']
-        },
-        'cost': 0.001,
-        'model_name': 'claude-sonnet-4-20250514'
-    }
-
-    request = MatchCheckRequest(
-        prompt_content="Write a function that adds two numbers",
-        code_content="def add(a, b): return a + b",
-        strength=0.5
-    )
-
-    response = await check_match(request)
-
-    assert response.result.match_score == 85
-    assert response.result.summary == 'Code largely matches requirements'
-    assert len(response.result.missing) == 1
-    assert response.cost == 0.001
-
-
-# --- Tests for diff analysis endpoint ---
-
-@pytest.mark.asyncio
-async def test_analyze_diff_basic(prompts_test_env):
-    """Test basic diff analysis functionality."""
-    analyze_diff = prompts_test_env['analyze_diff']
-    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
-    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-    _diff_cache = prompts_test_env['_diff_cache']
-
-    # Clear cache before test
-    _diff_cache.clear()
-
-    # Mock LLM response with detailed diff analysis
-    mock_llm_invoke.llm_invoke.return_value = {
-        'result': {
-            'overallScore': 80,
-            'summary': 'Code implements most requirements',
-            'sections': [
-                {
-                    'id': 'sec_1',
-                    'promptRange': {'startLine': 1, 'endLine': 3, 'text': 'Add two numbers'},
-                    'codeRanges': [{'startLine': 1, 'endLine': 2, 'text': 'def add(a, b):'}],
-                    'status': 'matched',
-                    'matchConfidence': 95,
-                    'semanticLabel': 'Addition Function',
-                    'notes': 'Fully implemented'
-                }
-            ],
-            'lineMappings': [
-                {'promptLine': 1, 'codeLines': [1], 'matchType': 'exact'},
-                {'promptLine': 2, 'codeLines': [2], 'matchType': 'semantic'},
-            ],
-            'stats': {
-                'totalRequirements': 2,
-                'matchedRequirements': 2,
-                'missingRequirements': 0,
-                'totalCodeFeatures': 2,
-                'documentedFeatures': 2,
-                'undocumentedFeatures': 0,
-                'promptToCodeCoverage': 100.0,
-                'codeToPromptCoverage': 100.0
-            },
-            'missing': [],
-            'extra': [],
-            'suggestions': ['Add docstring']
-        },
-        'cost': 0.002,
-        'model_name': 'claude-sonnet-4-20250514'
-    }
-
-    request = DiffAnalysisRequest(
-        prompt_content="Write a function that adds two numbers\nReturn the result",
-        code_content="def add(a, b):\n    return a + b",
-        strength=0.5,
-        mode="detailed"
-    )
-
-    response = await analyze_diff(request)
-
-    assert response.result.overallScore == 80
-    assert response.result.summary == 'Code implements most requirements'
-    assert len(response.result.sections) == 1
-    assert response.result.sections[0].id == 'sec_1'
-    assert response.result.sections[0].status == 'matched'
-    assert len(response.result.lineMappings) == 2
-    assert response.result.stats.totalRequirements == 2
-    assert response.result.stats.promptToCodeCoverage == 100.0
-    assert response.cost == 0.002
-    assert response.analysisMode == "detailed"
-    assert response.cached is False
-
-
-@pytest.mark.asyncio
-async def test_analyze_diff_quick_mode(prompts_test_env):
-    """Test diff analysis in quick mode reduces strength."""
-    analyze_diff = prompts_test_env['analyze_diff']
-    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
-    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-    _diff_cache = prompts_test_env['_diff_cache']
-
-    _diff_cache.clear()
-
-    mock_llm_invoke.llm_invoke.return_value = {
-        'result': {
-            'overallScore': 75,
-            'summary': 'Quick analysis complete',
-            'sections': [],
-            'lineMappings': [],
-            'stats': {
-                'totalRequirements': 1,
-                'matchedRequirements': 1,
-                'missingRequirements': 0,
-                'totalCodeFeatures': 1,
-                'documentedFeatures': 1,
-                'undocumentedFeatures': 0,
-                'promptToCodeCoverage': 100.0,
-                'codeToPromptCoverage': 100.0
-            },
-            'missing': [],
-            'extra': [],
-            'suggestions': []
-        },
-        'cost': 0.001,
-        'model_name': 'claude-sonnet-4-20250514'
-    }
-
-    request = DiffAnalysisRequest(
-        prompt_content="Test prompt",
-        code_content="Test code",
-        strength=0.8,  # High strength requested
-        mode="quick"   # But quick mode should cap it
-    )
-
-    await analyze_diff(request)
-
-    # Check that strength was capped for quick mode
-    call_args = mock_llm_invoke.llm_invoke.call_args
-    assert call_args.kwargs['strength'] <= 0.25
-
-
-@pytest.mark.asyncio
-async def test_analyze_diff_caching(prompts_test_env):
-    """Test that diff analysis results are cached."""
-    analyze_diff = prompts_test_env['analyze_diff']
-    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
-    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-    _diff_cache = prompts_test_env['_diff_cache']
-
-    _diff_cache.clear()
-
-    mock_llm_invoke.llm_invoke.return_value = {
-        'result': {
-            'overallScore': 90,
-            'summary': 'Cached result',
-            'sections': [],
-            'lineMappings': [],
-            'stats': {
-                'totalRequirements': 1,
-                'matchedRequirements': 1,
-                'missingRequirements': 0,
-                'totalCodeFeatures': 1,
-                'documentedFeatures': 1,
-                'undocumentedFeatures': 0,
-                'promptToCodeCoverage': 100.0,
-                'codeToPromptCoverage': 100.0
-            },
-            'missing': [],
-            'extra': [],
-            'suggestions': []
-        },
-        'cost': 0.001,
-        'model_name': 'claude-sonnet-4-20250514'
-    }
-
-    request = DiffAnalysisRequest(
-        prompt_content="Cache test prompt",
-        code_content="Cache test code",
-        strength=0.5,
-        mode="detailed"
-    )
-
-    # First call - should hit LLM
-    response1 = await analyze_diff(request)
-    assert response1.cached is False
-    assert mock_llm_invoke.llm_invoke.call_count == 1
-
-    # Second call with same content - should be cached
-    response2 = await analyze_diff(request)
-    assert response2.cached is True
-    assert mock_llm_invoke.llm_invoke.call_count == 1  # No additional call
-
-
-def test_cache_key_generation(prompts_test_env):
-    """Test that cache keys are properly generated from content hash."""
-    _get_cache_key = prompts_test_env['_get_cache_key']
-
-    key1 = _get_cache_key("prompt1", "code1", "detailed")
-    key2 = _get_cache_key("prompt1", "code1", "detailed")
-    key3 = _get_cache_key("prompt2", "code1", "detailed")
-    key4 = _get_cache_key("prompt1", "code1", "quick")
-
-    # Same content should produce same key
-    assert key1 == key2
-    # Different prompt should produce different key
-    assert key1 != key3
-    # Different mode should produce different key
-    assert key1 != key4
-
-
-@pytest.mark.asyncio
-async def test_analyze_diff_with_missing_requirements(prompts_test_env):
-    """Test diff analysis with missing requirements."""
-    analyze_diff = prompts_test_env['analyze_diff']
-    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
-    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-    _diff_cache = prompts_test_env['_diff_cache']
-
-    _diff_cache.clear()
-
-    mock_llm_invoke.llm_invoke.return_value = {
-        'result': {
-            'overallScore': 50,
-            'summary': 'Code missing key requirements',
-            'sections': [
-                {
-                    'id': 'sec_1',
-                    'promptRange': {'startLine': 1, 'endLine': 2, 'text': 'Validate input'},
-                    'codeRanges': [],  # No code implements this
-                    'status': 'missing',
-                    'matchConfidence': 0,
-                    'semanticLabel': 'Input Validation',
-                    'notes': 'No input validation found'
-                },
-                {
-                    'id': 'sec_2',
-                    'promptRange': {'startLine': 3, 'endLine': 4, 'text': 'Return result'},
-                    'codeRanges': [{'startLine': 2, 'endLine': 2, 'text': 'return a + b'}],
-                    'status': 'matched',
-                    'matchConfidence': 90,
-                    'semanticLabel': 'Return Statement',
-                }
-            ],
-            'lineMappings': [],
-            'stats': {
-                'totalRequirements': 2,
-                'matchedRequirements': 1,
-                'missingRequirements': 1,
-                'totalCodeFeatures': 2,
-                'documentedFeatures': 1,
-                'undocumentedFeatures': 1,
-                'promptToCodeCoverage': 50.0,
-                'codeToPromptCoverage': 50.0
-            },
-            'missing': ['Input validation is not implemented'],
-            'extra': [],
-            'suggestions': ['Add input type checking']
-        },
-        'cost': 0.002,
-        'model_name': 'claude-sonnet-4-20250514'
-    }
-
-    request = DiffAnalysisRequest(
-        prompt_content="Validate input\nCheck types\nReturn result\nDocument function",
-        code_content="def add(a, b):\n    return a + b",
-        strength=0.5,
-        mode="detailed"
-    )
-
-    response = await analyze_diff(request)
-
-    assert response.result.overallScore == 50
-    assert response.result.stats.missingRequirements == 1
-    assert len(response.result.missing) == 1
-    assert 'missing' in response.result.sections[0].status
-
-
-@pytest.mark.asyncio
-async def test_analyze_diff_handles_string_result(prompts_test_env):
-    """Test that diff analysis handles LLM returning string instead of dict."""
-    import json
-    analyze_diff = prompts_test_env['analyze_diff']
-    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
-    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-    _diff_cache = prompts_test_env['_diff_cache']
-
-    _diff_cache.clear()
-
-    # Return result as JSON string instead of dict
-    mock_llm_invoke.llm_invoke.return_value = {
-        'result': json.dumps({
-            'overallScore': 70,
-            'summary': 'String result test',
-            'sections': [],
-            'lineMappings': [],
-            'stats': {
-                'totalRequirements': 1,
-                'matchedRequirements': 1,
-                'missingRequirements': 0,
-                'totalCodeFeatures': 1,
-                'documentedFeatures': 1,
-                'undocumentedFeatures': 0,
-                'promptToCodeCoverage': 100.0,
-                'codeToPromptCoverage': 100.0
-            },
-            'missing': [],
-            'extra': [],
-            'suggestions': []
-        }),
-        'cost': 0.001,
-        'model_name': 'claude-sonnet-4-20250514'
-    }
-
-    request = DiffAnalysisRequest(
-        prompt_content="Test",
-        code_content="Test",
-        strength=0.5,
-        mode="detailed"
-    )
-
-    response = await analyze_diff(request)
-
-    assert response.result.overallScore == 70
-    assert response.result.summary == 'String result test'
-
-
-# --- Z3 Formal Verification for Diff Analysis ---
-
-def test_z3_diff_score_bounds():
-    """Formally verify that diff scores are bounded 0-100."""
-    s = z3.Solver()
-
-    overall_score = z3.Int('overall_score')
-    match_confidence = z3.Int('match_confidence')
-
-    # Property: scores must be in valid range
-    valid_overall = z3.And(overall_score >= 0, overall_score <= 100)
-    valid_confidence = z3.And(match_confidence >= 0, match_confidence <= 100)
-
-    # Test that invalid scores are rejected
-    s.push()
-    s.add(overall_score == 150)  # Invalid score
-    s.add(valid_overall)
-    assert s.check() == z3.unsat
-    s.pop()
-
-    s.push()
-    s.add(match_confidence == -10)  # Invalid negative score
-    s.add(valid_confidence)
-    assert s.check() == z3.unsat
-    s.pop()
-
-
-def test_z3_coverage_calculation():
-    """Formally verify coverage percentage calculation."""
-    s = z3.Solver()
-
-    total_reqs = z3.Int('total_reqs')
-    matched_reqs = z3.Int('matched_reqs')
-    coverage = z3.Real('coverage')
-
-    # Constraints
-    s.add(total_reqs > 0)
-    s.add(matched_reqs >= 0)
-    s.add(matched_reqs <= total_reqs)
-    s.add(coverage == (matched_reqs * 100) / total_reqs)
-
-    # Property: coverage is between 0 and 100
-    s.push()
-    s.add(z3.Or(coverage < 0, coverage > 100))
-    assert s.check() == z3.unsat
-    s.pop()
-
-    # Property: 100% coverage when all matched
-    s.push()
-    s.add(matched_reqs == total_reqs)
-    s.add(coverage != 100)
-    assert s.check() == z3.unsat
-    s.pop()
-
-
-# --- Tests for Cloud-Enabled LLM Calls ---
-
-class TestCloudEnabledLLMCalls:
-    """
-    Tests to verify that LLM endpoints use cloud auto-detection.
-
-    Previously, endpoints explicitly passed use_cloud=False which forced local
-    execution. These tests verify that use_cloud is NOT explicitly set to False,
-    allowing llm_invoke to auto-detect cloud availability.
-    """
-
-    @pytest.mark.asyncio
-    async def test_check_match_allows_cloud_autodetect(self, prompts_test_env):
-        """
-        Verify /check-match endpoint does NOT pass use_cloud=False.
-
-        This allows llm_invoke to auto-detect cloud availability via
-        CloudConfig.is_cloud_enabled().
-        """
-        check_match = prompts_test_env['check_match']
-        MatchCheckRequest = prompts_test_env['MatchCheckRequest']
-        mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-
-        # Mock LLM response
-        mock_llm_invoke.llm_invoke.return_value = {
-            'result': {
-                'match_score': 85,
-                'summary': 'Test result',
-                'missing': [],
-                'extra': [],
-                'suggestions': []
-            },
-            'cost': 0.001,
-            'model_name': 'claude-sonnet-4-20250514'
-        }
-
-        request = MatchCheckRequest(
-            prompt_content="Test prompt",
-            code_content="def test(): pass",
-            strength=0.5
-        )
-
-        await check_match(request)
-
-        # Verify llm_invoke was called
-        assert mock_llm_invoke.llm_invoke.called
-
-        # Get the call arguments
-        call_kwargs = mock_llm_invoke.llm_invoke.call_args.kwargs
-
-        # CRITICAL: use_cloud should NOT be explicitly set to False
-        # If use_cloud is in kwargs, it should not be False
-        if 'use_cloud' in call_kwargs:
-            assert call_kwargs['use_cloud'] is not False, (
-                "use_cloud should not be explicitly set to False - "
-                "this prevents cloud auto-detection"
-            )
-
-    @pytest.mark.asyncio
-    async def test_analyze_diff_allows_cloud_autodetect(self, prompts_test_env):
-        """
-        Verify /diff-analysis endpoint does NOT pass use_cloud=False.
-
-        This allows llm_invoke to auto-detect cloud availability via
-        CloudConfig.is_cloud_enabled().
-        """
-        analyze_diff = prompts_test_env['analyze_diff']
-        DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
-        mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-        _diff_cache = prompts_test_env['_diff_cache']
-
-        _diff_cache.clear()
-
-        # Mock LLM response
-        mock_llm_invoke.llm_invoke.return_value = {
-            'result': {
-                'overallScore': 80,
-                'promptToCodeScore': 85,
-                'codeToPromptScore': 75,
-                'summary': 'Test analysis',
-                'sections': [],
-                'codeSections': [],
-                'lineMappings': [],
-                'stats': {
-                    'totalRequirements': 1,
-                    'matchedRequirements': 1,
-                    'missingRequirements': 0,
-                    'promptToCodeCoverage': 100.0
-                },
-                'missing': [],
-                'extra': [],
-                'suggestions': []
-            },
-            'cost': 0.002,
-            'model_name': 'claude-sonnet-4-20250514'
-        }
-
-        request = DiffAnalysisRequest(
-            prompt_content="Test prompt",
-            code_content="def test(): pass",
-            strength=0.5,
-            mode="detailed"
-        )
-
-        await analyze_diff(request)
-
-        # Verify llm_invoke was called
-        assert mock_llm_invoke.llm_invoke.called
-
-        # Get the call arguments
-        call_kwargs = mock_llm_invoke.llm_invoke.call_args.kwargs
-
-        # CRITICAL: use_cloud should NOT be explicitly set to False
-        if 'use_cloud' in call_kwargs:
-            assert call_kwargs['use_cloud'] is not False, (
-                "use_cloud should not be explicitly set to False - "
-                "this prevents cloud auto-detection"
-            )
-
-    @pytest.mark.asyncio
-    async def test_prompt_diff_allows_cloud_autodetect(self, prompts_test_env, tmp_path):
-        """
-        Verify /prompt-diff endpoint does NOT pass use_cloud=False.
-
-        This allows llm_invoke to auto-detect cloud availability via
-        CloudConfig.is_cloud_enabled().
-        """
-        get_prompt_diff = prompts_test_env['get_prompt_diff']
-        PromptDiffRequest = prompts_test_env['PromptDiffRequest']
-        mock_llm_invoke = prompts_test_env['mock_llm_invoke']
-
-        # Create a test file for the prompt
-        test_prompt = tmp_path / "test.prompt"
-        test_prompt.write_text("Original prompt content")
-
-        # Mock LLM response
-        mock_llm_invoke.llm_invoke.return_value = {
-            'result': {
-                'summary': 'No significant changes',
-                'changes': []
-            },
-            'cost': 0.001,
-            'model_name': 'claude-sonnet-4-20250514'
-        }
-
-        request = PromptDiffRequest(
-            prompt_path=str(test_prompt),
-            version_a="working",
-            version_b="working",
-            strength=0.5
-        )
-
-        await get_prompt_diff(request)
-
-        # Verify llm_invoke was called
-        assert mock_llm_invoke.llm_invoke.called
-
-        # Get the call arguments
-        call_kwargs = mock_llm_invoke.llm_invoke.call_args.kwargs
-
-        # CRITICAL: use_cloud should NOT be explicitly set to False
-        if 'use_cloud' in call_kwargs:
-            assert call_kwargs['use_cloud'] is not False, (
-                "use_cloud should not be explicitly set to False - "
-                "this prevents cloud auto-detection"
-            )

@@ -6,9 +6,6 @@ pdd.server.routes without polluting sys.modules during collection.
 
 IMPORTANT: We use REAL pdd.server.models and pdd.server.security modules.
 We only mock modules that don't exist or cause circular import issues.
-
-NOTE: Top-level imports from pdd.server.* are avoided to prevent module
-pollution during pytest collection.
 """
 
 import sys
@@ -17,47 +14,24 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
-def _get_model_classes():
-    """Import model classes lazily to avoid collection-time pollution."""
-    from pdd.server.models import (
-        FileTreeNode,
-        FileContent,
-        WriteFileRequest,
-        WriteResult,
-        FileMetadata,
-        JobHandle,
-        JobResult,
-        JobStatus,
-        CommandRequest,
-        ServerConfig,
-        ServerStatus,
-    )
-    return {
-        'FileTreeNode': FileTreeNode,
-        'FileContent': FileContent,
-        'WriteFileRequest': WriteFileRequest,
-        'WriteResult': WriteResult,
-        'FileMetadata': FileMetadata,
-        'JobHandle': JobHandle,
-        'JobResult': JobResult,
-        'JobStatus': JobStatus,
-        'CommandRequest': CommandRequest,
-        'ServerConfig': ServerConfig,
-        'ServerStatus': ServerStatus,
-    }
-
-
-def _get_security_classes():
-    """Import security classes lazily to avoid collection-time pollution."""
-    from pdd.server.security import (
-        PathValidator,
-        SecurityError,
-    )
-    return {
-        'PathValidator': PathValidator,
-        'SecurityError': SecurityError,
-    }
+# Import real models and security - these work and should not be mocked
+from pdd.server.models import (
+    FileTreeNode,
+    FileContent,
+    WriteFileRequest,
+    WriteResult,
+    FileMetadata,
+    JobHandle,
+    JobResult,
+    JobStatus,
+    CommandRequest,
+    ServerConfig,
+    ServerStatus,
+)
+from pdd.server.security import (
+    PathValidator,
+    SecurityError,
+)
 
 
 # ============================================================================
@@ -91,7 +65,7 @@ def _setup_route_mocks():
     m_jobs.JobManager = MagicMock()
     m_jobs.Job = MagicMock()
     m_jobs.JobCallbacks = MagicMock()
-    m_jobs.JobStatus = _get_model_classes()['JobStatus']  # Use real JobStatus
+    m_jobs.JobStatus = JobStatus  # Use real JobStatus
     sys.modules["pdd.server.jobs"] = m_jobs
 
     # Mock websocket module - it may have complex dependencies
@@ -147,16 +121,16 @@ def route_test_environment():
 @pytest.fixture
 def security_error_class():
     """Provides the SecurityError class for tests."""
-    return _get_security_classes()['SecurityError']
+    return SecurityError
 
 
 @pytest.fixture
 def path_validator_class():
     """Provides the PathValidator class for tests."""
-    return _get_security_classes()['PathValidator']
+    return PathValidator
 
 
 @pytest.fixture
 def job_status_enum():
     """Provides the JobStatus enum for tests."""
-    return _get_model_classes()['JobStatus']
+    return JobStatus

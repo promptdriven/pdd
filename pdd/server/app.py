@@ -22,9 +22,8 @@ from .security import (
 )
 from .jobs import JobManager
 from .routes.websocket import ConnectionManager, create_websocket_routes
-from .routes import architecture, auth, files, commands, prompts
+from .routes import files, commands, prompts
 from .routes import websocket as ws_routes
-from .routes.config import router as config_router
 
 # Initialize Rich console
 console = Console()
@@ -39,25 +38,15 @@ class AppState:
     Holds thread-safe references to shared managers and configuration.
     """
 
-    def __init__(self, project_root: Path, config: Optional[ServerConfig] = None):
+    def __init__(self, project_root: Path):
         self.project_root = project_root.resolve()
         self.start_time = datetime.now(timezone.utc)
         self.version = "0.1.0"  # In a real app, load from package metadata
-
-        # Store server config for port access
-        self.config = config or ServerConfig()
-
+        
         # Initialize managers
         self.path_validator = PathValidator(self.project_root)
-        # SAFETY: Limit concurrent jobs to 3 - LLM calls are resource-intensive
-        # Running too many in parallel can exhaust memory/CPU and crash the system
-        self.job_manager = JobManager(max_concurrent=3, project_root=self.project_root)
+        self.job_manager = JobManager(max_concurrent=2)
         self.connection_manager = ConnectionManager()
-
-    @property
-    def server_port(self) -> int:
-        """Get the configured server port."""
-        return self.config.port
 
     @property
     def uptime_seconds(self) -> float:
@@ -88,11 +77,6 @@ def get_job_manager() -> JobManager:
 def get_connection_manager() -> ConnectionManager:
     """Dependency to get the WebSocket connection manager."""
     return get_app_state().connection_manager
-
-
-def get_server_port() -> int:
-    """Dependency to get the configured server port."""
-    return get_app_state().server_port
 
 
 # ============================================================================
@@ -139,33 +123,16 @@ async def lifespan(app: FastAPI):
     Handles startup initialization and shutdown cleanup.
     """
     state = get_app_state()
-
+    
     # Startup
     console.print(f"[green]PDD Server starting...[/green]")
     console.print(f"Project Root: [bold]{state.project_root}[/bold]")
-
-    # Start remote session heartbeat and command polling if configured
-    from ..remote_session import get_active_session_manager
-    session_manager = get_active_session_manager()
-    if session_manager:
-        session_manager.start_heartbeat()
-        session_manager.start_command_polling()
-        console.print("[dim]Remote session heartbeat and command polling started[/dim]")
-
+    
     yield
-
+    
     # Shutdown
     console.print("[yellow]Shutting down PDD Server...[/yellow]")
-
-    # Stop remote session heartbeat and command polling
-    if session_manager:
-        try:
-            await session_manager.stop_heartbeat()
-            await session_manager.stop_command_polling()
-            console.print("[dim]Remote session heartbeat and command polling stopped[/dim]")
-        except Exception as e:
-            console.print(f"[yellow]Warning: Error stopping remote session tasks: {e}[/yellow]")
-
+    
     # Cancel active jobs
     try:
         active_jobs = state.job_manager.get_active_jobs()
@@ -174,7 +141,7 @@ async def lifespan(app: FastAPI):
             await state.job_manager.shutdown()
     except Exception as e:
         console.print(f"[red]Error during job manager shutdown: {e}[/red]")
-
+    
     console.print("[green]Shutdown complete.[/green]")
 
 
@@ -195,12 +162,7 @@ def create_app(
         Configured FastAPI application.
     """
     global _app_state
-    _app_state = AppState(project_root, config=config)
-
-    # Configure commands router with the correct port for spawned terminal callbacks
-    # This ensures the terminal callback URL uses the actual server port, not the default
-    from .routes.commands import set_server_port
-    set_server_port(_app_state.server_port)
+    _app_state = AppState(project_root)
 
     # Determine configuration with proper fallback
     origins = None
@@ -242,20 +204,15 @@ def create_app(
 
     app.dependency_overrides[files.get_path_validator] = get_path_validator
     app.dependency_overrides[commands.get_job_manager] = get_job_manager
-    app.dependency_overrides[commands.get_project_root] = lambda: get_app_state().project_root
-    app.dependency_overrides[commands.get_server_port] = get_server_port
     app.dependency_overrides[ws_routes.get_job_manager] = get_job_manager
     app.dependency_overrides[ws_routes.get_project_root] = lambda: get_app_state().project_root
     app.dependency_overrides[prompts.get_path_validator] = get_path_validator
 
-    app.include_router(architecture.router)
-    app.include_router(auth.router)
-    app.include_router(config_router)
     app.include_router(files.router)
     app.include_router(commands.router)
     app.include_router(prompts.router)
 
-    create_websocket_routes(app, _app_state.connection_manager, _app_state.job_manager)
+    create_websocket_routes(app, _app_state.connection_manager)
 
     # 4. Serve Frontend Static Files
     # Look for frontend dist in the pdd package directory
