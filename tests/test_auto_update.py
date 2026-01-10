@@ -207,6 +207,24 @@ def test_detect_pip_installation():
     ) == "pip"
 
 
+def test_detect_uv_installation_windows():
+    """Test detection of UV installation on Windows with backslash paths."""
+    # Test Windows UV tool paths with backslashes
+    assert detect_installation_method(
+        r"C:\Users\pmbri\AppData\Roaming\uv\tools\pdd-cli\Scripts\python.exe"
+    ) == "uv"
+    assert detect_installation_method(
+        r"C:\Users\user\.local\share\uv\tools\pdd-cli\Scripts\python.exe"
+    ) == "uv"
+    assert detect_installation_method(
+        r"D:\uv\tools\pdd-cli\bin\python.exe"
+    ) == "uv"
+    # Test with forward slashes on Windows (some tools normalize paths)
+    assert detect_installation_method(
+        "C:/Users/user/AppData/Roaming/uv/tools/pdd-cli/Scripts/python.exe"
+    ) == "uv"
+
+
 def test_get_upgrade_command():
     """Test that the correct upgrade commands are generated."""
     # Test UV command generation
