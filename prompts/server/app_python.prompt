@@ -1,0 +1,82 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/app.py`.
+
+% Role & Scope
+  This module provides the FastAPI application factory for the PDD server.
+  It creates and configures the web application with routes, middleware,
+  dependency injection, lifecycle management, and optional frontend serving.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - FastAPI: 
+    <web>https://fastapi.tiangolo.com/</web>
+  - FastAPI Lifespan: 
+    <web>https://fastapi.tiangolo.com/advanced/events/</web>
+  - Uvicorn:
+    <web>https://www.uvicorn.org/</web>
+   
+
+% Requirements
+  1. **AppState class**:
+     - Holds server state: project_root, start_time, version
+     - Properties: uptime_seconds
+     - Thread-safe access to shared state (job manager, connections)
+
+  2. **create_app() factory function**:
+     - Parameters: project_root (Path), config (ServerConfig), allowed_origins (List[str])
+     - Returns configured FastAPI application
+     - Sets up: CORS, security middleware, exception handlers
+     - Registers all route modules (files, commands, prompts, websocket)
+
+  3. **Lifespan management**:
+     - Startup: Log server info
+     - Shutdown: Cancel active jobs, cleanup resources
+     - Use asynccontextmanager pattern
+
+  4. **Dependency injection**:
+     - `get_app_state()`: Returns AppState instance
+     - `get_path_validator()`: Returns PathValidator for current project
+     - `get_job_manager()`: Returns JobManager instance
+     - `get_connection_manager()`: Returns WebSocket ConnectionManager
+
+  5. **Exception handlers**:
+     - SecurityError -> 403 Forbidden
+     - RequestValidationError -> 422 Unprocessable Entity
+     - Generic Exception -> 500 with safe error message
+
+  6. **Route registration**:
+     - Include routers from: routes.files, routes.commands, routes.prompts
+     - WebSocket routes via create_websocket_routes()
+     - Status endpoint at /api/v1/status returning ServerStatus
+     - /docs and /redoc for OpenAPI documentation
+
+  7. **Frontend serving** (optional):
+     - If pdd/frontend/dist exists, serve static files
+     - Mount /assets for JS/CSS bundles
+     - SPA fallback: serve index.html for non-API routes
+     - Skip API, docs, and WebSocket paths
+
+  8. **run_server() function**:
+     - Parameters: project_root, host, port, log_level, allowed_origins, app, config
+     - Config object takes precedence over individual args
+     - Runs uvicorn with the application
+
+% Dependencies
+  Models are defined in pdd/server/models.py - use ServerConfig, ServerStatus
+  <include>context/server/models_example.py</include>
+  Security utilities in pdd/server/security.py - use PathValidator, SecurityError, configure_cors, SecurityLoggingMiddleware
+  <include>context/server/security_example.py</include>
+  Job manager in pdd/server/jobs.py
+  <include>context/server/jobs_example.py</include>
+  Routes: routes.files, routes.commands, routes.prompts, routes.websocket
+  
+
+% Instructions
+  - Use relative imports for server submodules
+  - FastAPI app should have title="PDD Server", description, version
+  - Global state via module-level variable with getter dependency
+  - Exception handlers should not leak internal paths or sensitive info
+  - Log startup message with server URL and docs URL
+
+% Deliverables
+  - Code: `pdd/server/app.py`

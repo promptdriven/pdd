@@ -151,6 +151,7 @@
         % Note: A time/effort field (e.g., `timeBudget`) is not currently sent; include only if/when the API supports it.
       - Cloud endpoint: `https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode`
       - Expected response fields: `generatedCode`, `totalCost`, `modelName`.
+      - Post-process JSON responses: When `language` is "json" (case-insensitive), strip markdown code fences from `generatedCode` if present. The cloud API may return fenced JSON like "```json\n...\n```". Remove leading "```json" or "```" and trailing "```" to extract the raw JSON content.
    3. If cloud execution fails (auth/network/HTTP/JSON errors, timeout, or missing code):
       - Log a warning and automatically fall back to local execution.
    4. For local execution, call the local code generator with the already preprocessed and substituted prompt, and set `preprocess_prompt=False` on the generator call.

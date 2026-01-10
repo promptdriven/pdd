@@ -1,0 +1,1255 @@
+import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { EditorState, Compartment } from '@codemirror/state';
+import { EditorView, lineNumbers, highlightActiveLine, keymap } from '@codemirror/view';
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import { completionKeymap } from '@codemirror/autocomplete';
+import { markdown } from '@codemirror/lang-markdown';
+import { oneDark } from '@codemirror/theme-one-dark';
+import { marked, Marked } from 'marked';
+import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics } from '../api';
+import { CommandType, CommandConfig, CommandOption, GlobalOption } from '../types';
+import { COMMANDS, GLOBAL_OPTIONS, GLOBAL_DEFAULTS } from '../constants';
+import PromptMetricsBar from './PromptMetricsBar';
+import GuidanceSidebar from './GuidanceSidebar';
+import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
+import { findIncludeAtCursor, IncludeTagInfo, parseIncludeManyPaths } from '../lib/includeAnalyzer';
+
+// Create a configured marked instance
+const markedInstance = new Marked({
+  breaks: true,
+  gfm: true,
+});
+
+// Helper to format option names for display
+function formatOptionName(name: string): string {
+  return name
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// Individual option input component - responsive modern styling
+const OptionInput: React.FC<{
+  option: CommandOption | GlobalOption;
+  value: any;
+  onChange: (value: any) => void;
+  compact?: boolean;
+}> = ({ option, value, onChange, compact = false }) => {
+  const inputId = `option-${option.name}`;
+
+  if (option.type === 'checkbox') {
+    return (
+      <label htmlFor={inputId} className={`flex items-start gap-3 ${compact ? 'p-2' : 'p-3'} rounded-xl bg-surface-800/30 hover:bg-surface-800/50 transition-colors cursor-pointer group`}>
+        <input
+          type="checkbox"
+          id={inputId}
+          checked={!!value}
+          onChange={(e) => onChange(e.target.checked)}
+          className="w-4 h-4 mt-0.5 rounded bg-surface-700 border-surface-600 text-accent-500 focus:ring-accent-500 focus:ring-offset-surface-800"
+        />
+        <div className="flex-1 min-w-0">
+          <div className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-white group-hover:text-accent-300 transition-colors`}>{formatOptionName(option.name)}</div>
+          <div className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400 mt-0.5`}>{option.description}</div>
+        </div>
+      </label>
+    );
+  }
+
+  if (option.type === 'range') {
+    const min = option.min ?? 0;
+    const max = option.max ?? 1;
+    const step = option.step ?? 0.1;
+    const displayValue = value ?? option.defaultValue ?? min;
+
+    return (
+      <div className={compact ? 'space-y-1.5' : 'space-y-2'}>
+        <div className="flex items-center justify-between">
+          <label htmlFor={inputId} className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-white`}>
+            {formatOptionName(option.name)}
+          </label>
+          <span className={`${compact ? 'text-xs' : 'text-sm'} font-mono text-accent-400 bg-accent-500/10 px-2 py-0.5 rounded-lg`}>
+            {typeof displayValue === 'number' ? displayValue.toFixed(2) : displayValue}
+          </span>
+        </div>
+        <p className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400`}>{option.description}</p>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-surface-500 w-6 text-right">{min}</span>
+          <input
+            type="range"
+            id={inputId}
+            min={min}
+            max={max}
+            step={step}
+            value={displayValue}
+            onChange={(e) => onChange(parseFloat(e.target.value))}
+            className="flex-1 h-2 bg-surface-700 rounded-full appearance-none cursor-pointer accent-accent-500
+              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-500
+              [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:shadow-accent-500/30
+              [&::-webkit-slider-thumb]:hover:bg-accent-400 [&::-webkit-slider-thumb]:transition-colors"
+          />
+          <span className="text-[10px] text-surface-500 w-6">{max}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <label htmlFor={inputId} className={`block ${compact ? 'text-xs' : 'text-sm'} font-medium text-white mb-1.5`}>
+        {formatOptionName(option.name)}
+        {option.required && <span className="text-red-400 ml-1">*</span>}
+      </label>
+      <p className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400 mb-2`}>{option.description}</p>
+      {option.type === 'textarea' ? (
+        <textarea
+          id={inputId}
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={option.placeholder}
+          required={option.required}
+          rows={3}
+          className="w-full px-3 py-2.5 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all resize-none"
+        />
+      ) : (
+        <input
+          type={option.type === 'number' ? 'number' : 'text'}
+          id={inputId}
+          value={value || ''}
+          onChange={(e) => onChange(option.type === 'number' ? (e.target.value ? Number(e.target.value) : '') : e.target.value)}
+          placeholder={option.placeholder}
+          required={option.required}
+          className="w-full px-3 py-2.5 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all"
+        />
+      )}
+    </div>
+  );
+};
+
+// Options Modal Component
+const CommandOptionsModal: React.FC<{
+  command: CommandConfig;
+  prompt: PromptInfo;
+  onRun: (options: Record<string, any>) => void;
+  onCancel: () => void;
+}> = ({ command, prompt, onRun, onCancel }) => {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const [optionValues, setOptionValues] = useState<Record<string, any>>(() => {
+    const defaults: Record<string, any> = {};
+
+    // Set defaults from command options
+    command.options.forEach(opt => {
+      if (opt.defaultValue !== undefined) {
+        if (opt.type === 'checkbox') {
+          defaults[opt.name] = opt.defaultValue === 'true' || opt.defaultValue === true;
+        } else if (opt.type === 'number' || opt.type === 'range') {
+          defaults[opt.name] = opt.defaultValue;
+        } else {
+          defaults[opt.name] = opt.defaultValue;
+        }
+      }
+    });
+
+    // Pre-fill file paths from detected files
+    if (command.requiresCode) {
+      defaults['_code'] = prompt.code || '';
+    }
+    if (command.requiresTest) {
+      defaults['_test'] = prompt.test || '';
+    }
+
+    // Set global option defaults
+    GLOBAL_OPTIONS.forEach(opt => {
+      defaults[`_global_${opt.name}`] = opt.defaultValue;
+    });
+
+    return defaults;
+  });
+
+  const handleValueChange = (optionName: string, value: any) => {
+    setOptionValues(prev => ({ ...prev, [optionName]: value }));
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanedOptions: Record<string, any> = {};
+
+    // Add command-specific options
+    Object.entries(optionValues).forEach(([key, value]) => {
+      // Skip internal prefixed keys and empty values
+      if (key.startsWith('_global_')) return;
+      if (value !== '' && value !== undefined && value !== null) {
+        cleanedOptions[key] = value;
+      }
+    });
+
+    // Add global options (only if different from defaults)
+    GLOBAL_OPTIONS.forEach(opt => {
+      const value = optionValues[`_global_${opt.name}`];
+      const defaultVal = opt.defaultValue;
+      // Only include if value differs from default
+      if (value !== defaultVal && value !== undefined && value !== null) {
+        cleanedOptions[`_global_${opt.name}`] = value;
+      }
+    });
+
+    onRun(cleanedOptions);
+  };
+
+  // Check if any global options differ from defaults
+  const hasCustomGlobalOptions = GLOBAL_OPTIONS.some(opt => {
+    const value = optionValues[`_global_${opt.name}`];
+    return value !== opt.defaultValue;
+  });
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={onCancel}>
+      <div
+        className="glass rounded-2xl border border-surface-600/50 shadow-2xl w-full max-w-md animate-scale-in"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-4 sm:px-6 py-4 border-b border-surface-700/50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-accent-500/20 flex items-center justify-center">
+              <span className="text-xl">{command.icon}</span>
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-white">{command.shortDescription}</h3>
+              <p className="text-xs sm:text-sm text-surface-400 line-clamp-1">{command.description}</p>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="px-4 sm:px-6 py-4 space-y-4 max-h-[50vh] sm:max-h-[60vh] overflow-y-auto">
+            {/* Target prompt */}
+            <div className="bg-surface-800/50 rounded-xl px-3 py-2.5 border border-surface-700/50">
+              <div className="text-xs text-surface-400 mb-0.5">Target Prompt</div>
+              <div className="text-sm text-white font-mono truncate">{prompt.sync_basename}</div>
+            </div>
+
+            {/* File path inputs for required files */}
+            {command.requiresCode && (
+              <div>
+                <label className="block text-sm font-medium text-white mb-1.5">
+                  Code File
+                  <span className="text-red-400 ml-1">*</span>
+                </label>
+                <p className="text-xs text-surface-400 mb-2">
+                  {prompt.code
+                    ? 'Auto-detected code file. Change if needed.'
+                    : 'No code file detected. Enter the path to use.'}
+                </p>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={optionValues['_code'] || ''}
+                    onChange={(e) => handleValueChange('_code', e.target.value)}
+                    placeholder="e.g., src/calculator.py"
+                    className={`w-full px-3 py-2.5 bg-surface-900/50 border rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all ${
+                      prompt.code ? 'border-green-500/50' : 'border-yellow-500/50'
+                    }`}
+                  />
+                  {prompt.code && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-green-400 text-xs px-1.5 py-0.5 rounded bg-green-500/20">
+                      detected
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {command.requiresTest && (
+              <div>
+                <label className="block text-sm font-medium text-white mb-1.5">
+                  Test File
+                  <span className="text-red-400 ml-1">*</span>
+                </label>
+                <p className="text-xs text-surface-400 mb-2">
+                  {prompt.test
+                    ? 'Auto-detected test file. Change if needed.'
+                    : 'No test file detected. Enter the path to use.'}
+                </p>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={optionValues['_test'] || ''}
+                    onChange={(e) => handleValueChange('_test', e.target.value)}
+                    placeholder="e.g., tests/test_calculator.py"
+                    className={`w-full px-3 py-2.5 bg-surface-900/50 border rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all ${
+                      prompt.test ? 'border-green-500/50' : 'border-yellow-500/50'
+                    }`}
+                  />
+                  {prompt.test && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-green-400 text-xs px-1.5 py-0.5 rounded bg-green-500/20">
+                      detected
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Command options */}
+            {command.options.length > 0 ? (
+              command.options.map(opt => (
+                <OptionInput
+                  key={opt.name}
+                  option={opt}
+                  value={optionValues[opt.name]}
+                  onChange={(val) => handleValueChange(opt.name, val)}
+                />
+              ))
+            ) : !command.requiresCode && !command.requiresTest ? (
+              <p className="text-surface-400 text-sm">No additional options for this command.</p>
+            ) : null}
+
+            {/* Advanced Options (Global) - Collapsible */}
+            <div className="border-t border-surface-700/30 pt-3 mt-2">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="w-full flex items-center justify-between text-left group"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-surface-400 uppercase tracking-wider">
+                    Advanced Options
+                  </span>
+                  {hasCustomGlobalOptions && (
+                    <span className="w-2 h-2 rounded-full bg-accent-500 animate-pulse" title="Custom settings applied" />
+                  )}
+                </div>
+                <svg
+                  className={`w-4 h-4 text-surface-400 transition-transform duration-200 ${showAdvanced ? 'rotate-180' : ''}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {showAdvanced && (
+                <div className="mt-3 space-y-3 animate-slide-down">
+                  {/* Model Settings Group */}
+                  <div className="space-y-3 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
+                    <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Model Settings</div>
+                    {GLOBAL_OPTIONS.filter(opt => ['strength', 'temperature', 'time'].includes(opt.name)).map(opt => (
+                      <OptionInput
+                        key={opt.name}
+                        option={opt}
+                        value={optionValues[`_global_${opt.name}`]}
+                        onChange={(val) => handleValueChange(`_global_${opt.name}`, val)}
+                        compact
+                      />
+                    ))}
+                  </div>
+
+                  {/* Execution Options Group */}
+                  <div className="space-y-1 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
+                    <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-2">Execution Options</div>
+                    {GLOBAL_OPTIONS.filter(opt => ['verbose', 'quiet', 'force', 'review-examples'].includes(opt.name)).map(opt => (
+                      <OptionInput
+                        key={opt.name}
+                        option={opt}
+                        value={optionValues[`_global_${opt.name}`]}
+                        onChange={(val) => handleValueChange(`_global_${opt.name}`, val)}
+                        compact
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="px-4 sm:px-6 py-4 border-t border-surface-700/50 flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium bg-surface-700/50 text-surface-300 hover:bg-surface-600 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25 transition-all flex items-center justify-center gap-2"
+            >
+              <span>{command.icon}</span>
+              <span>Run {command.shortDescription}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+interface PromptSpaceProps {
+  prompt: PromptInfo;
+  onBack: () => void;
+  onRunCommand: (command: CommandType, options?: Record<string, any>) => void;
+  isExecuting: boolean;
+  executionStatus?: 'idle' | 'running' | 'success' | 'failed';
+  lastCommand?: string | null;
+  onCancelCommand?: () => void;
+}
+
+const PromptSpace: React.FC<PromptSpaceProps> = ({
+  prompt,
+  onBack,
+  onRunCommand,
+  isExecuting,
+  executionStatus = 'idle',
+  lastCommand = null,
+  onCancelCommand,
+}) => {
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const originalContentRef = useRef<string>('');
+  const editedContentRef = useRef<string>('');  // Track user's edited content
+  const editableCompartment = useRef(new Compartment());
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [content, setContent] = useState<string | null>(null);
+  const [hasChanges, setHasChanges] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [modalCommand, setModalCommand] = useState<CommandConfig | null>(null);
+
+  // Token metrics and view mode state
+  const [viewMode, setViewMode] = useState<'raw' | 'processed'>('raw');
+  const [analysisResult, setAnalysisResult] = useState<PromptAnalyzeResponse | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+
+  // Include token analysis state
+  const [includeAnalysis, setIncludeAnalysis] = useState<{
+    visible: boolean;
+    loading: boolean;
+    tagInfo: IncludeTagInfo | null;
+    metrics: TokenMetrics | null;
+    error: string | null;
+  }>({ visible: false, loading: false, tagInfo: null, metrics: null, error: null });
+
+  // Track content for preview (updated when toggling preview on)
+  const [previewContent, setPreviewContent] = useState<string>('');
+
+  // Update preview content when toggling preview on or when view mode changes
+  useEffect(() => {
+    if (showPreview) {
+      // Get latest content from editor if available
+      let contentToRender: string;
+      if (viewMode === 'processed' && analysisResult?.processed_content) {
+        contentToRender = analysisResult.processed_content;
+      } else if (editorViewRef.current) {
+        contentToRender = editorViewRef.current.state.doc.toString();
+      } else {
+        contentToRender = editedContentRef.current || content || '';
+      }
+      setPreviewContent(contentToRender);
+    }
+  }, [showPreview, viewMode, analysisResult?.processed_content, content]);
+
+  // Memoized rendered markdown
+  const renderedMarkdown = useMemo(() => {
+    if (!previewContent) return '';
+    try {
+      const result = markedInstance.parse(previewContent);
+      // marked.parse can return string or Promise<string>, handle both
+      if (typeof result === 'string') {
+        return result;
+      }
+      return '';
+    } catch (e) {
+      console.error('Markdown rendering error:', e);
+      return '<p class="text-red-400">Error rendering markdown</p>';
+    }
+  }, [previewContent]);
+
+  // Load file content
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadContent = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const file = await api.getFileContent(prompt.prompt);
+        if (!cancelled) {
+          originalContentRef.current = file.content;
+          editedContentRef.current = file.content;  // Initialize edited content
+          setContent(file.content);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(e.message || 'Failed to load file');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadContent();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [prompt.prompt]);
+
+  // Initialize editor after content is loaded and container is rendered
+  // Re-initialize when switching back from preview mode
+  useEffect(() => {
+    // Don't initialize if in preview mode or no content
+    if (showPreview || content === null || !editorContainerRef.current) return;
+
+    // Clean up existing editor
+    if (editorViewRef.current) {
+      editorViewRef.current.destroy();
+      editorViewRef.current = null;
+    }
+
+    // Use edited content if available (preserves user changes when toggling preview)
+    const docContent = editedContentRef.current || content;
+
+    const state = EditorState.create({
+      doc: docContent,
+      extensions: [
+        lineNumbers(),
+        highlightActiveLine(),
+        history(),
+        keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap]),
+        markdown(),
+        oneDark,
+        // PDD directive autocomplete
+        ...pddAutocompleteExtension(),
+        // Editable compartment - starts as editable (raw mode)
+        editableCompartment.current.of(EditorView.editable.of(viewMode === 'raw')),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            const newContent = update.state.doc.toString();
+            // Only track edits when in raw mode (editable)
+            if (update.view.state.facet(EditorView.editable)) {
+              editedContentRef.current = newContent;
+            }
+            setHasChanges(newContent !== originalContentRef.current);
+          }
+        }),
+        EditorView.theme({
+          '&': {
+            height: '100%',
+            fontSize: '14px',
+            backgroundColor: 'rgb(17 24 39)',
+          },
+          '.cm-scroller': {
+            overflow: 'auto',
+            fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+          },
+          '.cm-gutters': {
+            backgroundColor: 'rgb(31 41 55)',
+            borderRight: '1px solid rgb(55 65 81)',
+          },
+          '.cm-activeLineGutter': {
+            backgroundColor: 'rgb(55 65 81)',
+          },
+          '.cm-activeLine': {
+            backgroundColor: 'rgba(55, 65, 81, 0.5)',
+          },
+        }),
+      ],
+    });
+
+    editorViewRef.current = new EditorView({
+      state,
+      parent: editorContainerRef.current,
+    });
+
+    // Cleanup on unmount or when dependencies change
+    return () => {
+      if (editorViewRef.current) {
+        editorViewRef.current.destroy();
+        editorViewRef.current = null;
+      }
+    };
+  }, [content, showPreview, viewMode]);
+
+  // Analyze prompt for metrics (debounced) - uses current editor content
+  useEffect(() => {
+    if (content === null) return;
+
+    const analyzePrompt = async () => {
+      setIsAnalyzing(true);
+      try {
+        // Get current content from editor or ref
+        const currentContent = editorViewRef.current
+          ? editorViewRef.current.state.doc.toString()
+          : editedContentRef.current || content;
+
+        const result = await api.analyzePrompt({
+          path: prompt.prompt,
+          model: 'claude-sonnet-4-20250514',
+          preprocess: true,
+          content: currentContent,  // Send current content instead of reading from file
+        });
+        setAnalysisResult(result);
+      } catch (e: any) {
+        console.error('Failed to analyze prompt:', e);
+        // Don't show error to user, just log it - metrics are optional
+      } finally {
+        setIsAnalyzing(false);
+      }
+    };
+
+    // Debounce by 500ms
+    const timeoutId = setTimeout(analyzePrompt, 500);
+    return () => clearTimeout(timeoutId);
+  }, [content, prompt.prompt, hasChanges]);  // Re-analyze when content changes (tracked by hasChanges)
+
+  // Keyboard shortcut for include analysis (Cmd+. / Ctrl+.)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check for Cmd+. (Mac) or Ctrl+. (Windows/Linux) - common for "quick actions"
+      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+        e.preventDefault();
+        analyzeIncludeAtCursor();
+      }
+      // Escape to close the popup
+      if (e.key === 'Escape' && includeAnalysis.visible) {
+        closeIncludeAnalysis();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [includeAnalysis.visible]);
+
+  // Handle view mode changes - update editor content and editability
+  const handleViewModeChange = (mode: 'raw' | 'processed') => {
+    // Before switching away from raw mode, save current editor content
+    if (viewMode === 'raw' && editorViewRef.current) {
+      editedContentRef.current = editorViewRef.current.state.doc.toString();
+    }
+
+    // Always update the view mode state (needed for preview mode too)
+    setViewMode(mode);
+
+    // If editor exists, update its content and editability
+    if (editorViewRef.current) {
+      // Update editor content based on mode
+      let displayContent: string;
+      const isEditable = mode === 'raw';
+
+      if (mode === 'processed' && analysisResult?.processed_content) {
+        displayContent = analysisResult.processed_content;
+      } else {
+        // Use edited content when switching back to raw mode
+        displayContent = editedContentRef.current || content || '';
+      }
+
+      const currentContent = editorViewRef.current.state.doc.toString();
+
+      // Build transaction effects
+      const effects: any[] = [
+        // Toggle editability
+        editableCompartment.current.reconfigure(EditorView.editable.of(isEditable)),
+      ];
+
+      // Update content if different
+      if (currentContent !== displayContent) {
+        editorViewRef.current.dispatch({
+          changes: {
+            from: 0,
+            to: currentContent.length,
+            insert: displayContent,
+          },
+          effects,
+        });
+      } else {
+        // Just update editability
+        editorViewRef.current.dispatch({ effects });
+      }
+    }
+  };
+
+  const handleSave = async () => {
+    if (!editorViewRef.current) return;
+
+    setSaving(true);
+    setSaveSuccess(false);
+    setError(null);
+
+    try {
+      const newContent = editorViewRef.current.state.doc.toString();
+      await api.writeFile(prompt.prompt, newContent);
+      originalContentRef.current = newContent;
+      editedContentRef.current = newContent;  // Sync edited content after save
+      setHasChanges(false);
+      setSaveSuccess(true);
+
+      setTimeout(() => setSaveSuccess(false), 2000);
+    } catch (e: any) {
+      setError(e.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleBack = () => {
+    if (hasChanges && !window.confirm('Discard unsaved changes?')) return;
+    onBack();
+  };
+
+  // Analyze include tag at cursor (triggered by Cmd+. or button click)
+  const analyzeIncludeAtCursor = async () => {
+    if (!editorViewRef.current) return;
+
+    const state = editorViewRef.current.state;
+    const tagInfo = findIncludeAtCursor(state);
+
+    if (!tagInfo) {
+      // No include tag at cursor - show brief message
+      setIncludeAnalysis({
+        visible: true,
+        loading: false,
+        tagInfo: null,
+        metrics: null,
+        error: 'Place cursor inside an <include>, <shell>, or <web> tag to analyze',
+      });
+      setTimeout(() => setIncludeAnalysis(prev => ({ ...prev, visible: false })), 3000);
+      return;
+    }
+
+    // Start loading
+    setIncludeAnalysis({
+      visible: true,
+      loading: true,
+      tagInfo,
+      metrics: null,
+      error: null,
+    });
+
+    try {
+      // For include-many, analyze the first file (could be extended to show all)
+      let pathToAnalyze = tagInfo.path;
+      if (tagInfo.tagType === 'include-many') {
+        const paths = parseIncludeManyPaths(tagInfo.path);
+        if (paths.length > 0) {
+          pathToAnalyze = paths[0];
+        }
+      }
+
+      const metrics = await api.analyzeFile(pathToAnalyze);
+      setIncludeAnalysis({
+        visible: true,
+        loading: false,
+        tagInfo,
+        metrics,
+        error: null,
+      });
+    } catch (e: any) {
+      setIncludeAnalysis({
+        visible: true,
+        loading: false,
+        tagInfo,
+        metrics: null,
+        error: e.message || 'Failed to analyze file',
+      });
+    }
+  };
+
+  // Close include analysis popup
+  const closeIncludeAnalysis = () => {
+    setIncludeAnalysis(prev => ({ ...prev, visible: false }));
+  };
+
+  const handleCommandClick = (command: CommandType) => {
+    const config = COMMANDS[command];
+    // Show modal for commands with options OR that require file inputs
+    if ((config.options && config.options.length > 0) || config.requiresCode || config.requiresTest) {
+      setModalCommand(config);
+    } else {
+      onRunCommand(command);
+    }
+  };
+
+  const handleRunWithOptions = (options: Record<string, any>) => {
+    if (modalCommand) {
+      onRunCommand(modalCommand.name, options);
+      setModalCommand(null);
+    }
+  };
+
+  // Check if command has missing required files (for visual indication only)
+  const getMissingFiles = (cmd: CommandConfig): string[] => {
+    const missing: string[] = [];
+    if (cmd.requiresCode && !prompt.code) missing.push('code');
+    if (cmd.requiresTest && !prompt.test) missing.push('test');
+    return missing;
+  };
+
+  // Split commands into regular and advanced
+  const regularCommands = Object.values(COMMANDS).filter(cmd => cmd.requiresPrompt && !cmd.isAdvanced);
+  const advancedCommands = Object.values(COMMANDS).filter(cmd => cmd.isAdvanced);
+
+  // State for mobile sidebar toggle and advanced commands
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showAdvancedCommands, setShowAdvancedCommands] = useState(false);
+  const [guidanceSidebarOpen, setGuidanceSidebarOpen] = useState(false);
+
+  return (
+    <div className="h-screen flex flex-col bg-surface-950">
+      {/* Header - Modern responsive design */}
+      <header className="glass flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-surface-700/50 sticky top-0 z-30">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+          <button
+            onClick={handleBack}
+            className="flex items-center gap-1.5 sm:gap-2 text-surface-400 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-surface-700/50"
+          >
+            <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            <span className="hidden sm:inline text-sm">Back</span>
+          </button>
+          <div className="h-5 w-px bg-surface-700 hidden sm:block" />
+          <div className="flex items-center gap-2 min-w-0">
+            <h1 className="text-sm sm:text-lg font-semibold text-white truncate">{prompt.sync_basename}</h1>
+            {prompt.language && (
+              <span className="px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] sm:text-xs bg-accent-500/15 text-accent-300 border border-accent-500/30 font-medium flex-shrink-0">
+                {prompt.language}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Save status and actions */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Mobile sidebar toggle */}
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="lg:hidden flex items-center gap-1.5 px-2.5 py-1.5 text-surface-400 hover:text-white bg-surface-700/50 hover:bg-surface-600 rounded-lg transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+            </svg>
+          </button>
+
+          {hasChanges && (
+            <span className="text-yellow-400 text-xs sm:text-sm flex items-center gap-1.5 px-2 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20">
+              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-yellow-400 rounded-full animate-pulse"></span>
+              <span className="hidden xs:inline">Unsaved</span>
+            </span>
+          )}
+          {saveSuccess && (
+            <span className="text-green-400 text-xs sm:text-sm flex items-center gap-1.5 px-2 py-1 rounded-full bg-green-500/10 border border-green-500/20">
+              <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </span>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={!hasChanges || saving || viewMode === 'processed'}
+            className={`px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm rounded-lg flex items-center gap-1.5 sm:gap-2 transition-all duration-200 ${
+              hasChanges && !saving && viewMode === 'raw'
+                ? 'bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25'
+                : 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
+            }`}
+            title={viewMode === 'processed' ? 'Switch to Raw view to save changes' : undefined}
+          >
+            {saving ? (
+              <svg className="animate-spin h-3.5 w-3.5 sm:h-4 sm:w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+            )}
+            <span className="hidden xs:inline">{saving ? 'Saving...' : 'Save'}</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Execution status bar - responsive */}
+      {executionStatus !== 'idle' && (
+        <div className={`
+          px-3 sm:px-4 py-2 text-center text-xs sm:text-sm font-medium border-b animate-slide-down
+          ${executionStatus === 'running' ? 'bg-accent-500/10 text-accent-300 border-accent-500/20' : ''}
+          ${executionStatus === 'success' ? 'bg-green-500/10 text-green-300 border-green-500/20' : ''}
+          ${executionStatus === 'failed' ? 'bg-red-500/10 text-red-300 border-red-500/20' : ''}
+        `}>
+          {executionStatus === 'running' && (
+            <span className="flex items-center justify-center gap-2 flex-wrap">
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <code className="bg-surface-800/80 px-2 py-0.5 rounded text-xs font-mono max-w-[150px] sm:max-w-none truncate">{lastCommand}</code>
+              {onCancelCommand && (
+                <button
+                  onClick={onCancelCommand}
+                  className="ml-2 px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 rounded-lg text-xs font-medium transition-colors"
+                >
+                  Stop
+                </button>
+              )}
+            </span>
+          )}
+          {executionStatus === 'success' && <span className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            Done
+          </span>}
+          {executionStatus === 'failed' && <span className="flex items-center justify-center gap-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            Failed
+          </span>}
+        </div>
+      )}
+
+      {/* Main content */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Mobile sidebar overlay */}
+        {sidebarOpen && (
+          <div className="lg:hidden fixed inset-0 bg-black/50 z-40 animate-fade-in" onClick={() => setSidebarOpen(false)} />
+        )}
+
+        {/* Sidebar with commands - responsive slide-out on mobile */}
+        <aside className={`
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          fixed lg:relative z-50 lg:z-auto
+          w-56 sm:w-52 lg:w-48 h-full
+          glass lg:bg-surface-800/30 border-r border-surface-700/50
+          flex flex-col transition-transform duration-300 ease-out
+        `}>
+          {/* Mobile close button */}
+          <div className="lg:hidden flex items-center justify-between p-3 border-b border-surface-700/50">
+            <span className="text-sm font-semibold text-white">Menu</span>
+            <button onClick={() => setSidebarOpen(false)} className="p-1.5 text-surface-400 hover:text-white rounded-lg hover:bg-surface-700/50">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="p-3 border-b border-surface-700/50 hidden lg:block">
+            <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">Commands</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {/* Regular Commands */}
+            <div className="p-2 space-y-1">
+              {regularCommands.map(cmd => {
+                const missingFiles = getMissingFiles(cmd);
+                const hasMissingFiles = missingFiles.length > 0;
+                return (
+                  <button
+                    key={cmd.name}
+                    onClick={() => { if (!isExecuting) { handleCommandClick(cmd.name); setSidebarOpen(false); } }}
+                    disabled={isExecuting}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left transition-all duration-200 ${
+                      isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-surface-300 hover:bg-surface-700/50 hover:text-white'
+                    }`}
+                    title={hasMissingFiles ? `${cmd.description} (${missingFiles.join(', ')} file${missingFiles.length > 1 ? 's' : ''} not auto-detected)` : cmd.description}
+                  >
+                    <span className="text-base">{cmd.icon}</span>
+                    <span className="flex-1">{cmd.shortDescription}</span>
+                    {hasMissingFiles && (
+                      <span className="w-5 h-5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs flex items-center justify-center">!</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Advanced Operations - Collapsible */}
+            {advancedCommands.length > 0 && (
+              <div className="border-t border-surface-700/30">
+                <button
+                  onClick={() => setShowAdvancedCommands(!showAdvancedCommands)}
+                  className="w-full p-3 flex items-center justify-between text-left hover:bg-surface-700/30 transition-colors"
+                >
+                  <span className="text-xs font-semibold text-surface-400 uppercase tracking-wider">
+                    Advanced Operations
+                  </span>
+                  <svg
+                    className={`w-4 h-4 text-surface-400 transition-transform duration-200 ${showAdvancedCommands ? 'rotate-180' : ''}`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {showAdvancedCommands && (
+                  <div className="p-2 pt-0 space-y-1">
+                    {advancedCommands.map(cmd => {
+                      const missingFiles = getMissingFiles(cmd);
+                      const hasMissingFiles = missingFiles.length > 0;
+                      return (
+                        <button
+                          key={cmd.name}
+                          onClick={() => { if (!isExecuting) { handleCommandClick(cmd.name); setSidebarOpen(false); } }}
+                          disabled={isExecuting}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-all duration-200 ${
+                            isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-surface-300 hover:bg-surface-700/50 hover:text-white'
+                          }`}
+                          title={cmd.description}
+                        >
+                          <span className="text-surface-500 text-xs">{cmd.icon}</span>
+                          <span className="flex-1 text-xs">{cmd.shortDescription}</span>
+                          {hasMissingFiles && (
+                            <span className="w-4 h-4 rounded-full bg-yellow-500/20 text-yellow-400 text-[10px] flex items-center justify-center">!</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* File info */}
+          <div className="p-3 border-t border-surface-700/50 space-y-2">
+            <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">Files</h3>
+            <div className="space-y-1.5 text-xs">
+              <FileLink label="Prompt" path={prompt.prompt} exists={true} />
+              <FileLink label="Code" path={prompt.code} exists={!!prompt.code} />
+              <FileLink label="Test" path={prompt.test} exists={!!prompt.test} />
+              <FileLink label="Example" path={prompt.example} exists={!!prompt.example} />
+            </div>
+          </div>
+        </aside>
+
+        {/* Editor area */}
+        <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+          {loading ? (
+            <div className="flex-1 flex flex-col items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-accent-500/20 flex items-center justify-center mb-4">
+                <svg className="animate-spin h-5 w-5 text-accent-400" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              </div>
+              <div className="text-surface-400 text-sm">Loading prompt...</div>
+            </div>
+          ) : error && content === null ? (
+            <div className="flex-1 flex flex-col items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center mb-4">
+                <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div className="text-red-400 mb-2">{error}</div>
+              <button onClick={() => window.location.reload()} className="px-4 py-2 bg-surface-700/50 hover:bg-surface-600 rounded-xl text-sm text-white transition-colors border border-surface-600">Retry</button>
+            </div>
+          ) : (
+            <>
+              {/* Metrics bar with view toggle */}
+              <PromptMetricsBar
+                rawMetrics={analysisResult?.raw_metrics || null}
+                processedMetrics={analysisResult?.processed_metrics || null}
+                viewMode={viewMode}
+                onViewModeChange={handleViewModeChange}
+                isLoading={isAnalyzing}
+                preprocessingError={analysisResult?.preprocessing_error}
+              />
+
+              {/* Editor path bar - responsive */}
+              <div className="px-3 sm:px-4 py-2 bg-surface-800/30 border-b border-surface-700/50 text-xs sm:text-sm text-surface-400 font-mono flex items-center gap-2 overflow-hidden">
+                <span className="truncate flex-1">{prompt.prompt}</span>
+                {viewMode === 'processed' && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-xs bg-yellow-500/15 text-yellow-300 border border-yellow-500/30 flex-shrink-0">Read Only</span>
+                )}
+                {/* Analyze Include button */}
+                <button
+                  onClick={analyzeIncludeAtCursor}
+                  disabled={showPreview}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
+                    showPreview
+                      ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                      : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+                  }`}
+                  title="Analyze include tag at cursor (Cmd+.)"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  <span className="hidden sm:inline">Tokens</span>
+                </button>
+                {/* Guide toggle button */}
+                <button
+                  onClick={() => setGuidanceSidebarOpen(!guidanceSidebarOpen)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
+                    guidanceSidebarOpen
+                      ? 'bg-accent-600 text-white'
+                      : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+                  }`}
+                  title={guidanceSidebarOpen ? 'Hide prompting guide' : 'Show prompting guide'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="hidden sm:inline">Guide</span>
+                </button>
+                {/* Preview toggle button */}
+                <button
+                  onClick={() => setShowPreview(!showPreview)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
+                    showPreview
+                      ? 'bg-accent-600 text-white'
+                      : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+                  }`}
+                  title={showPreview ? 'Show source code' : 'Show rendered preview'}
+                >
+                  {showPreview ? (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                      </svg>
+                      <span className="hidden sm:inline">Source</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                      <span className="hidden sm:inline">Preview</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Editor or Preview */}
+              {showPreview ? (
+                <div className="flex-1 overflow-auto bg-surface-900/50 p-4 sm:p-6 lg:p-8">
+                  <div
+                    className="markdown-body max-w-4xl mx-auto"
+                    dangerouslySetInnerHTML={{ __html: renderedMarkdown }}
+                  />
+                </div>
+              ) : (
+                <div ref={editorContainerRef} className="flex-1 overflow-hidden" />
+              )}
+
+              {/* Error bar */}
+              {error && (
+                <div className="px-3 sm:px-4 py-2 bg-red-500/10 border-t border-red-500/20 text-red-300 text-xs sm:text-sm">{error}</div>
+              )}
+            </>
+          )}
+        </main>
+
+        {/* Guidance Sidebar */}
+        <GuidanceSidebar
+          isOpen={guidanceSidebarOpen}
+          onClose={() => setGuidanceSidebarOpen(false)}
+        />
+      </div>
+
+      {/* Command Options Modal */}
+      {modalCommand && (
+        <CommandOptionsModal
+          command={modalCommand}
+          prompt={prompt}
+          onRun={handleRunWithOptions}
+          onCancel={() => setModalCommand(null)}
+        />
+      )}
+
+      {/* Include Analysis Popup */}
+      {includeAnalysis.visible && (
+        <div className="fixed bottom-4 right-4 z-50 animate-slide-up">
+          <div className="bg-surface-800 border border-surface-600 rounded-xl shadow-2xl p-4 w-80">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                <svg className="w-4 h-4 text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                Include Analysis
+              </h4>
+              <button
+                onClick={closeIncludeAnalysis}
+                className="p-1 rounded hover:bg-surface-700 text-surface-400 hover:text-white transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {includeAnalysis.loading ? (
+              <div className="flex items-center justify-center py-4">
+                <svg className="animate-spin h-5 w-5 text-accent-400" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span className="ml-2 text-sm text-surface-400">Analyzing...</span>
+              </div>
+            ) : includeAnalysis.error ? (
+              <div className="text-sm text-surface-400 bg-surface-900/50 rounded-lg p-3">
+                {includeAnalysis.error}
+              </div>
+            ) : includeAnalysis.metrics && includeAnalysis.tagInfo ? (
+              <div className="space-y-3">
+                <div className="bg-surface-900/50 rounded-lg p-3">
+                  <div className="text-xs text-surface-500 mb-1">File</div>
+                  <div className="text-sm text-white font-mono truncate">{includeAnalysis.tagInfo.path}</div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-surface-900/50 rounded-lg p-3">
+                    <div className="text-xs text-surface-500 mb-1">Tokens</div>
+                    <div className="text-lg font-semibold text-accent-400">
+                      {includeAnalysis.metrics.token_count.toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="bg-surface-900/50 rounded-lg p-3">
+                    <div className="text-xs text-surface-500 mb-1">Context Usage</div>
+                    <div className="text-lg font-semibold text-white">
+                      {includeAnalysis.metrics.context_usage_percent.toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+                {includeAnalysis.metrics.cost_estimate && (
+                  <div className="bg-surface-900/50 rounded-lg p-3">
+                    <div className="text-xs text-surface-500 mb-1">Estimated Cost</div>
+                    <div className="text-sm text-green-400">
+                      ${includeAnalysis.metrics.cost_estimate.input_cost.toFixed(4)} USD
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            <div className="mt-3 pt-3 border-t border-surface-700">
+              <p className="text-[10px] text-surface-500">
+                Press <kbd className="px-1 py-0.5 bg-surface-700 rounded text-surface-400">Cmd+.</kbd> to analyze include at cursor
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Small component for file links in sidebar - modernized
+const FileLink: React.FC<{ label: string; path?: string; exists: boolean }> = ({ label, path, exists }) => (
+  <div className={`flex items-center gap-2 ${exists ? 'text-surface-300' : 'text-surface-500'}`}>
+    <span className={`w-4 h-4 rounded flex items-center justify-center text-[10px] ${exists ? 'bg-green-500/20 text-green-400' : 'bg-surface-700/50 text-surface-500'}`}>
+      {exists ? '✓' : '✗'}
+    </span>
+    <span>{label}</span>
+  </div>
+);
+
+export default PromptSpace;

@@ -1,0 +1,5 @@
+{
+  "name": "Prompt Driven Development IDE",
+  "description": "A user-friendly interface to build and copy PDD (Prompt-Driven Development) CLI commands for scaffolding projects, generating code, creating tests, and more.",
+  "requestFramePermissions": []
+}

@@ -18,6 +18,7 @@
     - `install_completion_cmd` (as name="install_completion", from `.utility`)
     - `verify` (from `.utility`)
     - `templates_group` (from `.templates`)
+    - `connect` (from `.connect`) - Web frontend server command
 
 % Instructions
   - Ensure clean imports.

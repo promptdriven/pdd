@@ -58,7 +58,12 @@ dependencies = [
     "python-dotenv==1.1.0",
     "PyYAML==6.0.1",
     "jsonschema==4.23.0",
-    "z3-solver"]
+    "z3-solver",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "websockets>=13.0",
+    "watchdog>=4.0.0",
+    "tiktoken>=0.7.0"]
 requires-python = ">=3.12"
 
 [project.urls]
@@ -81,7 +86,9 @@ include = ["pdd*"]
     "mcp_config.json",
     "*.zsh",
     "*.fish",
-    "*.sh"
+    "*.sh",
+    "frontend/dist/**",
+    "frontend/dist/*"
 ]
 
 [project.optional-dependencies]
