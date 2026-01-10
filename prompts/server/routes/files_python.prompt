@@ -1,0 +1,102 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/files.py`.
+
+% Role & Scope
+  This module provides REST API endpoints for file operations.
+  It enables the web frontend to browse, read, and write files
+  in the project directory with proper security validation.
+
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+
+% Documentation References
+  - FastAPI Routers:
+    <web>https://fastapi.tiangolo.com/tutorial/bigger-applications/</web>
+  - FastAPI Query Parameters:
+    <web>https://fastapi.tiangolo.com/tutorial/query-params/</web>
+  - Python pathlib: https://docs.python.org/3/library/pathlib.html
+
+% Requirements
+  1. **GET /files/tree**:
+     - Query param: path (optional, defaults to project root)
+     - Query param: depth (optional, max recursion depth, default 3)
+     - Returns: FileTreeNode with directory structure
+     - Does NOT include file contents (metadata only)
+     - Respects path validation (no traversal outside project)
+
+  2. **GET /files/content**:
+     - Query param: path (required)
+     - Query param: encoding (optional, default "utf-8")
+     - Query param: chunk (optional, for large file chunking)
+     - Query param: chunk_size (optional, default 100000 bytes)
+     - Returns: FileContent with actual file content
+     - Binary files returned as base64
+     - Large files (>100KB) support chunked responses
+     - Include checksum (SHA-256) for chunked transfers
+
+  3. **POST /files/write**:
+     - Body: WriteFileRequest (path, content, encoding)
+     - Creates parent directories if needed
+     - Returns: WriteResult with success status and mtime
+     - Validates path before writing
+
+  4. **GET /files/metadata**:
+     - Query param: paths (list of paths)
+     - Returns: List of FileMetadata
+     - Batch endpoint for checking multiple files
+
+  5. **GET /files/prompts**:
+     - List all .prompt files in the project
+     - Returns list of dev-unit objects with:
+       - prompt: path to .prompt file
+       - sync_basename: basename for sync command (without language suffix)
+       - language: detected language (python, typescript, etc.)
+       - code, test, example: paths to related files if they exist
+     - Uses .pddrc configuration for context-specific paths
+     - Supports helper functions:
+       - `load_pddrc(project_root)`: Load .pddrc YAML config
+       - `match_context(prompt_path, pddrc)`: Get context defaults for path
+       - `parse_prompt_stem(stem)`: Extract sync_basename and language
+
+  6. **Language detection**:
+     - KNOWN_LANGUAGES: python, typescript, javascript, java, go, rust, cpp, c, csharp, ruby, swift, kotlin
+     - LANGUAGE_EXTENSIONS: map language to file extensions
+     - Parse prompt stem: "calculator_python" -> ("calculator", "python")
+
+  7. **Dev-unit file discovery**:
+     - Code files: check generate_output_path from .pddrc, then src/, then root
+     - Test files: check test_output_path, then tests/, test/, root with test_ prefix or _test suffix
+     - Example files: check example_output_path, then examples/, root with _example suffix
+
+  8. **Error handling**:
+     - 403 for path traversal attempts
+     - 404 for non-existent files
+     - 400 for directories when file expected
+
+  9. **Security**:
+     - All paths validated through PathValidator dependency
+     - No access outside project root
+     - Blacklisted files return 403
+
+% Dependencies
+  <fastapi_example>
+  <server.main><include>context/fastapi_example.py</include></server.main>
+  </fastapi_example>
+   Use models from pdd/server/models.py: FileMetadata, FileTreeNode, FileContent, WriteFileRequest, WriteResult
+  <models_note>
+  <server.models><include>context/server/models_example.py</include></server.models>
+  </models_note>
+  <security_note>
+  Use PathValidator from pdd/server/security.py via dependency injection
+   <server.security><include>context/server/security_example.py</include></server.security>
+  </security_note>
+
+% Instructions
+  - Create router with prefix="/api/v1/files", tags=["files"]
+  - Use Depends() for PathValidator injection
+  - Detect binary files by extension and content inspection
+  - Use hashlib for SHA-256 checksums
+  - Recursive directory traversal with depth limit
+  - Sort directory listings (directories first, then files)
+
+% Deliverables
+  - Code: `pdd/server/routes/files.py`
+  - Export: `files_router`

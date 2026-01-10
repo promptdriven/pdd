@@ -1,0 +1,78 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/connect.py`.
+
+% Role & Scope
+  This module provides the `pdd connect` CLI command.
+  It launches a local REST server that enables the web frontend
+  to interact with PDD commands through a browser interface.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - Click: https://click.palletsprojects.com/en/8.1.x/
+  - webbrowser module: https://docs.python.org/3/library/webbrowser.html
+  - Uvicorn: https://www.uvicorn.org/
+
+% Program Specification (from GitHub issue #155):
+  - User executes `pdd connect` in project directory
+  - CLI launches local REST server
+  - Browser window automatically opens (optional)
+  - Bidirectional connection between frontend and CLI
+  - Commands execute in terminal with visible output
+
+% Requirements
+  1. **Command definition**:
+     - Name: "connect"
+     - Options:
+       - --port (default 9876): Port to listen on
+       - --host (default "127.0.0.1"): Host to bind to
+       - --allow-remote (flag): Allow non-localhost connections
+       - --token (optional): Bearer token for authentication
+       - --no-browser (flag): Don't open browser automatically
+       - --frontend-url (optional): Custom frontend URL
+
+  2. **Security warnings**:
+     - If --allow-remote without --token: Warn and confirm
+     - Print security reminder about localhost-only default
+
+  3. **Server startup**:
+     - Create ServerConfig from options
+     - Call create_app(project_root, config)
+     - Print server URL and API docs URL
+     - Open browser if not --no-browser
+
+  4. **Browser opening**:
+     - Default: Open frontend at http://localhost:{port}
+     - If --frontend-url: Open that URL instead
+     - Use webbrowser.open()
+
+  5. **Output messages**:
+     - "Starting PDD server on http://{host}:{port}"
+     - "API Documentation: http://{host}:{port}/docs"
+     - "Frontend: http://{host}:{port}" (or custom URL)
+     - "Press Ctrl+C to stop the server"
+
+  6. **Graceful shutdown**:
+     - Handle KeyboardInterrupt
+     - Print shutdown message
+     - Clean up server resources
+
+% Dependencies
+  <server_app_example>
+  <include>context/server/app_example.py</include>
+  </server_app_example>
+
+<pdd.commands.misc><include>context/commands/misc_example.py</include></pdd.commands.misc>
+<pdd.commands><include>context/commands/__init___example.py</include></pdd.commands>
+
+% Instructions
+  - Use @click.command("connect")
+  - NO @track_cost decorator (no LLM calls)
+  - Use click.echo() for output
+  - Use click.style() for colored output
+  - click.confirm() for security warning
+  - Determine project_root from current working directory
+  - Pass click context for potential future use
+
+% Deliverables
+  - Code: `pdd/commands/connect.py`
+  - Export: `connect` command function

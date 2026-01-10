@@ -1,0 +1,83 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/websocket.py`.
+
+% Role & Scope
+  This module provides WebSocket endpoints for real-time streaming.
+  It enables the web frontend to receive live command output,
+  send interactive input, and watch for file changes.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - FastAPI WebSockets:
+    <web>https://fastapi.tiangolo.com/advanced/websockets/</web>
+  - Starlette WebSockets:
+    <web>https://www.starlette.io/websockets/</web>
+  - WebSocket Protocol: https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API
+  - watchdog:
+    <web>https://python-watchdog.readthedocs.io/en/stable/</web>
+
+% Requirements
+  1. **WS /ws/jobs/{job_id}/stream**:
+     - Streams job output in real-time
+     - Server sends: stdout, stderr, progress, complete, error, input_request
+     - Client sends: cancel, input
+     - Auto-disconnect when job completes
+     - Handle client disconnect gracefully
+
+  2. **WS /ws/watch**:
+     - Watches for file changes in project
+     - Client sends subscription: {"paths": ["path1", "path2"]}
+     - Server sends: file_change events (created, modified, deleted)
+     - Use watchdog for file system monitoring
+     - Debounce rapid changes (100ms)
+
+  3. **Message Protocol** (JSON):
+     Server -> Client:
+     - {"type": "stdout", "data": "...", "timestamp": "ISO8601"}
+     - {"type": "stderr", "data": "...", "timestamp": "ISO8601"}
+     - {"type": "progress", "current": N, "total": M, "message": "..."}
+     - {"type": "input_request", "prompt": "...", "password": false}
+     - {"type": "complete", "success": true, "result": {...}, "cost": 0.05}
+     - {"type": "error", "message": "...", "traceback": "..."}
+     - {"type": "file_change", "path": "...", "event": "modified"}
+
+     Client -> Server:
+     - {"type": "cancel"}
+     - {"type": "input", "data": "user input"}
+
+  4. **ConnectionManager**:
+     - Track active WebSocket connections
+     - Map connections to job IDs
+     - Broadcast to all connections watching a job
+     - Clean up on disconnect
+
+  5. **Error handling**:
+     - WebSocketDisconnect handling
+     - Invalid message format -> send error message
+     - Job not found -> close with error code
+
+% Dependencies
+   Use models from pdd/server/models.py: WSMessage, StdoutMessage, ProgressMessage, etc.
+  <pdd.server.models>
+  <include>context/server/models_example.py</include>
+  </pdd.server.models>
+
+  Use job manager for job status and control:
+  <pdd.server.jobs><include>context/job_manager_example.py</include></pdd.server.jobs>
+
+  WebSocket routes patterns and ConnectionManager usage:
+  <pdd.server.routes.websocket>
+  <include>context/server/routes/websocket_example.py</include>
+  </pdd.server.routes.websocket>
+
+% Instructions
+  - Create router with tags=["websocket"]
+  - Use ConnectionManager for connection tracking
+  - File watching with watchdog Observer
+  - Debounce file changes to avoid flooding
+  - Clean ANSI codes from output for web display (keep raw in separate field)
+  - Graceful shutdown of watchers on disconnect
+
+% Deliverables
+  - Code: `pdd/server/routes/websocket.py`
+  - Export: `websocket_router`, `ConnectionManager`

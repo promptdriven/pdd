@@ -1,0 +1,41 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/jobs.py`.
+
+% Role & Scope
+  Job queue manager for async command execution with job submission, tracking,
+  execution control (via semaphore), and cancellation support.
+
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+
+% Requirements
+  1. **Job dataclass**: id (UUID), command, args, options, status (JobStatus enum),
+     result, error, cost, created_at/started_at/completed_at (UTC-aware datetimes),
+     to_dict() for JSON serialization
+
+  2. **JobCallbacks class**: Event-based async callbacks (on_start, on_output,
+     on_progress, on_complete) with emit_* methods for WebSocket streaming integration
+
+  3. **JobManager class**:
+     - __init__(max_concurrent=1, executor=None): Semaphore-based concurrency
+     - submit(command, args, options) -> Job: Background task execution
+     - get_job(job_id), get_all_jobs(), get_active_jobs(): Query methods
+     - cancel(job_id) -> bool: Cooperative cancellation via Event + Task.cancel()
+     - cleanup_old_jobs(max_age_seconds) -> int: Remove completed jobs by age
+     - shutdown(): Cancel active jobs and cleanup ThreadPoolExecutor
+
+  4. **Default executor**: Execute Click commands via ClickCommandExecutor in thread pool
+
+  5. **Error handling**: Catch exceptions, set job.error/status=FAILED, ensure completed_at set
+
+% Dependencies
+  <server.jobs><include>context/server/jobs_example.py</include></server.jobs>
+  <server.click_executor><include>context/click_executor_example.py</include></server.click_executor>
+  <server.models><include>context/server/models_example.py</include></server.models>
+
+% Instructions
+  - Import JobStatus from .models (not defined locally)
+  - Use robust fallback imports for rich.console and click_executor
+  - Store jobs in Dict[str, Job], track tasks in Dict[str, asyncio.Task]
+
+% Deliverables
+  - Code: `pdd/server/jobs.py`
+  - Export: Job, JobManager, JobCallbacks

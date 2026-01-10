@@ -1,0 +1,64 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/models.py`.
+
+% Role & Scope
+  This module defines Pydantic v2 models for the PDD server REST API.
+  It provides request/response schemas for file operations, command execution,
+  job management, and WebSocket messages.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - Pydantic v2: https://docs.pydantic.dev/latest/
+  - Pydantic Settings: https://docs.pydantic.dev/latest/concepts/pydantic_settings/
+  - FastAPI Request/Response: https://fastapi.tiangolo.com/tutorial/response-model/
+
+% Requirements
+  1. **File Models**:
+     - `FileMetadata`: path, exists, size, mtime, is_directory
+     - `FileTreeNode`: name, path, type (file/directory), children (recursive), size, mtime
+     - `FileContent`: path, content, encoding (utf-8/base64), size, is_binary, chunk info
+     - `WriteFileRequest`: path, content, encoding, create_parents flag
+     - `WriteResult`: success, path, mtime, error
+
+  2. **Command Models**:
+     - `CommandRequest`: command name, args dict, options dict
+     - `JobHandle`: job_id, status, created_at
+     - `JobStatus`: status enum (queued/running/completed/failed/cancelled)
+     - `JobResult`: job_id, status, result, error, cost, duration_seconds, completed_at
+
+  3. **WebSocket Message Models**:
+     - `WSMessage`: base with type, timestamp, data
+     - `StdoutMessage`, `StderrMessage`: terminal output
+     - `ProgressMessage`: current, total, message
+     - `InputRequestMessage`: prompt, password flag
+     - `CompleteMessage`: success, result, cost
+     - `FileChangeMessage`: path, event type (created/modified/deleted)
+
+  4. **Server Models**:
+     - `ServerStatus`: version, project_root, uptime_seconds, active_jobs, connected_clients
+     - `ServerConfig`: host, port, token (optional), allow_remote flag
+
+  5. **Validation**:
+     - Path fields should validate against directory traversal (no "..")
+     - Use Field() for descriptions and constraints
+     - Use field_validator for custom validation
+
+  6. **Serialization**:
+     - datetime fields should serialize to ISO 8601 strings
+     - Enums should serialize to string values
+
+% Dependencies
+  <server.fastapi><include>context/fastapi_example.py</include></server.fastapi>
+  <server.job_manager><include>context/job_manager_example.py</include></server.job_manager>
+  <server.websocket><include>context/websocket_example.py</include></server.websocket>
+
+% Instructions
+  - Use Pydantic v2 syntax (model_dump, field_validator, etc.)
+  - All models should inherit from BaseModel
+  - Use Literal types for enum-like fields where appropriate
+  - Include docstrings for all models
+  - Use Optional[] for nullable fields with default None
+  - Export all models in __all__
+
+% Deliverables
+  - Code: `pdd/server/models.py`

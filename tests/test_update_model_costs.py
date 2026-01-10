@@ -69,12 +69,7 @@ from unittest.mock import patch, MagicMock, call, ANY, PropertyMock
 from pathlib import Path # Import Path
 from rich.table import Table # Import Table for mocking
 
-# Need to adjust import based on package structure
-# Assuming the code is in pdd/update_model_costs.py and tests are in tests/
-import sys
-# Add the parent directory of 'pdd' to sys.path
-# This is a common pattern in pytest for testing packages
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Package is installed in editable mode, direct imports work
 
 from pdd.update_model_costs import update_model_data, main, EXPECTED_COLUMNS
 
