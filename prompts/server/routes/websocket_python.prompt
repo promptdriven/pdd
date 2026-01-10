@@ -8,10 +8,13 @@
 <include>context/python_preamble.prompt</include>
 
 % Documentation References
-  - FastAPI WebSockets: https://fastapi.tiangolo.com/advanced/websockets/
-  - Starlette WebSockets: https://www.starlette.io/websockets/
+  - FastAPI WebSockets:
+    <web>https://fastapi.tiangolo.com/advanced/websockets/</web>
+  - Starlette WebSockets:
+    <web>https://www.starlette.io/websockets/</web>
   - WebSocket Protocol: https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API
-  - watchdog: https://python-watchdog.readthedocs.io/en/stable/
+  - watchdog:
+    <web>https://python-watchdog.readthedocs.io/en/stable/</web>
 
 % Requirements
   1. **WS /ws/jobs/{job_id}/stream**:
@@ -55,12 +58,17 @@
 
 % Dependencies
    Use models from pdd/server/models.py: WSMessage, StdoutMessage, ProgressMessage, etc.
-  <models_note>
-  <include>context/models_example.py</include>
-  </models_note>
+  <pdd.server.models>
+  <include>context/server/models_example.py</include>
+  </pdd.server.models>
 
   Use job manager for job status and control:
-  <server.jobs><include>context/job_manager_example.py</include></server.jobs>
+  <pdd.server.jobs><include>context/job_manager_example.py</include></pdd.server.jobs>
+
+  WebSocket routes patterns and ConnectionManager usage:
+  <pdd.server.routes.websocket>
+  <include>context/server/routes/websocket_example.py</include>
+  </pdd.server.routes.websocket>
 
 % Instructions
   - Create router with tags=["websocket"]

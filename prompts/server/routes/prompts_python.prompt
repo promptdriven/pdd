@@ -1,0 +1,62 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/prompts.py`.
+
+% Role & Scope
+  This module provides REST API endpoints for prompt analysis and preprocessing.
+  It enables preview and cost estimation before running expensive operations.
+
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+
+% Documentation References
+  - FastAPI Routers: https://fastapi.tiangolo.com/tutorial/bigger-applications/
+  - Pydantic Models: https://docs.pydantic.dev/latest/
+
+% Requirements
+  1. **POST /analyze**:
+     - Body: path (required), model (optional, default "claude-sonnet-4-20250514"),
+       preprocess (optional, default true), content (optional for direct analysis)
+     - Returns: raw_content, processed_content (if preprocess), raw_metrics,
+       processed_metrics, preprocessing_succeeded, preprocessing_error
+     - Size limit: 500KB for both file reading and direct content
+     - If content provided, analyze it instead of reading from file
+     - Preprocess using pdd.preprocess with recursive=True, double_curly_brackets=True
+
+  2. **Pydantic Models**:
+     - CostEstimateResponse: input_cost, model, tokens, cost_per_million, currency
+     - TokenMetricsResponse: token_count, context_limit, context_usage_percent, cost_estimate
+     - PromptAnalyzeRequest: path, model, preprocess, content
+     - PromptAnalyzeResponse: raw_content, processed_content, raw_metrics,
+       processed_metrics, preprocessing_succeeded, preprocessing_error
+
+  3. **Token metrics**:
+     - Use get_token_metrics from pdd.server.token_counter
+     - Pricing CSV at project_root/.pdd/llm_model.csv if exists
+     - Convert returned objects to response models
+
+  4. **Error handling**:
+     - 403 for path validation failures (SecurityError)
+     - 404 for non-existent files
+     - 400 for directories or files too large or non-text files
+     - Preprocessing errors captured in response, not thrown
+
+  5. **Security**:
+     - All paths validated through PathValidator dependency
+     - Change to project_root during preprocessing (for relative includes)
+
+% Dependencies
+  <fastapi_example>
+  <server.main><include>context/fastapi_example.py</include></server.main>
+  </fastapi_example>
+  <security_note>
+  Use PathValidator from pdd/server/security.py via dependency injection
+  <server.security><include>context/server/security_example.py</include></server.security>
+  </security_note>
+
+% Instructions
+  - Create router with prefix="/api/v1/prompts", tags=["prompts"]
+  - Use Depends() for PathValidator injection via get_path_validator()
+  - Provide set_path_validator() for configuration
+  - Use rich.console.Console for logging (with ImportError fallback)
+
+% Deliverables
+  - Code: `pdd/server/routes/prompts.py`
+  - Export: router
