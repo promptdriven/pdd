@@ -81,10 +81,16 @@ def _build_file_tree(
     project_root: Path,
     depth: int,
     current_depth: int = 0
-) -> FileTreeNode:
+) -> Optional[FileTreeNode]:
     """Recursively build a file tree structure."""
     relative_path = path.relative_to(project_root)
-    stat_info = path.stat()
+
+    # Handle broken symlinks - use lstat to not follow symlinks
+    try:
+        stat_info = path.stat()
+    except (FileNotFoundError, OSError):
+        # Broken symlink or inaccessible file - skip it
+        return None
 
     if path.is_dir():
         children = None
@@ -92,9 +98,12 @@ def _build_file_tree(
             try:
                 entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
                 children = [
-                    _build_file_tree(entry, project_root, depth, current_depth + 1)
-                    for entry in entries
-                    if not entry.name.startswith(".")  # Skip hidden files
+                    node for node in (
+                        _build_file_tree(entry, project_root, depth, current_depth + 1)
+                        for entry in entries
+                        if not entry.name.startswith(".")  # Skip hidden files
+                    )
+                    if node is not None  # Skip broken symlinks
                 ]
             except PermissionError:
                 children = []
