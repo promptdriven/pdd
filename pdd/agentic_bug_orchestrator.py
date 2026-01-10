@@ -266,7 +266,9 @@ def run_agentic_bug_orchestrator(
                     extracted_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
             
             changed_files = extracted_files
-            
+            # Pass explicit file list to Step 9 for precise git staging
+            context["files_to_stage"] = ", ".join(changed_files)
+
             if not changed_files:
                 msg = "Stopped at Step 7: No test file generated."
                 if not quiet: console.print(f"⏹️  {msg}")

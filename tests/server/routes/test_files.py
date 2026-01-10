@@ -15,14 +15,16 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 import z3
 
-# Import model classes from conftest (these are defined there, not mocked)
-from tests.server.routes.conftest import (
+# Import model classes directly from pdd.server modules
+from pdd.server.models import (
     FileTreeNode,
     FileContent,
     WriteFileRequest,
     WriteResult,
     FileMetadata,
     JobStatus,
+)
+from pdd.server.security import (
     SecurityError,
     PathValidator,
 )

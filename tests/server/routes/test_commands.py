@@ -19,8 +19,8 @@ try:
 except ImportError:
     HAS_Z3 = False
 
-# Import model classes from conftest (these are defined there, not mocked)
-from tests.server.routes.conftest import (
+# Import model classes directly from pdd.server.models
+from pdd.server.models import (
     CommandRequest,
     JobHandle,
     JobResult,

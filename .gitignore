@@ -11,6 +11,9 @@ __pycache__/
 pdd/litellm_cache.sqlite/cache.db
 litellm_cache.sqlite/
 
+# Auto-deps lock files (created by filelock for concurrent access prevention)
+*.csv.lock
+
 # Claude folder
 .claude/
 
@@ -206,5 +209,6 @@ yarn.lock
 !pdd/frontend/lib/
 !pdd/frontend/package-lock.json
 
-.pdd/core_dumps/*
+# PDD internal directory (backups, locks, meta, worktrees, etc.)
+.pdd/
 Makefile.test-staging

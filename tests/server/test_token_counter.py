@@ -1,15 +1,8 @@
-import sys
 import csv
 import pytest
 from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 from z3 import Solver, Int, Real, Implies, And, Or, unsat
-
-# Add the source directory to sys.path to allow importing the module
-# Assuming the test file is located at tests/server/test_token_counter.py
-# and the code is at pdd/server/token_counter.py
-ROOT_DIR = Path(__file__).resolve().parent.parent.parent
-sys.path.append(str(ROOT_DIR))
 
 from pdd.server import token_counter
 from pdd.server.token_counter import (

@@ -1,4 +1,3 @@
-import sys
 import os
 import asyncio
 import pytest
@@ -6,9 +5,6 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from pathlib import Path
 import click
 import ast
-
-# Adjust path to import the module under test
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pdd.context_generator_main import context_generator_main, _validate_and_fix_python_syntax
 
