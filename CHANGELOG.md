@@ -1,3 +1,17 @@
+## v0.0.108 (2026-01-09)
+
+### Feat
+
+- add prompt order selection modal for architecture generation
+- update prompt and add tests for cloud JSON fence stripping
+- add frontend web interface for pdd connect
+- add pdd connect command with FastAPI server backend
+
+### Fix
+
+- handle broken symlinks in file tree endpoint
+- resolve merge conflict with main and fix websocket prompt typo
+
 ## v0.0.107 (2026-01-08)
 
 ### Feat
