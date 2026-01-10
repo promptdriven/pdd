@@ -199,8 +199,12 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
 yarn.lock
+
+# Keep frontend build artifacts for pdd connect
+!pdd/frontend/dist/
+!pdd/frontend/lib/
+!pdd/frontend/package-lock.json
 
 .pdd/core_dumps/*
 Makefile.test-staging
