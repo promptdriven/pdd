@@ -8,6 +8,7 @@ interface PromptMetricsBarProps {
   onViewModeChange: (mode: 'raw' | 'processed') => void;
   isLoading: boolean;
   preprocessingError?: string | null;
+  timeValue?: number;  // Reasoning allocation (0-1), default 0.25
 }
 
 const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
@@ -17,6 +18,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
   onViewModeChange,
   isLoading,
   preprocessingError,
+  timeValue = 0.25,
 }) => {
   const currentMetrics = viewMode === 'processed' ? processedMetrics : rawMetrics;
 
@@ -141,6 +143,22 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
                 </span>
               </div>
             )}
+
+            {/* Thinking/Reasoning allocation */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] sm:text-xs text-surface-400 hidden sm:inline">Thinking:</span>
+              <div className="flex items-center gap-1">
+                <div className="w-12 sm:w-16 h-1.5 sm:h-2 bg-surface-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full transition-all bg-gradient-to-r from-purple-500 to-blue-500"
+                    style={{ width: `${Math.min(timeValue * 100, 100)}%` }}
+                  />
+                </div>
+                <span className="text-xs sm:text-sm font-mono text-purple-400">
+                  {Math.round(timeValue * 100)}%
+                </span>
+              </div>
+            </div>
           </>
         ) : (
           <span className="text-[10px] sm:text-xs text-surface-500">No metrics</span>
