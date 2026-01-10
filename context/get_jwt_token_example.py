@@ -52,6 +52,15 @@ async def main():
     """
     print("Starting authentication process...")
 
+    # Clear JWT cache for staging to ensure fresh token with correct audience
+    # The cache at ~/.pdd/jwt_cache is NOT environment-aware and returns cached
+    # tokens regardless of the firebase_api_key parameter
+    if pdd_env == "staging":
+        cache_file = Path.home() / ".pdd" / "jwt_cache"
+        if cache_file.exists():
+            cache_file.unlink()
+            print("Cleared JWT cache for staging authentication")
+
     if not FIREBASE_API_KEY:
         print("Error: NEXT_PUBLIC_FIREBASE_API_KEY is not set and could not be loaded for this environment.")
         print(f"Ensure the correct Firebase Web API key is available for PDD_ENV={pdd_env}.")
