@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+import webbrowser
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -466,7 +467,10 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
     # Display instructions to the user
     print(f"To authenticate, visit: {device_code_response['verification_uri']}")
     print(f"Enter code: {device_code_response['user_code']}")
+    sys.stdout.flush()  # Ensure visibility in piped contexts
+    webbrowser.open(device_code_response['verification_uri'])  # Auto-open browser
     print("Waiting for authentication...")
+    sys.stdout.flush()
 
     # Poll for GitHub token
     github_token = await device_flow.poll_for_token(
