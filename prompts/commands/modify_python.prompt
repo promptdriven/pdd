@@ -34,11 +34,12 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
 
 % Dependencies
 <module_dependencies>
-  <split_main_example><include>context/split_main_example.py</include></split_main_example>
-  <change_main_example><include>context/change_main_example.py</include></change_main_example>
-  <update_main_example><include>context/update_main_example.py</include></update_main_example>
-  <track_cost_example><include>context/track_cost_example.py</include></track_cost_example>
-  <agentic_change_example><include>context/agentic_change_example.py</include></agentic_change_example>
+  <pdd.split_main><include>context/split_main_example.py</include></pdd.split_main>
+  <pdd.change_main><include>context/change_main_example.py</include></pdd.change_main>
+  <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
+  <pdd.update_main><include>context/update_main_example.py</include></pdd.update_main>
+  <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
+  <pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
 </module_dependencies>
 
 % Deliverables
