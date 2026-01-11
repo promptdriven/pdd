@@ -1577,7 +1577,7 @@ pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --out
 
 ### 8. change
 
-Implement a change request from a GitHub issue using a 10-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), reviews architecture (asking for decisions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, and verifies the results.
+Implement a change request from a GitHub issue using a 12-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), reviews architecture (asking for decisions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, runs a review loop to identify and fix issues, and creates a PR.
 
 **Agentic Mode (default):**
 ```
@@ -1587,26 +1587,30 @@ pdd [GLOBAL OPTIONS] change GITHUB_ISSUE_URL
 Arguments:
 - `GITHUB_ISSUE_URL`: The URL of the GitHub issue describing the change request.
 
-The 10-step workflow:
+The 12-step workflow:
 1. **Duplicate Check**: Search for duplicate issues
 2. **Documentation Check**: Verify feature isn't already implemented
 3. **Research**: Web search to clarify specifications and find best practices
-4. **Clarification**: Ensure requirements are clear; ask questions if not (stops workflow until answered)
+4. **Clarification**: Ensure requirements are clear; ask questions with options if not (stops workflow until answered)
 5. **Documentation Changes**: Analyze what documentation updates are needed
 6. **Identify Dev Units**: Find affected prompts, code, examples, and tests
-7. **Architecture Review**: Identify architectural decisions; ask questions if needed (stops workflow until answered)
+7. **Architecture Review**: Identify architectural decisions; ask questions with options if needed (stops workflow until answered)
 8. **Analyze Changes**: Design prompt modifications
 9. **Implement Changes**: Modify prompts in an isolated git worktree
-10. **Verify**: Validate changes are syntactically correct
+10. **Identify Issues**: Review changes for problems (part of review loop)
+11. **Fix Issues**: Fix identified issues (part of review loop, max 5 iterations)
+12. **Create PR**: Create a pull request linking to the issue
 
 **Workflow Resumption**: Steps 4 and 7 may pause the workflow to ask clarifying or architectural questions. When this happens, answer the questions in the GitHub issue and run `pdd change` again. The workflow will resume from where it left off, skipping already-completed steps to save tokens.
+
+**Review Loop**: Steps 10-11 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
 Example (agentic mode):
 ```bash
 pdd change https://github.com/myorg/myrepo/issues/239
 ```
 
-After the workflow completes, review the changes in the worktree and run `pdd sync` to regenerate code.
+After the workflow completes, a PR is automatically created linking to the issue. Review the PR and run `pdd sync` on the modified prompts to regenerate code.
 
 **Manual Mode (legacy):**
 ```
