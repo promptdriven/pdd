@@ -304,6 +304,59 @@ export function useJobs(options: UseJobsOptions = {}) {
     });
   }, []);
 
+  /**
+   * Add a spawned terminal job to the dashboard.
+   * These jobs run in separate terminal windows, so we don't have WebSocket output.
+   * They're marked as "running" until manually dismissed.
+   */
+  const addSpawnedJob = useCallback((displayCommand: string, command: string): string => {
+    const jobId = `spawned-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    const jobInfo: JobInfo = {
+      id: jobId,
+      command,
+      displayCommand,
+      status: 'running',
+      progress: null,
+      output: ['Command running in separate terminal window...'],
+      cost: 0,
+      startedAt: new Date(),
+      completedAt: null,
+      error: null,
+    };
+
+    setJobs((prev) => {
+      const updated = new Map(prev);
+      updated.set(jobId, jobInfo);
+      return updated;
+    });
+
+    setSelectedJobId(jobId);
+    return jobId;
+  }, []);
+
+  /**
+   * Mark a spawned job as completed (user confirms it's done).
+   */
+  const markSpawnedJobDone = useCallback((jobId: string, success: boolean = true) => {
+    setJobs((prev) => {
+      const updated = new Map(prev);
+      const job = updated.get(jobId);
+      if (job) {
+        updated.set(jobId, {
+          ...job,
+          status: success ? 'completed' : 'failed',
+          completedAt: new Date(),
+          output: [...job.output, success ? 'Marked as completed by user.' : 'Marked as failed by user.'],
+        });
+        if (onJobComplete) {
+          onJobComplete({ ...job, status: success ? 'completed' : 'failed' }, success);
+        }
+      }
+      return updated;
+    });
+  }, [onJobComplete]);
+
   // Derived state
   const activeJobs = Array.from(jobs.values()).filter(
     (j) => j.status === 'queued' || j.status === 'running'
@@ -329,6 +382,8 @@ export function useJobs(options: UseJobsOptions = {}) {
     removeJob,
     clearCompletedJobs,
     setSelectedJobId,
+    addSpawnedJob,
+    markSpawnedJobDone,
   };
 }
 

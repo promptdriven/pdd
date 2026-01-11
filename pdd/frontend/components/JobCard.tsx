@@ -11,6 +11,7 @@ interface JobCardProps {
   onSelect: () => void;
   onCancel: () => void;
   onRemove?: () => void;
+  onMarkDone?: (success: boolean) => void;
 }
 
 /**
@@ -73,9 +74,11 @@ const JobCard: React.FC<JobCardProps> = ({
   onSelect,
   onCancel,
   onRemove,
+  onMarkDone,
 }) => {
   const statusStyle = getStatusStyle(job.status);
   const isActive = job.status === 'queued' || job.status === 'running';
+  const isSpawnedJob = job.id.startsWith('spawned-');
   const progressPercent = job.progress
     ? Math.round((job.progress.current / job.progress.total) * 100)
     : null;
@@ -186,7 +189,31 @@ const JobCard: React.FC<JobCardProps> = ({
 
       {/* Actions */}
       <div className="flex items-center gap-2">
-        {isActive && (
+        {/* Spawned jobs get Mark Done buttons instead of Cancel */}
+        {isActive && isSpawnedJob && onMarkDone && (
+          <>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMarkDone(true);
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 rounded-lg transition-colors"
+            >
+              Done
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMarkDone(false);
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg transition-colors"
+            >
+              Failed
+            </button>
+          </>
+        )}
+        {/* Regular jobs get Cancel button */}
+        {isActive && !isSpawnedJob && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -215,7 +242,7 @@ const JobCard: React.FC<JobCardProps> = ({
           }}
           className="px-3 py-1.5 text-xs font-medium text-accent-400 bg-accent-500/10 hover:bg-accent-500/20 border border-accent-500/20 rounded-lg transition-colors ml-auto"
         >
-          View Output
+          {isSpawnedJob ? 'Details' : 'View Output'}
         </button>
       </div>
     </div>
