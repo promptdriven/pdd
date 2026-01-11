@@ -49,6 +49,7 @@ shared:
 
   # Context examples
   - context/**/*_example.py
+  - context/cloud_function_call.py
 
   # Test prompts for regression (needed by both repos)
   - prompts/test_other_python.prompt
