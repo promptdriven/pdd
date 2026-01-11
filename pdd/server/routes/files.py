@@ -418,6 +418,23 @@ async def list_prompt_files(
         # Get context-specific paths from .pddrc
         context_defaults = match_context(relative_path, pddrc)
 
+        # Extract subdirectory structure from prompt path
+        # e.g., "prompts/server/click_executor_python.prompt" -> "server"
+        prompt_subdir = ""
+        prompts_base = context_defaults.get("prompts_dir", "prompts")
+        # Check if prompt is under the prompts base directory
+        if relative_path.startswith(prompts_base + "/"):
+            # Get path after prompts base, excluding the filename
+            after_base = relative_path[len(prompts_base) + 1:]
+            if "/" in after_base:
+                prompt_subdir = "/".join(after_base.split("/")[:-1])
+        elif "/" in relative_path:
+            # For prompts not in a prompts/ directory, check if there's a subdirectory
+            # e.g., "server/click_executor_python.prompt" -> "server"
+            parts = relative_path.split("/")
+            if len(parts) > 1:
+                prompt_subdir = "/".join(parts[:-1])
+
         # Get file extensions for this language
         extensions = LANGUAGE_EXTENSIONS.get(language, [".py", ".ts", ".js", ".java"]) if language else [".py", ".ts", ".tsx", ".js", ".jsx", ".java"]
 
@@ -444,12 +461,22 @@ async def list_prompt_files(
 
         for code_dir in code_dirs:
             for ext in extensions:
+                # Try with subdirectory first, then without
+                paths_to_try = []
                 if code_dir:
-                    code_path = project_root / code_dir / f"{sync_basename}{ext}"
+                    if prompt_subdir:
+                        paths_to_try.append(project_root / code_dir / prompt_subdir / f"{sync_basename}{ext}")
+                    paths_to_try.append(project_root / code_dir / f"{sync_basename}{ext}")
                 else:
-                    code_path = project_root / f"{sync_basename}{ext}"
-                if code_path.exists():
-                    related["code"] = str(code_path.relative_to(project_root))
+                    if prompt_subdir:
+                        paths_to_try.append(project_root / prompt_subdir / f"{sync_basename}{ext}")
+                    paths_to_try.append(project_root / f"{sync_basename}{ext}")
+
+                for code_path in paths_to_try:
+                    if code_path.exists():
+                        related["code"] = str(code_path.relative_to(project_root))
+                        break
+                if "code" in related:
                     break
             if "code" in related:
                 break
@@ -476,13 +503,23 @@ async def list_prompt_files(
                         continue
                     for ext in extensions:
                         test_name = f"{prefix}{sync_basename}{suffix}{ext}"
+                        # Try with subdirectory first, then without
+                        paths_to_try = []
                         if test_dir:
-                            test_path = project_root / test_dir / test_name
+                            if prompt_subdir:
+                                paths_to_try.append(project_root / test_dir / prompt_subdir / test_name)
+                            paths_to_try.append(project_root / test_dir / test_name)
                         else:
-                            test_path = project_root / test_name
-                        if test_path.exists():
-                            related["test"] = str(test_path.relative_to(project_root))
-                            found = True
+                            if prompt_subdir:
+                                paths_to_try.append(project_root / prompt_subdir / test_name)
+                            paths_to_try.append(project_root / test_name)
+
+                        for test_path in paths_to_try:
+                            if test_path.exists():
+                                related["test"] = str(test_path.relative_to(project_root))
+                                found = True
+                                break
+                        if found:
                             break
                     if found:
                         break
@@ -504,12 +541,23 @@ async def list_prompt_files(
 
         for example_dir in example_dirs:
             for ext in extensions:
+                example_name = f"{sync_basename}_example{ext}"
+                # Try with subdirectory first, then without
+                paths_to_try = []
                 if example_dir:
-                    example_path = project_root / example_dir / f"{sync_basename}_example{ext}"
+                    if prompt_subdir:
+                        paths_to_try.append(project_root / example_dir / prompt_subdir / example_name)
+                    paths_to_try.append(project_root / example_dir / example_name)
                 else:
-                    example_path = project_root / f"{sync_basename}_example{ext}"
-                if example_path.exists():
-                    related["example"] = str(example_path.relative_to(project_root))
+                    if prompt_subdir:
+                        paths_to_try.append(project_root / prompt_subdir / example_name)
+                    paths_to_try.append(project_root / example_name)
+
+                for example_path in paths_to_try:
+                    if example_path.exists():
+                        related["example"] = str(example_path.relative_to(project_root))
+                        break
+                if "example" in related:
                     break
             if "example" in related:
                 break

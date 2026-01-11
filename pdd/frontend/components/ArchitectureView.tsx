@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions } from '../api';
 import DependencyViewer from './DependencyViewer';
 import FileBrowser from './FileBrowser';
@@ -10,6 +10,10 @@ interface ArchitectureViewProps {
   serverConnected: boolean;
   isExecuting: boolean;
   onOpenPromptSpace: (prompt: PromptInfo) => void;
+  // Batch operation callbacks for job dashboard tracking
+  onBatchStart?: (name: string, total: number) => void;
+  onBatchProgress?: (current: number, total: number, currentItem: string) => void;
+  onBatchComplete?: (success: boolean) => void;
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
@@ -18,6 +22,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   serverConnected,
   isExecuting,
   onOpenPromptSpace,
+  onBatchStart,
+  onBatchProgress,
+  onBatchComplete,
 }) => {
   // Architecture state
   const [architecture, setArchitecture] = useState<ArchitectureModule[] | null>(null);
@@ -63,6 +70,26 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   // Sidebar collapsed state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // Existing prompts state - track which prompts already exist with their file info
+  const [existingPrompts, setExistingPrompts] = useState<Set<string>>(new Set());
+  const [promptsInfo, setPromptsInfo] = useState<PromptInfo[]>([]);
+
+  // Load existing prompts
+  const loadExistingPrompts = useCallback(async () => {
+    try {
+      const prompts = await api.listPrompts();
+      // Store full prompts info for file tracking
+      setPromptsInfo(prompts);
+      // Extract prompt filenames (e.g., "prompts/orders_Python.prompt" -> "orders_Python.prompt")
+      const promptFilenames = new Set(
+        prompts.map(p => p.prompt.split('/').pop() || '')
+      );
+      setExistingPrompts(promptFilenames);
+    } catch (e) {
+      console.error('Failed to load existing prompts:', e);
+    }
+  }, []);
+
   // Load architecture on mount
   useEffect(() => {
     const loadArchitecture = async () => {
@@ -77,6 +104,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           const modules = await api.getArchitecture();
           setArchitecture(modules);
           setMode('graph');
+          // Load existing prompts after architecture is loaded
+          await loadExistingPrompts();
         } else {
           setMode('empty');
         }
@@ -89,7 +118,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     };
 
     loadArchitecture();
-  }, [serverConnected]);
+  }, [serverConnected, loadExistingPrompts]);
 
   // Handle file selection from browser
   const handleFileSelect = useCallback(async (path: string) => {
@@ -98,6 +127,10 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       if (showFileBrowser === 'prd') {
         setPrdContent(content.content);
         setPrdPath(path);
+        // Transition to editor mode if we were in empty state
+        if (mode === 'empty') {
+          setMode('editor');
+        }
       } else if (showFileBrowser === 'techStack') {
         setTechStackContent(content.content);
         setTechStackPath(path);
@@ -106,7 +139,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     } catch (e: any) {
       console.error('Failed to load file:', e);
     }
-  }, [showFileBrowser]);
+  }, [showFileBrowser, mode]);
 
   // Generate architecture from PRD
   const handleGenerate = async () => {
@@ -207,6 +240,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       };
     });
 
+    // Notify parent that batch operation is starting (for job dashboard)
+    onBatchStart?.('Generating Prompts', moduleRequests.length);
+
     try {
       const results = await api.batchGeneratePrompts(
         {
@@ -218,10 +254,15 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         },
         (current, total, module) => {
           setPromptGenerationProgress({ current, total, currentModule: module });
+          // Also notify parent for job dashboard
+          onBatchProgress?.(current, total, module);
         },
         () => cancelRequestedRef.current
       );
       setPromptGenerationResults(results);
+      // Notify parent that batch completed successfully
+      const allSucceeded = results.every(r => r.success);
+      onBatchComplete?.(allSucceeded);
     } catch (e: any) {
       console.error('Failed to generate prompts:', e);
       setPromptGenerationResults([{
@@ -229,11 +270,13 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         success: false,
         error: e.message || 'Failed to generate prompts',
       }]);
+      // Notify parent that batch failed
+      onBatchComplete?.(false);
     } finally {
       setIsGeneratingPrompts(false);
       setPromptGenerationProgress(null);
     }
-  }, [prdPath, techStackPath, globalOptions]);
+  }, [prdPath, techStackPath, globalOptions, onBatchStart, onBatchProgress, onBatchComplete]);
 
   // Cancel prompt generation and current running command
   const handleCancelPromptGeneration = useCallback(async () => {
@@ -245,12 +288,14 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     }
   }, []);
 
-  // Close progress modal
-  const handleCloseProgressModal = useCallback(() => {
+  // Close progress modal and refresh existing prompts
+  const handleCloseProgressModal = useCallback(async () => {
     setShowProgressModal(false);
     setPromptGenerationResults(null);
     cancelRequestedRef.current = false;
-  }, []);
+    // Refresh existing prompts after generation
+    await loadExistingPrompts();
+  }, [loadExistingPrompts]);
 
   if (loading) {
     return (
@@ -540,6 +585,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
             onModuleClick={handleModuleClick}
             onGeneratePrompts={handleGeneratePrompts}
             isGeneratingPrompts={isGeneratingPrompts}
+            existingPrompts={existingPrompts}
+            promptsInfo={promptsInfo}
           />
         ) : (
           <div className="glass rounded-xl border border-surface-700/50 h-full flex items-center justify-center">
@@ -568,6 +615,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         <PromptOrderModal
           isOpen={showOrderModal}
           modules={architecture}
+          existingPrompts={existingPrompts}
           onClose={() => setShowOrderModal(false)}
           onConfirm={handleConfirmGeneratePrompts}
         />

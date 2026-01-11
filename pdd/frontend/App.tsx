@@ -1,12 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { CommandType } from './types';
 import { COMMANDS } from './constants';
 import PromptSelector from './components/PromptSelector';
 import PromptSpace from './components/PromptSpace';
 import ArchitectureView from './components/ArchitectureView';
 import ProjectSettings from './components/ProjectSettings';
+import JobDashboard, { BatchOperation } from './components/JobDashboard';
 import { api, PromptInfo, RunResult } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
+import { useJobs, JobInfo } from './hooks/useJobs';
+import { useToast } from './components/Toast';
 
 type View = 'architecture' | 'prompts' | 'bug' | 'settings';
 
@@ -38,6 +41,34 @@ const App: React.FC = () => {
 
   // Bug command state
   const [bugIssueUrl, setBugIssueUrl] = useState('');
+
+  // Batch operation state (for architecture prompt generation)
+  const [batchOperation, setBatchOperation] = useState<BatchOperation | null>(null);
+
+  // Toast notifications
+  const { addToast } = useToast();
+
+  // Job management for multi-session support
+  const handleJobComplete = useCallback((job: JobInfo, success: boolean) => {
+    addToast(
+      `${job.displayCommand} ${success ? 'completed successfully' : 'failed'}`,
+      success ? 'success' : 'error',
+      5000
+    );
+  }, [addToast]);
+
+  const {
+    activeJobs,
+    completedJobs,
+    selectedJob,
+    selectedJobId,
+    isAnyJobRunning,
+    submitJob,
+    cancelJob,
+    removeJob,
+    clearCompletedJobs,
+    setSelectedJobId,
+  } = useJobs({ onJobComplete: handleJobComplete });
 
   // Check server connection on mount
   useEffect(() => {
@@ -128,7 +159,8 @@ const App: React.FC = () => {
           return `--${k.replace(/_/g, '-')} ${v}`;
         }).filter(Boolean).join(' ')
       : '';
-    setLastCommand(`pdd ${config.backendName} ${displayArg}${optionsStr}`);
+    const fullDisplayCommand = `pdd ${config.backendName} ${displayArg}${optionsStr}`;
+    setLastCommand(fullDisplayCommand);
 
     try {
       // Build the command request based on command type
@@ -239,21 +271,26 @@ const App: React.FC = () => {
         }
       }
 
-      const result = await api.runCommand({
+      // Spawn command in a new terminal window for complete isolation
+      const result = await api.spawnTerminal({
         command: config.backendName,
         args,
         options,
       });
 
-      setLastRunResult(result);
-      setExecutionStatus(result.success ? 'success' : 'failed');
+      if (result.success) {
+        setExecutionStatus('success');
+        addToast(`Opened terminal: ${fullDisplayCommand}`, 'success', 3000);
+      } else {
+        setExecutionStatus('failed');
+        addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+      }
 
-      // Reset status after 5 seconds (keep error details visible longer)
+      // Clear the status bar after a short delay
       setTimeout(() => {
         setExecutionStatus('idle');
         setLastCommand(null);
-        if (result.success) setLastRunResult(null);
-      }, result.success ? 5000 : 10000);
+      }, 3000);
     } catch (error: any) {
       console.error('Failed to execute command:', error);
       setLastRunResult({
@@ -263,6 +300,7 @@ const App: React.FC = () => {
         error_details: error.message,
       });
       setExecutionStatus('failed');
+      addToast(`Error: ${error.message}`, 'error', 5000);
       setTimeout(() => {
         setExecutionStatus('idle');
         setLastCommand(null);
@@ -285,24 +323,33 @@ const App: React.FC = () => {
 
     setIsExecuting(true);
     setExecutionStatus('running');
-    setLastCommand(`pdd bug ${bugIssueUrl}`);
+    const displayCommand = `pdd bug ${bugIssueUrl}`;
+    setLastCommand(displayCommand);
 
     try {
-      // Bug command expects 'args' as tuple with the URL
-      const result = await api.runCommand({
+      // Spawn bug command in a new terminal window for complete isolation
+      const result = await api.spawnTerminal({
         command: 'bug',
         args: { args: [bugIssueUrl] },
         options: {},
       });
 
-      setExecutionStatus(result.success ? 'success' : 'failed');
+      if (result.success) {
+        setExecutionStatus('success');
+        addToast(`Opened terminal: ${displayCommand}`, 'success', 3000);
+      } else {
+        setExecutionStatus('failed');
+        addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+      }
+
       setTimeout(() => {
         setExecutionStatus('idle');
         setLastCommand(null);
-      }, 5000);
+      }, 3000);
     } catch (error: any) {
       console.error('Failed to execute bug command:', error);
       setExecutionStatus('failed');
+      addToast(`Error: ${error.message}`, 'error', 5000);
       setTimeout(() => {
         setExecutionStatus('idle');
         setLastCommand(null);
@@ -332,6 +379,46 @@ const App: React.FC = () => {
       console.error('Failed to cancel:', e);
     }
   };
+
+  // Batch operation callbacks for ArchitectureView
+  const handleBatchOperationStart = useCallback((name: string, total: number) => {
+    setBatchOperation({
+      id: `batch-${Date.now()}`,
+      name,
+      current: 0,
+      total,
+      currentItem: '',
+      status: 'running',
+      startedAt: new Date(),
+    });
+  }, []);
+
+  const handleBatchOperationProgress = useCallback((current: number, total: number, currentItem: string) => {
+    setBatchOperation(prev => prev ? {
+      ...prev,
+      current,
+      total,
+      currentItem,
+    } : null);
+  }, []);
+
+  const handleBatchOperationComplete = useCallback((success: boolean) => {
+    setBatchOperation(prev => prev ? {
+      ...prev,
+      status: success ? 'completed' : 'failed',
+    } : null);
+    // Clear after a short delay
+    setTimeout(() => setBatchOperation(null), 3000);
+  }, []);
+
+  const handleCancelBatchOperation = useCallback(async () => {
+    // This will trigger the cancel in ArchitectureView
+    try {
+      await api.cancelCommand();
+    } catch (e) {
+      console.error('Failed to cancel batch operation:', e);
+    }
+  }, []);
 
   // If editing a prompt, show full-screen PromptSpace
   if (editingPrompt) {
@@ -518,6 +605,9 @@ const App: React.FC = () => {
               serverConnected={serverConnected}
               isExecuting={isExecuting}
               onOpenPromptSpace={(prompt) => setEditingPrompt(prompt)}
+              onBatchStart={handleBatchOperationStart}
+              onBatchProgress={handleBatchOperationProgress}
+              onBatchComplete={handleBatchOperationComplete}
             />
           </div>
         ) : view === 'prompts' ? (
@@ -541,53 +631,157 @@ const App: React.FC = () => {
             <ProjectSettings />
           </div>
         ) : (
-          <div className="max-w-2xl mx-auto animate-fade-in">
-            <div className="mb-4 sm:mb-6 text-center sm:text-left">
+          <div className="max-w-4xl mx-auto animate-fade-in">
+            {/* Header */}
+            <div className="mb-6 text-center sm:text-left">
               <h2 className="text-xl sm:text-2xl font-semibold text-white mb-2 flex items-center justify-center sm:justify-start gap-2">
                 <span className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center"><BugAntIcon className="w-5 h-5" /></span>
-                Bug Investigation
+                Bug Investigation Agent
               </h2>
               <p className="text-surface-400 text-sm">
-                Enter a GitHub issue URL to investigate a bug using AI-powered analysis.
+                Automatically investigate GitHub issues and generate failing test cases with AI-powered analysis.
               </p>
             </div>
 
-            <div className="glass rounded-2xl p-4 sm:p-6 border border-surface-700/50 card-hover">
-              <label className="block text-sm font-medium text-surface-300 mb-2">
-                GitHub Issue URL
-              </label>
-              <input
-                type="url"
-                value={bugIssueUrl}
-                onChange={(e) => setBugIssueUrl(e.target.value)}
-                placeholder="https://github.com/org/repo/issues/123"
-                className="w-full px-3 sm:px-4 py-2.5 sm:py-3 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 transition-all text-sm sm:text-base"
-                disabled={isExecuting}
-              />
-              <p className="mt-2 text-xs text-surface-500">
-                The AI will analyze the issue, understand the codebase, and generate a reproducing test case.
-              </p>
+            <div className="grid gap-4 lg:grid-cols-2">
+              {/* Left column: Input and action */}
+              <div className="space-y-4">
+                {/* Main input card */}
+                <div className="glass rounded-2xl p-4 sm:p-6 border border-surface-700/50">
+                  <label className="block text-sm font-medium text-surface-300 mb-2">
+                    GitHub Issue URL
+                  </label>
+                  <input
+                    type="url"
+                    value={bugIssueUrl}
+                    onChange={(e) => setBugIssueUrl(e.target.value)}
+                    placeholder="https://github.com/org/repo/issues/123"
+                    className="w-full px-3 sm:px-4 py-2.5 sm:py-3 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 transition-all text-sm sm:text-base"
+                    disabled={isExecuting}
+                  />
 
-              <button
-                onClick={handleRunBugCommand}
-                disabled={isExecuting || !serverConnected || !bugIssueUrl.trim()}
-                className={`
-                  mt-4 w-full px-4 py-2.5 sm:py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base
-                  ${isExecuting || !serverConnected || !bugIssueUrl.trim()
-                    ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40'}
-                `}
-              >
-                <BugAntIcon className="w-4 h-4" />
-                <span>Investigate Bug</span>
-              </button>
+                  <button
+                    onClick={handleRunBugCommand}
+                    disabled={isExecuting || !serverConnected || !bugIssueUrl.trim()}
+                    className={`
+                      mt-4 w-full px-4 py-2.5 sm:py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base
+                      ${isExecuting || !serverConnected || !bugIssueUrl.trim()
+                        ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white shadow-lg shadow-red-500/25 hover:shadow-red-500/40'}
+                    `}
+                  >
+                    <BugAntIcon className="w-4 h-4" />
+                    <span>Start Investigation</span>
+                  </button>
+                </div>
+
+                {/* Prerequisites card */}
+                <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                  <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Prerequisites
+                  </h3>
+                  <ul className="space-y-2 text-xs text-surface-400">
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">1</span>
+                      <span><strong className="text-surface-300">GitHub CLI installed</strong> - Install from <code className="bg-surface-800 px-1 rounded text-accent-300">brew install gh</code> or <a href="https://cli.github.com" target="_blank" rel="noopener noreferrer" className="text-accent-400 hover:underline">cli.github.com</a></span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">2</span>
+                      <span><strong className="text-surface-300">Authenticated with GitHub</strong> - Run <code className="bg-surface-800 px-1 rounded text-accent-300">gh auth login</code> if needed</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">3</span>
+                      <span><strong className="text-surface-300">Repository cloned locally</strong> - The agent works within your local codebase</span>
+                    </li>
+                  </ul>
+                </div>
+
+                {/* After investigation card */}
+                <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                  <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    After Investigation
+                  </h3>
+                  <ul className="space-y-2 text-xs text-surface-400">
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">1.</span>
+                      <span><strong className="text-surface-300">Review the draft PR</strong> - The agent creates a draft PR with a failing test</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">2.</span>
+                      <span><strong className="text-surface-300">Fix the bug</strong> - Implement the fix to make the test pass</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">3.</span>
+                      <span><strong className="text-surface-300">Mark PR ready</strong> - Convert from draft to ready for review</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Right column: Workflow steps */}
+              <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Agent Workflow (9 Steps)
+                </h3>
+                <div className="space-y-1">
+                  {[
+                    { step: 1, name: 'Duplicate Check', desc: 'Search for existing similar issues' },
+                    { step: 2, name: 'Documentation Check', desc: 'Verify if it\'s a known issue or user error' },
+                    { step: 3, name: 'Triage', desc: 'Assess if sufficient information is provided' },
+                    { step: 4, name: 'Reproduce', desc: 'Attempt to reproduce the reported bug' },
+                    { step: 5, name: 'Root Cause Analysis', desc: 'Identify the underlying cause' },
+                    { step: 6, name: 'Test Plan', desc: 'Design a testing strategy' },
+                    { step: 7, name: 'Generate Test', desc: 'Create a failing unit test' },
+                    { step: 8, name: 'Verify Test', desc: 'Ensure test correctly detects the bug' },
+                    { step: 9, name: 'Create PR', desc: 'Open a draft pull request' },
+                  ].map((item) => (
+                    <div key={item.step} className="flex items-start gap-3 py-1.5 px-2 rounded-lg hover:bg-surface-800/30 transition-colors">
+                      <div className="w-5 h-5 rounded-full bg-surface-700 flex items-center justify-center text-[10px] font-medium text-surface-300 flex-shrink-0">
+                        {item.step}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-white font-medium">{item.name}</div>
+                        <p className="text-[11px] text-surface-500">{item.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 pt-3 border-t border-surface-700/50">
+                  <p className="text-xs text-surface-500">
+                    <strong className="text-surface-400">Note:</strong> The agent may exit early if it detects a duplicate issue,
+                    feature request, or insufficient information. Progress is shown in the terminal.
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         )}
       </main>
 
+      {/* Job Dashboard - shows active and completed jobs */}
+      <JobDashboard
+        activeJobs={activeJobs}
+        completedJobs={completedJobs}
+        selectedJob={selectedJob}
+        onSelectJob={setSelectedJobId}
+        onCancelJob={cancelJob}
+        onRemoveJob={removeJob}
+        onClearCompleted={clearCompletedJobs}
+        batchOperation={batchOperation}
+        onCancelBatchOperation={handleCancelBatchOperation}
+      />
+
       {/* Modern footer - responsive */}
-      <footer className="fixed bottom-0 left-0 right-0 glass border-t border-surface-700/50 px-4 sm:px-6 py-2.5 sm:py-3">
+      <footer className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-surface-700/50 px-4 sm:px-6 py-2.5 sm:py-3">
         <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 text-xs text-surface-500">
           <span className="w-4 h-4 rounded bg-surface-800/80 flex items-center justify-center p-0.5">
             <svg viewBox="0 0 1024 1024" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
@@ -600,7 +794,7 @@ const App: React.FC = () => {
           <span className="hidden sm:inline">Prompt Driven Development</span>
           <span className="sm:hidden">PDD</span>
           <span className="text-surface-600">•</span>
-          <span>Commands run in your terminal</span>
+          <span>{isAnyJobRunning ? 'Jobs running - see dashboard below' : 'Commands tracked in dashboard'}</span>
         </div>
       </footer>
     </div>

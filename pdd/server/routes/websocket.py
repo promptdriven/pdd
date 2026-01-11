@@ -21,7 +21,7 @@ from ..models import (
     ProgressMessage,
     JobStatus,
 )
-from ..jobs import JobManager, Job
+from ..jobs import JobManager, Job, JobStatus as JobStatusEnum
 
 # Initialize console for logging
 console = Console()
@@ -411,14 +411,29 @@ async def emit_job_complete(job_id: str, result: Any, success: bool, cost: float
 # App Integration
 # ============================================================================
 
-def create_websocket_routes(app, connection_manager: ConnectionManager):
+def create_websocket_routes(app, connection_manager: ConnectionManager, job_manager: JobManager = None):
     """
     Register WebSocket routes with the FastAPI application.
 
     Args:
         app: FastAPI application instance.
         connection_manager: ConnectionManager instance for handling WebSocket connections.
+        job_manager: JobManager instance for registering output callbacks.
     """
     global manager
     manager = connection_manager
     app.include_router(router)
+
+    # Register callbacks to stream job output to WebSocket clients
+    if job_manager:
+        async def on_job_output(job: Job, stream_type: str, text: str):
+            """Callback to broadcast job output to WebSocket subscribers."""
+            await emit_job_output(job.id, stream_type, text)
+
+        async def on_job_complete(job: Job):
+            """Callback to broadcast job completion to WebSocket subscribers."""
+            success = job.status == JobStatusEnum.COMPLETED
+            await emit_job_complete(job.id, job.result, success, job.cost)
+
+        job_manager.callbacks.on_output(on_job_output)
+        job_manager.callbacks.on_complete(on_job_complete)

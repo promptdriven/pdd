@@ -40,6 +40,9 @@ class RunResult(BaseModel):
     success: bool
     message: str
     exit_code: int = 0
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+    error_details: Optional[str] = None
 
 
 class CancelResult(BaseModel):
@@ -113,6 +116,8 @@ ALLOWED_COMMANDS = {
     "test": "Generate unit tests",
     "example": "Generate example code",
     "fix": "Fix code based on test errors",
+    "crash": "Fix code based on crash errors",
+    "verify": "Verify code against prompt requirements",
     # Advanced operations
     "split": "Split large prompt files into smaller ones",
     "change": "Modify prompts based on change instructions",
@@ -325,6 +330,8 @@ POSITIONAL_ARGS = {
     "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],  # pdd fix PROMPT CODE TEST... ERROR
     "bug": ["args"],  # Special: 'args' contains the positional arguments
     "update": ["args"],  # Special: 'args' contains the positional arguments
+    "crash": ["prompt_file", "code_file", "program_file", "error_file"],  # pdd crash PROMPT CODE PROGRAM ERROR
+    "verify": ["prompt_file", "code_file", "verification_program"],  # pdd verify PROMPT CODE VERIFICATION_PROGRAM
     # Advanced operations
     "split": ["input_prompt", "input_code", "example_code"],  # pdd split INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
     "change": ["change_prompt_file", "input_code", "input_prompt_file"],  # pdd change CHANGE_PROMPT INPUT_CODE [INPUT_PROMPT]
@@ -430,6 +437,27 @@ def _build_pdd_command_args(command: str, args: Optional[Dict], options: Optiona
     return cmd_args
 
 
+def _parse_error_details(exit_code: int) -> str:
+    """Parse exit code and return user-friendly error details."""
+    error_messages = {
+        1: "Command failed - check the terminal output above for details",
+        2: "Command line usage error - invalid arguments or options",
+        126: "Command not executable - permission denied",
+        127: "Command not found - pdd may not be properly installed",
+        128: "Invalid exit argument",
+        130: "Command terminated by Ctrl+C",
+        137: "Command killed (SIGKILL) - possibly out of memory",
+        139: "Segmentation fault",
+        143: "Command terminated (SIGTERM)",
+    }
+
+    # Check for specific PDD exit codes
+    if exit_code == 1:
+        return "Command failed - this may indicate missing files, authentication issues, or other errors. Check the terminal for details."
+
+    return error_messages.get(exit_code, f"Command exited with code {exit_code}")
+
+
 @router.post("/run", response_model=RunResult)
 async def run_command_in_terminal(request: CommandRequest):
     """
@@ -525,10 +553,20 @@ async def run_command_in_terminal(request: CommandRequest):
         console.print(f"[bold red]Command failed (exit code: {exit_code})[/bold red]")
         console.print(f"[red]{'='*60}[/red]\n")
 
+        # Parse common error patterns based on exit code
+        error_details = _parse_error_details(exit_code)
+
+        return RunResult(
+            success=False,
+            message=f"Command failed with exit code {exit_code}",
+            exit_code=exit_code,
+            error_details=error_details,
+        )
+
     return RunResult(
-        success=exit_code == 0,
-        message="Command completed" if exit_code == 0 else f"Command failed with exit code {exit_code}",
-        exit_code=exit_code,
+        success=True,
+        message="Command completed successfully",
+        exit_code=0,
     )
 
 
@@ -563,3 +601,63 @@ async def get_command_status():
         "running": is_running,
         "command": command_info,
     }
+
+
+# ============================================================================
+# Terminal Spawning - Run commands in separate terminal windows
+# ============================================================================
+
+from ..terminal_spawner import TerminalSpawner
+
+
+class SpawnTerminalResponse(BaseModel):
+    """Response from spawning a terminal."""
+    success: bool
+    message: str
+    command: str
+    platform: str
+
+
+@router.post("/spawn-terminal", response_model=SpawnTerminalResponse)
+async def spawn_terminal_command(request: CommandRequest):
+    """
+    Spawn a PDD command in a new terminal window.
+
+    The command runs in complete isolation from the server.
+    User sees output directly in the new terminal window.
+
+    This is safer than running commands in the server process because:
+    - Each command runs in its own terminal process
+    - No risk of WebSocket/subprocess conflicts
+    - User can manage terminal windows directly
+    """
+    # Validate command is allowed
+    if request.command not in ALLOWED_COMMANDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown command: {request.command}. Allowed: {list(ALLOWED_COMMANDS.keys())}"
+        )
+
+    # Build full command
+    cmd_args = _build_pdd_command_args(request.command, request.args, request.options)
+    cmd_str = " ".join(cmd_args)
+
+    # Get working directory
+    cwd = os.getcwd()
+
+    # Spawn terminal
+    success = TerminalSpawner.spawn(cmd_str, working_dir=cwd)
+
+    if success:
+        console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+        console.print(f"[bold cyan]Spawned terminal: pdd {request.command}[/bold cyan]")
+        console.print(f"[cyan]{'='*60}[/cyan]\n")
+    else:
+        console.print(f"\n[bold red]Failed to spawn terminal for: pdd {request.command}[/bold red]")
+
+    return SpawnTerminalResponse(
+        success=success,
+        message="Terminal window opened" if success else "Failed to open terminal",
+        command=request.command,
+        platform=sys.platform
+    )

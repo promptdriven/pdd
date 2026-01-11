@@ -45,7 +45,9 @@ class AppState:
         
         # Initialize managers
         self.path_validator = PathValidator(self.project_root)
-        self.job_manager = JobManager(max_concurrent=2)
+        # SAFETY: Limit concurrent jobs to 3 - LLM calls are resource-intensive
+        # Running too many in parallel can exhaust memory/CPU and crash the system
+        self.job_manager = JobManager(max_concurrent=3)
         self.connection_manager = ConnectionManager()
 
     @property
@@ -212,7 +214,7 @@ def create_app(
     app.include_router(commands.router)
     app.include_router(prompts.router)
 
-    create_websocket_routes(app, _app_state.connection_manager)
+    create_websocket_routes(app, _app_state.connection_manager, _app_state.job_manager)
 
     # 4. Serve Frontend Static Files
     # Look for frontend dist in the pdd package directory
