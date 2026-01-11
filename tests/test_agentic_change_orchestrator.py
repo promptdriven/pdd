@@ -470,6 +470,67 @@ def test_step7_prompt_has_stop_condition_marker():
 
 
 # -----------------------------------------------------------------------------
+# Scope Enforcement Tests (TDD for PDD Methodology)
+# -----------------------------------------------------------------------------
+
+def test_step9_prompt_has_scope_critical_section():
+    """
+    Verify Step 9 prompt has CRITICAL scope section prominently placed.
+
+    TDD: This test FAILS until we update the prompt with:
+    - % CRITICAL: Scope section
+    - FORBIDDEN keyword
+    - References to Code files and Example files
+    """
+    prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_change_step9_implement_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+
+    # Must have CRITICAL scope section
+    assert "% CRITICAL: Scope" in prompt_content, "Step 9 prompt missing % CRITICAL: Scope section"
+
+    # Must forbid code/example files
+    assert "FORBIDDEN" in prompt_content, "Step 9 prompt must use FORBIDDEN keyword"
+    assert "Code files" in prompt_content or "code files" in prompt_content, \
+        "Step 9 prompt must mention Code files as forbidden"
+    assert "Example files" in prompt_content or "example files" in prompt_content, \
+        "Step 9 prompt must mention Example files as forbidden"
+
+
+def test_step8_prompt_has_scope_section():
+    """
+    Verify Step 8 prompt has scope constraints.
+
+    TDD: This test FAILS until we add a Scope section to Step 8.
+    """
+    prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_change_step8_analyze_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+
+    # Must have scope section
+    assert "% Scope" in prompt_content, "Step 8 prompt missing % Scope section"
+
+    # Must mention what NOT to do
+    assert "Do NOT" in prompt_content, "Step 8 prompt must say what NOT to do"
+    assert "Code files" in prompt_content or "code files" in prompt_content, \
+        "Step 8 prompt must mention Code files as forbidden"
+
+
+def test_step6_prompt_clarifies_change_scope():
+    """
+    Verify Step 6 clarifies that pdd change only modifies prompts.
+
+    TDD: This test FAILS until we add scope clarification to Step 6.
+    """
+    prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_change_step6_devunits_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+
+    # Must clarify scope - pdd change only modifies prompts
+    assert "pdd change" in prompt_content and "ONLY" in prompt_content, \
+        "Step 6 must clarify that pdd change modifies ONLY prompts"
+    assert "GENERATED" in prompt_content, \
+        "Step 6 must clarify that code/example files are GENERATED"
+
+
+# -----------------------------------------------------------------------------
 # Z3 Formal Verification
 # -----------------------------------------------------------------------------
 
