@@ -82,6 +82,8 @@
 % User Experience in Terminal:
     - To authenticate, visit: https://github.com/login/device
     - Enter code: ABCD-EFGH
+    - Auto-open browser to verification URL when device flow starts
+    - Flush stdout immediately after displaying auth prompts (ensures visibility in piped contexts)
     - Waiting for authentication...
     - Authentication successful!
 
