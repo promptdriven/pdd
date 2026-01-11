@@ -1,0 +1,54 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the pdd/server/terminal_spawner.py module.
+
+% Role & Scope
+Cross-platform terminal spawning utilities for running commands in isolated terminal windows.
+This allows the server to spawn commands that run independently, with output visible directly
+to the user in a new terminal window rather than captured by the server.
+
+% Requirements
+1. **TerminalSpawner class** (static methods only):
+   - `spawn(command, working_dir) -> bool`: Main entry point
+     - Prepends `cd working_dir &&` if working_dir provided
+     - Dispatches to platform-specific method based on sys.platform
+     - Returns True on success, False on failure
+
+   - `_darwin(command) -> bool`: macOS implementation
+     - Creates temporary shell script in /tmp with unique name (using pid and id)
+     - Script runs command then `exec bash` to keep terminal open
+     - Makes script executable (chmod 0o755)
+     - Opens with Terminal.app via `open -a Terminal <script>`
+
+   - `_linux(command) -> bool`: Linux implementation
+     - Tries terminal emulators in order: gnome-terminal, xfce4-terminal, konsole, xterm
+     - Uses shutil.which() to check availability
+     - Each terminal runs: bash -c "{command}; exec bash"
+     - Returns False if no supported terminal found
+
+   - `_windows(command) -> bool`: Windows implementation
+     - Tries Windows Terminal first: wt.exe new-tab powershell -NoExit -Command
+     - Falls back to PowerShell: powershell.exe -NoExit -Command
+     - Returns True if either succeeds
+
+2. **Error handling**:
+   - All methods catch exceptions and return False
+   - Print error message on failure for debugging
+
+% Dependencies
+- os: for getpid(), environ
+- shutil: for which() on Linux
+- subprocess: for Popen()
+- sys: for platform detection
+- pathlib.Path: for script file operations
+
+% Instructions
+- Use subprocess.Popen for non-blocking process creation
+- Keep terminal open after command completes (exec bash / -NoExit)
+- Use unique script names to avoid conflicts between concurrent spawns
+- Handle FileNotFoundError gracefully when terminal not found
+
+% Deliverables
+- Code: `pdd/server/terminal_spawner.py`
+- Export: TerminalSpawner

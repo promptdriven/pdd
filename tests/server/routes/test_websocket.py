@@ -69,6 +69,16 @@ class JobManager:
     pass
 
 
+class ServerConfig:
+    """Mock ServerConfig for testing."""
+    pass
+
+
+class ServerStatus:
+    """Mock ServerStatus for testing."""
+    pass
+
+
 # ============================================================================
 # Fixture to set up mocks and import module under test
 # ============================================================================
@@ -79,39 +89,52 @@ def websocket_module():
     Set up mocks and import the websocket module.
     This fixture ensures mocking happens at test execution time, not collection time.
     """
-    # Save existing modules
+    # Save existing modules - include all pdd.server modules to avoid pollution
     saved_modules = {}
-    modules_to_mock = [
-        "pdd.server.models",
-        "pdd.server.jobs",
-        "pdd.server.routes.files",
-        "pdd.server.routes.commands",
-        "pdd.server.routes.exec",
-        "pdd.server.routes.websocket",
-    ]
-    for mod_name in modules_to_mock:
-        if mod_name in sys.modules:
+    for mod_name in list(sys.modules.keys()):
+        if mod_name.startswith("pdd.server"):
             saved_modules[mod_name] = sys.modules[mod_name]
             del sys.modules[mod_name]
 
-    # Create mock models module
+    # Create mock models module with all required classes
     mock_models = types.ModuleType("pdd.server.models")
     mock_models.WSMessage = WSMessage
     mock_models.StdoutMessage = StdoutMessage
     mock_models.StderrMessage = StderrMessage
     mock_models.ProgressMessage = ProgressMessage
     mock_models.JobStatus = JobStatus
+    mock_models.ServerConfig = ServerConfig
+    mock_models.ServerStatus = ServerStatus
     sys.modules["pdd.server.models"] = mock_models
 
     # Create mock jobs module
     mock_jobs = types.ModuleType("pdd.server.jobs")
     mock_jobs.JobManager = JobManager
     mock_jobs.Job = Job
+    mock_jobs.JobStatus = JobStatus  # websocket.py imports JobStatus as JobStatusEnum
     sys.modules["pdd.server.jobs"] = mock_jobs
 
-    # Mock sibling modules to prevent import errors
+    # Mock pdd.server as a package (must have __path__ to be a package)
+    import pdd
+    mock_server = types.ModuleType("pdd.server")
+    mock_server.__path__ = [str(pdd.__path__[0]) + "/server"]  # Make it a package
+    mock_server.app = MagicMock()
+    mock_server.models = mock_models
+    mock_server.jobs = mock_jobs
+    sys.modules["pdd.server"] = mock_server
+    sys.modules["pdd.server.app"] = MagicMock()
+    sys.modules["pdd.server.security"] = MagicMock()
+    sys.modules["pdd.server.executor"] = MagicMock()
+
+    # Mock routes as a package
+    mock_routes = types.ModuleType("pdd.server.routes")
+    mock_routes.__path__ = [str(pdd.__path__[0]) + "/server/routes"]  # Make it a package
+    sys.modules["pdd.server.routes"] = mock_routes
+
+    # Mock sibling route modules to prevent import errors
     sys.modules["pdd.server.routes.files"] = MagicMock()
     sys.modules["pdd.server.routes.commands"] = MagicMock()
+    sys.modules["pdd.server.routes.prompts"] = MagicMock()
     sys.modules["pdd.server.routes.exec"] = MagicMock()
 
     # Now import the module under test
@@ -146,9 +169,9 @@ def websocket_module():
         "Job": Job,
     }
 
-    # Cleanup: remove mocks and restore saved modules
-    for mod_name in modules_to_mock:
-        if mod_name in sys.modules:
+    # Cleanup: remove all pdd.server mocks and restore saved modules
+    for mod_name in list(sys.modules.keys()):
+        if mod_name.startswith("pdd.server"):
             del sys.modules[mod_name]
     for mod_name, mod in saved_modules.items():
         sys.modules[mod_name] = mod

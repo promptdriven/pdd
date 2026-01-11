@@ -83,6 +83,9 @@ export interface RunResult {
   success: boolean;
   message: string;
   exit_code: number;
+  stdout?: string | null;
+  stderr?: string | null;
+  error_details?: string | null;
 }
 
 export interface CancelResult {
@@ -93,6 +96,23 @@ export interface CancelResult {
 export interface CommandStatus {
   running: boolean;
   command: string | null;
+}
+
+export interface SpawnTerminalResponse {
+  success: boolean;
+  message: string;
+  command: string;
+  platform: string;
+  job_id?: string;
+}
+
+export interface SpawnedJobStatus {
+  job_id: string;
+  command: string;
+  status: 'running' | 'completed' | 'failed' | 'unknown';
+  started_at: string;
+  completed_at?: string;
+  exit_code?: number;
 }
 
 // Token metrics types
@@ -127,6 +147,59 @@ export interface PromptAnalyzeResponse {
   preprocessing_error: string | null;
 }
 
+// Sync status types
+export type SyncStatusType = 'in_sync' | 'prompt_changed' | 'code_changed' | 'conflict' | 'never_synced';
+
+export interface SyncStatus {
+  status: SyncStatusType;
+  last_sync_timestamp: string | null;
+  last_sync_command: string | null;
+  prompt_modified: boolean;
+  code_modified: boolean;
+  fingerprint_exists: boolean;
+  prompt_exists: boolean;
+  code_exists: boolean;
+}
+
+// Model information types
+export interface ModelInfo {
+  model: string;           // Full model identifier (e.g., "gpt-5.1-codex-mini")
+  provider: string;        // Model provider (e.g., "OpenAI", "Anthropic")
+  input_cost: number;      // Input cost per million tokens (USD)
+  output_cost: number;     // Output cost per million tokens (USD)
+  elo: number;             // Coding arena ELO rating
+  context_limit: number;   // Maximum context window size in tokens
+  max_thinking_tokens: number;  // Maximum thinking/reasoning tokens (0 if not supported)
+  reasoning_type: string;  // "none", "effort", or "budget"
+  structured_output: boolean;  // Whether the model supports structured output
+}
+
+export interface ModelsResponse {
+  models: ModelInfo[];
+  default_model: string;
+}
+
+// Match check types
+export interface MatchCheckRequest {
+  prompt_content: string;
+  code_content: string;
+  strength?: number;  // 0-1
+}
+
+export interface MatchCheckResult {
+  match_score: number;
+  summary: string;
+  missing?: string[];
+  extra?: string[];
+  suggestions?: string[];
+}
+
+export interface MatchCheckResponse {
+  result: MatchCheckResult;
+  cost: number;
+  model: string;
+}
+
 // Architecture types (re-exported for convenience)
 export interface ArchitectureModule {
   reason: string;
@@ -155,6 +228,7 @@ export interface GenerationGlobalOptions {
   verbose?: boolean;
   quiet?: boolean;
   force?: boolean;
+  local?: boolean;        // Run locally instead of cloud
 }
 
 export interface GenerateArchitectureRequest {
@@ -279,6 +353,25 @@ class PDDApiClient {
     return this.request<JobResult[]>(`/api/v1/commands/history?limit=${limit}&offset=${offset}`);
   }
 
+  /**
+   * Spawn a command in a new terminal window.
+   * The command runs in complete isolation from the server.
+   */
+  async spawnTerminal(request: CommandRequest): Promise<SpawnTerminalResponse> {
+    return this.request<SpawnTerminalResponse>('/api/v1/commands/spawn-terminal', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Get the status of a spawned job.
+   * Used for polling to check if spawned terminal commands have completed.
+   */
+  async getSpawnedJobStatus(jobId: string): Promise<SpawnedJobStatus> {
+    return this.request<SpawnedJobStatus>(`/api/v1/commands/spawned-jobs/${jobId}/status`);
+  }
+
   // Files
   async getFileTree(path: string = '', depth: number = 3): Promise<FileTreeNode> {
     const params = new URLSearchParams();
@@ -346,6 +439,35 @@ class PDDApiClient {
       preprocess: false,  // Don't preprocess - just count tokens in the raw file
     });
     return response.raw_metrics;
+  }
+
+  /**
+   * Get the sync status for a prompt/code pair.
+   * Returns whether the prompt and code are in sync, or if either has been modified.
+   */
+  async getSyncStatus(basename: string, language: string): Promise<SyncStatus> {
+    return this.request<SyncStatus>(
+      `/api/v1/prompts/sync-status?basename=${encodeURIComponent(basename)}&language=${encodeURIComponent(language)}`
+    );
+  }
+
+  /**
+   * Get list of available LLM models with their capabilities.
+   * Returns model information including context limits, pricing, and thinking capacity.
+   */
+  async getModels(): Promise<ModelsResponse> {
+    return this.request<ModelsResponse>('/api/v1/prompts/models');
+  }
+
+  /**
+   * Check how well code matches the prompt requirements using LLM judge.
+   * Returns a match score, summary, missing requirements, and suggestions.
+   */
+  async checkMatch(request: MatchCheckRequest): Promise<MatchCheckResponse> {
+    return this.request<MatchCheckResponse>('/api/v1/prompts/check-match', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
   }
 
   // Architecture operations

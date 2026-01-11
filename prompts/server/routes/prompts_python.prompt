@@ -20,25 +20,57 @@
      - If content provided, analyze it instead of reading from file
      - Preprocess using pdd.preprocess with recursive=True, double_curly_brackets=True
 
-  2. **Pydantic Models**:
+  2. **GET /sync-status**:
+     - Query params: basename (module name), language (e.g., "python")
+     - Returns SyncStatusResponse with:
+       - status: "in_sync", "prompt_changed", "code_changed", "conflict", "never_synced"
+       - last_sync_timestamp, last_sync_command
+       - prompt_modified, code_modified booleans
+       - fingerprint_exists, prompt_exists, code_exists booleans
+     - Uses read_fingerprint, get_pdd_file_paths, calculate_sha256 from sync_determine_operation
+
+  3. **GET /models**:
+     - Returns ModelsResponse with list of available LLM models
+     - Each ModelInfo includes: model, provider, input_cost, output_cost, elo,
+       context_limit, max_thinking_tokens, reasoning_type, structured_output
+     - Loads from llm_model.csv via _load_model_data
+     - Sorted by ELO descending (best models first)
+
+  4. **POST /check-match**:
+     - Body: MatchCheckRequest with prompt_content, code_content, strength
+     - Uses llm_invoke to evaluate how well code matches prompt requirements
+     - Returns MatchCheckResponse with:
+       - result: match_score (0-100), summary, missing, extra, suggestions
+       - cost, model used
+
+  5. **Pydantic Models**:
      - CostEstimateResponse: input_cost, model, tokens, cost_per_million, currency
      - TokenMetricsResponse: token_count, context_limit, context_usage_percent, cost_estimate
      - PromptAnalyzeRequest: path, model, preprocess, content
      - PromptAnalyzeResponse: raw_content, processed_content, raw_metrics,
        processed_metrics, preprocessing_succeeded, preprocessing_error
+     - SyncStatusResponse: status, last_sync_timestamp, last_sync_command,
+       prompt_modified, code_modified, fingerprint_exists, prompt_exists, code_exists
+     - ModelInfo: model, provider, input_cost, output_cost, elo, context_limit,
+       max_thinking_tokens, reasoning_type, structured_output
+     - ModelsResponse: models list, default_model
+     - MatchCheckRequest: prompt_content, code_content, strength
+     - MatchCheckResult: match_score, summary, missing, extra, suggestions
+     - MatchCheckResponse: result, cost, model
 
-  3. **Token metrics**:
+  6. **Token metrics**:
      - Use get_token_metrics from pdd.server.token_counter
      - Pricing CSV at project_root/.pdd/llm_model.csv if exists
      - Convert returned objects to response models
 
-  4. **Error handling**:
+  7. **Error handling**:
      - 403 for path validation failures (SecurityError)
      - 404 for non-existent files
      - 400 for directories or files too large or non-text files
      - Preprocessing errors captured in response, not thrown
+     - 500 for internal errors (sync status, model loading, match checking)
 
-  5. **Security**:
+  8. **Security**:
      - All paths validated through PathValidator dependency
      - Change to project_root during preprocessing (for relative includes)
 
@@ -50,6 +82,11 @@
   Use PathValidator from pdd/server/security.py via dependency injection
   <server.security><include>context/server/security_example.py</include></server.security>
   </security_note>
+  Use pdd.sync_determine_operation for fingerprint and hash utilities:
+    - read_fingerprint, get_pdd_file_paths, calculate_sha256
+  Use pdd.llm_invoke for LLM-based match checking:
+    - llm_invoke, _load_model_data, LLM_MODEL_CSV_PATH, DEFAULT_BASE_MODEL
+  Use MODEL_CONTEXT_LIMITS from pdd.server.token_counter
 
 % Instructions
   - Create router with prefix="/api/v1/prompts", tags=["prompts"]

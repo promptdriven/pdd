@@ -13,7 +13,10 @@ import signal
 import subprocess
 import sys
 import threading
+import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -34,12 +37,20 @@ from ..models import CommandRequest, JobHandle, JobResult, JobStatus
 from ..jobs import JobManager
 from ..click_executor import ClickCommandExecutor, get_pdd_command
 
+# Import construct_paths functions for smart output path detection
+from ...construct_paths import (
+    detect_context_for_file,
+)
+
 
 class RunResult(BaseModel):
     """Result of running a command in terminal mode."""
     success: bool
     message: str
     exit_code: int = 0
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+    error_details: Optional[str] = None
 
 
 class CancelResult(BaseModel):
@@ -113,6 +124,8 @@ ALLOWED_COMMANDS = {
     "test": "Generate unit tests",
     "example": "Generate example code",
     "fix": "Fix code based on test errors",
+    "crash": "Fix code based on crash errors",
+    "verify": "Verify code against prompt requirements",
     # Advanced operations
     "split": "Split large prompt files into smaller ones",
     "change": "Modify prompts based on change instructions",
@@ -121,6 +134,87 @@ ALLOWED_COMMANDS = {
     "conflicts": "Check for conflicts between prompt files",
     "preprocess": "Preprocess prompt file for LLM use",
 }
+
+
+def _compute_smart_output_path(
+    command: str,
+    prompt_file: str,
+    project_root: Path,
+) -> Optional[str]:
+    """
+    Compute the correct output path based on .pddrc context detection.
+
+    For commands like 'example' and 'test', this:
+    1. Detects which context the prompt file belongs to
+    2. Gets the appropriate output path from context config (e.g., example_output_path)
+    3. Preserves subdirectory structure from the prompt file
+
+    Example:
+        prompt_file: "prompts/server/terminal_spawner_python.prompt"
+        context: pdd_cli (example_output_path: "context")
+        -> output: "context/server/terminal_spawner_example.py"
+
+    Args:
+        command: The pdd command (e.g., "example", "test")
+        prompt_file: Path to the prompt file
+        project_root: Project root directory
+
+    Returns:
+        Computed output path, or None if detection fails
+    """
+    if command not in ("example", "test"):
+        return None
+
+    try:
+        # Detect context for the prompt file
+        context_name, context_defaults = detect_context_for_file(
+            prompt_file,
+            repo_root=str(project_root)
+        )
+
+        if not context_name or not context_defaults:
+            return None
+
+        # Get the appropriate output path based on command
+        if command == "example":
+            base_output = context_defaults.get("example_output_path")
+        elif command == "test":
+            base_output = context_defaults.get("test_output_path")
+        else:
+            return None
+
+        if not base_output:
+            return None
+
+        # Compute subdirectory structure from prompt file path
+        # e.g., prompts/server/foo.prompt -> server/
+        prompt_path = Path(prompt_file)
+
+        # Try to find "prompts" directory in the path and get relative subdirectory
+        path_parts = prompt_path.parts
+        subdirs = []
+
+        for i, part in enumerate(path_parts):
+            if part == "prompts":
+                # Get subdirectories between "prompts" and the filename
+                subdirs = list(path_parts[i+1:-1])
+                break
+
+        # If we found subdirectories, append them to the output path
+        if subdirs:
+            output_path = os.path.join(base_output, *subdirs)
+            # Ensure it ends with / to indicate directory
+            if not output_path.endswith('/'):
+                output_path += '/'
+            return output_path
+
+        # No subdirectories, just return base output
+        return base_output
+
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not compute smart output path: {e}[/yellow]")
+        return None
+
 
 router = APIRouter(prefix="/api/v1/commands", tags=["commands"])
 
@@ -139,6 +233,24 @@ def set_job_manager(manager: JobManager) -> None:
     """Configure the JobManager instance."""
     global _job_manager
     _job_manager = manager
+
+
+# Project root dependency - will be overridden by app
+_project_root: Optional[Path] = None
+
+
+def get_project_root() -> Path:
+    """Dependency to get the project root path."""
+    if _project_root is None:
+        # Fallback to cwd if not configured (shouldn't happen in production)
+        return Path(os.getcwd())
+    return _project_root
+
+
+def set_project_root(project_root: Path) -> None:
+    """Configure the project root path."""
+    global _project_root
+    _project_root = project_root
 
 
 @router.post("/execute", response_model=JobHandle)
@@ -325,6 +437,8 @@ POSITIONAL_ARGS = {
     "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],  # pdd fix PROMPT CODE TEST... ERROR
     "bug": ["args"],  # Special: 'args' contains the positional arguments
     "update": ["args"],  # Special: 'args' contains the positional arguments
+    "crash": ["prompt_file", "code_file", "program_file", "error_file"],  # pdd crash PROMPT CODE PROGRAM ERROR
+    "verify": ["prompt_file", "code_file", "verification_program"],  # pdd verify PROMPT CODE VERIFICATION_PROGRAM
     # Advanced operations
     "split": ["input_prompt", "input_code", "example_code"],  # pdd split INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
     "change": ["change_prompt_file", "input_code", "input_prompt_file"],  # pdd change CHANGE_PROMPT INPUT_CODE [INPUT_PROMPT]
@@ -430,6 +544,27 @@ def _build_pdd_command_args(command: str, args: Optional[Dict], options: Optiona
     return cmd_args
 
 
+def _parse_error_details(exit_code: int) -> str:
+    """Parse exit code and return user-friendly error details."""
+    error_messages = {
+        1: "Command failed - check the terminal output above for details",
+        2: "Command line usage error - invalid arguments or options",
+        126: "Command not executable - permission denied",
+        127: "Command not found - pdd may not be properly installed",
+        128: "Invalid exit argument",
+        130: "Command terminated by Ctrl+C",
+        137: "Command killed (SIGKILL) - possibly out of memory",
+        139: "Segmentation fault",
+        143: "Command terminated (SIGTERM)",
+    }
+
+    # Check for specific PDD exit codes
+    if exit_code == 1:
+        return "Command failed - this may indicate missing files, authentication issues, or other errors. Check the terminal for details."
+
+    return error_messages.get(exit_code, f"Command exited with code {exit_code}")
+
+
 @router.post("/run", response_model=RunResult)
 async def run_command_in_terminal(request: CommandRequest):
     """
@@ -525,10 +660,20 @@ async def run_command_in_terminal(request: CommandRequest):
         console.print(f"[bold red]Command failed (exit code: {exit_code})[/bold red]")
         console.print(f"[red]{'='*60}[/red]\n")
 
+        # Parse common error patterns based on exit code
+        error_details = _parse_error_details(exit_code)
+
+        return RunResult(
+            success=False,
+            message=f"Command failed with exit code {exit_code}",
+            exit_code=exit_code,
+            error_details=error_details,
+        )
+
     return RunResult(
-        success=exit_code == 0,
-        message="Command completed" if exit_code == 0 else f"Command failed with exit code {exit_code}",
-        exit_code=exit_code,
+        success=True,
+        message="Command completed successfully",
+        exit_code=0,
     )
 
 
@@ -563,3 +708,175 @@ async def get_command_status():
         "running": is_running,
         "command": command_info,
     }
+
+
+# ============================================================================
+# Terminal Spawning - Run commands in separate terminal windows
+# ============================================================================
+
+from ..terminal_spawner import TerminalSpawner
+
+
+class SpawnTerminalResponse(BaseModel):
+    """Response from spawning a terminal."""
+    success: bool
+    message: str
+    command: str
+    platform: str
+    job_id: Optional[str] = None
+
+
+class SpawnedJobCompleteRequest(BaseModel):
+    """Request body for completing a spawned job."""
+    success: bool
+    exit_code: int = 0
+
+
+class SpawnedJobCompleteResponse(BaseModel):
+    """Response from completing a spawned job."""
+    updated: bool
+    job_id: str
+
+
+class SpawnedJobStatus(BaseModel):
+    """Status of a spawned job."""
+    job_id: str
+    command: str
+    status: str
+    started_at: str
+    completed_at: Optional[str] = None
+    exit_code: Optional[int] = None
+
+
+# Track spawned jobs in memory
+# Key: job_id, Value: dict with job info
+_spawned_jobs: Dict[str, dict] = {}
+
+
+@router.post("/spawned-jobs/{job_id}/complete", response_model=SpawnedJobCompleteResponse)
+async def complete_spawned_job(job_id: str, request: SpawnedJobCompleteRequest):
+    """
+    Called by spawned terminal script when command completes.
+
+    The shell script in the terminal calls this endpoint via curl
+    when the command finishes to report success/failure.
+    """
+    if job_id in _spawned_jobs:
+        _spawned_jobs[job_id]["status"] = "completed" if request.success else "failed"
+        _spawned_jobs[job_id]["exit_code"] = request.exit_code
+        _spawned_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        status_str = "completed" if request.success else "failed"
+        console.print(f"[cyan]Spawned job {job_id[:16]}... {status_str} (exit code: {request.exit_code})[/cyan]")
+
+        return SpawnedJobCompleteResponse(updated=True, job_id=job_id)
+
+    return SpawnedJobCompleteResponse(updated=False, job_id=job_id)
+
+
+@router.get("/spawned-jobs/{job_id}/status", response_model=SpawnedJobStatus)
+async def get_spawned_job_status(job_id: str):
+    """
+    Get the status of a spawned job.
+
+    Frontend polls this endpoint to check if spawned jobs have completed.
+    """
+    if job_id in _spawned_jobs:
+        job = _spawned_jobs[job_id]
+        return SpawnedJobStatus(
+            job_id=job_id,
+            command=job.get("command", "unknown"),
+            status=job.get("status", "unknown"),
+            started_at=job.get("started_at", ""),
+            completed_at=job.get("completed_at"),
+            exit_code=job.get("exit_code"),
+        )
+
+    return SpawnedJobStatus(
+        job_id=job_id,
+        command="unknown",
+        status="unknown",
+        started_at="",
+    )
+
+
+@router.post("/spawn-terminal", response_model=SpawnTerminalResponse)
+async def spawn_terminal_command(
+    request: CommandRequest,
+    project_root: Path = Depends(get_project_root),
+):
+    """
+    Spawn a PDD command in a new terminal window.
+
+    The command runs in complete isolation from the server.
+    User sees output directly in the new terminal window.
+
+    This is safer than running commands in the server process because:
+    - Each command runs in its own terminal process
+    - No risk of WebSocket/subprocess conflicts
+    - User can manage terminal windows directly
+
+    The spawned terminal script will call back to report completion status.
+    """
+    # Validate command is allowed
+    if request.command not in ALLOWED_COMMANDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown command: {request.command}. Allowed: {list(ALLOWED_COMMANDS.keys())}"
+        )
+
+    # Generate unique job ID
+    job_id = f"spawned-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+
+    # Smart output path detection for example/test commands
+    # If --output is not already provided, compute it from .pddrc context
+    options = dict(request.options) if request.options else {}
+    if request.command in ("example", "test") and not options.get("output"):
+        prompt_file = request.args.get("prompt_file") if request.args else None
+        if prompt_file:
+            smart_output = _compute_smart_output_path(
+                request.command,
+                prompt_file,
+                project_root,
+            )
+            if smart_output:
+                options["output"] = smart_output
+                console.print(f"[green]Auto-detected output path: {smart_output}[/green]")
+
+    # Build full command with potentially updated options
+    cmd_args = _build_pdd_command_args(request.command, request.args, options)
+    cmd_str = " ".join(cmd_args)
+
+    # Use project root as working directory (not os.getcwd())
+    cwd = str(project_root)
+
+    # Track the job before spawning
+    _spawned_jobs[job_id] = {
+        "job_id": job_id,
+        "command": request.command,
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        "exit_code": None,
+    }
+
+    # Spawn terminal with job_id for callback
+    success = TerminalSpawner.spawn(cmd_str, working_dir=cwd, job_id=job_id)
+
+    if success:
+        console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+        console.print(f"[bold cyan]Spawned terminal: pdd {request.command}[/bold cyan]")
+        console.print(f"[cyan]Job ID: {job_id}[/cyan]")
+        console.print(f"[cyan]{'='*60}[/cyan]\n")
+    else:
+        console.print(f"\n[bold red]Failed to spawn terminal for: pdd {request.command}[/bold red]")
+        # Remove from tracking if spawn failed
+        del _spawned_jobs[job_id]
+
+    return SpawnTerminalResponse(
+        success=success,
+        message="Terminal window opened" if success else "Failed to open terminal",
+        command=request.command,
+        platform=sys.platform,
+        job_id=job_id if success else None,
+    )

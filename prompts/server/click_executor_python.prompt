@@ -7,35 +7,47 @@ Write the pdd/server/click_executor.py module.
 Click command executor providing programmatic execution of PDD CLI commands with output capture, streaming support, and lazy command loading. A lighter-weight alternative to executor.py with caching and capture mode toggle.
 
 % Requirements
-1. **CapturedOutput dataclass**:
+1. **Headless Environment Setup**:
+   - `_setup_headless_environment()`: Set CI=1, PDD_FORCE=1, TERM=dumb
+   - Called at module load to ensure commands run non-interactively
+
+2. **CapturedOutput dataclass**:
    - stdout: str, stderr: str, exit_code: int
    - exception: Optional[Exception]
    - cost: float (default 0.0, for compatibility)
 
-2. **StreamingWriter class**:
+3. **StreamingWriter class**:
    - Wraps StringIO buffer with callback for real-time streaming
    - write(text) -> int, flush(), isatty() -> False
 
-3. **OutputCapture context manager**:
+4. **OutputCapture context manager**:
    - Captures stdout/stderr during command execution
    - Optional callback for real-time streaming
    - Uses StreamingWriter when callback provided, direct StringIO otherwise
 
-4. **create_isolated_context(command, obj, color) -> click.Context**:
+5. **create_isolated_context(command, obj, color) -> click.Context**:
    - Creates Click context with hardcoded PDD defaults (strength=0.5, temperature=0.1, time=0.25)
    - Mocks get_parameter_source to return DEFAULT
 
-5. **ClickCommandExecutor class**:
+6. **Option Type Conversion**:
+   - INTEGER_OPTIONS: max_attempts, target_coverage, depth, limit, max_tokens, timeout, retries, iterations
+   - FLOAT_OPTIONS: strength, temperature, time, threshold, budget
+   - BOOLEAN_OPTIONS: verbose, quiet, force, loop, skip_verify, skip_tests, local, dry_run, auto_submit, recursive
+   - `_convert_option_type(key, value)`: Convert value based on option name
+
+7. **ClickCommandExecutor class**:
    - __init__(base_context_obj, output_callback)
    - execute(command, args, options, capture_output) -> CapturedOutput
    - `capture_output=True`: redirects to StringIO for capture
    - `capture_output=False`: outputs directly to terminal
+   - Normalizes hyphens to underscores in option keys
+   - Converts string values to appropriate types using _convert_option_type
    - Handles click.Abort, click.ClickException, general Exception
 
-6. **get_pdd_command(command_name) -> Optional[click.Command]**:
+8. **get_pdd_command(command_name) -> Optional[click.Command]**:
    - Uses module-level `_command_cache` dict for lazy caching
    - Individual lazy imports to avoid circular dependencies
-   - Supports: sync, update, generate, test, fix, example, bug, crash
+   - Supports: sync, update, generate, test, fix, example, bug, crash, verify
    - Returns None and logs warning for unknown/failed imports
 
 % Dependencies
@@ -45,6 +57,7 @@ Reference pdd.commands modules:
 - generate: generate, test, example
 - fix: fix
 - analysis: bug, crash
+- utility: verify
 
 % Deliverables
 - Code: `pdd/server/click_executor.py`

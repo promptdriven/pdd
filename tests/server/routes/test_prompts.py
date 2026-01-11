@@ -70,6 +70,8 @@ def prompts_test_env():
         "pdd.server.security",
         "pdd.server.token_counter",
         "pdd.preprocess",
+        "pdd.sync_determine_operation",
+        "pdd.llm_invoke",
     ]
     # Also track modules that get imported during test and need cleanup
     modules_to_clear = [
@@ -96,6 +98,11 @@ def prompts_test_env():
 
     mock_token_counter = types.ModuleType("pdd.server.token_counter")
     mock_token_counter.get_token_metrics = MagicMock()
+    mock_token_counter.MODEL_CONTEXT_LIMITS = {
+        "gpt-4": 128000,
+        "claude": 200000,
+        "default": 128000,
+    }
     sys.modules["pdd.server.token_counter"] = mock_token_counter
 
     mock_preprocess = types.ModuleType("pdd.preprocess")
@@ -107,6 +114,21 @@ def prompts_test_env():
         if "pdd.server.routes.prompts" in mod_name:
             del sys.modules[mod_name]
 
+    # Mock sync_determine_operation
+    mock_sync_op = types.ModuleType("pdd.sync_determine_operation")
+    mock_sync_op.read_fingerprint = MagicMock()
+    mock_sync_op.get_pdd_file_paths = MagicMock()
+    mock_sync_op.calculate_sha256 = MagicMock()
+    sys.modules["pdd.sync_determine_operation"] = mock_sync_op
+
+    # Mock llm_invoke module
+    mock_llm_invoke = types.ModuleType("pdd.llm_invoke")
+    mock_llm_invoke.llm_invoke = MagicMock()
+    mock_llm_invoke._load_model_data = MagicMock()
+    mock_llm_invoke.LLM_MODEL_CSV_PATH = "/mock/llm_model.csv"
+    mock_llm_invoke.DEFAULT_BASE_MODEL = "claude-sonnet-4-20250514"
+    sys.modules["pdd.llm_invoke"] = mock_llm_invoke
+
     # Import code under test
     from pdd.server.routes.prompts import (
         router,
@@ -116,7 +138,14 @@ def prompts_test_env():
         PromptAnalyzeRequest,
         PromptAnalyzeResponse,
         TokenMetricsResponse,
-        CostEstimateResponse
+        CostEstimateResponse,
+        get_sync_status,
+        get_available_models,
+        check_match,
+        SyncStatusResponse,
+        ModelsResponse,
+        MatchCheckRequest,
+        MatchCheckResponse,
     )
 
     yield {
@@ -128,9 +157,18 @@ def prompts_test_env():
         'PromptAnalyzeResponse': PromptAnalyzeResponse,
         'TokenMetricsResponse': TokenMetricsResponse,
         'CostEstimateResponse': CostEstimateResponse,
+        'get_sync_status': get_sync_status,
+        'get_available_models': get_available_models,
+        'check_match': check_match,
+        'SyncStatusResponse': SyncStatusResponse,
+        'ModelsResponse': ModelsResponse,
+        'MatchCheckRequest': MatchCheckRequest,
+        'MatchCheckResponse': MatchCheckResponse,
         'mock_security': mock_security,
         'mock_token_counter': mock_token_counter,
         'mock_preprocess': mock_preprocess,
+        'mock_sync_op': mock_sync_op,
+        'mock_llm_invoke': mock_llm_invoke,
     }
 
     # Cleanup: delete all modules we mocked or imported during test
@@ -439,3 +477,192 @@ def test_z3_response_consistency():
     s.add(consistency_rule)
     assert s.check() == z3.unsat  # Inconsistent state
     s.pop()
+
+
+# --- Tests for new endpoints ---
+
+@pytest.mark.asyncio
+async def test_sync_status_never_synced(setup_validator, tmp_path):
+    """Test sync status when no fingerprint exists."""
+    prompts_test_env, mock_validator = setup_validator
+    get_sync_status = prompts_test_env['get_sync_status']
+    mock_sync_op = prompts_test_env['mock_sync_op']
+
+    # Use real tmp_path for project_root
+    mock_validator.project_root = tmp_path
+
+    # Set up mocks
+    mock_paths = MagicMock()
+    mock_paths.__getitem__ = lambda self, key: MagicMock(exists=lambda: key == 'prompt')
+    mock_sync_op.get_pdd_file_paths.return_value = mock_paths
+    mock_sync_op.read_fingerprint.return_value = None  # No fingerprint
+
+    response = await get_sync_status(
+        basename="test_module",
+        language="python",
+        validator=mock_validator
+    )
+
+    assert response.status == "never_synced"
+    assert response.fingerprint_exists is False
+
+
+@pytest.mark.asyncio
+async def test_sync_status_in_sync(setup_validator, tmp_path):
+    """Test sync status when files are in sync."""
+    prompts_test_env, mock_validator = setup_validator
+    get_sync_status = prompts_test_env['get_sync_status']
+    mock_sync_op = prompts_test_env['mock_sync_op']
+
+    # Use real tmp_path for project_root
+    mock_validator.project_root = tmp_path
+
+    # Set up mocks
+    mock_prompt_path = MagicMock()
+    mock_prompt_path.exists.return_value = True
+    mock_code_path = MagicMock()
+    mock_code_path.exists.return_value = True
+
+    mock_sync_op.get_pdd_file_paths.return_value = {
+        'prompt': mock_prompt_path,
+        'code': mock_code_path
+    }
+
+    # Fingerprint with matching hashes
+    mock_fingerprint = MagicMock()
+    mock_fingerprint.prompt_hash = "abc123"
+    mock_fingerprint.code_hash = "def456"
+    mock_fingerprint.timestamp = "2024-01-01T00:00:00Z"
+    mock_fingerprint.command = "generate"
+    mock_sync_op.read_fingerprint.return_value = mock_fingerprint
+
+    # Current hashes match fingerprint
+    mock_sync_op.calculate_sha256.side_effect = ["abc123", "def456"]
+
+    response = await get_sync_status(
+        basename="test_module",
+        language="python",
+        validator=mock_validator
+    )
+
+    assert response.status == "in_sync"
+    assert response.prompt_modified is False
+    assert response.code_modified is False
+
+
+@pytest.mark.asyncio
+async def test_sync_status_prompt_changed(setup_validator, tmp_path):
+    """Test sync status when prompt has changed."""
+    prompts_test_env, mock_validator = setup_validator
+    get_sync_status = prompts_test_env['get_sync_status']
+    mock_sync_op = prompts_test_env['mock_sync_op']
+
+    # Use real tmp_path for project_root
+    mock_validator.project_root = tmp_path
+
+    # Set up mocks
+    mock_prompt_path = MagicMock()
+    mock_prompt_path.exists.return_value = True
+    mock_code_path = MagicMock()
+    mock_code_path.exists.return_value = True
+
+    mock_sync_op.get_pdd_file_paths.return_value = {
+        'prompt': mock_prompt_path,
+        'code': mock_code_path
+    }
+
+    mock_fingerprint = MagicMock()
+    mock_fingerprint.prompt_hash = "old_hash"
+    mock_fingerprint.code_hash = "def456"
+    mock_fingerprint.timestamp = "2024-01-01T00:00:00Z"
+    mock_fingerprint.command = "generate"
+    mock_sync_op.read_fingerprint.return_value = mock_fingerprint
+
+    # Prompt hash changed, code hash same
+    mock_sync_op.calculate_sha256.side_effect = ["new_hash", "def456"]
+
+    response = await get_sync_status(
+        basename="test_module",
+        language="python",
+        validator=mock_validator
+    )
+
+    assert response.status == "prompt_changed"
+    assert response.prompt_modified is True
+    assert response.code_modified is False
+
+
+@pytest.mark.asyncio
+async def test_get_available_models(prompts_test_env):
+    """Test getting available models list."""
+    import pandas as pd
+
+    get_available_models = prompts_test_env['get_available_models']
+    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+
+    # Create mock DataFrame
+    mock_df = pd.DataFrame([
+        {
+            'model': 'claude-sonnet-4-20250514',
+            'provider': 'Anthropic',
+            'input': 3.0,
+            'output': 15.0,
+            'coding_arena_elo': 1400,
+            'max_reasoning_tokens': 0,
+            'reasoning_type': 'none',
+            'structured_output': True,
+        },
+        {
+            'model': 'gpt-4-turbo',
+            'provider': 'OpenAI',
+            'input': 10.0,
+            'output': 30.0,
+            'coding_arena_elo': 1350,
+            'max_reasoning_tokens': 0,
+            'reasoning_type': 'none',
+            'structured_output': True,
+        }
+    ])
+    mock_llm_invoke._load_model_data.return_value = mock_df
+
+    response = await get_available_models()
+
+    assert len(response.models) == 2
+    # Should be sorted by ELO descending
+    assert response.models[0].model == 'claude-sonnet-4-20250514'
+    assert response.models[0].elo == 1400
+    assert response.default_model == 'claude-sonnet-4-20250514'
+
+
+@pytest.mark.asyncio
+async def test_check_match(prompts_test_env):
+    """Test match checking endpoint."""
+    check_match = prompts_test_env['check_match']
+    MatchCheckRequest = prompts_test_env['MatchCheckRequest']
+    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+
+    # Mock LLM response
+    mock_llm_invoke.llm_invoke.return_value = {
+        'result': {
+            'match_score': 85,
+            'summary': 'Code largely matches requirements',
+            'missing': ['error handling'],
+            'extra': [],
+            'suggestions': ['Add try/except blocks']
+        },
+        'cost': 0.001,
+        'model_name': 'claude-sonnet-4-20250514'
+    }
+
+    request = MatchCheckRequest(
+        prompt_content="Write a function that adds two numbers",
+        code_content="def add(a, b): return a + b",
+        strength=0.5
+    )
+
+    response = await check_match(request)
+
+    assert response.result.match_score == 85
+    assert response.result.summary == 'Code largely matches requirements'
+    assert len(response.result.missing) == 1
+    assert response.cost == 0.001

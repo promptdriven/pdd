@@ -194,6 +194,8 @@ def app_module_with_mocks():
         _mock_routes_commands = types.ModuleType("pdd.server.routes.commands")
         _mock_routes_commands.router = APIRouter()
         _mock_routes_commands.get_job_manager = MagicMock(__name__="get_job_manager_mock")
+        _mock_routes_commands.get_project_root = MagicMock(__name__="get_project_root_mock")
+        _mock_routes_commands.set_project_root = MagicMock(__name__="set_project_root_mock")
         sys.modules["pdd.server.routes.commands"] = _mock_routes_commands
 
         _mock_routes_ws = types.ModuleType("pdd.server.routes.websocket")
@@ -284,7 +286,7 @@ def test_app_state_initialization(app_module_with_mocks, mock_project_root, mock
     assert isinstance(state.uptime_seconds, float)
 
     mock_managers["PathValidator"].assert_called_once_with(state.project_root)
-    mock_managers["JobManager"].assert_called_once_with(max_concurrent=2)
+    mock_managers["JobManager"].assert_called_once_with(max_concurrent=3)
     mock_managers["ConnectionManager"].assert_called_once()
 
 
