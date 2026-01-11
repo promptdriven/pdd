@@ -22,7 +22,7 @@ from .security import (
 )
 from .jobs import JobManager
 from .routes.websocket import ConnectionManager, create_websocket_routes
-from .routes import files, commands, prompts
+from .routes import auth, files, commands, prompts
 from .routes import websocket as ws_routes
 
 # Initialize Rich console
@@ -38,17 +38,25 @@ class AppState:
     Holds thread-safe references to shared managers and configuration.
     """
 
-    def __init__(self, project_root: Path):
+    def __init__(self, project_root: Path, config: Optional[ServerConfig] = None):
         self.project_root = project_root.resolve()
         self.start_time = datetime.now(timezone.utc)
         self.version = "0.1.0"  # In a real app, load from package metadata
-        
+
+        # Store server config for port access
+        self.config = config or ServerConfig()
+
         # Initialize managers
         self.path_validator = PathValidator(self.project_root)
         # SAFETY: Limit concurrent jobs to 3 - LLM calls are resource-intensive
         # Running too many in parallel can exhaust memory/CPU and crash the system
         self.job_manager = JobManager(max_concurrent=3)
         self.connection_manager = ConnectionManager()
+
+    @property
+    def server_port(self) -> int:
+        """Get the configured server port."""
+        return self.config.port
 
     @property
     def uptime_seconds(self) -> float:
@@ -79,6 +87,11 @@ def get_job_manager() -> JobManager:
 def get_connection_manager() -> ConnectionManager:
     """Dependency to get the WebSocket connection manager."""
     return get_app_state().connection_manager
+
+
+def get_server_port() -> int:
+    """Dependency to get the configured server port."""
+    return get_app_state().server_port
 
 
 # ============================================================================
@@ -164,7 +177,7 @@ def create_app(
         Configured FastAPI application.
     """
     global _app_state
-    _app_state = AppState(project_root)
+    _app_state = AppState(project_root, config=config)
 
     # Determine configuration with proper fallback
     origins = None
@@ -207,10 +220,12 @@ def create_app(
     app.dependency_overrides[files.get_path_validator] = get_path_validator
     app.dependency_overrides[commands.get_job_manager] = get_job_manager
     app.dependency_overrides[commands.get_project_root] = lambda: get_app_state().project_root
+    app.dependency_overrides[commands.get_server_port] = get_server_port
     app.dependency_overrides[ws_routes.get_job_manager] = get_job_manager
     app.dependency_overrides[ws_routes.get_project_root] = lambda: get_app_state().project_root
     app.dependency_overrides[prompts.get_path_validator] = get_path_validator
 
+    app.include_router(auth.router)
     app.include_router(files.router)
     app.include_router(commands.router)
     app.include_router(prompts.router)

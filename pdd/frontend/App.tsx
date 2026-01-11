@@ -6,6 +6,8 @@ import PromptSpace from './components/PromptSpace';
 import ArchitectureView from './components/ArchitectureView';
 import ProjectSettings from './components/ProjectSettings';
 import JobDashboard, { BatchOperation } from './components/JobDashboard';
+import AuthStatusIndicator from './components/AuthStatusIndicator';
+import ReauthModal from './components/ReauthModal';
 import { api, PromptInfo, RunResult } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
 import { useJobs, JobInfo } from './hooks/useJobs';
@@ -44,6 +46,9 @@ const App: React.FC = () => {
 
   // Batch operation state (for architecture prompt generation)
   const [batchOperation, setBatchOperation] = useState<BatchOperation | null>(null);
+
+  // Auth modal state
+  const [showReauthModal, setShowReauthModal] = useState(false);
 
   // Toast notifications
   const { addToast } = useToast();
@@ -267,6 +272,21 @@ const App: React.FC = () => {
         // Verify command: pdd verify PROMPT_FILE CODE_FILE VERIFICATION_PROGRAM [options]
         args.prompt_file = prompt.prompt;
         args.code_file = codeFile;
+        if (options['verification-program']) {
+          args.verification_program = options['verification-program'];
+          delete options['verification-program'];
+        }
+      } else if (command === CommandType.SUBMIT_EXAMPLE) {
+        // Submit Example uses fix --loop --auto-submit under the hood
+        args.prompt_file = prompt.prompt;
+        args.code_file = codeFile;
+        args.unit_test_files = testFile;
+        // Create a placeholder error file path (loop mode doesn't require existing error file)
+        args.error_file = '.pdd/submit_example_errors.log';
+        // Force loop and auto-submit flags
+        options['loop'] = true;
+        options['auto-submit'] = true;
+        // Move verification-program from options to args
         if (options['verification-program']) {
           args.verification_program = options['verification-program'];
           delete options['verification-program'];
@@ -525,6 +545,9 @@ const App: React.FC = () => {
               <span className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${serverConnected ? 'bg-green-400 animate-pulse-slow' : 'bg-yellow-400 animate-pulse'}`} />
               <span className="hidden xs:inline">{serverConnected ? 'Connected' : 'Offline'}</span>
             </div>
+
+            {/* Cloud auth status */}
+            <AuthStatusIndicator onReauth={() => setShowReauthModal(true)} />
           </div>
         </div>
       </header>
@@ -804,6 +827,11 @@ const App: React.FC = () => {
           <span>{isAnyJobRunning ? 'Jobs running - see dashboard below' : 'Commands tracked in dashboard'}</span>
         </div>
       </footer>
+
+      {/* Re-authentication modal */}
+      {showReauthModal && (
+        <ReauthModal onClose={() => setShowReauthModal(false)} />
+      )}
     </div>
   );
 };

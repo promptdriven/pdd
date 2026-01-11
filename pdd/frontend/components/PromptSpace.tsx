@@ -184,6 +184,11 @@ const CommandOptionsModal: React.FC<{
       defaults['_test'] = prompt.test || '';
     }
 
+    // Special case: for Submit Example, pre-fill verification-program with example file
+    if (command.name === CommandType.SUBMIT_EXAMPLE && prompt.example) {
+      defaults['verification-program'] = prompt.example;
+    }
+
     // Set global option defaults
     GLOBAL_OPTIONS.forEach(opt => {
       defaults[`_global_${opt.name}`] = opt.defaultValue;

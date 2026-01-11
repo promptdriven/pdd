@@ -224,6 +224,21 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
       { name: 'agentic-fallback', type: 'checkbox', placeholder: '', description: 'Enable agentic fallback if primary fix fails', defaultValue: true },
     ]
   },
+  [CommandType.SUBMIT_EXAMPLE]: {
+    name: CommandType.SUBMIT_EXAMPLE,
+    backendName: 'fix',  // Uses fix command under the hood
+    description: "Submit a successful fix as a few-shot example to PDD Cloud. Runs fix --loop --auto-submit with verification to iteratively fix and submit the example.",
+    shortDescription: "Submit Example",
+    icon: "🚀",
+    requiresPrompt: true,
+    requiresCode: true,
+    requiresTest: true,
+    options: [
+      { name: 'verification-program', type: 'file', placeholder: 'examples/calculator_example.py', description: 'Verification program to check the fix (required). The example file typically serves as the verification program.', required: true },
+      { name: 'max-attempts', type: 'number', placeholder: '5', description: 'Maximum fix attempts before giving up', defaultValue: 5 },
+      { name: 'budget', type: 'number', placeholder: '10', description: 'Maximum cost in dollars', defaultValue: 10 },
+    ]
+  },
 
   // Advanced Operations
   [CommandType.SPLIT]: {
