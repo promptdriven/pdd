@@ -410,6 +410,66 @@ def test_orchestrator_review_loop_max_iterations(mock_dependencies, temp_cwd):
     assert len(step11_calls) == 5
 
 # -----------------------------------------------------------------------------
+# Step 7 Stop Condition Tests (TDD)
+# -----------------------------------------------------------------------------
+
+def test_step7_stop_with_stop_condition_marker(mock_dependencies, temp_cwd):
+    """
+    Test that Step 7 stops when explicit STOP_CONDITION marker is present.
+
+    TDD: This test FAILS with current implementation because:
+    - Current check: "Architectural Decision Needed" (capital D, N)
+    - Test output: "Architectural decision needed" (lowercase d, n)
+    - Case mismatch → current check fails → workflow continues → test fails
+
+    After fix: New check matches exactly → workflow stops → test passes
+    """
+    mock_run, _, _, _ = mock_dependencies
+
+    def side_effect(prompt, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step7":
+            # Use lowercase to ensure current check fails (TDD red phase)
+            return (True, "Posted to GitHub.\nSTOP_CONDITION: Architectural decision needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Feature request",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=777,
+        issue_author="user",
+        issue_title="Feature",
+        cwd=temp_cwd
+    )
+
+    assert success is False, "Workflow should have stopped at step 7"
+    assert "Stopped at step 7" in msg
+    assert "Architectural decision needed" in msg
+
+
+def test_step7_prompt_has_stop_condition_marker():
+    """
+    Verify Step 7 prompt documents the exact STOP_CONDITION marker.
+
+    TDD: This test FAILS until we add the CRITICAL section to the prompt.
+    """
+    prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_change_step7_architecture_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+
+    # Must have CRITICAL section
+    assert "% CRITICAL" in prompt_content, "Step 7 prompt missing CRITICAL section"
+
+    # Must document exact marker
+    assert "STOP_CONDITION: Architectural decision needed" in prompt_content, (
+        "Step 7 prompt must document exact marker: 'STOP_CONDITION: Architectural decision needed'"
+    )
+
+
+# -----------------------------------------------------------------------------
 # Z3 Formal Verification
 # -----------------------------------------------------------------------------
 
