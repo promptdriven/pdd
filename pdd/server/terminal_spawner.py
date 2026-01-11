@@ -43,7 +43,8 @@ class TerminalSpawner:
             True if terminal was spawned successfully
         """
         if working_dir:
-            command = f"cd {working_dir} && {command}"
+            # Quote the path to handle spaces and special characters
+            command = f'cd "{working_dir}" && {command}'
 
         platform = sys.platform
 
