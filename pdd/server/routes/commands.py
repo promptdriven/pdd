@@ -37,6 +37,11 @@ from ..models import CommandRequest, JobHandle, JobResult, JobStatus
 from ..jobs import JobManager
 from ..click_executor import ClickCommandExecutor, get_pdd_command
 
+# Import construct_paths functions for smart output path detection
+from ...construct_paths import (
+    detect_context_for_file,
+)
+
 
 class RunResult(BaseModel):
     """Result of running a command in terminal mode."""
@@ -129,6 +134,87 @@ ALLOWED_COMMANDS = {
     "conflicts": "Check for conflicts between prompt files",
     "preprocess": "Preprocess prompt file for LLM use",
 }
+
+
+def _compute_smart_output_path(
+    command: str,
+    prompt_file: str,
+    project_root: Path,
+) -> Optional[str]:
+    """
+    Compute the correct output path based on .pddrc context detection.
+
+    For commands like 'example' and 'test', this:
+    1. Detects which context the prompt file belongs to
+    2. Gets the appropriate output path from context config (e.g., example_output_path)
+    3. Preserves subdirectory structure from the prompt file
+
+    Example:
+        prompt_file: "prompts/server/terminal_spawner_python.prompt"
+        context: pdd_cli (example_output_path: "context")
+        -> output: "context/server/terminal_spawner_example.py"
+
+    Args:
+        command: The pdd command (e.g., "example", "test")
+        prompt_file: Path to the prompt file
+        project_root: Project root directory
+
+    Returns:
+        Computed output path, or None if detection fails
+    """
+    if command not in ("example", "test"):
+        return None
+
+    try:
+        # Detect context for the prompt file
+        context_name, context_defaults = detect_context_for_file(
+            prompt_file,
+            repo_root=str(project_root)
+        )
+
+        if not context_name or not context_defaults:
+            return None
+
+        # Get the appropriate output path based on command
+        if command == "example":
+            base_output = context_defaults.get("example_output_path")
+        elif command == "test":
+            base_output = context_defaults.get("test_output_path")
+        else:
+            return None
+
+        if not base_output:
+            return None
+
+        # Compute subdirectory structure from prompt file path
+        # e.g., prompts/server/foo.prompt -> server/
+        prompt_path = Path(prompt_file)
+
+        # Try to find "prompts" directory in the path and get relative subdirectory
+        path_parts = prompt_path.parts
+        subdirs = []
+
+        for i, part in enumerate(path_parts):
+            if part == "prompts":
+                # Get subdirectories between "prompts" and the filename
+                subdirs = list(path_parts[i+1:-1])
+                break
+
+        # If we found subdirectories, append them to the output path
+        if subdirs:
+            output_path = os.path.join(base_output, *subdirs)
+            # Ensure it ends with / to indicate directory
+            if not output_path.endswith('/'):
+                output_path += '/'
+            return output_path
+
+        # No subdirectories, just return base output
+        return base_output
+
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not compute smart output path: {e}[/yellow]")
+        return None
+
 
 router = APIRouter(prefix="/api/v1/commands", tags=["commands"])
 
@@ -742,8 +828,23 @@ async def spawn_terminal_command(
     # Generate unique job ID
     job_id = f"spawned-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
 
-    # Build full command
-    cmd_args = _build_pdd_command_args(request.command, request.args, request.options)
+    # Smart output path detection for example/test commands
+    # If --output is not already provided, compute it from .pddrc context
+    options = dict(request.options) if request.options else {}
+    if request.command in ("example", "test") and not options.get("output"):
+        prompt_file = request.args.get("prompt_file") if request.args else None
+        if prompt_file:
+            smart_output = _compute_smart_output_path(
+                request.command,
+                prompt_file,
+                project_root,
+            )
+            if smart_output:
+                options["output"] = smart_output
+                console.print(f"[green]Auto-detected output path: {smart_output}[/green]")
+
+    # Build full command with potentially updated options
+    cmd_args = _build_pdd_command_args(request.command, request.args, options)
     cmd_str = " ".join(cmd_args)
 
     # Use project root as working directory (not os.getcwd())

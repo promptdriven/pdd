@@ -75,6 +75,15 @@
       - POST /commands/spawn-terminal: Spawn command in new terminal window
       - Uses TerminalSpawner for cross-platform support (macOS, Linux, Windows)
       - Returns SpawnTerminalResponse with success status and platform
+      - Smart output path detection: auto-computes --output for example/test commands
+        using detect_context_for_file() from pdd.construct_paths
+
+  11. **Smart Output Path Detection** (`_compute_smart_output_path`):
+      - For example/test commands, detects output path from .pddrc context
+      - Uses detect_context_for_file() to find matching context
+      - Preserves subdirectory structure from prompt path
+      - Example: prompts/server/foo.prompt + context.example_output_path="context"
+        -> output: "context/server/"
 
 % Dependencies
   <fastapi_example>
@@ -91,6 +100,7 @@
   <pdd.cli><include>context/cli_example.py</include></pdd.cli>
   </cli_reference>
   Use TerminalSpawner from pdd/server/terminal_spawner.py for spawning terminal windows
+  Use detect_context_for_file from pdd/construct_paths.py for smart output path detection
 
 % Instructions
   - Create router with prefix="/api/v1/commands", tags=["commands"]

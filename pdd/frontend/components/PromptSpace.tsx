@@ -9,12 +9,15 @@ import { javascript } from '@codemirror/lang-javascript';
 import { java } from '@codemirror/lang-java';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked, Marked } from 'marked';
-import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics, RunResult } from '../api';
+import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics, RunResult, MatchCheckResponse } from '../api';
 import { CommandType, CommandConfig, CommandOption, GlobalOption } from '../types';
 import { COMMANDS, GLOBAL_OPTIONS, GLOBAL_DEFAULTS } from '../constants';
 import type { GlobalDefaults } from '../types';
 import PromptMetricsBar from './PromptMetricsBar';
 import GuidanceSidebar from './GuidanceSidebar';
+import SyncStatusBadge from './SyncStatusBadge';
+import ModelSelector from './ModelSelector';
+import { ModelInfo } from '../api';
 import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
 import { findIncludeAtCursor, IncludeTagInfo, parseIncludeManyPaths } from '../lib/includeAnalyzer';
 
@@ -448,6 +451,9 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
+  // Model selection state
+  const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
+
   // Include token analysis state
   const [includeAnalysis, setIncludeAnalysis] = useState<{
     visible: boolean;
@@ -467,6 +473,13 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [codeError, setCodeError] = useState<string | null>(null);
   const codeEditorContainerRef = useRef<HTMLDivElement>(null);
   const codeEditorViewRef = useRef<EditorView | null>(null);
+
+  // Match check modal state
+  const [showMatchModal, setShowMatchModal] = useState(false);
+  const [matchResult, setMatchResult] = useState<MatchCheckResponse | null>(null);
+  const [matchStrength, setMatchStrength] = useState(0.5);
+  const [isCheckingMatch, setIsCheckingMatch] = useState(false);
+  const [matchError, setMatchError] = useState<string | null>(null);
 
   // Update preview content when toggling preview on or when view mode changes
   useEffect(() => {
@@ -608,7 +621,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     };
   }, [content, showPreview, viewMode]);
 
-  // Analyze prompt for metrics (debounced) - uses current editor content
+  // Analyze prompt for metrics (debounced) - uses current editor content and selected model
   useEffect(() => {
     if (content === null) return;
 
@@ -620,9 +633,12 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
           ? editorViewRef.current.state.doc.toString()
           : editedContentRef.current || content;
 
+        // Use selected model for cost estimation, fallback to Claude Sonnet
+        const modelForAnalysis = selectedModel?.model || 'claude-sonnet-4-20250514';
+
         const result = await api.analyzePrompt({
           path: prompt.prompt,
-          model: 'claude-sonnet-4-20250514',
+          model: modelForAnalysis,
           preprocess: true,
           content: currentContent,  // Send current content instead of reading from file
         });
@@ -638,7 +654,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     // Debounce by 500ms
     const timeoutId = setTimeout(analyzePrompt, 500);
     return () => clearTimeout(timeoutId);
-  }, [content, prompt.prompt, hasChanges]);  // Re-analyze when content changes (tracked by hasChanges)
+  }, [content, prompt.prompt, hasChanges, selectedModel]);  // Re-analyze when content or model changes
 
   // Load code content when code panel is opened
   const loadCodeContent = useCallback(async () => {
@@ -672,6 +688,40 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const handleReloadCode = useCallback(() => {
     loadCodeContent();
   }, [loadCodeContent]);
+
+  // Handle match check
+  const handleCheckMatch = async () => {
+    if (!codeContent) {
+      // Load code content if not already loaded
+      if (prompt.code) {
+        await loadCodeContent();
+      } else {
+        setMatchError('No code file associated with this prompt');
+        return;
+      }
+    }
+
+    setIsCheckingMatch(true);
+    setMatchError(null);
+
+    try {
+      // Get current prompt content from editor or state
+      const promptContent = editorViewRef.current
+        ? editorViewRef.current.state.doc.toString()
+        : editedContentRef.current || content || '';
+
+      const result = await api.checkMatch({
+        prompt_content: promptContent,
+        code_content: codeContent || '',
+        strength: matchStrength,
+      });
+      setMatchResult(result);
+    } catch (error: any) {
+      setMatchError(error.message || 'Failed to check match');
+    } finally {
+      setIsCheckingMatch(false);
+    }
+  };
 
   // Initialize code editor when content is loaded and panel is visible
   useEffect(() => {
@@ -941,6 +991,13 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 {prompt.language}
               </span>
             )}
+            {prompt.sync_basename && prompt.language && (
+              <SyncStatusBadge
+                basename={prompt.sync_basename}
+                language={prompt.language}
+                refreshTrigger={saveSuccess ? 1 : 0}
+              />
+            )}
           </div>
         </div>
 
@@ -1194,6 +1251,8 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 timeValue={GLOBAL_DEFAULTS.time}
                 promptLineCount={content ? content.split('\n').length : undefined}
                 codeLineCount={codeContent ? codeContent.split('\n').length : undefined}
+                selectedModel={selectedModel}
+                onModelChange={setSelectedModel}
               />
 
               {/* Editor path bar - responsive */}
@@ -1250,6 +1309,29 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   <span className="hidden sm:inline">Guide</span>
+                </button>
+                {/* Check Match button */}
+                <button
+                  onClick={() => setShowMatchModal(true)}
+                  disabled={!prompt.code || isCheckingMatch}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
+                    !prompt.code
+                      ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                      : 'bg-purple-600/50 text-purple-200 hover:bg-purple-500 hover:text-white'
+                  }`}
+                  title={!prompt.code ? 'No code file available' : 'Check prompt-code match with LLM'}
+                >
+                  {isCheckingMatch ? (
+                    <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  )}
+                  <span className="hidden sm:inline">Match</span>
                 </button>
                 {/* Preview toggle button */}
                 <button
@@ -1463,6 +1545,139 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
               <p className="text-[10px] text-surface-500">
                 Press <kbd className="px-1 py-0.5 bg-surface-700 rounded text-surface-400">Cmd+.</kbd> to analyze include at cursor
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Match Check Modal */}
+      {showMatchModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={() => setShowMatchModal(false)}>
+          <div
+            className="glass rounded-2xl border border-surface-600/50 shadow-2xl w-full max-w-lg animate-scale-in"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-surface-700/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Check Prompt-Code Match</h3>
+                  <p className="text-sm text-surface-400">Evaluate how well your code implements the prompt</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 space-y-4">
+              {/* Strength selector */}
+              <div>
+                <label className="text-sm text-surface-300 mb-2 block">Model Strength</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { value: 0.25, label: 'Fast', desc: 'Quick check' },
+                    { value: 0.5, label: 'Balanced', desc: 'Default' },
+                    { value: 0.75, label: 'Strong', desc: 'More accurate' },
+                    { value: 1.0, label: 'Best', desc: 'Highest accuracy' },
+                  ].map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setMatchStrength(opt.value)}
+                      className={`py-2 px-3 rounded-lg text-xs transition-all ${
+                        matchStrength === opt.value
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-surface-700 text-surface-300 hover:bg-surface-600'
+                      }`}
+                    >
+                      <div className="font-medium">{opt.label}</div>
+                      <div className="text-[10px] opacity-70">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Error display */}
+              {matchError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                  <p className="text-sm text-red-300">{matchError}</p>
+                </div>
+              )}
+
+              {/* Results display */}
+              {matchResult && (
+                <div className="p-4 bg-surface-900/50 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className="text-3xl font-bold"
+                      style={{
+                        color: matchResult.result.match_score >= 80 ? '#10b981' :
+                               matchResult.result.match_score >= 50 ? '#f59e0b' : '#ef4444'
+                      }}
+                    >
+                      {matchResult.result.match_score}%
+                    </span>
+                    <span className="text-xs text-surface-500">
+                      {matchResult.model} (${matchResult.cost.toFixed(4)})
+                    </span>
+                  </div>
+                  <p className="text-sm text-surface-300">{matchResult.result.summary}</p>
+
+                  {matchResult.result.missing && matchResult.result.missing.length > 0 && (
+                    <div>
+                      <p className="text-xs text-red-400 font-medium mb-1">Missing Requirements:</p>
+                      <ul className="text-xs text-surface-400 list-disc ml-4 space-y-0.5">
+                        {matchResult.result.missing.map((m, i) => <li key={i}>{m}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  {matchResult.result.extra && matchResult.result.extra.length > 0 && (
+                    <div>
+                      <p className="text-xs text-yellow-400 font-medium mb-1">Extra Code (not in prompt):</p>
+                      <ul className="text-xs text-surface-400 list-disc ml-4 space-y-0.5">
+                        {matchResult.result.extra.map((e, i) => <li key={i}>{e}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  {matchResult.result.suggestions && matchResult.result.suggestions.length > 0 && (
+                    <div>
+                      <p className="text-xs text-blue-400 font-medium mb-1">Suggestions:</p>
+                      <ul className="text-xs text-surface-400 list-disc ml-4 space-y-0.5">
+                        {matchResult.result.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-surface-700/50 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowMatchModal(false); setMatchResult(null); setMatchError(null); }}
+                className="px-4 py-2 text-sm text-surface-300 hover:text-white transition-colors"
+              >
+                Close
+              </button>
+              <button
+                onClick={handleCheckMatch}
+                disabled={isCheckingMatch}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+              >
+                {isCheckingMatch ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Checking...
+                  </>
+                ) : (
+                  'Run Check'
+                )}
+              </button>
             </div>
           </div>
         </div>
