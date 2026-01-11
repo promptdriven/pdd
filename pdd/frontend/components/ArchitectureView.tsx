@@ -39,7 +39,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [techStackContent, setTechStackContent] = useState('');
   const [techStackPath, setTechStackPath] = useState<string | null>(null);
   const [showTechStack, setShowTechStack] = useState(false);
-  const [showFileBrowser, setShowFileBrowser] = useState<'prd' | 'techStack' | null>(null);
+  const [showFileBrowser, setShowFileBrowser] = useState<'prd' | 'techStack' | 'architecture' | null>(null);
+  const [architecturePathInput, setArchitecturePathInput] = useState('architecture.json');
+  const [loadArchitectureError, setLoadArchitectureError] = useState<string | null>(null);
 
   // Architecture generation state
   const [isGenerating, setIsGenerating] = useState(false);
@@ -98,6 +100,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         return;
       }
 
+      // Set loading true when server connects (handles reconnection case)
+      setLoading(true);
+
       try {
         const result = await api.checkArchitectureExists();
         if (result.exists) {
@@ -134,12 +139,51 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       } else if (showFileBrowser === 'techStack') {
         setTechStackContent(content.content);
         setTechStackPath(path);
+      } else if (showFileBrowser === 'architecture') {
+        // Load architecture.json file directly
+        try {
+          const modules = JSON.parse(content.content) as ArchitectureModule[];
+          setArchitecture(modules);
+          setMode('graph');
+          // Load existing prompts after architecture is loaded
+          await loadExistingPrompts();
+        } catch (parseError) {
+          console.error('Failed to parse architecture.json:', parseError);
+          alert('Invalid architecture.json format. Please select a valid architecture file.');
+          return;
+        }
       }
       setShowFileBrowser(null);
     } catch (e: any) {
       console.error('Failed to load file:', e);
     }
-  }, [showFileBrowser, mode]);
+  }, [showFileBrowser, mode, loadExistingPrompts]);
+
+  // Load architecture from path input
+  const handleLoadArchitectureFromPath = useCallback(async () => {
+    if (!architecturePathInput.trim()) {
+      setLoadArchitectureError('Please enter a file path');
+      return;
+    }
+
+    setLoadArchitectureError(null);
+    try {
+      const content = await api.getFileContent(architecturePathInput.trim());
+      const modules = JSON.parse(content.content) as ArchitectureModule[];
+      setArchitecture(modules);
+      setMode('graph');
+      await loadExistingPrompts();
+    } catch (e: any) {
+      console.error('Failed to load architecture:', e);
+      if (e.message?.includes('404') || e.message?.includes('not found')) {
+        setLoadArchitectureError(`File not found: ${architecturePathInput}`);
+      } else if (e instanceof SyntaxError) {
+        setLoadArchitectureError('Invalid JSON format in file');
+      } else {
+        setLoadArchitectureError(e.message || 'Failed to load architecture file');
+      }
+    }
+  }, [architecturePathInput, loadExistingPrompts]);
 
   // Generate architecture from PRD
   const handleGenerate = async () => {
@@ -323,9 +367,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           </div>
           <h2 className="text-xl font-semibold text-white mb-2">No architecture.json found</h2>
           <p className="text-surface-400 text-sm mb-6">
-            Create a PRD (Product Requirements Document) to generate your project architecture.
+            Generate a new architecture from a PRD, or load an existing architecture.json file.
           </p>
-          <div className="flex gap-3 justify-center">
+
+          {/* Primary actions */}
+          <div className="flex gap-3 justify-center mb-4">
             <button
               onClick={() => setMode('editor')}
               className="px-4 py-2.5 bg-accent-600 hover:bg-accent-500 text-white rounded-xl font-medium transition-colors"
@@ -338,9 +384,41 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
               className="px-4 py-2.5 bg-surface-700 hover:bg-surface-600 text-white rounded-xl font-medium transition-colors"
               disabled={!serverConnected}
             >
-              Load from file
+              Load PRD
             </button>
           </div>
+
+          {/* Secondary action - load existing architecture */}
+          <div className="pt-4 border-t border-surface-700/50">
+            <p className="text-surface-500 text-xs mb-3">Or load an existing architecture file</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={architecturePathInput}
+                onChange={(e) => {
+                  setArchitecturePathInput(e.target.value);
+                  setLoadArchitectureError(null);
+                }}
+                placeholder="architecture.json"
+                className="flex-1 px-3 py-2 bg-surface-900/50 border border-surface-600 rounded-lg text-sm text-white placeholder-surface-500 focus:outline-none focus:border-accent-500"
+                disabled={!serverConnected}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleLoadArchitectureFromPath();
+                }}
+              />
+              <button
+                onClick={handleLoadArchitectureFromPath}
+                className="px-4 py-2 bg-surface-700 hover:bg-surface-600 text-surface-300 hover:text-white rounded-lg text-sm font-medium transition-colors"
+                disabled={!serverConnected}
+              >
+                Load
+              </button>
+            </div>
+            {loadArchitectureError && (
+              <p className="text-red-400 text-xs mt-2">{loadArchitectureError}</p>
+            )}
+          </div>
+
           {!serverConnected && (
             <p className="text-yellow-400 text-xs mt-4">
               Connect to server to enable architecture generation
@@ -568,6 +646,37 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                     {architecture ? 'Regenerate' : 'Generate Architecture'}
                   </button>
                 )}
+              </div>
+
+              {/* Load Different Architecture File */}
+              <div className="border-t border-surface-700/50">
+                <div className="p-3">
+                  <p className="text-xs font-medium text-surface-400 uppercase tracking-wider mb-2">Load Architecture File</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={architecturePathInput}
+                      onChange={(e) => {
+                        setArchitecturePathInput(e.target.value);
+                        setLoadArchitectureError(null);
+                      }}
+                      placeholder="architecture.json"
+                      className="flex-1 px-2 py-1.5 bg-surface-900/50 border border-surface-600 rounded text-xs text-white placeholder-surface-500 focus:outline-none focus:border-accent-500"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleLoadArchitectureFromPath();
+                      }}
+                    />
+                    <button
+                      onClick={handleLoadArchitectureFromPath}
+                      className="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 text-surface-300 hover:text-white rounded text-xs font-medium transition-colors"
+                    >
+                      Load
+                    </button>
+                  </div>
+                  {loadArchitectureError && (
+                    <p className="text-red-400 text-[10px] mt-1">{loadArchitectureError}</p>
+                  )}
+                </div>
               </div>
             </>
           )}

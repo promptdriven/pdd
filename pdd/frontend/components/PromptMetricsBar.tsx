@@ -9,6 +9,9 @@ interface PromptMetricsBarProps {
   isLoading: boolean;
   preprocessingError?: string | null;
   timeValue?: number;  // Reasoning allocation (0-1), default 0.25
+  // Code-to-prompt ratio props
+  promptLineCount?: number;
+  codeLineCount?: number;
 }
 
 const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
@@ -19,6 +22,8 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
   isLoading,
   preprocessingError,
   timeValue = 0.25,
+  promptLineCount,
+  codeLineCount,
 }) => {
   const currentMetrics = viewMode === 'processed' ? processedMetrics : rawMetrics;
 
@@ -159,6 +164,21 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* Code:Prompt ratio */}
+            {promptLineCount !== undefined && promptLineCount > 0 && codeLineCount !== undefined && (
+              <div className="flex items-center gap-1.5" title={`${codeLineCount} lines of code / ${promptLineCount} lines of prompt`}>
+                <span className="text-[10px] sm:text-xs text-surface-400 hidden sm:inline">Code:Prompt:</span>
+                <span className={`text-xs sm:text-sm font-mono ${
+                  codeLineCount / promptLineCount >= 1 ? 'text-blue-400' : 'text-orange-400'
+                }`}>
+                  {(codeLineCount / promptLineCount).toFixed(1)}x
+                </span>
+                <span className="text-[10px] text-surface-500 hidden md:inline">
+                  ({codeLineCount}/{promptLineCount})
+                </span>
+              </div>
+            )}
           </>
         ) : (
           <span className="text-[10px] sm:text-xs text-surface-500">No metrics</span>
