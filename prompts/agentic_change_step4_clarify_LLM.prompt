@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 4 of 9 in an agentic change workflow. Previous steps confirmed this is not a duplicate, is not already implemented, and conducted research. Now you must determine if the requirements are sufficiently clear.
+You are working on step 4 of 10 in an agentic change workflow. Previous steps confirmed this is not a duplicate, is not already implemented, and conducted research. Now you must determine if the requirements are sufficiently clear.
 
 **This step may STOP the workflow** if clarifying questions are needed. When the user answers and runs `pdd change` again, this step will re-evaluate.
 

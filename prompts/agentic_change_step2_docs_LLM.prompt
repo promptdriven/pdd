@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 2 of 6 in an agentic change workflow. Previous step checked for duplicate issues.
+You are working on step 2 of 10 in an agentic change workflow. Previous step checked for duplicate issues.
 
 **This step may terminate the workflow** if the feature is already implemented.
 
