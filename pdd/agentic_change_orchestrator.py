@@ -170,8 +170,9 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
             # Checkout existing branch
             cmd.extend([str(worktree_abs_path), branch_name])
         else:
-            # Create new branch from HEAD
-            cmd.extend(["-b", branch_name, str(worktree_abs_path), "HEAD"])
+            # Create new branch from origin/main (not HEAD) to avoid inheriting
+            # commits from the current branch that shouldn't be in the PR
+            cmd.extend(["-b", branch_name, str(worktree_abs_path), "origin/main"])
             
         subprocess.run(
             cmd,
