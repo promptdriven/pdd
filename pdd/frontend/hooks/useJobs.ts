@@ -318,7 +318,12 @@ export function useJobs(options: UseJobsOptions = {}) {
       displayCommand,
       status: 'running',
       progress: null,
-      output: ['Command running in separate terminal window...'],
+      output: [
+        'Command running in separate terminal window.',
+        '',
+        'To stop: Close the terminal window',
+        'When finished: Click "Done" or "Failed" below',
+      ],
       cost: 0,
       startedAt: new Date(),
       completedAt: null,

@@ -179,6 +179,7 @@ const JobDashboard: React.FC<JobDashboardProps> = ({
                         isSelected={selectedJob?.id === job.id}
                         onSelect={() => onSelectJob(job.id)}
                         onCancel={() => onCancelJob(job.id)}
+                        onRemove={() => onRemoveJob(job.id)}
                         onMarkDone={onMarkSpawnedDone ? (success) => onMarkSpawnedDone(job.id, success) : undefined}
                       />
                     ))}
