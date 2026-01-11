@@ -1,0 +1,132 @@
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to verify that the prompt changes made in the previous step are valid and complete.
+
+% Context
+
+You are working on step 8 of 8 in an agentic change workflow. Previous step implemented the prompt changes. This is the final verification before the user reviews.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Worktree Path: {worktree_path}
+- Files to Stage: {files_to_stage}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Output
+<step7_output>
+{step7_output}
+</step7_output>
+
+% Your Task
+
+1. **Verify prompt syntax**
+   - Check each modified/created prompt for syntax errors
+   - Ensure `<include>` directives reference existing files
+   - Verify prompt structure follows PDD conventions
+
+2. **Verify prompt content**
+   - Requirements are testable and behavioral
+   - Dependencies are correctly specified
+   - No implementation details leaked into prompts
+   - Prompt size is appropriate (10-30% of expected code)
+
+3. **Verify completeness**
+   - All changes from Step 6 analysis were implemented
+   - No files were missed
+   - Example files updated if interfaces changed
+
+4. **Dry-run validation** (optional)
+   - If possible, run `pdd generate --dry-run` on modified prompts
+   - Check for preprocessing errors
+
+5. **Prepare for review**
+   - Stage the changed files in git
+   - Summarize what the user needs to review
+   - Provide next steps
+
+% Output
+
+After completing your verification, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If verification passed:**
+```markdown
+## Step 8: Verification Complete
+
+**Status:** All Checks Passed
+
+### Verification Results
+| Check | Status |
+|-------|--------|
+| Prompt syntax | :white_check_mark: Valid |
+| Include directives | :white_check_mark: All files exist |
+| PDD conventions | :white_check_mark: Followed |
+| Completeness | :white_check_mark: All changes applied |
+
+### Files Ready for Review
+- `prompts/xxx_python.prompt` - [brief description of changes]
+- `prompts/yyy_python.prompt` - [brief description of changes]
+
+### Worktree Location
+```
+{worktree_path}
+```
+
+### Next Steps for User
+1. Review the changes in the worktree
+2. Run `pdd sync <module>` to regenerate code from modified prompts
+3. Run tests to verify functionality
+4. Merge the worktree branch when satisfied
+
+### Commands to Run
+```bash
+cd {worktree_path}
+pdd sync xxx  # Regenerate code for modified module
+pytest tests/test_xxx.py  # Run tests
+```
+
+---
+*Investigation complete. Ready for user review.*
+```
+
+**If verification failed (STOP workflow):**
+```markdown
+## Step 8: Verification Complete
+
+**Status:** FAIL: Verification Failed
+
+### Verification Results
+| Check | Status |
+|-------|--------|
+| Prompt syntax | :x: [error details] |
+| Include directives | :white_check_mark: Valid |
+| ... | ... |
+
+### Issues Found
+1. [Issue description]
+2. [Issue description]
+
+### Recommendation
+[How to fix the issues]
+
+---
+*Investigation paused - verification failed.*
+```
+
+% Important
+
+- Be thorough in verification
+- If any check fails, STOP the workflow
+- Provide clear next steps for the user
+- The user will manually run `pdd sync` - don't do it automatically
+- Always post your findings as a GitHub comment before completing

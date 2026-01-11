@@ -1,0 +1,156 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_change_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 8-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+
+% Requirements
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run 8 steps sequentially, each as a separate `run_agentic_task()` call
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps
+6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files
+7. Pass extracted files to Step 8 via `files_to_stage` context variable
+
+% Step Execution
+For each step (1-8):
+1. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
+2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=CHANGE_STEP_TIMEOUTS.get(step_num))`
+   - Import `CHANGE_STEP_TIMEOUTS` from `agentic_common` (Issue #239)
+   - Pass step-specific timeout to ensure complex steps get adequate time
+4. Store the output for use by subsequent steps
+5. Accumulate cost: `total_cost += step_cost`
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_change_step1_duplicate_LLM | Search for duplicate issues |
+| 2 | agentic_change_step2_docs_LLM | Check if already implemented |
+| 3 | agentic_change_step3_research_LLM | Research to clarify specifications |
+| 4 | agentic_change_step4_docs_change_LLM | Analyze documentation changes needed |
+| 5 | agentic_change_step5_devunits_LLM | Identify dev units involved |
+| 6 | agentic_change_step6_analyze_LLM | Analyze how prompts should change |
+| 7 | agentic_change_step7_implement_LLM | Implement the prompt changes |
+| 8 | agentic_change_step8_verify_LLM | Verify the changes |
+
+% Context Accumulation
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output, step2_output, step3_output
+- Step 5 receives: issue_content, step1_output through step4_output
+- Step 6 receives: issue_content, step1_output through step5_output
+- Step 7 receives: issue_content, step5_output, step6_output, worktree_path
+- Step 8 receives: issue_content, step7_output, worktree_path, files_to_stage
+
+% Files to Stage
+After Step 7 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Step 8:
+- `context["files_to_stage"] = ", ".join(changed_files)`
+- This ensures Step 8 knows exactly which files to stage for review
+
+% Early Exit Conditions (Hard Stops)
+
+The orchestrator must parse step output to detect stop conditions:
+
+| Step | Stop Condition | Detection |
+|------|----------------|-----------|
+| 1 | Issue is a duplicate | Output contains "Duplicate of #" |
+| 2 | Already implemented | Output contains "Already Implemented" |
+| 3 | Research complete | (no stop condition - continues to step 4) |
+| 4 | Docs analysis complete | (no stop condition - continues to step 5) |
+| 5 | No dev units found | Output contains "No Dev Units Found" |
+| 6 | No changes needed | Output contains "No Changes Required" |
+| 7 | Implementation failed | No FILES_CREATED or FILES_MODIFIED line, or output contains "FAIL:" |
+| 8 | Verification failed | Output contains "FAIL: Verification" |
+
+**Hard stop behavior:**
+- Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
+- The step has already posted its findings to GitHub before returning
+- Do NOT continue to subsequent steps
+
+**Soft failures (continue):**
+- If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
+- Steps should post their findings to GitHub even on partial failure
+
+% Git Worktree Isolation
+
+Before Step 7, create an isolated git worktree for prompt changes. This prevents the workflow from disturbing the user's current branch.
+
+1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+   - Create worktree at `.pdd/worktrees/change-issue-{issue_number}/` relative to git root
+   - Branch name: `change/issue-{issue_number}`
+   - If worktree already exists at path, remove with `git worktree remove --force`
+   - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
+   - If branch already exists locally, delete with `git branch -D`
+   - Create worktree: `git worktree add -b {branch} {path} HEAD`
+   - Return (worktree_path, None) on success, (None, error_msg) on failure
+
+2. In orchestrator loop, before Step 7:
+   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
+   - Switch working directory to worktree path for Steps 7-8
+   - Add `worktree_path` to context dict (for Step 7 and 8 prompt formatting)
+   - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
+
+3. Additional helper functions:
+   - `_get_git_root(cwd: Path) -> Optional[Path]` - Get repo root via `git rev-parse --show-toplevel`
+   - `_worktree_exists(cwd: Path, worktree_path: Path) -> bool` - Check if path is in `git worktree list --porcelain` output
+   - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
+   - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
+   - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
+
+% Console Output
+
+The orchestrator must provide real-time feedback to the user via rich console output:
+
+1. **Header** (at start):
+   ```
+   Implementing change for issue #{issue_number}: "{issue_title}"
+   ```
+
+2. **Step progress** (before each step):
+   ```
+   [Step N/8] {step_description}...
+   ```
+
+3. **Agentic output** (during each step):
+   - Stream or display the output from `run_agentic_task()` so the user can see what the agent is doing
+   - Use `verbose` flag to control detail level
+
+4. **Step result** (after each step):
+   ```
+     -> {brief_result}
+   ```
+   Examples: "No duplicates found", "3 dev units identified", "Changes applied"
+
+5. **Hard stop message** (if workflow terminates early):
+   ```
+   Investigation stopped at Step N: {reason}
+   ```
+
+6. **Final summary** (at end):
+   ```
+   Change workflow complete  (or Change workflow failed)
+      Total cost: ${total_cost:.4f}
+      Files changed: {comma_separated_list}
+      Worktree: {worktree_path}
+
+   Next steps:
+      cd {worktree_path}
+      pdd sync <module>  # Regenerate code
+   ```
+
+Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `CHANGE_STEP_TIMEOUTS`
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
+
+% Deliverables
+- Code: `pdd/agentic_change_orchestrator.py`

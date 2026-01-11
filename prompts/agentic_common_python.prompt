@@ -56,12 +56,23 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 % Environment Variables
 - `PDD_AGENTIC_TIMEOUT`: Agent CLI timeout in seconds (default: 240)
 
-% Per-Step Timeouts (Issue #256)
-Export `STEP_TIMEOUTS: Dict[int, float]` mapping step numbers to timeout values:
+% Per-Step Timeouts (Issue #256, #239)
+
+Export workflow-specific timeout dictionaries:
+
+`BUG_STEP_TIMEOUTS: Dict[int, float]` - For 9-step agentic bug workflow:
 - Simple steps (1-3, 9): 240 seconds (setup, review, plan, final verify)
 - Medium step (6): 340 seconds (verify fix plan)
 - Complex steps (4, 5, 8): 600 seconds (reproduce, root cause, verify)
 - Most complex step (7): 1000 seconds (generate fix)
+
+`CHANGE_STEP_TIMEOUTS: Dict[int, float]` - For 8-step agentic change workflow:
+- Simple steps (1, 2): 240 seconds (duplicate check, docs comparison)
+- Medium steps (3, 4, 5, 8): 340 seconds (research, docs changes, identify dev units, verify work)
+- Complex step (6): 600 seconds (analyze prompt changes)
+- Most complex step (7): 1000 seconds (implement changes)
+
+`STEP_TIMEOUTS: Dict[int, float]` - Alias for `BUG_STEP_TIMEOUTS` (backward compatibility)
 
 % False Positive Detection (Issue #261)
 Export `MIN_VALID_OUTPUT_LENGTH: int = 50`
