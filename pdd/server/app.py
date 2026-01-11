@@ -206,6 +206,7 @@ def create_app(
 
     app.dependency_overrides[files.get_path_validator] = get_path_validator
     app.dependency_overrides[commands.get_job_manager] = get_job_manager
+    app.dependency_overrides[commands.get_project_root] = lambda: get_app_state().project_root
     app.dependency_overrides[ws_routes.get_job_manager] = get_job_manager
     app.dependency_overrides[ws_routes.get_project_root] = lambda: get_app_state().project_root
     app.dependency_overrides[prompts.get_path_validator] = get_path_validator

@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -146,6 +147,24 @@ def set_job_manager(manager: JobManager) -> None:
     """Configure the JobManager instance."""
     global _job_manager
     _job_manager = manager
+
+
+# Project root dependency - will be overridden by app
+_project_root: Optional[Path] = None
+
+
+def get_project_root() -> Path:
+    """Dependency to get the project root path."""
+    if _project_root is None:
+        # Fallback to cwd if not configured (shouldn't happen in production)
+        return Path(os.getcwd())
+    return _project_root
+
+
+def set_project_root(project_root: Path) -> None:
+    """Configure the project root path."""
+    global _project_root
+    _project_root = project_root
 
 
 @router.post("/execute", response_model=JobHandle)
@@ -696,7 +715,10 @@ async def get_spawned_job_status(job_id: str):
 
 
 @router.post("/spawn-terminal", response_model=SpawnTerminalResponse)
-async def spawn_terminal_command(request: CommandRequest):
+async def spawn_terminal_command(
+    request: CommandRequest,
+    project_root: Path = Depends(get_project_root),
+):
     """
     Spawn a PDD command in a new terminal window.
 
@@ -724,8 +746,8 @@ async def spawn_terminal_command(request: CommandRequest):
     cmd_args = _build_pdd_command_args(request.command, request.args, request.options)
     cmd_str = " ".join(cmd_args)
 
-    # Get working directory
-    cwd = os.getcwd()
+    # Use project root as working directory (not os.getcwd())
+    cwd = str(project_root)
 
     # Track the job before spawning
     _spawned_jobs[job_id] = {
