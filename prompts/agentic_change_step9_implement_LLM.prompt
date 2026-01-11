@@ -6,6 +6,18 @@ You are working on step 9 of 12 in an agentic change workflow. Previous steps re
 
 **This step modifies files.** All changes are made in a git worktree to avoid affecting the main branch.
 
+% Scope
+
+**IMPORTANT**: This workflow modifies ONLY:
+- Prompt files (`prompts/*.prompt`)
+- Documentation files (`README.md`, `docs/*.md`)
+
+Do NOT create or modify:
+- Python code files (`pdd/*.py`)
+- Example files (`context/*_example.py`)
+
+Code generation happens separately via `pdd sync` after the PR is merged.
+
 % PDD Background
 
 <pdd_prompting_guide>
@@ -70,11 +82,7 @@ You are working on step 9 of 12 in an agentic change workflow. Previous steps re
      - Code: `pdd/module_name.py`
      ```
 
-4. **Update example files** (if needed)
-   - If interfaces change, update relevant example files in `context/`
-   - Examples should show typical usage patterns
-
-5. **Track changes**
+4. **Track changes**
    - Report all files modified with `FILES_MODIFIED:` prefix
    - Report all files created with `FILES_CREATED:` prefix
 
@@ -95,7 +103,7 @@ Your comment should follow this format:
 **Status:** Changes Applied
 
 ### Files Modified
-FILES_MODIFIED: prompts/xxx_python.prompt, context/xxx_example.py
+FILES_MODIFIED: prompts/xxx_python.prompt, README.md
 
 ### Files Created
 FILES_CREATED: prompts/yyy_python.prompt
@@ -151,8 +159,8 @@ After review, run `pdd sync` on modified prompts to regenerate code.
 Your final response MUST include these exact lines for the orchestrator to parse:
 
 ```
-FILES_MODIFIED: file1.py, file2.py, file3.py
-FILES_CREATED: file4.py, file5.py
+FILES_MODIFIED: prompts/file1_python.prompt, prompts/file2_python.prompt
+FILES_CREATED: prompts/file3_python.prompt
 ```
 
 These lines MUST:
@@ -164,7 +172,7 @@ These lines MUST:
 Example of CORRECT format:
 ```
 FILES_MODIFIED: prompts/sync_main_python.prompt, prompts/fix_error_loop_python.prompt
-FILES_CREATED: prompts/parallel_fix_python.prompt, context/parallel_fix_example.py
+FILES_CREATED: prompts/parallel_fix_python.prompt
 ```
 
 Example of WRONG format (will cause workflow failure):
