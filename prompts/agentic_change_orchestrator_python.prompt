@@ -1,7 +1,4 @@
-<include>context/python_preamble.prompt</include>
-
-% Goal
-Write the `pdd/agentic_change_orchestrator.py` module.
+% You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
 
 % Role & Scope
 Orchestrator for the 12-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 10-11) that iterates until no issues are found.
