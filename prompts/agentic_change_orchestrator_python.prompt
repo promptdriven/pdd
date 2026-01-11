@@ -247,6 +247,12 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
       Starting from Step 5: Documentation Changes
    ```
 
+% Error Handling
+- Return `(False, "Failed to create worktree: {error}", cost, model, [])` if worktree setup fails
+- Return `(False, "Stopped at step N: {reason}", cost, model, changed_files)` on hard stop conditions
+- Log warning and continue if `run_agentic_task()` returns failure without matching a hard stop condition
+- On state file read/write errors, log warning and continue without persistence
+
 % Dependencies
 Import from `agentic_common`: `run_agentic_task`, `CHANGE_STEP_TIMEOUTS`
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>

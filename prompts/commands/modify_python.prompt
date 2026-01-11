@@ -8,11 +8,18 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
 
 % Requirements
 1. **split**: Call `split_main` with arguments: input_prompt, input_code, example_code, output_sub, output_modified
-2. **change**: Validate csv-vs-file mode, then call `change_main`. Options: `--budget` (float, default 5.0), `--output`, `--csv` flag
+
+2. **change**: Two modes determined by `--manual` flag:
+   - **Agentic mode (default)**: Takes single GitHub issue URL argument, calls `run_agentic_change(issue_url, verbose, quiet)`. Returns 5-tuple: (success, message, cost, model, changed_files). Display success status, cost, model used, and list of changed files using click.echo.
+   - **Manual mode (`--manual` flag)**: Legacy behavior. Validate csv-vs-file mode, call `change_main`. Options: `--budget` (float, default 5.0), `--output`, `--csv` flag
+   - Agentic mode: exactly 1 arg (issue URL)
+   - Manual mode: 2-3 args (change_prompt_file, input_code, [input_prompt_file])
+
 3. **update**: Two modes determined by presence of file arguments:
    - Repo-wide mode (no args): Scan entire repo, options `--extensions` (comma-separated) and `--directory` available
    - Single-file mode: When one arg provided, treat as code file. Options `--git` and `--output` available
    - Pass `repo=is_repo_mode` to `update_main`
+
 4. **update --simple flag**: Boolean flag (default False) to use legacy 2-stage LLM update instead of agentic mode
 
 % Error Handling
@@ -21,8 +28,9 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
 - For all other exceptions (including `click.UsageError`), call `handle_error(e, command_name, quiet)` and return None
 
 % Instructions
-- Validation for `change` should occur at the command level before calling `change_main`
+- For `change` command: validate argument count based on mode before calling the appropriate function
 - Raise `click.UsageError` for validation failures
+- In manual mode, validate that file arguments exist before calling change_main
 
 % Dependencies
 <module_dependencies>
@@ -30,6 +38,7 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
   <change_main_example><include>context/change_main_example.py</include></change_main_example>
   <update_main_example><include>context/update_main_example.py</include></update_main_example>
   <track_cost_example><include>context/track_cost_example.py</include></track_cost_example>
+  <agentic_change_example><include>context/agentic_change_example.py</include></agentic_change_example>
 </module_dependencies>
 
 % Deliverables
