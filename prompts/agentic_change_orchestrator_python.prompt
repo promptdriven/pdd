@@ -257,7 +257,6 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 Import from `agentic_common`: `run_agentic_task`, `CHANGE_STEP_TIMEOUTS`
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
-<pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
 
 % Deliverables
 - Code: `pdd/agentic_change_orchestrator.py`
