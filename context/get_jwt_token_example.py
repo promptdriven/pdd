@@ -14,7 +14,7 @@ def _load_firebase_api_key(pdd_env: str) -> str:
     # Choose env file based on target environment
     project_root = Path(__file__).resolve().parents[2]
     if pdd_env == "staging":
-        candidate = project_root / "frontend" / ".env.local"
+        candidate = project_root / "frontend" / ".env.staging"
     elif pdd_env == "prod":
         candidate = project_root / "frontend" / ".env.production"
     else:
@@ -51,6 +51,15 @@ async def main():
     Demonstrates how to use the get_jwt_token function to authenticate with Firebase using GitHub Device Flow.
     """
     print("Starting authentication process...")
+
+    # Clear JWT cache for staging to ensure fresh token with correct audience
+    # The cache at ~/.pdd/jwt_cache is NOT environment-aware and returns cached
+    # tokens regardless of the firebase_api_key parameter
+    if pdd_env == "staging":
+        cache_file = Path.home() / ".pdd" / "jwt_cache"
+        if cache_file.exists():
+            cache_file.unlink()
+            print("Cleared JWT cache for staging authentication")
 
     if not FIREBASE_API_KEY:
         print("Error: NEXT_PUBLIC_FIREBASE_API_KEY is not set and could not be loaded for this environment.")
