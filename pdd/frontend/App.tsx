@@ -281,8 +281,8 @@ const App: React.FC = () => {
       });
 
       if (result.success) {
-        // Add to job dashboard for tracking
-        addSpawnedJob(fullDisplayCommand, config.backendName);
+        // Add to job dashboard for tracking with server-provided job_id
+        addSpawnedJob(fullDisplayCommand, config.backendName, result.job_id);
         setExecutionStatus('success');
         addToast(`Opened terminal: ${fullDisplayCommand}`, 'success', 3000);
       } else {
@@ -339,8 +339,8 @@ const App: React.FC = () => {
       });
 
       if (result.success) {
-        // Add to job dashboard for tracking
-        addSpawnedJob(displayCommand, 'bug');
+        // Add to job dashboard for tracking with server-provided job_id
+        addSpawnedJob(displayCommand, 'bug', result.job_id);
         setExecutionStatus('success');
         addToast(`Opened terminal: ${displayCommand}`, 'success', 3000);
       } else {

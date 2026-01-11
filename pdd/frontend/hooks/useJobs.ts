@@ -306,11 +306,12 @@ export function useJobs(options: UseJobsOptions = {}) {
 
   /**
    * Add a spawned terminal job to the dashboard.
-   * These jobs run in separate terminal windows, so we don't have WebSocket output.
-   * They're marked as "running" until manually dismissed.
+   * These jobs run in separate terminal windows with automatic completion tracking.
+   * The terminal script calls back to the server when done.
    */
-  const addSpawnedJob = useCallback((displayCommand: string, command: string): string => {
-    const jobId = `spawned-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const addSpawnedJob = useCallback((displayCommand: string, command: string, serverJobId?: string): string => {
+    // Use server-provided job ID if available, otherwise generate one
+    const jobId = serverJobId || `spawned-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
     const jobInfo: JobInfo = {
       id: jobId,
@@ -321,8 +322,7 @@ export function useJobs(options: UseJobsOptions = {}) {
       output: [
         'Command running in separate terminal window.',
         '',
-        'To stop: Close the terminal window',
-        'When finished: Click "Done" or "Failed" below',
+        'Status will update automatically when command completes.',
       ],
       cost: 0,
       startedAt: new Date(),
@@ -361,6 +361,59 @@ export function useJobs(options: UseJobsOptions = {}) {
       return updated;
     });
   }, [onJobComplete]);
+
+  /**
+   * Poll for spawned job status updates.
+   * The terminal script calls back to the server when done, and we poll to detect it.
+   */
+  useEffect(() => {
+    // Get spawned jobs that are still running
+    const spawnedRunningJobs = Array.from(jobs.values()).filter(
+      (j) => j.id.startsWith('spawned-') && j.status === 'running'
+    );
+
+    if (spawnedRunningJobs.length === 0) return;
+
+    const pollInterval = setInterval(async () => {
+      for (const job of spawnedRunningJobs) {
+        try {
+          const status = await api.getSpawnedJobStatus(job.id);
+          if (status.status === 'completed' || status.status === 'failed') {
+            // Auto-update job status
+            const success = status.status === 'completed';
+            setJobs((prev) => {
+              const updated = new Map(prev);
+              const currentJob = updated.get(job.id);
+              if (currentJob && currentJob.status === 'running') {
+                const completedJob: JobInfo = {
+                  ...currentJob,
+                  status: success ? 'completed' : 'failed',
+                  completedAt: new Date(),
+                  output: [
+                    ...currentJob.output,
+                    '',
+                    success
+                      ? `✓ Command completed successfully (exit code: ${status.exit_code || 0})`
+                      : `✗ Command failed (exit code: ${status.exit_code || 1})`,
+                  ],
+                };
+                updated.set(job.id, completedJob);
+                // Trigger callback
+                if (onJobComplete) {
+                  onJobComplete(completedJob, success);
+                }
+              }
+              return updated;
+            });
+          }
+        } catch (e) {
+          // Ignore polling errors - server might be temporarily unavailable
+        }
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [jobs, onJobComplete]);
 
   // Derived state
   const activeJobs = Array.from(jobs.values()).filter(
