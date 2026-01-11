@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 6 of 8 in an agentic change workflow. Previous steps identified dev units and documentation changes needed.
+You are working on step 7 of 9 in an agentic change workflow. Previous steps identified dev units and documentation changes needed.
 
 % PDD Background
 
@@ -42,10 +42,14 @@ You are working on step 6 of 8 in an agentic change workflow. Previous steps ide
 {step5_output}
 </step5_output>
 
+<step6_output>
+{step6_output}
+</step6_output>
+
 % Your Task
 
 1. **Read existing prompts**
-   - For each prompt identified in Step 5, read its current content
+   - For each prompt identified in Step 6, read its current content
    - Understand the current requirements, dependencies, and constraints
    - Note the prompt structure (Role, Requirements, Dependencies, etc.)
 
@@ -79,7 +83,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 Your comment should follow this format:
 
 ```markdown
-## Step 6: Prompt Change Analysis
+## Step 7: Prompt Change Analysis
 
 **Status:** [Changes Analyzed | No Changes Required]
 
@@ -113,12 +117,12 @@ Your comment should follow this format:
 - Mitigation: [how to reduce risk]
 
 ---
-*Proceeding to Step 7: Implement Changes*
+*Proceeding to Step 8: Implement Changes*
 ```
 
 **If no changes are needed (STOP workflow):**
 ```markdown
-## Step 6: Prompt Change Analysis
+## Step 7: Prompt Change Analysis
 
 **Status:** No Changes Required
 

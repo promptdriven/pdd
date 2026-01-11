@@ -1577,7 +1577,7 @@ pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --out
 
 ### 8. change
 
-Implement a change request from a GitHub issue using an 8-step agentic workflow. The workflow researches the feature, analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, and verifies the results.
+Implement a change request from a GitHub issue using a 9-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, and verifies the results.
 
 **Agentic Mode (default):**
 ```
@@ -1587,15 +1587,16 @@ pdd [GLOBAL OPTIONS] change GITHUB_ISSUE_URL
 Arguments:
 - `GITHUB_ISSUE_URL`: The URL of the GitHub issue describing the change request.
 
-The 8-step workflow:
+The 9-step workflow:
 1. **Duplicate Check**: Search for duplicate issues
 2. **Documentation Check**: Verify feature isn't already implemented
 3. **Research**: Web search to clarify specifications and find best practices
-4. **Documentation Changes**: Analyze what documentation updates are needed
-5. **Identify Dev Units**: Find affected prompts, code, examples, and tests
-6. **Analyze Changes**: Design prompt modifications
-7. **Implement Changes**: Modify prompts in an isolated git worktree
-8. **Verify**: Validate changes are syntactically correct
+4. **Clarification**: Ensure requirements are clear; ask questions if not (stops workflow until answered)
+5. **Documentation Changes**: Analyze what documentation updates are needed
+6. **Identify Dev Units**: Find affected prompts, code, examples, and tests
+7. **Analyze Changes**: Design prompt modifications
+8. **Implement Changes**: Modify prompts in an isolated git worktree
+9. **Verify**: Validate changes are syntactically correct
 
 Example (agentic mode):
 ```bash
