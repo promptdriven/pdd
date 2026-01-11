@@ -284,7 +284,7 @@ def test_app_state_initialization(app_module_with_mocks, mock_project_root, mock
     assert isinstance(state.uptime_seconds, float)
 
     mock_managers["PathValidator"].assert_called_once_with(state.project_root)
-    mock_managers["JobManager"].assert_called_once_with(max_concurrent=2)
+    mock_managers["JobManager"].assert_called_once_with(max_concurrent=3)
     mock_managers["ConnectionManager"].assert_called_once()
 
 

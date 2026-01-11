@@ -10,9 +10,6 @@
 % Documentation References
   - FastAPI WebSockets:
     <web>https://fastapi.tiangolo.com/advanced/websockets/</web>
-  - Starlette WebSockets:
-    <web>https://www.starlette.io/websockets/</web>
-  - WebSocket Protocol: https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API
   - watchdog:
     <web>https://python-watchdog.readthedocs.io/en/stable/</web>
 
@@ -21,63 +18,50 @@
      - Streams job output in real-time
      - Server sends: stdout, stderr, progress, complete, error, input_request
      - Client sends: cancel, input
-     - Auto-disconnect when job completes
-     - Handle client disconnect gracefully
+     - Auto-close when job completes; handle disconnect gracefully
+     - If job not found, close with WS_1008_POLICY_VIOLATION
+     - If job already completed, send result immediately and close
 
   2. **WS /ws/watch**:
      - Watches for file changes in project
      - Client sends subscription: {"paths": ["path1", "path2"]}
      - Server sends: file_change events (created, modified, deleted)
-     - Use watchdog for file system monitoring
-     - Debounce rapid changes (100ms)
+     - Use watchdog Observer with AsyncFileEventHandler bridging to asyncio queue
+     - Debounce rapid changes (100ms via DEBOUNCE_SECONDS constant)
 
-  3. **Message Protocol** (JSON):
-     Server -> Client:
-     - {"type": "stdout", "data": "...", "timestamp": "ISO8601"}
-     - {"type": "stderr", "data": "...", "timestamp": "ISO8601"}
-     - {"type": "progress", "current": N, "total": M, "message": "..."}
-     - {"type": "input_request", "prompt": "...", "password": false}
-     - {"type": "complete", "success": true, "result": {...}, "cost": 0.05}
-     - {"type": "error", "message": "...", "traceback": "..."}
-     - {"type": "file_change", "path": "...", "event": "modified"}
+  3. **ConnectionManager**:
+     - Track active connections, job subscriptions, and watch subscriptions
+     - Methods: connect, disconnect, subscribe_to_job, subscribe_to_watch
+     - Broadcast methods for job messages and file changes
+     - Clean up dead connections on send failures
 
-     Client -> Server:
-     - {"type": "cancel"}
-     - {"type": "input", "data": "user input"}
+  4. **Job Event Integration** (emit helpers):
+     - `emit_job_output(job_id, stream, text)`: Broadcast stdout/stderr with ANSI cleaning
+     - `emit_job_progress(job_id, current, total, message)`: Broadcast progress
+     - `emit_job_complete(job_id, result, success, cost)`: Broadcast completion
 
-  4. **ConnectionManager**:
-     - Track active WebSocket connections
-     - Map connections to job IDs
-     - Broadcast to all connections watching a job
-     - Clean up on disconnect
+  5. **App Integration**:
+     - `create_websocket_routes(app, connection_manager, job_manager)`: Register router and callbacks
+     - Replaces global manager instance
+     - Registers on_output and on_complete callbacks with job_manager if provided
 
-  5. **Error handling**:
-     - WebSocketDisconnect handling
-     - Invalid message format -> send error message
-     - Job not found -> close with error code
+  6. **Dependencies**:
+     - Dependency functions `get_job_manager()` and `get_project_root()` as injection points
+     - Raise NotImplementedError to be overridden by app's dependency_overrides
 
 % Dependencies
-   Use models from pdd/server/models.py: WSMessage, StdoutMessage, ProgressMessage, etc.
-  <pdd.server.models>
-  <include>context/server/models_example.py</include>
-  </pdd.server.models>
+  Use models from pdd/server/models.py: WSMessage, StdoutMessage, StderrMessage, ProgressMessage, JobStatus
+  <pdd.server.models><include>context/server/models_example.py</include></pdd.server.models>
 
   Use job manager for job status and control:
   <pdd.server.jobs><include>context/job_manager_example.py</include></pdd.server.jobs>
 
-  WebSocket routes patterns and ConnectionManager usage:
-  <pdd.server.routes.websocket>
-  <include>context/server/routes/websocket_example.py</include>
-  </pdd.server.routes.websocket>
-
 % Instructions
   - Create router with tags=["websocket"]
-  - Use ConnectionManager for connection tracking
-  - File watching with watchdog Observer
-  - Debounce file changes to avoid flooding
-  - Clean ANSI codes from output for web display (keep raw in separate field)
+  - Use `clean_ansi(text)` utility to strip ANSI escape sequences
+  - File watching with watchdog Observer; AsyncFileEventHandler bridges events to asyncio
   - Graceful shutdown of watchers on disconnect
 
 % Deliverables
   - Code: `pdd/server/routes/websocket.py`
-  - Export: `websocket_router`, `ConnectionManager`
+  - Export: `websocket_router` (alias: router), `ConnectionManager`, `create_websocket_routes`
