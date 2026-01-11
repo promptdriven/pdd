@@ -68,6 +68,8 @@ const App: React.FC = () => {
     removeJob,
     clearCompletedJobs,
     setSelectedJobId,
+    addSpawnedJob,
+    markSpawnedJobDone,
   } = useJobs({ onJobComplete: handleJobComplete });
 
   // Check server connection on mount
@@ -279,6 +281,8 @@ const App: React.FC = () => {
       });
 
       if (result.success) {
+        // Add to job dashboard for tracking
+        addSpawnedJob(fullDisplayCommand, config.backendName);
         setExecutionStatus('success');
         addToast(`Opened terminal: ${fullDisplayCommand}`, 'success', 3000);
       } else {
@@ -335,6 +339,8 @@ const App: React.FC = () => {
       });
 
       if (result.success) {
+        // Add to job dashboard for tracking
+        addSpawnedJob(displayCommand, 'bug');
         setExecutionStatus('success');
         addToast(`Opened terminal: ${displayCommand}`, 'success', 3000);
       } else {
@@ -776,6 +782,7 @@ const App: React.FC = () => {
         onCancelJob={cancelJob}
         onRemoveJob={removeJob}
         onClearCompleted={clearCompletedJobs}
+        onMarkSpawnedDone={markSpawnedJobDone}
         batchOperation={batchOperation}
         onCancelBatchOperation={handleCancelBatchOperation}
       />

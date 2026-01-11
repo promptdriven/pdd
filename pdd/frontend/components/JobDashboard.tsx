@@ -30,6 +30,8 @@ interface JobDashboardProps {
   onCancelJob: (jobId: string) => void;
   onRemoveJob: (jobId: string) => void;
   onClearCompleted: () => void;
+  // Mark spawned job as done
+  onMarkSpawnedDone?: (jobId: string, success: boolean) => void;
   // Optional batch operation tracking
   batchOperation?: BatchOperation | null;
   onCancelBatchOperation?: () => void;
@@ -43,6 +45,7 @@ const JobDashboard: React.FC<JobDashboardProps> = ({
   onCancelJob,
   onRemoveJob,
   onClearCompleted,
+  onMarkSpawnedDone,
   batchOperation,
   onCancelBatchOperation,
 }) => {
@@ -176,6 +179,7 @@ const JobDashboard: React.FC<JobDashboardProps> = ({
                         isSelected={selectedJob?.id === job.id}
                         onSelect={() => onSelectJob(job.id)}
                         onCancel={() => onCancelJob(job.id)}
+                        onMarkDone={onMarkSpawnedDone ? (success) => onMarkSpawnedDone(job.id, success) : undefined}
                       />
                     ))}
                   </div>
