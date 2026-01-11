@@ -131,12 +131,12 @@ class CloudConfig:
                 app_name=app_name
             ))
         except (AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError) as e:
-            if verbose:
-                console.print(f"[yellow]Cloud authentication error: {e}[/yellow]")
+            # Always display auth errors (both these expected ones and the unexpected ones handled below) - critical for debugging auth issues
+            console.print(f"[yellow]Cloud authentication error: {e}[/yellow]")
             return None
         except Exception as e:
-            if verbose:
-                console.print(f"[yellow]Unexpected auth error: {e}[/yellow]")
+            # Always display unexpected errors too
+            console.print(f"[yellow]Unexpected auth error: {e}[/yellow]")
             return None
 
     @staticmethod

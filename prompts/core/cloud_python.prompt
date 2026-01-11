@@ -17,7 +17,8 @@
   4) `get_jwt_token(verbose, app_name)`: Return JWT token or None
      - First check `PDD_JWT_TOKEN` env var (for testing/CI)
      - Fall back to device flow auth via `get_jwt_token` from `..get_jwt_token`
-     - Catch all auth exceptions and return None on failure
+     - Always display auth errors to user (critical for debugging auth issues)
+     - Return None on failure after displaying error
   5) `is_running_in_cloud()`: Return True if running inside a cloud environment
      - Check for `K_SERVICE` env var (set by Google Cloud Functions/Cloud Run)
      - Check for `FUNCTIONS_EMULATOR` env var (set by Firebase emulator)
