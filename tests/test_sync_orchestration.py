@@ -4033,3 +4033,96 @@ class TestHeadlessConfirmationCallback:
         assert "user_confirmed_overwrite[0] = True" in source, (
             "headless_confirming_callback should set user_confirmed_overwrite[0] = True"
         )
+
+
+class TestHeadlessModeDetection:
+    """
+    Tests for headless mode detection in sync_orchestration.
+
+    The headless mode detection logic at line 1625 should:
+    - Default to TUI mode (headless=False) when running in an interactive terminal
+    - Enable headless mode when stdout is not a TTY (non-interactive)
+    - Enable headless mode when CI environment variable is set
+    - Enable headless mode when quiet=True
+
+    Bug scenario: If 'not' is accidentally removed from 'sys.stdout.isatty()',
+    headless mode becomes the default in interactive terminals, breaking the TUI.
+    """
+
+    def test_tui_mode_is_default_in_interactive_terminal(self):
+        """
+        TUI mode (headless=False) should be the default when:
+        - Running in an interactive terminal (isatty=True)
+        - quiet=False
+        - No CI environment variable
+        """
+        quiet = False
+
+        # Simulate interactive terminal
+        with patch.object(sys.stdout, 'isatty', return_value=True):
+            with patch.dict(os.environ, {}, clear=True):
+                # This is the correct logic that should be in sync_orchestration
+                headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+                assert not headless, (
+                    "TUI mode should be the default in interactive terminal. "
+                    "headless should be falsy when isatty()=True, quiet=False, and no CI env."
+                )
+
+    def test_headless_when_not_tty(self):
+        """Headless mode should be enabled when stdout is not a TTY."""
+        quiet = False
+
+        with patch.object(sys.stdout, 'isatty', return_value=False):
+            with patch.dict(os.environ, {}, clear=True):
+                headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+                assert headless, (
+                    "Headless mode should be enabled when stdout is not a TTY"
+                )
+
+    def test_headless_when_ci_env_set(self):
+        """Headless mode should be enabled when CI environment variable is set."""
+        quiet = False
+
+        with patch.object(sys.stdout, 'isatty', return_value=True):
+            with patch.dict(os.environ, {'CI': '1'}, clear=True):
+                headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+                assert headless, (
+                    "Headless mode should be enabled when CI env var is set"
+                )
+
+    def test_headless_when_quiet_true(self):
+        """Headless mode should be enabled when quiet=True."""
+        quiet = True
+
+        with patch.object(sys.stdout, 'isatty', return_value=True):
+            with patch.dict(os.environ, {}, clear=True):
+                headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+                assert headless, (
+                    "Headless mode should be enabled when quiet=True"
+                )
+
+    def test_sync_orchestration_has_correct_headless_detection(self):
+        """
+        Verify sync_orchestration.py has the correct headless detection logic.
+
+        The correct logic should be:
+            headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+
+        BUG: If 'not' is missing before sys.stdout.isatty(), TUI mode becomes
+        impossible in interactive terminals.
+        """
+        import inspect
+        from pdd import sync_orchestration as sync_mod
+
+        source = inspect.getsource(sync_mod.sync_orchestration)
+
+        # Check that the headless detection line exists with correct 'not' keyword
+        assert "not sys.stdout.isatty()" in source, (
+            "CRITICAL BUG: sync_orchestration is missing 'not' before sys.stdout.isatty(). "
+            "This makes headless mode the default in interactive terminals, breaking the TUI. "
+            "Fix: Change 'sys.stdout.isatty()' to 'not sys.stdout.isatty()' in the headless detection."
+        )
