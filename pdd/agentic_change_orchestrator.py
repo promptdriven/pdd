@@ -521,7 +521,7 @@ def run_agentic_change_orchestrator(
             stop_reason = "Clarification needed from user"
         elif step_num == 6 and "No Dev Units Found" in output:
             stop_reason = "No relevant dev units found"
-        elif step_num == 7 and "Architectural Decision Needed" in output:
+        elif step_num == 7 and "STOP_CONDITION: Architectural decision needed" in output:
             stop_reason = "Architectural decision needed"
         elif step_num == 8 and "No Changes Required" in output:
             stop_reason = "Analysis determined no changes required"

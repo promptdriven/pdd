@@ -165,3 +165,16 @@ Please reply with your preferred options (e.g., "1A, 2B"). Then run `pdd change 
 - Always tag the issue author (@{issue_author}) when asking questions
 - This is a HARD STOP - if questions are needed, the workflow terminates here
 - When `pdd change` is run again, this step will re-evaluate based on new comments
+
+% CRITICAL: Output Format for Stop Condition
+
+If architectural decisions are needed, your final response MUST include this exact line:
+
+STOP_CONDITION: Architectural decision needed
+
+This line MUST:
+- Appear in your final output (not just in the GitHub comment)
+- Use exact casing shown above (lowercase "decision needed")
+- Be on its own line for reliable parsing
+
+If NO architectural decisions are needed (proceeding to Step 8), do NOT include this line.
