@@ -194,6 +194,8 @@ def app_module_with_mocks():
         _mock_routes_commands = types.ModuleType("pdd.server.routes.commands")
         _mock_routes_commands.router = APIRouter()
         _mock_routes_commands.get_job_manager = MagicMock(__name__="get_job_manager_mock")
+        _mock_routes_commands.get_project_root = MagicMock(__name__="get_project_root_mock")
+        _mock_routes_commands.set_project_root = MagicMock(__name__="set_project_root_mock")
         sys.modules["pdd.server.routes.commands"] = _mock_routes_commands
 
         _mock_routes_ws = types.ModuleType("pdd.server.routes.websocket")

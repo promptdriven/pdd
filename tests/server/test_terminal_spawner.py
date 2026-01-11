@@ -26,9 +26,10 @@ class TestTerminalSpawner:
             with patch('sys.platform', 'darwin'):
                 TerminalSpawner.spawn("pdd sync foo", working_dir="/home/user/project")
 
-                # Verify the command includes cd
+                # Verify the command includes cd (may be quoted)
                 call_args = mock_darwin.call_args[0][0]
-                assert "cd /home/user/project" in call_args
+                assert "/home/user/project" in call_args
+                assert "cd" in call_args
                 assert "pdd sync foo" in call_args
 
     def test_spawn_dispatches_to_darwin_on_macos(self):
