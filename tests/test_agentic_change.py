@@ -151,30 +151,30 @@ def test_happy_path_clone_repo(mock_dependencies):
     
     def subprocess_side_effect(args, **kwargs):
         cmd = args if isinstance(args, list) else []
-
-        # Comments API (check BEFORE Issue API since comments URL contains "issues/1" too)
-        if "api" in cmd and any("comments" in arg for arg in cmd):
-            m = MagicMock()
-            m.returncode = 0
-            m.stdout = json.dumps(comments_data)
-            return m
-
+        
         # Issue API
-        if "api" in cmd and any("issues/1" in arg for arg in cmd):
+        if "api" in cmd and "issues/1" in cmd[-1]:
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(issue_data)
             return m
-
+            
+        # Comments API
+        if "api" in cmd and "comments" in cmd[-1]:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = json.dumps(comments_data)
+            return m
+            
         # Clone command
         if "repo" in cmd and "clone" in cmd:
             m = MagicMock()
             m.returncode = 0
             return m
-
+            
         # Default fallback
         m = MagicMock()
-        m.returncode = 1  # Fail other commands (like git remote) to force clone path
+        m.returncode = 1 # Fail other commands (like git remote) to force clone path
         return m
 
     mock_subprocess.side_effect = subprocess_side_effect
@@ -243,21 +243,18 @@ def test_happy_path_current_directory(mock_dependencies):
 
     mock_subprocess.side_effect = subprocess_side_effect
 
-    # Create a mock that behaves like Path("/local/repo")
-    mock_path = MagicMock()
-    mock_path.__truediv__ = MagicMock(return_value=MagicMock(exists=MagicMock(return_value=True)))
-    mock_path.__eq__ = lambda self, other: other == Path("/local/repo")
-    mock_path.__str__ = lambda self: "/local/repo"
-    mock_path.__fspath__ = lambda self: "/local/repo"
-
     # Mock Path.cwd() to simulate we are in a repo
     with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
-        mock_cwd.return_value = mock_path
+        # Make .git exist
+        mock_cwd.return_value.__truediv__.return_value.exists.return_value = True
+        # Make cwd return a specific path
+        mock_cwd.return_value = Path("/local/repo")
+        
         run_agentic_change("https://github.com/owner/repo/issues/1")
 
-    # Verify orchestrator called with local path (the mock_path)
+    # Verify orchestrator called with local path
     call_kwargs = mock_orch.call_args[1]
-    assert call_kwargs["cwd"] == mock_path
+    assert call_kwargs["cwd"] == Path("/local/repo")
     
     # Verify NO clone command was issued
     for call_obj in mock_subprocess.call_args_list:
@@ -276,14 +273,14 @@ def test_comments_fetch_failure_resilience(mock_dependencies):
         cmd = args if isinstance(args, list) else []
         
         # Issue API succeeds
-        if "api" in cmd and any("issues/1" in arg for arg in cmd):
+        if "api" in cmd and "issues/1" in cmd[-1]:
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(issue_data)
             return m
             
         # Comments API fails
-        if "api" in cmd and any("bad.url" in arg for arg in cmd):
+        if "api" in cmd and "bad.url" in cmd[-1]:
             m = MagicMock()
             m.returncode = 1
             m.stderr = "Error"
@@ -312,137 +309,36 @@ def test_comments_fetch_failure_resilience(mock_dependencies):
 def test_clone_failure(mock_dependencies):
     """Test handling of git clone failure."""
     _, mock_subprocess, _, _ = mock_dependencies
-
+    
     issue_data = {"title": "T", "body": "B", "user": {"login": "u"}, "comments_url": ""}
-
+    
     def subprocess_side_effect(args, **kwargs):
         cmd = args if isinstance(args, list) else []
-
+        
         if "api" in cmd:
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(issue_data)
             return m
-
+            
         # Clone fails
         if "repo" in cmd and "clone" in cmd:
             m = MagicMock()
             m.returncode = 1
             m.stderr = "Permission denied"
             return m
-
+            
         m = MagicMock()
         m.returncode = 1 # Force clone path
         return m
 
     mock_subprocess.side_effect = subprocess_side_effect
-
+    
     with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
         mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
-
+        
         success, msg, _, _, _ = run_agentic_change("https://github.com/owner/repo/issues/1")
-
+    
     assert success is False
     assert "Failed to clone repository" in msg
     assert "Permission denied" in msg
-
-
-def test_issue_content_curly_braces_escaped(mock_dependencies):
-    """
-    Test that curly braces in issue content are escaped to prevent
-    Python's .format() from interpreting them as placeholders.
-
-    Reproduces bug: KeyError when issue contains code like { setError("coming soon") }
-    """
-    _, mock_subprocess, mock_orch, _ = mock_dependencies
-
-    # Issue body contains JavaScript code with curly braces
-    issue_data = {
-        "title": "Fix error handling",
-        "body": "The function does this:\n```javascript\nfunction handleClick() { setError(\"coming soon\") }\n```",
-        "user": {"login": "author"},
-        "comments_url": "https://api.github.com/repos/owner/repo/issues/248/comments"
-    }
-
-    # Comment also contains code with curly braces
-    comments_data = [
-        {"user": {"login": "reviewer"}, "body": "You should use: `const obj = { key: value }`"}
-    ]
-
-    def subprocess_side_effect(args, **kwargs):
-        cmd = args if isinstance(args, list) else []
-
-        # Comments API
-        if "api" in cmd and any("comments" in arg for arg in cmd):
-            m = MagicMock()
-            m.returncode = 0
-            m.stdout = json.dumps(comments_data)
-            return m
-
-        # Issue API
-        if "api" in cmd and any("issues/248" in arg for arg in cmd):
-            m = MagicMock()
-            m.returncode = 0
-            m.stdout = json.dumps(issue_data)
-            return m
-
-        # Clone command
-        if "repo" in cmd and "clone" in cmd:
-            m = MagicMock()
-            m.returncode = 0
-            return m
-
-        # Default
-        m = MagicMock()
-        m.returncode = 1
-        return m
-
-    mock_subprocess.side_effect = subprocess_side_effect
-
-    with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
-        mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
-
-        success, msg, _, _, _ = run_agentic_change(
-            "https://github.com/owner/repo/issues/248"
-        )
-
-    assert success is True
-
-    # Verify the orchestrator was called
-    mock_orch.assert_called_once()
-    call_kwargs = mock_orch.call_args[1]
-    content = call_kwargs["issue_content"]
-
-    # Curly braces should be ESCAPED (doubled) to prevent .format() errors
-    # { becomes {{ and } becomes }}
-    #
-    # The BUG: When issue content contains { setError("coming soon") },
-    # calling prompt_template.format(**context) fails with:
-    #   KeyError: ' setError("coming soon") '
-    # because Python interprets { ... } as a format placeholder.
-
-    # The FIX: Escape all curly braces in issue_content so { becomes {{
-    # After escaping, .format() will convert {{ back to { in the output,
-    # but won't try to substitute them as placeholders.
-
-    # Verify that the content can be safely used in .format() without KeyError
-    # This is the actual bug reproduction - if braces aren't escaped, this raises KeyError
-    try:
-        # Simulate what the orchestrator does: call .format() with the content
-        # The content should have {issue_content} placeholder escaped, so when
-        # we format a template containing this escaped content, it works.
-        test_template = "Issue content: {content}"
-        test_template.format(content=content)
-        # If we get here, the content itself is safe
-    except KeyError as e:
-        pytest.fail(f"Content contains unescaped braces that cause KeyError: {e}")
-
-    # Additionally verify the escaping is correct:
-    # The original "{ setError" should now be "{{ setError" (two opening braces)
-    # Count opening braces before "setError" - should be 2 (escaped), not 1 (raw)
-    import re
-    # Find pattern: one or more { followed by space and "setError"
-    match = re.search(r'(\{+)\s*setError', content)
-    assert match is not None, "Should find braces before setError"
-    braces = match.group(1)
-    assert len(braces) == 2, f"Expected 2 opening braces (escaped), got {len(braces)}: '{braces}'"

@@ -16,14 +16,6 @@ from .agentic_change_orchestrator import run_agentic_change_orchestrator
 console = Console()
 
 
-def _escape_format_braces(text: str) -> str:
-    """
-    Escape curly braces in text to prevent Python's .format() from
-    interpreting them as placeholders. { becomes {{ and } becomes }}.
-    """
-    return text.replace("{", "{{").replace("}", "}}")
-
-
 def _check_gh_cli() -> bool:
     """
     Check if the GitHub CLI (gh) is installed and available in the system PATH.
@@ -50,13 +42,12 @@ def _parse_issue_url(url: str) -> Optional[Tuple[str, str, int]]:
     return None
 
 
-def _run_gh_command(args: List[str], timeout: Optional[int] = None) -> Tuple[bool, str]:
+def _run_gh_command(args: List[str]) -> Tuple[bool, str]:
     """
     Execute a gh CLI command.
 
     Args:
         args: List of arguments to pass to `gh`.
-        timeout: Optional timeout in seconds. None means no timeout.
 
     Returns:
         Tuple of (success, output). Output is stdout on success, stderr on failure.
@@ -66,14 +57,11 @@ def _run_gh_command(args: List[str], timeout: Optional[int] = None) -> Tuple[boo
             ["gh"] + args,
             capture_output=True,
             text=True,
-            check=False,
-            timeout=timeout,
+            check=False
         )
         if result.returncode != 0:
             return False, result.stderr.strip()
         return True, result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        return False, f"gh command timed out after {timeout}s"
     except Exception as e:
         return False, str(e)
 
@@ -141,9 +129,7 @@ def run_agentic_change(
     issue_url: str,
     *,
     verbose: bool = False,
-    quiet: bool = False,
-    timeout_adder: float = 0.0,
-    use_github_state: bool = True
+    quiet: bool = False
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     CLI entry point for the agentic change workflow.
@@ -155,8 +141,6 @@ def run_agentic_change(
         issue_url: The full URL of the GitHub issue.
         verbose: If True, enables detailed logging.
         quiet: If True, suppresses standard output.
-        timeout_adder: Additional time to add to step timeouts.
-        use_github_state: If True, persists state to GitHub comments.
 
     Returns:
         Tuple containing:
@@ -199,7 +183,7 @@ def run_agentic_change(
     # 4. Fetch Comments
     comments_data = []
     if comments_url:
-        success, comments_json = _run_gh_command(["api", comments_url, "--paginate"])
+        success, comments_json = _run_gh_command(["api", comments_url])
         if success:
             try:
                 comments_data = json.loads(comments_json)
@@ -209,16 +193,12 @@ def run_agentic_change(
 
     # 5. Construct Full Context
     issue_content = f"Title: {title}\n\nDescription:\n{body}\n"
-    if comments_data and isinstance(comments_data, list):
+    if comments_data:
         issue_content += "\nComments:\n"
         for comment in comments_data:
-            if isinstance(comment, dict):
-                c_user = comment.get("user", {}).get("login", "unknown")
-                c_body = comment.get("body", "")
-                issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
-
-    # Escape curly braces to prevent .format() errors when issue contains code
-    issue_content = _escape_format_braces(issue_content)
+            c_user = comment.get("user", {}).get("login", "unknown")
+            c_body = comment.get("body", "")
+            issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
 
     # 6. Setup Repository (Clone or Use Current)
     try:
@@ -240,7 +220,5 @@ def run_agentic_change(
         issue_title=title,
         cwd=work_dir,
         verbose=verbose,
-        quiet=quiet,
-        timeout_adder=timeout_adder,
-        use_github_state=use_github_state
+        quiet=quiet
     )
