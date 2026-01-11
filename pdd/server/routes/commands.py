@@ -13,6 +13,8 @@ import signal
 import subprocess
 import sys
 import threading
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -616,6 +618,81 @@ class SpawnTerminalResponse(BaseModel):
     message: str
     command: str
     platform: str
+    job_id: Optional[str] = None
+
+
+class SpawnedJobCompleteRequest(BaseModel):
+    """Request body for completing a spawned job."""
+    success: bool
+    exit_code: int = 0
+
+
+class SpawnedJobCompleteResponse(BaseModel):
+    """Response from completing a spawned job."""
+    updated: bool
+    job_id: str
+
+
+class SpawnedJobStatus(BaseModel):
+    """Status of a spawned job."""
+    job_id: str
+    command: str
+    status: str
+    started_at: str
+    completed_at: Optional[str] = None
+    exit_code: Optional[int] = None
+
+
+# Track spawned jobs in memory
+# Key: job_id, Value: dict with job info
+_spawned_jobs: Dict[str, dict] = {}
+
+
+@router.post("/spawned-jobs/{job_id}/complete", response_model=SpawnedJobCompleteResponse)
+async def complete_spawned_job(job_id: str, request: SpawnedJobCompleteRequest):
+    """
+    Called by spawned terminal script when command completes.
+
+    The shell script in the terminal calls this endpoint via curl
+    when the command finishes to report success/failure.
+    """
+    if job_id in _spawned_jobs:
+        _spawned_jobs[job_id]["status"] = "completed" if request.success else "failed"
+        _spawned_jobs[job_id]["exit_code"] = request.exit_code
+        _spawned_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+        status_str = "completed" if request.success else "failed"
+        console.print(f"[cyan]Spawned job {job_id[:16]}... {status_str} (exit code: {request.exit_code})[/cyan]")
+
+        return SpawnedJobCompleteResponse(updated=True, job_id=job_id)
+
+    return SpawnedJobCompleteResponse(updated=False, job_id=job_id)
+
+
+@router.get("/spawned-jobs/{job_id}/status", response_model=SpawnedJobStatus)
+async def get_spawned_job_status(job_id: str):
+    """
+    Get the status of a spawned job.
+
+    Frontend polls this endpoint to check if spawned jobs have completed.
+    """
+    if job_id in _spawned_jobs:
+        job = _spawned_jobs[job_id]
+        return SpawnedJobStatus(
+            job_id=job_id,
+            command=job.get("command", "unknown"),
+            status=job.get("status", "unknown"),
+            started_at=job.get("started_at", ""),
+            completed_at=job.get("completed_at"),
+            exit_code=job.get("exit_code"),
+        )
+
+    return SpawnedJobStatus(
+        job_id=job_id,
+        command="unknown",
+        status="unknown",
+        started_at="",
+    )
 
 
 @router.post("/spawn-terminal", response_model=SpawnTerminalResponse)
@@ -630,6 +707,8 @@ async def spawn_terminal_command(request: CommandRequest):
     - Each command runs in its own terminal process
     - No risk of WebSocket/subprocess conflicts
     - User can manage terminal windows directly
+
+    The spawned terminal script will call back to report completion status.
     """
     # Validate command is allowed
     if request.command not in ALLOWED_COMMANDS:
@@ -638,6 +717,9 @@ async def spawn_terminal_command(request: CommandRequest):
             detail=f"Unknown command: {request.command}. Allowed: {list(ALLOWED_COMMANDS.keys())}"
         )
 
+    # Generate unique job ID
+    job_id = f"spawned-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+
     # Build full command
     cmd_args = _build_pdd_command_args(request.command, request.args, request.options)
     cmd_str = " ".join(cmd_args)
@@ -645,19 +727,33 @@ async def spawn_terminal_command(request: CommandRequest):
     # Get working directory
     cwd = os.getcwd()
 
-    # Spawn terminal
-    success = TerminalSpawner.spawn(cmd_str, working_dir=cwd)
+    # Track the job before spawning
+    _spawned_jobs[job_id] = {
+        "job_id": job_id,
+        "command": request.command,
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        "exit_code": None,
+    }
+
+    # Spawn terminal with job_id for callback
+    success = TerminalSpawner.spawn(cmd_str, working_dir=cwd, job_id=job_id)
 
     if success:
         console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
         console.print(f"[bold cyan]Spawned terminal: pdd {request.command}[/bold cyan]")
+        console.print(f"[cyan]Job ID: {job_id}[/cyan]")
         console.print(f"[cyan]{'='*60}[/cyan]\n")
     else:
         console.print(f"\n[bold red]Failed to spawn terminal for: pdd {request.command}[/bold red]")
+        # Remove from tracking if spawn failed
+        del _spawned_jobs[job_id]
 
     return SpawnTerminalResponse(
         success=success,
         message="Terminal window opened" if success else "Failed to open terminal",
         command=request.command,
-        platform=sys.platform
+        platform=sys.platform,
+        job_id=job_id if success else None,
     )

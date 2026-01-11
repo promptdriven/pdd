@@ -103,6 +103,16 @@ export interface SpawnTerminalResponse {
   message: string;
   command: string;
   platform: string;
+  job_id?: string;
+}
+
+export interface SpawnedJobStatus {
+  job_id: string;
+  command: string;
+  status: 'running' | 'completed' | 'failed' | 'unknown';
+  started_at: string;
+  completed_at?: string;
+  exit_code?: number;
 }
 
 // Token metrics types
@@ -299,6 +309,14 @@ class PDDApiClient {
       method: 'POST',
       body: JSON.stringify(request),
     });
+  }
+
+  /**
+   * Get the status of a spawned job.
+   * Used for polling to check if spawned terminal commands have completed.
+   */
+  async getSpawnedJobStatus(jobId: string): Promise<SpawnedJobStatus> {
+    return this.request<SpawnedJobStatus>(`/api/v1/commands/spawned-jobs/${jobId}/status`);
   }
 
   // Files
