@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 
-# Default server port for callback
-DEFAULT_SERVER_PORT = 5000
+# Default server port for callback (must match PDD server port)
+DEFAULT_SERVER_PORT = 9876
 
 
 class TerminalSpawner:
