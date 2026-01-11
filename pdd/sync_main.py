@@ -23,6 +23,7 @@ from .construct_paths import (
     get_extension
 )
 from .sync_orchestration import sync_orchestration
+from .sync_tui import DEFAULT_STEER_TIMEOUT_S
 from .template_expander import expand_template
 
 # Regex for basename validation supporting subdirectory paths (e.g., 'core/cloud')
@@ -299,6 +300,8 @@ def sync_main(
     skip_tests: bool,
     target_coverage: float,
     dry_run: bool,
+    no_steer: bool = False,
+    steer_timeout: Optional[float] = None,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -436,6 +439,8 @@ def sync_main(
                 verbose=verbose,
                 quiet=quiet,
                 context_override=context_override,
+                no_steer=no_steer,
+                steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
             )
         return {}, 0.0, ""
 
@@ -574,6 +579,8 @@ def sync_main(
                 local=local,
                 context_config=resolved_config,
                 context_override=context_override,
+                no_steer=no_steer,
+                steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
             )
 
             lang_cost = sync_result.get("total_cost", 0.0)

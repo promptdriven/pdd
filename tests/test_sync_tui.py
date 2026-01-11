@@ -486,3 +486,96 @@ def test_z3_maybe_steer_filtering_logic():
     solver.add(original_op != op_verify)
     assert solver.check().r == -1, "Found a case where skip_verify failed to prevent switching to verify"
     solver.pop()
+
+
+def test_request_steering_headless():
+    """Verify request_steering returns recommended_op immediately in headless mode."""
+    refs = [[""]] * 10
+    app = SyncApp("test", 1.0, lambda: {}, *refs, stop_event=threading.Event())
+    
+    with patch("pdd.sync_tui._is_headless_environment", return_value=True):
+        op, abort = app.request_steering("generate", "test reason")
+        assert op == "generate"
+        assert abort is False
+
+
+def test_request_steering_no_steer_flag():
+    """Verify request_steering returns recommended_op when no_steer is True."""
+    refs = [[""]] * 10
+    app = SyncApp("test", 1.0, lambda: {}, *refs, stop_event=threading.Event(), no_steer=True)
+    
+    with patch("pdd.sync_tui._is_headless_environment", return_value=False):
+        op, abort = app.request_steering("generate", "test reason")
+        assert op == "generate"
+        assert abort is False
+
+
+def test_request_steering_normal_operation():
+    """Verify request_steering calls request_choice and returns the chosen operation."""
+    refs = [[""]] * 10
+    app = SyncApp("test", 1.0, lambda: {}, *refs, stop_event=threading.Event())
+    app.call_from_thread = MagicMock()
+    
+    # Mock request_choice to return a chosen operation
+    def _call_from_thread_side_effect(fn, *args, **kwargs):
+        if getattr(app, "_choice_event", None) is not None:
+            app._choice_result = "example"  # User chose "example" instead of "generate"
+            app._choice_event.set()
+    
+    app.call_from_thread.side_effect = _call_from_thread_side_effect
+    app.request_choice = MagicMock(return_value="example")
+    
+    with patch("pdd.sync_tui._is_headless_environment", return_value=False):
+        op, abort = app.request_steering("generate", "test reason", timeout_s=5.0)
+        assert op == "example"
+        assert abort is False
+        app.request_choice.assert_called_once()
+        call_kwargs = app.request_choice.call_args[1]
+        assert call_kwargs['title'] == "Sync steering"
+        assert "Recommended: generate (test reason)" in call_kwargs['prompt']
+        assert call_kwargs['default'] == "generate"
+        assert call_kwargs['timeout_s'] == 5.0
+
+
+def test_request_steering_abort_choice():
+    """Verify request_steering returns recommended_op with should_abort=True when user chooses abort."""
+    refs = [[""]] * 10
+    app = SyncApp("test", 1.0, lambda: {}, *refs, stop_event=threading.Event())
+    app.request_choice = MagicMock(return_value="abort")
+    
+    with patch("pdd.sync_tui._is_headless_environment", return_value=False):
+        op, abort = app.request_steering("generate", "test reason")
+        assert op == "generate"  # Returns recommended_op
+        assert abort is True  # Should abort
+
+
+def test_request_steering_without_reason():
+    """Verify request_steering works correctly when reason is empty."""
+    refs = [[""]] * 10
+    app = SyncApp("test", 1.0, lambda: {}, *refs, stop_event=threading.Event())
+    app.request_choice = MagicMock(return_value="test")
+    
+    with patch("pdd.sync_tui._is_headless_environment", return_value=False):
+        op, abort = app.request_steering("generate", "")
+        assert op == "test"
+        assert abort is False
+        call_kwargs = app.request_choice.call_args[1]
+        assert "Recommended: generate" in call_kwargs['prompt']
+        # Should not include reason in prompt when reason is empty
+        assert "(test reason)" not in call_kwargs['prompt']
+
+
+def test_request_steering_dedupes_choices():
+    """Verify request_steering deduplicates choices when recommended_op appears in the list."""
+    refs = [[""]] * 10
+    app = SyncApp("test", 1.0, lambda: {}, *refs, stop_event=threading.Event())
+    app.request_choice = MagicMock(return_value="generate")
+    
+    with patch("pdd.sync_tui._is_headless_environment", return_value=False):
+        op, abort = app.request_steering("generate", "test reason")
+        assert op == "generate"
+        assert abort is False
+        call_kwargs = app.request_choice.call_args[1]
+        choices = call_kwargs['choices']
+        # "generate" should only appear once in the choices list
+        assert choices.count("generate") == 1

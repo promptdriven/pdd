@@ -57,10 +57,17 @@ from ..core.utils import _run_setup_utility
     help="Deprecated: Use --dry-run instead.",
 )
 @click.option(
-    "--steer",
+    "--no-steer",
+    "no_steer",
     is_flag=True,
     default=False,
-    help="Enable interactive steering of sync operations.",
+    help="Disable interactive steering of sync operations.",
+)
+@click.option(
+    "--steer-timeout",
+    type=float,
+    default=None,
+    help="Timeout in seconds for steering prompts (default: 8.0).",
 )
 @click.pass_context
 @track_cost
@@ -74,7 +81,8 @@ def sync(
     target_coverage: Optional[float],
     dry_run: bool,
     log: bool,
-    steer: bool,
+    no_steer: bool,
+    steer_timeout: Optional[float],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -92,12 +100,6 @@ def sync(
         )
         dry_run = True
 
-    import os
-    if steer:
-        os.environ["PDD_DISABLE_STEERING"] = "0"
-    else:
-        os.environ["PDD_DISABLE_STEERING"] = "1"
-
     try:
         result, total_cost, model_name = sync_main(
             ctx=ctx,
@@ -108,6 +110,8 @@ def sync(
             skip_tests=skip_tests,
             target_coverage=target_coverage,
             dry_run=dry_run,
+            no_steer=no_steer,
+            steer_timeout=steer_timeout,
         )
         return str(result), total_cost, model_name
     except click.Abort:
