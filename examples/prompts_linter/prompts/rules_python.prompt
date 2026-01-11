@@ -1,0 +1,59 @@
+You are an expert Python developer architecting the `src/utils/rules.py` module for the PDD Prompt Linter. This module is the deterministic core of the linter, responsible for applying heuristic rules derived from the Prompt-Driven Development (PDD) Prompting Guide to raw prompt text. It must analyze text and return a structured list of compliance issues without relying on an LLM.
+
+Requirements
+1.  **Entry Point**: Expose a primary function `analyze_text(text: str) -> List[Issue]` that runs all heuristic checks and aggregates the results.
+2.  **Rule Categories**: Implement checks covering the following PDD Guide principles:
+    *   **Anatomy**: The prompt SHOULD contain key structural sections:
+        - Requirements section (heading with "Requirements" or similar)
+        - Input/Output specification section (heading with "Input", "Output", "Input/Output", "Inputs and Outputs", "Deliverable", or similar)
+        - Dependencies section (heading with "Dependencies" or similar)
+        - Instructions section (heading with "Instructions" or similar)
+        (Severity: Warning for missing sections).
+    *   **Determinism**: The prompt SHOULD NOT contain non-deterministic tags like `<web>`, `<shell>`, `<exec>`, or `<run>`. (Severity: Warning).
+    *   **Modularity**: The prompt should define a single module. Detect patterns indicating multiple file definitions:
+        - Multiple distinct code blocks with filename headers (e.g., "# file: path/to/file.py" or "// path/to/file.js")
+        - Section separators like "---", "===", "***" between different file definitions
+        - Multiple deliverable sections describing different files
+        - Patterns like "File 1:", "File 2:", or "Create file X" followed by "Create file Y"
+        (Severity: Warning).
+    *   **Context Engineering**: Detect "repo dumps". If the prompt contains massive blocks of code not inside `<include>` tags (heuristic: very high code-to-text ratio or specific "dump" keywords), flag it. (Severity: Warning).
+    *   **Requirements**: The prompt MUST have a "Requirements" section (case-insensitive regex match for "Requirements" followed by a list format). (Severity: Error).
+    *   **Attention Hierarchy**: Critical keywords like "Security", "Auth", or "Constraint" should appear in the first 20% or last 20% of the prompt. If found only in the middle, flag as "Middle Loss". (Severity: Info).
+3.  **Data Structures**: Use the `Issue`, `Severity`, and `RuleCategory` types defined in `src/utils/models.py`.
+4.  **Helpers**: Utilize text processing utilities from `src/utils/helpers.py` (e.g., tag extraction, ratio calculation) to keep this module focused on logic, not parsing.
+5.  **Performance**: All checks must be fast (regex or simple string analysis). No external API calls.
+6.  **Robustness**: Handle empty strings or malformed input gracefully (return empty list or specific "Empty Prompt" issue).
+
+Dependencies
+% Here are examples of how to use internal modules:
+<src.utils.models><include>examples/models_example.py</include></src.utils.models>
+<src.utils.helpers><include>examples/helpers_example.py</include></src.utils.helpers>
+<src.utils.rules><include>examples/rules_example.py</include></src.utils.rules>
+
+Prompt Dependencies:
+- models_Python.prompt
+- helpers_Python.prompt
+
+Instructions
+- Import `Issue`, `Severity`, `RuleCategory` (or equivalent enums) from `src.utils.models`.
+- Import helper functions from `src.utils.helpers`.
+- Create a constant registry or list of rule functions to allow easy extensibility.
+- **Determinism Check**: Use regex to find forbidden tags. Map these to `RuleCategory.DETERMINISM`.
+- **Anatomy Check**: Scan for key structural sections (Requirements, Input/Output, Dependencies, Instructions). Use case-insensitive regex to detect section headings. Flag missing sections. Map to `RuleCategory.ANATOMY`.
+- **Modularity Check**: Detect multiple file definitions by searching for:
+  - Filename header patterns in code blocks (regex for "# file:", "// file:", etc.)
+  - Section separators: "---", "===", "***" (especially between code blocks)
+  - Multiple "deliverable" or "create file" statements
+  - Map to `RuleCategory.MODULARITY`.
+- **Requirements Check**: Scan for a line starting with "Requirements" followed by numbered items (1., 2., etc) or bullet points. Map to `RuleCategory.CONTRACTS`.
+- **Context Check**: Use a helper to calculate the ratio of code lines to text lines. If > 80% code and length > 50 lines, flag as potential "Repo Dump". Also search for dump keywords ("entire", "full codebase", "all files", "complete source"). Map to `RuleCategory.CONTEXT`.
+- **Attention Check**: Calculate the index of keywords. If `total_len * 0.2 < index < total_len * 0.8`, create an issue. Map to `RuleCategory.ATTENTION`.
+- Ensure every `Issue` created has a unique, stable `rule_id` (e.g., "DET001", "ANA001") to allow the frontend/CLI to reference it easily.
+
+Deliverable
+- `src/utils/rules.py`: The complete Python module implementing the heuristic analysis engine.
+
+Implementation assumptions (explicit)
+- The `Issue` model has fields for `rule_id`, `title`, `description`, `severity`, and `category`.
+- `helpers.py` provides basic regex patterns or string cleaning functions, but `rules.py` defines the specific logic for PDD compliance.
+- The input `text` is the full content of the prompt file.
