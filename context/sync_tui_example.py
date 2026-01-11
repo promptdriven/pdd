@@ -40,20 +40,21 @@ def mock_worker_logic(app: SyncApp, stop_event: threading.Event) -> Dict[str, an
             time.sleep(0.3)
 
         # 3. Demonstrate Interactive Steering (Choice Modal)
-        # This will auto-select index 0 after 5 seconds if no input is given.
+        # This will auto-select the first option after 5 seconds if no input is given.
         options = ["Optimize for Speed", "Optimize for Cost", "Manual Review"]
-        choice_idx = app.request_choice(
+        choice = app.request_choice(
+            title="Optimization Strategy",
             prompt="Select optimization strategy:",
-            options=options,
-            default_index=0,
+            choices=options,
+            default=options[0],
             timeout_s=5.0
         )
-        print(f"Strategy selected: {options[choice_idx]}")
+        print(f"Strategy selected: {choice}")
 
         # 4. Demonstrate Confirmation Modal
         if app.request_confirmation("Do you want to commit these changes?"):
             print("Changes committed successfully.")
-            return {"success": True, "total_cost": 0.15, "strategy": options[choice_idx]}
+            return {"success": True, "total_cost": 0.15, "strategy": choice}
         else:
             print("Commit aborted by user.")
             return {"success": False, "error": "User aborted"}

@@ -217,17 +217,18 @@ def run_process_with_output(cmd_args, timeout=300):
 
     def stream_pipe(pipe, capture_list):
         """
-        Read from a pipe and append each line to capture_list for later aggregation.
+        Read from an unbuffered pipe one byte at a time and append to capture_list.
+        
+        Uses read(1) instead of readline() because the subprocess is created with
+        bufsize=0 (unbuffered mode). readline() on unbuffered binary pipes will
+        hang indefinitely waiting for newline characters that may never arrive.
         """
         while True:
             try:
-                # Read a line (or chunk if line-buffered isn't working as expected)
-                chunk = pipe.readline()
+                chunk = pipe.read(1)
                 if not chunk:
                     break
                 capture_list.append(chunk)
-                # Optionally, print to console here if real-time streaming is desired.
-                # For now, we only capture.
             except (ValueError, IOError, OSError):
                 # OSError can occur when pipe is closed during read
                 break
