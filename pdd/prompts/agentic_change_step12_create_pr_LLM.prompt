@@ -106,11 +106,11 @@ Closes #{issue_number}
 **Status:** PR Ready for Review
 
 ### Pull Request
-[PR #{pr_number}]({pr_url})
+[PR #{{pr_number}}]({{pr_url}})
 
 ### Summary
 - Branch: `change/issue-{issue_number}`
-- Files changed: {N}
+- Files changed: {{N}}
 - Ready for review
 
 ### What's Next
@@ -119,7 +119,7 @@ Closes #{issue_number}
 3. Run tests to verify
 
 ---
-*Agentic change workflow complete. Total cost: ${total_cost:.4f}*
+*Agentic change workflow complete. Total cost: ${{total_cost:.4f}}*
 ```
 
 % Important
