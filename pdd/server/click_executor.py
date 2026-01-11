@@ -26,14 +26,19 @@ def _setup_headless_environment():
 
     This ensures commands run in non-interactive mode without TUI,
     which is necessary when running programmatically through the server.
+
+    NOTE: This should only be called when actually executing commands through
+    the server, NOT at module import time. Calling at import time would
+    affect ALL pdd commands (including CLI usage) because the connect command
+    imports this module transitively.
     """
     os.environ['CI'] = '1'  # Triggers headless mode in sync and other commands
     os.environ['PDD_FORCE'] = '1'  # Skip confirmation prompts
     os.environ['TERM'] = 'dumb'  # Disable fancy terminal features
 
 
-# Set up headless environment when this module is imported
-_setup_headless_environment()
+# NOTE: Do NOT call _setup_headless_environment() here at import time!
+# It will be called by ClickCommandExecutor when executing commands.
 
 
 # ============================================================================
@@ -305,6 +310,9 @@ class ClickCommandExecutor:
         Returns:
             CapturedOutput with stdout, stderr, exit_code
         """
+        # Set up headless environment for server-executed commands
+        _setup_headless_environment()
+
         # Merge context objects
         obj = {**self._base_context_obj, **(options or {})}
 
