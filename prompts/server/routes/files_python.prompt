@@ -62,9 +62,13 @@
      - Parse prompt stem: "calculator_python" -> ("calculator", "python")
 
   7. **Dev-unit file discovery**:
+     - Extract subdirectory structure from prompt path (e.g., "prompts/server/foo.prompt" -> "server")
      - Code files: check generate_output_path from .pddrc, then src/, then root
+       - Try with subdirectory first (e.g., src/server/foo.py), then without (e.g., src/foo.py)
      - Test files: check test_output_path, then tests/, test/, root with test_ prefix or _test suffix
+       - Try with subdirectory first, then without
      - Example files: check example_output_path, then examples/, root with _example suffix
+       - Try with subdirectory first, then without
 
   8. **Error handling**:
      - 403 for path traversal attempts
