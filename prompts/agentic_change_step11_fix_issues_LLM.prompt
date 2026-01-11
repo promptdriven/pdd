@@ -80,7 +80,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
    - Fix: [What was changed]
 
 ### Summary
-Applied {N} fixes successfully.
+Applied {{N}} fixes successfully.
 
 ---
 *Returning to Step 10 for re-verification*
@@ -104,7 +104,7 @@ Applied {N} fixes successfully.
    - Recommendation: [What the user should do]
 
 ### Summary
-Applied {N} of {M} fixes. {remaining} issues require manual intervention.
+Applied {{N}} of {{M}} fixes. {{remaining}} issues require manual intervention.
 
 ---
 *Returning to Step 10 for re-verification*
