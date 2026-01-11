@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 8 of 8 in an agentic change workflow. Previous step implemented the prompt changes. This is the final verification before the user reviews.
+You are working on step 9 of 9 in an agentic change workflow. Previous step implemented the prompt changes. This is the final verification before the user reviews.
 
 % Inputs
 
@@ -18,9 +18,9 @@ You are working on step 8 of 8 in an agentic change workflow. Previous step impl
 </issue_content>
 
 % Previous Step Output
-<step7_output>
-{step7_output}
-</step7_output>
+<step8_output>
+{step8_output}
+</step8_output>
 
 % Your Task
 
@@ -36,7 +36,7 @@ You are working on step 8 of 8 in an agentic change workflow. Previous step impl
    - Prompt size is appropriate (10-30% of expected code)
 
 3. **Verify completeness**
-   - All changes from Step 6 analysis were implemented
+   - All changes from Step 7 analysis were implemented
    - No files were missed
    - Example files updated if interfaces changed
 
@@ -61,7 +61,7 @@ Your comment should follow this format:
 
 **If verification passed:**
 ```markdown
-## Step 8: Verification Complete
+## Step 9: Verification Complete
 
 **Status:** All Checks Passed
 
@@ -101,7 +101,7 @@ pytest tests/test_xxx.py  # Run tests
 
 **If verification failed (STOP workflow):**
 ```markdown
-## Step 8: Verification Complete
+## Step 9: Verification Complete
 
 **Status:** FAIL: Verification Failed
 
