@@ -1,0 +1,120 @@
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to fix the issues identified in the previous step.
+
+% Context
+
+You are working on step 11 of 12 in an agentic change workflow. Previous step identified issues with the prompt/documentation changes. This step fixes those issues.
+
+**This step is part of a review loop.** After fixing, Step 10 will run again to check for remaining issues. The loop continues until no issues are found (max 5 iterations).
+
+% PDD Background
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Worktree Path: {worktree_path}
+- Review Iteration: {review_iteration} of 5
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Issues to Fix (from Step 10)
+<step10_output>
+{step10_output}
+</step10_output>
+
+% Your Task
+
+1. **Navigate to worktree**
+   - All modifications happen in: {worktree_path}
+
+2. **Fix each issue identified in Step 10**
+   For each issue listed:
+   - Read the file containing the issue
+   - Apply the fix described
+   - Verify the fix is correct
+   - Move to the next issue
+
+3. **Verify fixes**
+   - Ensure fixes don't introduce new issues
+   - Check that the file still follows PDD conventions
+   - Validate any `<include>` directives still work
+
+4. **Track changes**
+   - Report all fixes applied with file and line number
+   - Note any issues that couldn't be fixed and why
+
+% Output
+
+After completing your fixes, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+**If all fixes applied successfully:**
+```markdown
+## Step 11: Fix Issues (Iteration {review_iteration}/5)
+
+**Status:** Fixes Applied
+
+### Fixes Made
+
+1. **Fixed** `prompts/xxx_python.prompt` line 45
+   - Issue: [What was wrong]
+   - Fix: [What was changed]
+
+2. **Fixed** `prompts/yyy_python.prompt`
+   - Issue: [What was wrong]
+   - Fix: [What was changed]
+
+3. **Fixed** `README.md`
+   - Issue: [What was wrong]
+   - Fix: [What was changed]
+
+### Summary
+Applied {N} fixes successfully.
+
+---
+*Returning to Step 10 for re-verification*
+```
+
+**If some fixes could not be applied:**
+```markdown
+## Step 11: Fix Issues (Iteration {review_iteration}/5)
+
+**Status:** Partial Fixes Applied
+
+### Fixes Made
+1. **Fixed** `prompts/xxx_python.prompt`
+   - Issue: [What was wrong]
+   - Fix: [What was changed]
+
+### Could Not Fix
+1. **[FILE]** `prompts/yyy_python.prompt`
+   - Issue: [What was wrong]
+   - Reason: [Why it couldn't be fixed]
+   - Recommendation: [What the user should do]
+
+### Summary
+Applied {N} of {M} fixes. {remaining} issues require manual intervention.
+
+---
+*Returning to Step 10 for re-verification*
+```
+
+% Important
+
+- Work in the worktree directory, not the main repo
+- Apply fixes exactly as described in Step 10 output
+- If a fix seems wrong or would break something, skip it and explain why
+- Don't introduce new issues while fixing existing ones
+- After fixes, Step 10 will verify - the loop continues until no issues remain
+- Maximum 5 iterations to prevent infinite loops
