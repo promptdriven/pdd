@@ -311,7 +311,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    */
   const addSpawnedJob = useCallback((displayCommand: string, command: string, serverJobId?: string): string => {
     // Use server-provided job ID if available, otherwise generate one
-    const jobId = serverJobId || `spawned-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const jobId = serverJobId || `spawned-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
     const jobInfo: JobInfo = {
       id: jobId,
