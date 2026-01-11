@@ -29,11 +29,8 @@ from rich.style import Style
 
 _ACTIVE_SYNC_APP = None  # set by SyncApp when running interactively
 
-# Default steering timeout (seconds). Can be overridden via env var.
-try:
-    DEFAULT_STEER_TIMEOUT_S = float(os.environ.get("PDD_STEER_TIMEOUT_S", "8"))
-except Exception:
-    DEFAULT_STEER_TIMEOUT_S = 8.0
+# Default steering timeout (seconds).
+DEFAULT_STEER_TIMEOUT_S = 8.0
 
 
 def _is_headless_environment() -> bool:
@@ -589,6 +586,7 @@ class SyncApp(App):
         tests_color_ref: List[str],
         stop_event: threading.Event,
         progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None,
+        no_steer: bool = False,
     ):
         super().__init__()
         self.basename = basename
@@ -609,6 +607,7 @@ class SyncApp(App):
         self.progress_callback_ref = progress_callback_ref
 
         self.stop_event = stop_event
+        self.no_steer = no_steer
 
         # Internal animation state
         self.animation_state = AnimationState(basename, budget)
@@ -1055,7 +1054,7 @@ class SyncApp(App):
         if _is_headless_environment():
             return recommended_op, False
 
-        if os.environ.get("PDD_DISABLE_STEERING", "").strip().lower() in {"1", "true", "yes"}:
+        if self.no_steer:
             return recommended_op, False
 
         choices = [
