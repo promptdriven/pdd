@@ -98,6 +98,13 @@ export interface CommandStatus {
   command: string | null;
 }
 
+export interface SpawnTerminalResponse {
+  success: boolean;
+  message: string;
+  command: string;
+  platform: string;
+}
+
 // Token metrics types
 export interface CostEstimate {
   input_cost: number;
@@ -281,6 +288,17 @@ class PDDApiClient {
 
   async getJobHistory(limit: number = 50, offset: number = 0): Promise<JobResult[]> {
     return this.request<JobResult[]>(`/api/v1/commands/history?limit=${limit}&offset=${offset}`);
+  }
+
+  /**
+   * Spawn a command in a new terminal window.
+   * The command runs in complete isolation from the server.
+   */
+  async spawnTerminal(request: CommandRequest): Promise<SpawnTerminalResponse> {
+    return this.request<SpawnTerminalResponse>('/api/v1/commands/spawn-terminal', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
   }
 
   // Files

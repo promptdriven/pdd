@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ArchitectureModule } from '../api';
+import { ArchitectureModule, PromptInfo } from '../api';
 import { ChevronDownIcon, ChevronUpIcon, SparklesIcon, DocumentArrowDownIcon, SpinnerIcon } from './Icon';
 import Tooltip from './Tooltip';
 
@@ -27,6 +27,8 @@ interface DependencyViewerProps {
   onModuleClick: (module: ArchitectureModule) => void;
   onGeneratePrompts?: () => void;
   isGeneratingPrompts?: boolean;
+  existingPrompts?: Set<string>;
+  promptsInfo?: PromptInfo[];
 }
 
 // Determine category based on tags
@@ -75,8 +77,21 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   onModuleClick,
   onGeneratePrompts,
   isGeneratingPrompts = false,
+  existingPrompts = new Set(),
+  promptsInfo = [],
 }) => {
   const [isPrdVisible, setIsPrdVisible] = useState(false);
+
+  // Create a lookup map from module filename to PromptInfo for file tracking
+  const promptInfoMap = useMemo(() => {
+    const map = new Map<string, PromptInfo>();
+    for (const p of promptsInfo) {
+      // Extract filename from path (e.g., "prompts/calculator_python.prompt" -> "calculator_python.prompt")
+      const filename = p.prompt.split('/').pop() || '';
+      map.set(filename, p);
+    }
+    return map;
+  }, [promptsInfo]);
 
   const layout = useMemo(() => {
     // Convert architecture modules to graph nodes
@@ -343,6 +358,11 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
         {/* Module nodes */}
         {layout.nodes.map(node => {
           const colors = getCategoryColors(node.category);
+          const hasPrompt = existingPrompts.has(node.id);
+          const promptInfo = promptInfoMap.get(node.id);
+          const hasCode = !!promptInfo?.code;
+          const hasTest = !!promptInfo?.test;
+          const hasExample = !!promptInfo?.example;
           return (
             <Tooltip
               key={node.id}
@@ -351,18 +371,55 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
                   <div className="font-medium">{node.filename}</div>
                   <div className="text-xs text-surface-400 mt-1">{node.filepath}</div>
                   <div className="text-xs mt-2">{node.description.substring(0, 100)}...</div>
+                  {hasPrompt && (
+                    <div className="mt-2 pt-2 border-t border-surface-700/50">
+                      <div className="text-xs text-emerald-400 flex items-center gap-1 mb-1">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        Prompt exists
+                      </div>
+                      <div className="flex items-center gap-2 text-xs mt-1">
+                        <span className={hasCode ? 'text-green-400' : 'text-surface-500'}>{hasCode ? '✓' : '✗'} Code</span>
+                        <span className={hasTest ? 'text-yellow-400' : 'text-surface-500'}>{hasTest ? '✓' : '✗'} Test</span>
+                        <span className={hasExample ? 'text-blue-400' : 'text-surface-500'}>{hasExample ? '✓' : '✗'} Example</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               }
             >
               <button
                 onClick={() => onModuleClick(node)}
-                className={`absolute ${colors.bg} ${colors.border} ${colors.hover} border rounded-xl p-3 flex flex-col justify-center items-center text-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent-500 transition-all duration-200 hover:scale-105`}
+                className={`absolute ${colors.bg} ${colors.border} ${colors.hover} border rounded-xl p-3 flex flex-col justify-center items-center text-center cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent-500 transition-all duration-200 hover:scale-105 ${hasPrompt ? 'ring-2 ring-emerald-500/50' : ''}`}
                 style={{
                   width: NODE_WIDTH,
                   height: NODE_HEIGHT,
                   transform: `translate(${node.x}px, ${node.y + yOffset}px)`,
                 }}
               >
+                {/* Prompt status indicator */}
+                {hasPrompt && (
+                  <div className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg">
+                    <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                )}
+                {/* File status indicators - shown when prompt exists */}
+                {hasPrompt && (
+                  <div className="absolute -bottom-1.5 right-1 flex gap-0.5">
+                    <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold ${hasCode ? 'bg-green-500 text-white' : 'bg-surface-700 text-surface-500'}`} title={hasCode ? 'Code exists' : 'No code file'}>
+                      C
+                    </div>
+                    <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold ${hasTest ? 'bg-yellow-500 text-white' : 'bg-surface-700 text-surface-500'}`} title={hasTest ? 'Test exists' : 'No test file'}>
+                      T
+                    </div>
+                    <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold ${hasExample ? 'bg-blue-500 text-white' : 'bg-surface-700 text-surface-500'}`} title={hasExample ? 'Example exists' : 'No example file'}>
+                      E
+                    </div>
+                  </div>
+                )}
                 <p className="font-medium text-sm text-white truncate w-full">{node.label}</p>
                 <p className={`text-xs ${colors.text} truncate w-full`}>
                   {node.interface?.type || 'module'}
@@ -390,6 +447,22 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded bg-green-500/40 border border-green-500/50" />
               <span className="text-xs text-surface-300">Shared</span>
+            </div>
+            <div className="flex items-center gap-2 pt-1 border-t border-surface-700/50 mt-1">
+              <div className="w-3 h-3 rounded-full bg-emerald-500 flex items-center justify-center">
+                <svg className="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <span className="text-xs text-surface-300">Prompt exists</span>
+            </div>
+            <div className="flex items-center gap-2 pt-1 border-t border-surface-700/50 mt-1">
+              <div className="flex gap-0.5">
+                <div className="w-3 h-3 rounded-full bg-green-500 flex items-center justify-center text-[7px] font-bold text-white">C</div>
+                <div className="w-3 h-3 rounded-full bg-yellow-500 flex items-center justify-center text-[7px] font-bold text-white">T</div>
+                <div className="w-3 h-3 rounded-full bg-blue-500 flex items-center justify-center text-[7px] font-bold text-white">E</div>
+              </div>
+              <span className="text-xs text-surface-300">Code/Test/Example</span>
             </div>
           </div>
         </div>
