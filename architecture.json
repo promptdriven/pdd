@@ -1,0 +1,5403 @@
+[
+  {
+    "reason": "Provides unified LLM invocation across all PDD operations.",
+    "description": "Core abstraction for calling LLMs via LiteLLM. Handles provider selection, authentication, retries, token counting, and cost tracking. Supports batch mode and structured outputs.",
+    "dependencies": [
+      "path_resolution_python.prompt"
+    ],
+    "priority": 1,
+    "filename": "llm_invoke_python.prompt",
+    "filepath": "pdd/llm_invoke.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "setup_file_logging",
+            "signature": "(log_file_path = None)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_verbose_logging",
+            "signature": "(verbose = False)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "llm_invoke",
+            "signature": "(prompt: Optional[str] = None, input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None, strength: float = 0.5, temperature: float = 0.1, verbose: bool = False, output_pydantic: Optional[Type[BaseModel]] = None, output_schema: Optional[Dict[str, Any]] = None, time: Optional[float] = 0.25, use_batch_mode: bool = False, messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None, language: Optional[str] = None, use_cloud: Optional[bool] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, message: str, raw_response: Any = None, item_index: int = 0)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "calc_strength",
+            "signature": "(candidate)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Loads prompt templates from the PDD template system.",
+    "description": "Locates and reads prompt template files from PDD_PATH or local directories. Handles template inheritance and variable resolution.",
+    "dependencies": [
+      "path_resolution_python.prompt"
+    ],
+    "priority": 2,
+    "filename": "load_prompt_template_python.prompt",
+    "filepath": "pdd/load_prompt_template.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "print_formatted",
+            "signature": "(message: str) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "load_prompt_template",
+            "signature": "(prompt_name: str) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Centralizes path resolution for all PDD file operations.",
+    "description": "Resolves paths for prompts, generated code, tests, examples, and context files. Handles multiple project layouts and discovery strategies.",
+    "dependencies": [
+      "generate_output_paths_python.prompt",
+      "get_extension_python.prompt",
+      "get_language_python.prompt"
+    ],
+    "priority": 3,
+    "filename": "construct_paths_python.prompt",
+    "filepath": "pdd/construct_paths.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "list_available_contexts",
+            "signature": "(start_path: Optional[Path] = None) -> list[str]",
+            "returns": "list[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "detect_context_for_file",
+            "signature": "(file_path: str, repo_root: Optional[str] = None) -> Tuple[Optional[str], Dict[str, Any]]",
+            "returns": "Tuple[Optional[str], Dict[str, Any]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_tests_dir_from_config",
+            "signature": "(start_path: Optional[Path] = None) -> Optional[Path]",
+            "returns": "Optional[Path]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "construct_paths",
+            "signature": "(input_file_paths: Dict[str, str], force: bool, quiet: bool, command: str, command_options: Optional[Dict[str, Any]], create_error_file: bool = True, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, path_resolution_mode: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]",
+            "returns": "Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Prepares prompts for LLM consumption by expanding directives.",
+    "description": "Expands <include> directives, processes <shell> and <web> tags, handles variable substitution, and normalizes prompt formatting. Supports recursive expansion.",
+    "dependencies": [
+      "path_resolution_python.prompt"
+    ],
+    "priority": 4,
+    "filename": "preprocess_python.prompt",
+    "filepath": "pdd/preprocess.py",
+    "tags": [
+      "module",
+      "processing",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "preprocess",
+            "signature": "(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_file_path",
+            "signature": "(file_name: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_backtick_includes",
+            "signature": "(text: str, recursive: bool) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_xml_tags",
+            "signature": "(text: str, recursive: bool) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_include_tags",
+            "signature": "(text: str, recursive: bool) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_pdd_tags",
+            "signature": "(text: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_shell_tags",
+            "signature": "(text: str, recursive: bool) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_web_tags",
+            "signature": "(text: str, recursive: bool) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_include_many_tags",
+            "signature": "(text: str, recursive: bool) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "double_curly",
+            "signature": "(text: str, exclude_keys: Optional[List[str]] = None) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_include",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_include",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_shell",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_shell_with_spans",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_web",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_web_with_spans",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_many",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_many_with_spans",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_code_block",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replace_include_with_spans",
+            "signature": "(match)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides shared utilities for all agentic workflows.",
+    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, and result aggregation.",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "agentic_common_python.prompt",
+    "filepath": "pdd/agentic_common.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "log_info",
+            "signature": "(message: str) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "log_debug",
+            "signature": "(message: str) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "log_error",
+            "signature": "(message: str) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_available_agents",
+            "signature": "() -> List[str]",
+            "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_agentic_task",
+            "signature": "(instruction: str, cwd: Path) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Detects programming language from prompt or filename.",
+    "description": "Identifies the target language for code generation. Uses filename patterns and prompt content analysis.",
+    "dependencies": [
+      "path_resolution_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "get_language_python.prompt",
+    "filepath": "pdd/get_language.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_language",
+            "signature": "(extension: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides path resolution utilities for includes and templates.",
+    "description": "Resolves relative paths for include directives, locates prompt templates, finds data files, and discovers project roots.",
+    "dependencies": [],
+    "priority": 7,
+    "filename": "path_resolution_python.prompt",
+    "filepath": "pdd/path_resolution.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_default_resolver",
+            "signature": "() -> PathResolver",
+            "returns": "PathResolver",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "resolve_include",
+            "signature": "(self, rel: str, profile: IncludeProfile = 'cwd_then_package_then_repo') -> Path",
+            "returns": "Path",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "resolve_prompt_template",
+            "signature": "(self, name: str, profile: PromptProfile = 'pdd_path_then_repo_then_cwd') -> Optional[Path]",
+            "returns": "Optional[Path]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "resolve_data_file",
+            "signature": "(self, rel: str, profile: DataProfile = 'pdd_path_only') -> Path",
+            "returns": "Path",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "resolve_project_root",
+            "signature": "(self, profile: ProjectRootProfile = 'pdd_path_then_marker_then_cwd', max_levels: int = 5) -> Path",
+            "returns": "Path",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Extracts clean code from raw LLM responses.",
+    "description": "Parses LLM output to extract code blocks, removes markdown fencing, validates syntax, and handles multi-block outputs. Uses LLM for complex extraction when needed.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 8,
+    "filename": "postprocess_python.prompt",
+    "filepath": "pdd/postprocess.py",
+    "tags": [
+      "module",
+      "processing",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "postprocess_0",
+            "signature": "(text: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "postprocess",
+            "signature": "(llm_output: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Detects whether LLM output is complete or needs continuation.",
+    "description": "Analyzes LLM responses to determine if code is complete. Checks for truncation markers, unclosed blocks, and incomplete functions.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 9,
+    "filename": "unfinished_prompt_python.prompt",
+    "filepath": "pdd/unfinished_prompt.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "unfinished_prompt",
+            "signature": "(prompt_text: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, language: Optional[str] = None, verbose: bool = False) -> Tuple[str, bool, float, str]",
+            "returns": "Tuple[str, bool, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates and verifies language-specific tests.",
+    "description": "Creates tests appropriate for the target language. Handles language-specific testing patterns.",
+    "dependencies": [],
+    "priority": 10,
+    "filename": "agentic_langtest_python.prompt",
+    "filepath": "pdd/agentic_langtest.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "default_verify_cmd_for",
+            "signature": "(lang: str, unit_test_file: str) -> str | None",
+            "returns": "str | None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "missing_tool_hints",
+            "signature": "(lang: str, verify_cmd: str | None, project_root: Path) -> str | None",
+            "returns": "str | None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Continues incomplete LLM outputs that were truncated.",
+    "description": "Detects when LLM output is incomplete and continues generation from where it stopped. Handles token limit issues gracefully.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "unfinished_prompt_python.prompt"
+    ],
+    "priority": 11,
+    "filename": "continue_generation_python.prompt",
+    "filepath": "pdd/continue_generation.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "continue_generation",
+            "signature": "(formatted_input_prompt: str, llm_output: str, strength: float, temperature: float, time: float = DEFAULT_TIME, language: Optional[str] = None, verbose: bool = False) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Handles authentication for PDD cloud services.",
+    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication.",
+    "dependencies": [],
+    "priority": 12,
+    "filename": "get_jwt_token_python.prompt",
+    "filepath": "pdd/get_jwt_token.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "__init__",
+            "signature": "(self, client_id: str)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, firebase_api_key: str, app_name: str)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "verify_firebase_token",
+            "signature": "(self, id_token: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Returns file extension for a programming language.",
+    "description": "Maps language names to file extensions. Uses internal language format database.",
+    "dependencies": [
+      "path_resolution_python.prompt"
+    ],
+    "priority": 13,
+    "filename": "get_extension_python.prompt",
+    "filepath": "pdd/get_extension.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_extension",
+            "signature": "(language: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides safe file editing operations.",
+    "description": "Reads, modifies, and writes files with proper encoding handling. Supports atomic writes and backups.",
+    "dependencies": [],
+    "priority": 14,
+    "filename": "edit_file_python.prompt",
+    "filepath": "pdd/edit_file.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "calculate_hash",
+            "signature": "(content: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "format_tools_for_claude",
+            "signature": "(tools)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "handle_error",
+            "signature": "(state: EditFileState) -> EditFileState",
+            "returns": "EditFileState",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "decide_next_step",
+            "signature": "(state: EditFileState) -> Literal['execute_edit', 'handle_error', END]",
+            "returns": "Literal['execute_edit', 'handle_error', END]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "check_edit_result",
+            "signature": "(state: EditFileState) -> Literal['plan_edits', 'handle_error']",
+            "returns": "Literal['plan_edits', 'handle_error']",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_edit_in_subprocess",
+            "signature": "(file_path: str, edit_instructions: str) -> Tuple[bool, Optional[str]]",
+            "returns": "Tuple[bool, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Detects Python environment configuration.",
+    "description": "Identifies virtual environments, Python versions, and installed packages. Used for execution setup.",
+    "dependencies": [],
+    "priority": 15,
+    "filename": "python_env_detector_python.prompt",
+    "filepath": "pdd/python_env_detector.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect_host_python_executable",
+            "signature": "() -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_environment_info",
+            "signature": "() -> dict",
+            "returns": "dict",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "is_in_virtual_environment",
+            "signature": "() -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_environment_type",
+            "signature": "() -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Returns execution command for a language.",
+    "description": "Provides the command to run code in a given language. Used for example execution.",
+    "dependencies": [
+      "path_resolution_python.prompt"
+    ],
+    "priority": 16,
+    "filename": "get_run_command_python.prompt",
+    "filepath": "pdd/get_run_command.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_run_command",
+            "signature": "(extension: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_run_command_for_file",
+            "signature": "(file_path: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Detects conflicts when multiple prompts affect same code.",
+    "description": "Identifies overlapping or contradictory specifications across prompts. Helps maintain consistency.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 17,
+    "filename": "conflicts_in_prompts_python.prompt",
+    "filepath": "pdd/conflicts_in_prompts.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "conflicts_in_prompts",
+            "signature": "(prompt1: str, prompt2: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[List[dict], float, str]",
+            "returns": "Tuple[List[dict], float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes runtime crashes in generated code modules.",
+    "description": "Analyzes stack traces and error messages to fix crashed code. Handles both syntax and runtime errors.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 18,
+    "filename": "fix_code_module_errors_python.prompt",
+    "filepath": "pdd/fix_code_module_errors.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_inputs",
+            "signature": "(program: str, prompt: str, code: str, errors: str, strength: float) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "fix_code_module_errors",
+            "signature": "(program: str, prompt: str, code: str, errors: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False, program_path: str = '', code_path: str = '') -> Tuple[bool, bool, str, str, str, float, str]",
+            "returns": "Tuple[bool, bool, str, str, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Autonomously investigates GitHub issues and creates fixes.",
+    "description": "Multi-step bug investigation: checks for duplicates, reviews docs, triages, reproduces, finds root cause, and creates PR.",
+    "dependencies": [
+      "agentic_bug_orchestrator_python.prompt",
+      "agentic_common_python.prompt",
+      "bug_main_python.prompt"
+    ],
+    "priority": 19,
+    "filename": "agentic_bug_python.prompt",
+    "filepath": "pdd/agentic_bug.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_bug",
+            "signature": "(issue_url: str) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes issues found during functional verification.",
+    "description": "Corrects code that fails verification checks. Addresses logic errors and specification mismatches.",
+    "dependencies": [
+      "edit_file_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 20,
+    "filename": "fix_verification_errors_python.prompt",
+    "filepath": "pdd/fix_verification_errors.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_verification_errors",
+            "signature": "(program: str, prompt: str, code: str, output: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, verbose: bool = False, time: float = DEFAULT_TIME) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Updates prompts to reflect code modifications.",
+    "description": "Back-propagates code changes into the source prompt. Keeps prompts synchronized with manually edited code.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 21,
+    "filename": "update_prompt_python.prompt",
+    "filepath": "pdd/update_prompt.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "update_prompt",
+            "signature": "(input_prompt: str, input_code: str, modified_code: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes code based on failing unit test output.",
+    "description": "Analyzes test failures and generates code or test corrections. Determines whether to fix the code or the test based on error patterns.",
+    "dependencies": [
+      "edit_file_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 22,
+    "filename": "fix_errors_from_unit_tests_python.prompt",
+    "filepath": "pdd/fix_errors_from_unit_tests.py",
+    "tags": [
+      "fix",
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_inputs",
+            "signature": "(strength: float, temperature: float) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "write_to_error_file",
+            "signature": "(file_path: str, content: str) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "fix_errors_from_unit_tests",
+            "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[bool, bool, str, str, str, float, str]",
+            "returns": "Tuple[bool, bool, str, str, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates example code demonstrating module usage.",
+    "description": "Creates minimal runnable examples that show how to use generated modules. Examples serve as interface documentation and grounding context.",
+    "dependencies": [
+      "continue_generation_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "postprocess_python.prompt",
+      "preprocess_python.prompt",
+      "unfinished_prompt_python.prompt"
+    ],
+    "priority": 23,
+    "filename": "context_generator_python.prompt",
+    "filepath": "pdd/context_generator.py",
+    "tags": [
+      "generation",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "context_generator",
+            "signature": "(code_module: str, prompt: str, language: str = 'python', strength: float = 0.5, temperature: float = 0, time: Optional[float] = DEFAULT_TIME, verbose: bool = False, source_file_path: str = None, example_file_path: str = None, module_name: str = None) -> tuple",
+            "returns": "tuple",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Identifies which prompts need updates based on changes.",
+    "description": "Analyzes change descriptions to determine affected prompts. Supports batch change detection.",
+    "dependencies": [
+      "continue_generation_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "postprocess_python.prompt",
+      "preprocess_python.prompt",
+      "unfinished_prompt_python.prompt"
+    ],
+    "priority": 24,
+    "filename": "detect_change_python.prompt",
+    "filepath": "pdd/detect_change.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect_change",
+            "signature": "(prompt_files: List[str], change_description: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[List[Dict[str, str]], float, str]",
+            "returns": "Tuple[List[Dict[str, str]], float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic crash explore operations.",
+    "description": "Defines the prompt structure for agentic crash explore. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 25,
+    "filename": "agentic_crash_explore_LLM.prompt",
+    "filepath": "prompts/agentic_crash_explore_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic fix explore operations.",
+    "description": "Defines the prompt structure for agentic fix explore. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 26,
+    "filename": "agentic_fix_explore_LLM.prompt",
+    "filepath": "prompts/agentic_fix_explore_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Autonomously updates prompts based on code changes.",
+    "description": "Analyzes code modifications and generates corresponding prompt updates. Ensures prompt-code synchronization.",
+    "dependencies": [],
+    "priority": 27,
+    "filename": "agentic_update_LLM.prompt",
+    "filepath": "prompts/agentic_update_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic verify explore operations.",
+    "description": "Defines the prompt structure for agentic verify explore. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 28,
+    "filename": "agentic_verify_explore_LLM.prompt",
+    "filepath": "prompts/agentic_verify_explore_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Main CLI entry point and command dispatcher.",
+    "description": "Defines all pdd commands using Click. Routes to appropriate subcommands and handles global options.",
+    "dependencies": [],
+    "priority": 29,
+    "filename": "cli_python.prompt",
+    "filepath": "pdd/cli.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    }
+  },
+  {
+    "reason": "Determines output file paths for generated code.",
+    "description": "Calculates where generated files should be written based on project structure and conventions.",
+    "dependencies": [],
+    "priority": 30,
+    "filename": "generate_output_paths_python.prompt",
+    "filepath": "pdd/generate_output_paths.py",
+    "tags": [
+      "generation",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_output_paths",
+            "signature": "(command: str, output_locations: Dict[str, Optional[str]], basename: str, language: str, file_extension: str, context_config: Optional[Dict[str, str]] = None, input_file_dir: Optional[str] = None, input_file_dirs: Optional[Dict[str, str]] = None, config_base_dir: Optional[str] = None, path_resolution_mode: PathResolutionMode = 'config_base') -> Dict[str, str]",
+            "returns": "Dict[str, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Displays animated PDD logo in terminal.",
+    "description": "Renders animated ASCII art logo. Used for CLI branding.",
+    "dependencies": [],
+    "priority": 31,
+    "filename": "logo_animation_python.prompt",
+    "filepath": "pdd/logo_animation.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "start_logo_animation",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "stop_logo_animation",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_logo_animation_inline",
+            "signature": "(console: Console, stop_event: threading.Event)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "update_progress",
+            "signature": "(self, progress: float)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_new_transition",
+            "signature": "(self, new_target_x: float, new_target_y: float)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for sync analysis operations.",
+    "description": "Defines the prompt structure for sync analysis. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 32,
+    "filename": "sync_analysis_LLM.prompt",
+    "filepath": "prompts/sync_analysis_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "sync",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Tracks LLM usage costs across operations.",
+    "description": "Records token usage and calculates costs. Aggregates costs across workflow steps.",
+    "dependencies": [],
+    "priority": 33,
+    "filename": "track_cost_python.prompt",
+    "filepath": "pdd/track_cost.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "track_cost",
+            "signature": "(func)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "extract_cost_and_model",
+            "signature": "(result: Any) -> Tuple[Any, str]",
+            "returns": "Tuple[Any, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "collect_files",
+            "signature": "(args, kwargs)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "wrapper",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "looks_like_file",
+            "signature": "(path_str)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Processes batch changes from CSV files.",
+    "description": "Reads change specifications from CSV and applies them to multiple prompts. Supports bulk updates.",
+    "dependencies": [
+      "get_extension_python.prompt"
+    ],
+    "priority": 34,
+    "filename": "process_csv_change_python.prompt",
+    "filepath": "pdd/process_csv_change.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "resolve_prompt_path",
+            "signature": "(prompt_name: str, csv_file: str, code_directory: str) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "process_csv_change",
+            "signature": "(csv_file: str, strength: float, temperature: float, code_directory: str, language: str, extension: str, budget: float, time: float = DEFAULT_TIME) -> Tuple[bool, List[Dict[str, str]], float, Optional[str]]",
+            "returns": "Tuple[bool, List[Dict[str, str]], float, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "mock_change",
+            "signature": "(input_prompt, input_code, change_prompt, strength, temperature)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "mock_get_extension",
+            "signature": "(language_name)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the auto deps command.",
+    "description": "Command-line interface for auto deps. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "insert_includes_python.prompt"
+    ],
+    "priority": 35,
+    "filename": "auto_deps_main_python.prompt",
+    "filepath": "pdd/auto_deps_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "auto_deps_main",
+            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the conflicts command.",
+    "description": "Command-line interface for conflicts. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "conflicts_in_prompts_python.prompt",
+      "construct_paths_python.prompt"
+    ],
+    "priority": 36,
+    "filename": "conflicts_main_python.prompt",
+    "filepath": "pdd/conflicts_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "conflicts_main",
+            "signature": "(ctx: click.Context, prompt1: str, prompt2: str, output: Optional[str], verbose: bool = False, language: Optional[str] = None) -> Tuple[List[Dict], float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the context generator command.",
+    "description": "Command-line interface for context generator. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "context_generator_python.prompt"
+    ],
+    "priority": 37,
+    "filename": "context_generator_main_python.prompt",
+    "filepath": "pdd/context_generator_main.py",
+    "tags": [
+      "cli",
+      "generation",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "context_generator_main",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str]) -> Tuple[str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Returns test execution command for a language.",
+    "description": "Provides the command to run tests in a given language. Defaults to pytest for Python.",
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "get_language_python.prompt"
+    ],
+    "priority": 38,
+    "filename": "get_test_command_python.prompt",
+    "filepath": "pdd/get_test_command.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_test_command_for_file",
+            "signature": "(test_file: str, language: Optional[str] = None) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Creates summaries of directory contents.",
+    "description": "Generates overview of files in a directory. Used for context in LLM prompts.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 39,
+    "filename": "summarize_directory_python.prompt",
+    "filepath": "pdd/summarize_directory.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "summarize_directory",
+            "signature": "(directory_path: str, strength: float, temperature: float, time: float = DEFAULT_TIME, verbose: bool = False, csv_file: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the trace command.",
+    "description": "Command-line interface for trace. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "trace_python.prompt"
+    ],
+    "priority": 40,
+    "filename": "trace_main_python.prompt",
+    "filepath": "pdd/trace_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "trace_main",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, code_line: int, output: Optional[str]) -> Tuple[str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Adds XML structure tags to prompt content.",
+    "description": "Wraps content sections in XML tags for better LLM parsing. Improves prompt structure clarity.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 41,
+    "filename": "xml_tagger_python.prompt",
+    "filepath": "pdd/xml_tagger.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "xml_tagger",
+            "signature": "(raw_prompt: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Orchestrates the 9-step agentic bug investigation workflow.",
+    "description": "Coordinates duplicate checking, documentation review, triage, reproduction, root cause analysis, test planning, test generation, verification, and PR creation.",
+    "dependencies": [
+      "agentic_bug_python.prompt",
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 42,
+    "filename": "agentic_bug_orchestrator_python.prompt",
+    "filepath": "pdd/agentic_bug_orchestrator.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_bug_orchestrator",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Autonomously updates prompts based on code changes.",
+    "description": "Analyzes code modifications and generates corresponding prompt updates. Ensures prompt-code synchronization.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "agentic_update_LLM.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 43,
+    "filename": "agentic_update_python.prompt",
+    "filepath": "pdd/agentic_update.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_update",
+            "signature": "(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Autonomously verifies code against specifications.",
+    "description": "Runs generated code, checks output against expectations, and identifies discrepancies. Supports exploration for context.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "agentic_verify_explore_LLM.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 44,
+    "filename": "agentic_verify_python.prompt",
+    "filepath": "pdd/agentic_verify.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_verify",
+            "signature": "(prompt_file: Path, code_file: Path, program_file: Path, verification_log_file: Path) -> tuple[bool, str, float, str, list[str]]",
+            "returns": "tuple[bool, str, float, str, list[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Automatically selects relevant includes for prompts.",
+    "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "summarize_directory_python.prompt"
+    ],
+    "priority": 45,
+    "filename": "auto_include_python.prompt",
+    "filepath": "pdd/auto_include.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "auto_include",
+            "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[str, str, float, str]",
+            "returns": "Tuple[str, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "replacer",
+            "signature": "(match: re.Match) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Modifies prompts based on change instructions.",
+    "description": "Applies specified modifications to prompt content. Preserves structure while incorporating requested changes.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 46,
+    "filename": "change_python.prompt",
+    "filepath": "pdd/change.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "change",
+            "signature": "(input_prompt: str, input_code: str, change_prompt: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, budget: float = 5.0, verbose: bool = False) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the crash command.",
+    "description": "Command-line interface for crash. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "fix_code_loop_python.prompt",
+      "fix_code_module_errors_python.prompt"
+    ],
+    "priority": 47,
+    "filename": "crash_main_python.prompt",
+    "filepath": "pdd/crash_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "crash_main",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, error_file: str, output: Optional[str] = None, output_program: Optional[str] = None, loop: bool = False, max_attempts: Optional[int] = None, budget: Optional[float] = None, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None) -> Tuple[bool, str, str, int, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the fix verification command.",
+    "description": "Command-line interface for fix verification. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "fix_verification_errors_loop_python.prompt",
+      "fix_verification_errors_python.prompt"
+    ],
+    "priority": 48,
+    "filename": "fix_verification_main_python.prompt",
+    "filepath": "pdd/fix_verification_main.py",
+    "tags": [
+      "cli",
+      "fix",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "run_program",
+            "signature": "(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]"
+          },
+          {
+            "name": "fix_verification_main",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None) -> Tuple[bool, str, str, int, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Integrates with git for change tracking.",
+    "description": "Detects git changes, stages files, and supports commit operations. Tracks prompt modifications.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "agentic_update_python.prompt",
+      "update_prompt_python.prompt"
+    ],
+    "priority": 49,
+    "filename": "git_update_python.prompt",
+    "filepath": "pdd/git_update.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "git_update",
+            "signature": "(input_prompt: str, modified_code_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, simple: bool = False, quiet: bool = False, prompt_file: Optional[str] = None) -> Tuple[Optional[str], float, str]",
+            "returns": "Tuple[Optional[str], float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Expands test coverage for existing test suites.",
+    "description": "Analyzes existing tests and generates additional test cases to improve coverage. Focuses on edge cases and error conditions.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "postprocess_python.prompt"
+    ],
+    "priority": 50,
+    "filename": "increase_tests_python.prompt",
+    "filepath": "pdd/increase_tests.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "increase_tests",
+            "signature": "(existing_unit_tests: str, coverage_report: str, code: str, prompt_that_generated_code: str, language: str = 'python', strength: float = 0.5, temperature: float = 0.0, time: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the preprocess command.",
+    "description": "Command-line interface for preprocess. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "preprocess_python.prompt",
+      "xml_tagger_python.prompt"
+    ],
+    "priority": 51,
+    "filename": "preprocess_main_python.prompt",
+    "filepath": "pdd/preprocess_main.py",
+    "tags": [
+      "cli",
+      "processing",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "preprocess_main",
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list) -> Tuple[str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Splits functionality from one prompt into a new sub-prompt.",
+    "description": "Extracts a subset of functionality into a separate prompt file. Creates proper dependency relationships.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 52,
+    "filename": "split_python.prompt",
+    "filepath": "pdd/split.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "split",
+            "signature": "(input_prompt: str, input_code: str, example_code: str, strength: float = DEFAULT_STRENGTH, temperature: float = DEFAULT_TEMPERATURE, time: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[Tuple[str, str], float, str]",
+            "returns": "Tuple[Tuple[str, str], float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Maps generated code lines back to source prompt lines.",
+    "description": "Traces code locations to their originating prompt sections. Useful for debugging and understanding generation.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 53,
+    "filename": "trace_python.prompt",
+    "filepath": "pdd/trace.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "trace",
+            "signature": "(code_file: str, code_line: int, prompt_file: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[Optional[int], float, str]",
+            "returns": "Tuple[Optional[int], float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Autonomously investigates and fixes runtime crashes.",
+    "description": "Multi-step workflow that explores code, identifies crash causes, and generates fixes. Uses LLM for root cause analysis.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "agentic_crash_explore_LLM.prompt",
+      "get_run_command_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 54,
+    "filename": "agentic_crash_python.prompt",
+    "filepath": "pdd/agentic_crash.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_crash",
+            "signature": "(prompt_file: str | Path, code_file: str | Path, program_file: str | Path, crash_log_file: str | Path) -> tuple[bool, str, float, str | None, list[str]]",
+            "returns": "tuple[bool, str, float, str | None, list[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the bug command.",
+    "description": "Command-line interface for bug. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "agentic_bug_python.prompt",
+      "bug_to_unit_test_python.prompt",
+      "construct_paths_python.prompt",
+      "get_jwt_token_python.prompt"
+    ],
+    "priority": 55,
+    "filename": "bug_main_python.prompt",
+    "filepath": "pdd/bug_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "bug_main",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, current_output: str, desired_output: str, output: Optional[str] = None, language: Optional[str] = 'Python') -> Tuple[str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the cmd test command.",
+    "description": "Command-line interface for cmd test. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "generate_test_python.prompt",
+      "get_jwt_token_python.prompt",
+      "increase_tests_python.prompt"
+    ],
+    "priority": 56,
+    "filename": "cmd_test_main_python.prompt",
+    "filepath": "pdd/cmd_test_main.py",
+    "tags": [
+      "cli",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "cmd_test_main",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None, language: str | None, coverage_report: str | None, existing_tests: list[str] | None, target_coverage: float | None, merge: bool | None, strength: float | None = None, temperature: float | None = None) -> tuple[str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the code generator command.",
+    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "get_jwt_token_python.prompt",
+      "preprocess_python.prompt",
+      "python_env_detector_python.prompt"
+    ],
+    "priority": 57,
+    "filename": "code_generator_main_python.prompt",
+    "filepath": "pdd/code_generator_main.py",
+    "tags": [
+      "cli",
+      "generation",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "is_git_repository",
+            "signature": "(path: Optional[str] = None) -> bool"
+          },
+          {
+            "name": "get_git_content_at_ref",
+            "signature": "(file_path: str, git_ref: str = 'HEAD') -> Optional[str]"
+          },
+          {
+            "name": "get_file_git_status",
+            "signature": "(file_path: str) -> str"
+          },
+          {
+            "name": "git_add_files",
+            "signature": "(file_paths: List[str], verbose: bool = False) -> bool"
+          },
+          {
+            "name": "code_generator_main",
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False) -> Tuple[str, bool, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Iteratively fixes code crashes until execution succeeds.",
+    "description": "Runs crash-fix cycles with retry limits. Executes example code to verify fixes.",
+    "dependencies": [
+      "agentic_crash_python.prompt",
+      "agentic_langtest_python.prompt",
+      "fix_code_module_errors_python.prompt",
+      "get_language_python.prompt"
+    ],
+    "priority": 58,
+    "filename": "fix_code_loop_python.prompt",
+    "filepath": "pdd/fix_code_loop.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "cloud_crash_fix",
+            "signature": "(program: str, prompt: str, code: str, errors: str, strength: float, temperature: float, time: float, verbose: bool, program_path: str = '', code_path: str = '', language: str = 'python') -> Tuple[bool, bool, str, str, str, float, Optional[str]]",
+            "returns": "Tuple[bool, bool, str, str, str, float, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_process_with_output",
+            "signature": "(cmd_args, timeout = 300)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "fix_code_loop",
+            "signature": "(code_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str, verbose: bool = False, time: float = DEFAULT_TIME, prompt_file: str = '', agentic_fallback: bool = True, use_cloud: bool = False) -> Tuple[bool, str, str, int, float, Optional[str]]",
+            "returns": "Tuple[bool, str, str, int, float, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, returncode, stdout, stderr)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "stream_pipe",
+            "signature": "(pipe, sink, capture_list)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "dummy_fix_code_module_errors",
+            "signature": "(program, prompt, code, errors, strength, temperature, verbose)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_agentic_crash",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_language",
+            "signature": "(ext)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "default_verify_cmd_for",
+            "signature": "(lang, verification_program)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "rprint",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "fix_code_module_errors",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Iteratively fixes verification failures.",
+    "description": "Runs verification-fix cycles until code meets specifications or retry limit reached.",
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "agentic_verify_python.prompt",
+      "fix_verification_errors_python.prompt",
+      "get_language_python.prompt"
+    ],
+    "priority": 59,
+    "filename": "fix_verification_errors_loop_python.prompt",
+    "filepath": "pdd/fix_verification_errors_loop.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "cloud_verify_fix",
+            "signature": "(program: str, prompt: str, code: str, output: str, strength: float, temperature: float, time_param: float, verbose: bool, language: str = 'python') -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "fix_verification_errors_loop",
+            "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = 'verification.log', output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Injects include directives into prompts.",
+    "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
+    "dependencies": [
+      "auto_include_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 60,
+    "filename": "insert_includes_python.prompt",
+    "filepath": "pdd/insert_includes.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "insert_includes",
+            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[str, str, float, str]",
+            "returns": "Tuple[str, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Splits functionality from one prompt into a new sub-prompt.",
+    "description": "Extracts a subset of functionality into a separate prompt file. Creates proper dependency relationships.",
+    "dependencies": [
+      "cli_python.prompt",
+      "conflicts_main_python.prompt",
+      "trace_main_python.prompt",
+      "track_cost_python.prompt"
+    ],
+    "priority": 61,
+    "filename": "split_LLM.prompt",
+    "filepath": "prompts/split_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the update command.",
+    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "construct_paths_python.prompt",
+      "git_update_python.prompt",
+      "update_prompt_python.prompt"
+    ],
+    "priority": 62,
+    "filename": "update_main_python.prompt",
+    "filepath": "pdd/update_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "resolve_prompt_code_pair",
+            "signature": "(code_file_path: str, quiet: bool = False, output_dir: Optional[str] = None) -> Tuple[str, str]"
+          },
+          {
+            "name": "find_and_resolve_all_pairs",
+            "signature": "(repo_root: str, quiet: bool = False, extensions: Optional[str] = None, output_dir: Optional[str] = None) -> List[Tuple[str, str]]"
+          },
+          {
+            "name": "update_file_pair",
+            "signature": "(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo, simple: bool = False) -> Dict[str, Any]"
+          },
+          {
+            "name": "update_main",
+            "signature": "(ctx: click.Context, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git: bool = False, repo: bool = False, extensions: Optional[str] = None, directory: Optional[str] = None, strength: Optional[float] = None, temperature: Optional[float] = None, simple: bool = False) -> Optional[Tuple[str, float, str]]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Converts bug reports into failing unit tests.",
+    "description": "Transforms GitHub issues or bug descriptions into reproducible test cases. Ensures bugs are captured before fixing.",
+    "dependencies": [
+      "continue_generation_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "postprocess_python.prompt",
+      "unfinished_prompt_python.prompt"
+    ],
+    "priority": 63,
+    "filename": "bug_to_unit_test_python.prompt",
+    "filepath": "pdd/bug_to_unit_test.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "bug_to_unit_test",
+            "signature": "(current_output: str, desired_output: str, prompt_used_to_generate_the_code: str, code_under_test: str, program_used_to_run_code_under_test: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, language: str = 'python') -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Core module that transforms prompts into executable code.",
+    "description": "Compiles natural language prompts into code. Orchestrates preprocessing, LLM invocation, continuation for incomplete outputs, and postprocessing. Returns generated code, cost, and model used.",
+    "dependencies": [
+      "continue_generation_python.prompt",
+      "llm_invoke_python.prompt",
+      "postprocess_python.prompt",
+      "preprocess_python.prompt",
+      "unfinished_prompt_python.prompt"
+    ],
+    "priority": 64,
+    "filename": "code_generator_python.prompt",
+    "filepath": "pdd/code_generator.py",
+    "tags": [
+      "generation",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "code_generator",
+            "signature": "(prompt: str, language: str, strength: float, temperature: float = 0.0, time: Optional[float] = None, verbose: bool = False, preprocess_prompt: bool = True, output_schema: Optional[dict] = None) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Iteratively fixes errors until tests pass.",
+    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations.",
+    "dependencies": [
+      "agentic_fix_python.prompt",
+      "agentic_langtest_python.prompt",
+      "fix_errors_from_unit_tests_python.prompt",
+      "get_language_python.prompt",
+      "python_env_detector_python.prompt"
+    ],
+    "priority": 65,
+    "filename": "fix_error_loop_python.prompt",
+    "filepath": "pdd/fix_error_loop.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "escape_brackets",
+            "signature": "(text: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "cloud_fix_errors",
+            "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, code_file_ext: str = '.py') -> Tuple[bool, bool, str, str, str, float, str]",
+            "returns": "Tuple[bool, bool, str, str, str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_pytest_on_file",
+            "signature": "(test_file: str) -> tuple[int, int, int, str]",
+            "returns": "tuple[int, int, int, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "format_log_for_output",
+            "signature": "(log_structure)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "fix_error_loop",
+            "signature": "(unit_test_file: str, code_file: str, prompt_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str = 'error_log.txt', verbose: bool = False, time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the fix command.",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "fix_error_loop_python.prompt",
+      "fix_errors_from_unit_tests_python.prompt",
+      "get_jwt_token_python.prompt",
+      "get_language_python.prompt"
+    ],
+    "priority": 66,
+    "filename": "fix_main_python.prompt",
+    "filepath": "pdd/fix_main.py",
+    "tags": [
+      "cli",
+      "fix",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "fix_main",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None) -> Tuple[bool, str, str, int, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Intelligently determines which sync operations to run.",
+    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "get_language_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "sync_analysis_LLM.prompt"
+    ],
+    "priority": 67,
+    "filename": "sync_determine_operation_python.prompt",
+    "filepath": "pdd/sync_determine_operation.py",
+    "tags": [
+      "module",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_pdd_dir",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_meta_dir",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_locks_dir",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_extension",
+            "signature": "(language: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_pdd_file_paths",
+            "signature": "(basename: str, language: str, prompts_dir: str = 'prompts', context_override: Optional[str] = None) -> Dict[str, Path]",
+            "returns": "Dict[str, Path]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "calculate_sha256",
+            "signature": "(file_path: Path) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "read_fingerprint",
+            "signature": "(basename: str, language: str) -> Optional[Fingerprint]",
+            "returns": "Optional[Fingerprint]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "read_run_report",
+            "signature": "(basename: str, language: str) -> Optional[RunReport]",
+            "returns": "Optional[RunReport]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "calculate_current_hashes",
+            "signature": "(paths: Dict[str, Any]) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_git_diff",
+            "signature": "(file_path: Path) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "estimate_operation_cost",
+            "signature": "(operation: str, language: str = 'python') -> float",
+            "returns": "float",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "validate_expected_files",
+            "signature": "(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]",
+            "returns": "Dict[str, bool]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "check_for_dependencies",
+            "signature": "(prompt_content: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "sync_determine_operation",
+            "signature": "(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = 'prompts', skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None) -> SyncDecision",
+            "returns": "SyncDecision",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "analyze_conflict_with_llm",
+            "signature": "(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = 'prompts', context_override: Optional[str] = None) -> SyncDecision",
+            "returns": "SyncDecision",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, basename: str, language: str)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__enter__",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__exit__",
+            "signature": "(self, exc_type, exc_val, exc_tb)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "acquire",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "release",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates unit tests for PDD-generated code modules.",
+    "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
+    "dependencies": [
+      "continue_generation_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "postprocess_python.prompt",
+      "preprocess_python.prompt",
+      "unfinished_prompt_python.prompt"
+    ],
+    "priority": 68,
+    "filename": "generate_test_python.prompt",
+    "filepath": "pdd/generate_test.py",
+    "tags": [
+      "generation",
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_test",
+            "signature": "(prompt: str, code: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, language: str = 'python', verbose: bool = False, source_file_path: Optional[str] = None, test_file_path: Optional[str] = None, module_name: Optional[str] = None, existing_tests: Optional[str] = None) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Autonomously fixes failing tests with exploration.",
+    "description": "Investigates test failures, explores codebase for context, and generates targeted fixes. Supports harvest-only mode.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "agentic_fix_explore_LLM.prompt",
+      "agentic_langtest_python.prompt",
+      "get_language_python.prompt",
+      "get_run_command_python.prompt",
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 69,
+    "filename": "agentic_fix_python.prompt",
+    "filepath": "pdd/agentic_fix.py",
+    "tags": [
+      "agentic",
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_agent_command",
+            "signature": "(provider: str, instruction_file: Path) -> List[str]",
+            "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "find_llm_csv_path",
+            "signature": "() -> Optional[Path]",
+            "returns": "Optional[Path]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_agentic_fix",
+            "signature": "(prompt_file: str, code_file: str, unit_test_file: str, error_log_file: str, verify_cmd: Optional[str] = None, cwd: Optional[Path] = None) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Coordinates sync workflow steps and state management.",
+    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
+    "dependencies": [
+      "auto_deps_main_python.prompt",
+      "cmd_test_main_python.prompt",
+      "code_generator_main_python.prompt",
+      "context_generator_main_python.prompt",
+      "crash_main_python.prompt",
+      "fix_main_python.prompt",
+      "fix_verification_main_python.prompt",
+      "get_test_command_python.prompt",
+      "sync_determine_operation_python.prompt",
+      "update_main_python.prompt"
+    ],
+    "priority": 70,
+    "filename": "sync_orchestration_python.prompt",
+    "filepath": "pdd/sync_orchestration.py",
+    "tags": [
+      "module",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "load_sync_log",
+            "signature": "(basename: str, language: str) -> List[Dict[str, Any]]",
+            "returns": "List[Dict[str, Any]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "create_sync_log_entry",
+            "signature": "(decision, budget_remaining: float) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "update_sync_log_entry",
+            "signature": "(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "append_sync_log",
+            "signature": "(basename: str, language: str, entry: Dict[str, Any])",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "log_sync_event",
+            "signature": "(basename: str, language: str, event: str, details: Dict[str, Any] = None)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "save_run_report",
+            "signature": "(report: Dict[str, Any], basename: str, language: str, atomic_state: Optional['AtomicStateUpdate'] = None)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "sync_orchestration",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, basename: str, language: str)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__enter__",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__exit__",
+            "signature": "(self, exc_type, exc_val, exc_tb)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_run_report",
+            "signature": "(self, report: Dict[str, Any], path: Path)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_fingerprint",
+            "signature": "(self, fingerprint: Dict[str, Any], path: Path)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "read_pipe",
+            "signature": "(pipe, chunks)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_confirm_callback",
+            "signature": "() -> Optional[Callable[[str, str], bool]]",
+            "returns": "Optional[Callable[[str, str], bool]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "sync_worker_logic",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "confirming_callback",
+            "signature": "(msg: str, title: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "headless_confirming_callback",
+            "signature": "(msg: str, title: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, rc, out, err)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Configuration data for Makefile.",
+    "description": "Defines Makefile settings and data. Used by runtime modules.",
+    "dependencies": [],
+    "priority": 71,
+    "filename": "Makefile_makefile.prompt",
+    "filepath": "Makefile",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step1 duplicate operations.",
+    "description": "Defines the prompt structure for agentic bug step1 duplicate. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 72,
+    "filename": "agentic_bug_step1_duplicate_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step1_duplicate_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step2 docs operations.",
+    "description": "Defines the prompt structure for agentic bug step2 docs. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 73,
+    "filename": "agentic_bug_step2_docs_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step2_docs_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step3 triage operations.",
+    "description": "Defines the prompt structure for agentic bug step3 triage. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 74,
+    "filename": "agentic_bug_step3_triage_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step3_triage_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step4 reproduce operations.",
+    "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 75,
+    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step5 root cause operations.",
+    "description": "Defines the prompt structure for agentic bug step5 root cause. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 76,
+    "filename": "agentic_bug_step5_root_cause_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step5_root_cause_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step6 test plan operations.",
+    "description": "Defines the prompt structure for agentic bug step6 test plan. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 77,
+    "filename": "agentic_bug_step6_test_plan_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step6_test_plan_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step7 generate operations.",
+    "description": "Defines the prompt structure for agentic bug step7 generate. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 78,
+    "filename": "agentic_bug_step7_generate_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step7_generate_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "generation",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step8 verify operations.",
+    "description": "Defines the prompt structure for agentic bug step8 verify. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 79,
+    "filename": "agentic_bug_step8_verify_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step8_verify_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic bug step9 pr operations.",
+    "description": "Defines the prompt structure for agentic bug step9 pr. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 80,
+    "filename": "agentic_bug_step9_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step9_pr_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic fix harvest only operations.",
+    "description": "Defines the prompt structure for agentic fix harvest only. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 81,
+    "filename": "agentic_fix_harvest_only_LLM.prompt",
+    "filepath": "prompts/agentic_fix_harvest_only_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for agentic fix primary operations.",
+    "description": "Defines the prompt structure for agentic fix primary. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 82,
+    "filename": "agentic_fix_primary_LLM.prompt",
+    "filepath": "prompts/agentic_fix_primary_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Automatically selects relevant includes for prompts.",
+    "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
+    "dependencies": [],
+    "priority": 83,
+    "filename": "auto_include_LLM.prompt",
+    "filepath": "prompts/auto_include_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Automatically updates prompts across the codebase.",
+    "description": "Propagates changes through dependent prompts. Maintains consistency after modifications.",
+    "dependencies": [],
+    "priority": 84,
+    "filename": "auto_update_python.prompt",
+    "filepath": "pdd/auto_update.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect_installation_method",
+            "signature": "(sys_executable)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_upgrade_command",
+            "signature": "(package_name, installation_method)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "auto_update",
+            "signature": "(package_name: str = 'pdd-cli', latest_version: str = None) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Converts bug reports into failing unit tests.",
+    "description": "Transforms GitHub issues or bug descriptions into reproducible test cases. Ensures bugs are captured before fixing.",
+    "dependencies": [],
+    "priority": 85,
+    "filename": "bug_to_unit_test_LLM.prompt",
+    "filepath": "prompts/bug_to_unit_test_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Modifies prompts based on change instructions.",
+    "description": "Applies specified modifications to prompt content. Preserves structure while incorporating requested changes.",
+    "dependencies": [],
+    "priority": 86,
+    "filename": "change_LLM.prompt",
+    "filepath": "prompts/change_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for code patcher operations.",
+    "description": "Defines the prompt structure for code patcher. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 87,
+    "filename": "code_patcher_LLM.prompt",
+    "filepath": "prompts/code_patcher_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Formats comment lines for different languages.",
+    "description": "Generates properly formatted comments. Handles indentation and language conventions.",
+    "dependencies": [],
+    "priority": 88,
+    "filename": "comment_line_python.prompt",
+    "filepath": "pdd/comment_line.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "comment_line",
+            "signature": "(code_line, comment_characters)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for conflict operations.",
+    "description": "Defines the prompt structure for conflict. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 89,
+    "filename": "conflict_LLM.prompt",
+    "filepath": "prompts/conflict_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Continues incomplete LLM outputs that were truncated.",
+    "description": "Detects when LLM output is incomplete and continues generation from where it stopped. Handles token limit issues gracefully.",
+    "dependencies": [],
+    "priority": 90,
+    "filename": "continue_generation_LLM.prompt",
+    "filepath": "prompts/continue_generation_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Identifies which prompts need updates based on changes.",
+    "description": "Analyzes change descriptions to determine affected prompts. Supports batch change detection.",
+    "dependencies": [],
+    "priority": 91,
+    "filename": "detect_change_LLM.prompt",
+    "filepath": "prompts/detect_change_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for diff analyzer operations.",
+    "description": "Defines the prompt structure for diff analyzer. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 92,
+    "filename": "diff_analyzer_LLM.prompt",
+    "filepath": "prompts/diff_analyzer_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Implements encode message functionality.",
+    "description": "Provides encode message capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 93,
+    "filename": "encode_message_python.prompt",
+    "filepath": "pdd/encode_message.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    }
+  },
+  {
+    "reason": "LLM prompt template for example generator operations.",
+    "description": "Defines the prompt structure for example generator. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 94,
+    "filename": "example_generator_LLM.prompt",
+    "filepath": "prompts/example_generator_LLM.prompt",
+    "tags": [
+      "config",
+      "generation",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract auto include operations.",
+    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 95,
+    "filename": "extract_auto_include_LLM.prompt",
+    "filepath": "prompts/extract_auto_include_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract code operations.",
+    "description": "Defines the prompt structure for extract code. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 96,
+    "filename": "extract_code_LLM.prompt",
+    "filepath": "prompts/extract_code_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract conflict operations.",
+    "description": "Defines the prompt structure for extract conflict. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 97,
+    "filename": "extract_conflict_LLM.prompt",
+    "filepath": "prompts/extract_conflict_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract detect change operations.",
+    "description": "Defines the prompt structure for extract detect change. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 98,
+    "filename": "extract_detect_change_LLM.prompt",
+    "filepath": "prompts/extract_detect_change_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract program code fix operations.",
+    "description": "Defines the prompt structure for extract program code fix. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 99,
+    "filename": "extract_program_code_fix_LLM.prompt",
+    "filepath": "prompts/extract_program_code_fix_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract prompt change operations.",
+    "description": "Defines the prompt structure for extract prompt change. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 100,
+    "filename": "extract_prompt_change_LLM.prompt",
+    "filepath": "prompts/extract_prompt_change_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract prompt split operations.",
+    "description": "Defines the prompt structure for extract prompt split. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 101,
+    "filename": "extract_prompt_split_LLM.prompt",
+    "filepath": "prompts/extract_prompt_split_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract prompt update operations.",
+    "description": "Defines the prompt structure for extract prompt update. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 102,
+    "filename": "extract_prompt_update_LLM.prompt",
+    "filepath": "prompts/extract_prompt_update_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract promptline operations.",
+    "description": "Defines the prompt structure for extract promptline. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 103,
+    "filename": "extract_promptline_LLM.prompt",
+    "filepath": "prompts/extract_promptline_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract unit code fix operations.",
+    "description": "Defines the prompt structure for extract unit code fix. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 104,
+    "filename": "extract_unit_code_fix_LLM.prompt",
+    "filepath": "prompts/extract_unit_code_fix_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for extract xml operations.",
+    "description": "Defines the prompt structure for extract xml. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 105,
+    "filename": "extract_xml_LLM.prompt",
+    "filepath": "prompts/extract_xml_LLM.prompt",
+    "tags": [
+      "config",
+      "extraction",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Locates sections within prompt files.",
+    "description": "Finds specific sections in prompts by header or content. Used for targeted modifications.",
+    "dependencies": [],
+    "priority": 106,
+    "filename": "find_section_python.prompt",
+    "filepath": "pdd/find_section.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "find_section",
+            "signature": "(lines, start_index = 0, sub_section = False)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for find verification errors operations.",
+    "description": "Defines the prompt structure for find verification errors. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 107,
+    "filename": "find_verification_errors_LLM.prompt",
+    "filepath": "prompts/find_verification_errors_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Fixes runtime crashes in generated code modules.",
+    "description": "Analyzes stack traces and error messages to fix crashed code. Handles both syntax and runtime errors.",
+    "dependencies": [],
+    "priority": 108,
+    "filename": "fix_code_module_errors_LLM.prompt",
+    "filepath": "prompts/fix_code_module_errors_LLM.prompt",
+    "tags": [
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Fixes issues found during functional verification.",
+    "description": "Corrects code that fails verification checks. Addresses logic errors and specification mismatches.",
+    "dependencies": [],
+    "priority": 109,
+    "filename": "fix_verification_errors_LLM.prompt",
+    "filepath": "prompts/fix_verification_errors_LLM.prompt",
+    "tags": [
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Generates unit tests for PDD-generated code modules.",
+    "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
+    "dependencies": [],
+    "priority": 110,
+    "filename": "generate_test_LLM.prompt",
+    "filepath": "prompts/generate_test_LLM.prompt",
+    "tags": [
+      "config",
+      "generation",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Expands test coverage for existing test suites.",
+    "description": "Analyzes existing tests and generates additional test cases to improve coverage. Focuses on edge cases and error conditions.",
+    "dependencies": [],
+    "priority": 111,
+    "filename": "increase_tests_LLM.prompt",
+    "filepath": "prompts/increase_tests_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Injects include directives into prompts.",
+    "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
+    "dependencies": [],
+    "priority": 112,
+    "filename": "insert_includes_LLM.prompt",
+    "filepath": "prompts/insert_includes_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Installs shell completion for PDD CLI.",
+    "description": "Configures bash/zsh/fish completion for pdd commands. Improves CLI usability.",
+    "dependencies": [],
+    "priority": 113,
+    "filename": "install_completion_python.prompt",
+    "filepath": "pdd/install_completion.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_local_pdd_path",
+            "signature": "() -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_shell_rc_path",
+            "signature": "(shell: str) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_current_shell",
+            "signature": "() -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_completion_script_extension",
+            "signature": "(shell: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "install_completion",
+            "signature": "(quiet: bool = False)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Configuration data for language format.",
+    "description": "Defines language format settings and data. Used by runtime modules.",
+    "dependencies": [],
+    "priority": 114,
+    "filename": "language_format_csv.prompt",
+    "filepath": "pdd/data/language_format.csv",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Configuration data for llm model.",
+    "description": "Defines llm model settings and data. Used by runtime modules.",
+    "dependencies": [],
+    "priority": 115,
+    "filename": "llm_model_csv.prompt",
+    "filepath": "pdd/data/llm_model.csv",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Shell completion script for bash.",
+    "description": "Provides command-line completion for pdd in bash. Lists commands and options.",
+    "dependencies": [],
+    "priority": 116,
+    "filename": "pdd_completion_bash.prompt",
+    "filepath": "pdd_completion.sh",
+    "tags": [
+      "cli",
+      "shell"
+    ],
+    "interface": {
+      "type": "cli"
+    }
+  },
+  {
+    "reason": "Shell completion script for fish.",
+    "description": "Provides command-line completion for pdd in fish. Lists commands and options.",
+    "dependencies": [],
+    "priority": 117,
+    "filename": "pdd_completion_fish.prompt",
+    "filepath": "pdd/pdd_completion.fish",
+    "tags": [
+      "cli",
+      "shell"
+    ],
+    "interface": {
+      "type": "cli"
+    }
+  },
+  {
+    "reason": "Shell completion script for zsh.",
+    "description": "Provides command-line completion for pdd in zsh. Lists commands and options.",
+    "dependencies": [],
+    "priority": 118,
+    "filename": "pdd_completion_zsh.prompt",
+    "filepath": "pdd/pdd_completion.zsh",
+    "tags": [
+      "cli",
+      "shell"
+    ],
+    "interface": {
+      "type": "cli"
+    }
+  },
+  {
+    "reason": "Configuration data for pdd theme.",
+    "description": "Defines pdd theme settings and data. Used by runtime modules.",
+    "dependencies": [],
+    "priority": 119,
+    "filename": "pdd_theme_json.prompt",
+    "filepath": "pdd_theme.json",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Module that post-process the string output of a LLM so that the code can be run.",
+    "description": "Implements functionality to post-process the string output of a LLM so that the code can be run. Integrates with PDD workflow.",
+    "dependencies": [],
+    "priority": 120,
+    "filename": "postprocess_0_python.prompt",
+    "filepath": "pdd/postprocess_0.py",
+    "tags": [
+      "module",
+      "processing",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "postprocess_0",
+            "signature": "(llm_output: str, language: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Implements pypi description functionality.",
+    "description": "Provides pypi description capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 121,
+    "filename": "pypi_description_restructuredtext.prompt",
+    "filepath": "pypi_description.rst",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Configuration data for pyproject.",
+    "description": "Defines pyproject settings and data. Used by runtime modules.",
+    "dependencies": [],
+    "priority": 122,
+    "filename": "pyproject_toml.prompt",
+    "filepath": "pyproject.toml",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Parses pytest output for automated error handling.",
+    "description": "Extracts test results, failures, and error messages from pytest output. Provides structured data for fix workflows.",
+    "dependencies": [],
+    "priority": 123,
+    "filename": "pytest_output_python.prompt",
+    "filepath": "pdd/pytest_output.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_failing_files_from_output",
+            "signature": "(pytest_output: str) -> list[str]",
+            "returns": "list[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_pytest_and_capture_output",
+            "signature": "(test_file: str) -> dict",
+            "returns": "dict",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "save_output_to_json",
+            "signature": "(output: dict, output_file: str = 'pytest.json')",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "pytest_runtest_logreport",
+            "signature": "(self, report)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "pytest_sessionfinish",
+            "signature": "(self, session)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "capture_logs",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_logs",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Implements regression analysis functionality.",
+    "description": "Provides regression analysis capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 124,
+    "filename": "regression_analysis_log.prompt",
+    "filepath": "regression_analysis.log",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Implements regression functionality.",
+    "description": "Provides regression capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 125,
+    "filename": "regression_bash.prompt",
+    "filepath": "regression.sh",
+    "tags": [
+      "cli",
+      "shell"
+    ],
+    "interface": {
+      "type": "cli"
+    }
+  },
+  {
+    "reason": "Renders Mermaid diagrams to HTML.",
+    "description": "Converts Mermaid diagram specifications to HTML visualization. Used for architecture diagrams.",
+    "dependencies": [],
+    "priority": 126,
+    "filename": "render_mermaid_python.prompt",
+    "filepath": "pdd/render_mermaid.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "write_pretty_architecture_json",
+            "signature": "(arch_file, architecture)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "generate_mermaid_code",
+            "signature": "(architecture, app_name = 'System')",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "generate_html",
+            "signature": "(mermaid_code, architecture, app_name)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates run generated from specifications.",
+    "description": "Creates run generated using LLM. Handles input processing, generation, and output validation.",
+    "dependencies": [],
+    "priority": 127,
+    "filename": "run_generated_python.prompt",
+    "filepath": "pdd/run_generated.py",
+    "tags": [
+      "generation",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    }
+  },
+  {
+    "reason": "Implements setup functionality.",
+    "description": "Provides setup capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 128,
+    "filename": "setup_python.prompt",
+    "filepath": "pdd/setup.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    }
+  },
+  {
+    "reason": "Configures PDD installation and environment.",
+    "description": "Handles initial setup, configuration, and environment variable management.",
+    "dependencies": [],
+    "priority": 129,
+    "filename": "setup_tool_python.prompt",
+    "filepath": "pdd/setup_tool.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "print_colored",
+            "signature": "(text: str, color: str = WHITE, bold: bool = False) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "create_divider",
+            "signature": "(char: str = LIGHT_HORIZONTAL, width: int = 80) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "create_fat_divider",
+            "signature": "(width: int = 80) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "print_pdd_logo",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_csv_variable_names",
+            "signature": "() -> Dict[str, str]",
+            "returns": "Dict[str, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "discover_api_keys",
+            "signature": "() -> Dict[str, Optional[str]]",
+            "returns": "Dict[str, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "test_openai_key",
+            "signature": "(api_key: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "test_google_key",
+            "signature": "(api_key: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "test_anthropic_key",
+            "signature": "(api_key: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "test_api_keys",
+            "signature": "(keys: Dict[str, Optional[str]]) -> Dict[str, bool]",
+            "returns": "Dict[str, bool]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_user_keys",
+            "signature": "(current_keys: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]",
+            "returns": "Dict[str, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "detect_shell",
+            "signature": "() -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_shell_init_file",
+            "signature": "(shell: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "create_api_env_script",
+            "signature": "(keys: Dict[str, str], shell: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "save_configuration",
+            "signature": "(valid_keys: Dict[str, str]) -> Tuple[List[str], bool, Optional[str]]",
+            "returns": "Tuple[List[str], bool, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "create_sample_prompt",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "show_menu",
+            "signature": "(keys: Dict[str, Optional[str]], test_results: Dict[str, bool]) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "create_exit_summary",
+            "signature": "(saved_files: List[str], created_pdd_dir: bool, sample_prompt_file: str, shell: str, valid_keys: Dict[str, str], init_file_updated: Optional[str] = None) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Implements simple math functionality.",
+    "description": "Provides simple math capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 130,
+    "filename": "simple_math_python.prompt",
+    "filepath": "pdd/simple_math.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "add",
+            "signature": "(a, b)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for summarize file operations.",
+    "description": "Defines the prompt structure for summarize file. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 131,
+    "filename": "summarize_file_LLM.prompt",
+    "filepath": "prompts/summarize_file_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Provides text UI for interactive sync operations.",
+    "description": "Terminal user interface for controlling and monitoring sync workflows. Supports interactive mode.",
+    "dependencies": [],
+    "priority": 132,
+    "filename": "sync_tui_python.prompt",
+    "filepath": "pdd/sync_tui.py",
+    "tags": [
+      "module",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "show_exit_animation",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, message: str, title: str = 'Confirmation Required')",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "compose",
+            "signature": "(self) -> ComposeResult",
+            "returns": "ComposeResult",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "on_button_pressed",
+            "signature": "(self, event: Button.Pressed) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "action_confirm_yes",
+            "signature": "(self) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "action_confirm_no",
+            "signature": "(self) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, message: str, title: str = 'Input Required', default: str = '', password: bool = False)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "compose",
+            "signature": "(self) -> ComposeResult",
+            "returns": "ComposeResult",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "on_mount",
+            "signature": "(self) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "on_button_pressed",
+            "signature": "(self, event: Button.Pressed) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "on_input_submitted",
+            "signature": "(self, event: Input.Submitted) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "action_cancel",
+            "signature": "(self) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, app_ref: List[Optional['SyncApp']])",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "readable",
+            "signature": "(self) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "writable",
+            "signature": "(self) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "readline",
+            "signature": "(self, limit: int = -1) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "read",
+            "signature": "(self, size: int = -1) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_prompt",
+            "signature": "(self, prompt: str) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, real_redirector: 'ThreadSafeRedirector', stdin_redirector: 'TUIStdinRedirector')",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "write",
+            "signature": "(self, s: str) -> int",
+            "returns": "int",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "flush",
+            "signature": "(self) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "captured_logs",
+            "signature": "(self) -> List[str]",
+            "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, app: App, log: RichLog)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "write",
+            "signature": "(self, s: str) -> int",
+            "returns": "int",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "flush",
+            "signature": "(self)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "captured_logs",
+            "signature": "(self) -> List[str]",
+            "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "compose",
+            "signature": "(self) -> ComposeResult",
+            "returns": "ComposeResult",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "on_mount",
+            "signature": "(self) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_worker_task",
+            "signature": "(self) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "update_animation",
+            "signature": "(self) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "request_confirmation",
+            "signature": "(self, message: str, title: str = 'Confirmation Required') -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "request_input",
+            "signature": "(self, message: str, title: str = 'Input Required', default: str = '', password: bool = False) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "schedule_modal",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "schedule_modal",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Manages PDD prompt template discovery and loading.",
+    "description": "Registers and retrieves prompt templates. Supports template inheritance and versioning.",
+    "dependencies": [],
+    "priority": 133,
+    "filename": "template_registry_python.prompt",
+    "filepath": "pdd/template_registry.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "list_templates",
+            "signature": "(filter_tag: Optional[str] = None) -> List[Dict[str, Any]]",
+            "returns": "List[Dict[str, Any]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "load_template",
+            "signature": "(name: str) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "show_template",
+            "signature": "(name: str) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "copy_template",
+            "signature": "(name: str, dest_dir: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "alias",
+            "signature": "(self) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "register",
+            "signature": "(meta: TemplateMeta) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Implements test other functionality.",
+    "description": "Provides test other capabilities for PDD operations.",
+    "dependencies": [],
+    "priority": 134,
+    "filename": "test_other_python.prompt",
+    "filepath": "pdd/test_other.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module"
+    }
+  },
+  {
+    "reason": "Maps generated code lines back to source prompt lines.",
+    "description": "Traces code locations to their originating prompt sections. Useful for debugging and understanding generation.",
+    "dependencies": [],
+    "priority": 135,
+    "filename": "trace_LLM.prompt",
+    "filepath": "prompts/trace_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for trim results operations.",
+    "description": "Defines the prompt structure for trim results. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 136,
+    "filename": "trim_results_LLM.prompt",
+    "filepath": "prompts/trim_results_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for trim results start operations.",
+    "description": "Defines the prompt structure for trim results start. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [],
+    "priority": 137,
+    "filename": "trim_results_start_LLM.prompt",
+    "filepath": "prompts/trim_results_start_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Detects whether LLM output is complete or needs continuation.",
+    "description": "Analyzes LLM responses to determine if code is complete. Checks for truncation markers, unclosed blocks, and incomplete functions.",
+    "dependencies": [],
+    "priority": 138,
+    "filename": "unfinished_prompt_LLM.prompt",
+    "filepath": "prompts/unfinished_prompt_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Updates LLM model cost data.",
+    "description": "Fetches and stores current pricing for LLM models. Keeps cost tracking accurate.",
+    "dependencies": [],
+    "priority": 139,
+    "filename": "update_model_costs_python.prompt",
+    "filepath": "pdd/update_model_costs.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "update_model_data",
+            "signature": "(csv_path: str) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Updates prompts to reflect code modifications.",
+    "description": "Back-propagates code changes into the source prompt. Keeps prompts synchronized with manually edited code.",
+    "dependencies": [],
+    "priority": 140,
+    "filename": "update_prompt_LLM.prompt",
+    "filepath": "prompts/update_prompt_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Returns comment syntax for a programming language.",
+    "description": "Provides language-specific comment delimiters. Supports single-line and multi-line comments.",
+    "dependencies": [
+      "path_resolution_python.prompt"
+    ],
+    "priority": 141,
+    "filename": "get_comment_python.prompt",
+    "filepath": "pdd/get_comment.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_comment",
+            "signature": "(language: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Module that be instructions on how to generate python code for the bug_main.",
+    "description": "Implements functionality to be instructions on how to generate python code for the bug_main. Integrates with PDD workflow.",
+    "dependencies": [
+      "preprocess_main_python.prompt"
+    ],
+    "priority": 142,
+    "filename": "main_gen_prompt.prompt",
+    "filepath": "prompts/main_gen_prompt.prompt",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Module that test the prompt for a given prompt file.",
+    "description": "Implements functionality to test the prompt for a given prompt file. Integrates with PDD workflow.",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 143,
+    "filename": "prompt_tester_python.prompt",
+    "filepath": "pdd/prompt_tester.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module"
+    }
+  },
+  {
+    "reason": "Provides real-time progress visualization for sync.",
+    "description": "Displays animated progress indicators, step status, and cost tracking during sync operations.",
+    "dependencies": [
+      "logo_animation_python.prompt"
+    ],
+    "priority": 144,
+    "filename": "sync_animation_python.prompt",
+    "filepath": "pdd/sync_animation.py",
+    "tags": [
+      "module",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "sync_animation",
+            "signature": "(function_name_ref: List[str], stop_event: threading.Event, basename: str, cost_ref: List[float], budget: Optional[float], prompt_color: List[str], code_color: List[str], example_color: List[str], tests_color: List[str], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str]) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, basename: str, budget: Optional[float])",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "update_dynamic_state",
+            "signature": "(self, function_name: str, cost: float, prompt_path: str, code_path: str, example_path: str, tests_path: str)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "set_box_colors",
+            "signature": "(self, prompt_color: str, code_color: str, example_color: str, tests_color: str)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_elapsed_time_str",
+            "signature": "(self) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_emoji_for_box",
+            "signature": "(self, box_name: str, blink_on: bool) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt template for xml convertor operations.",
+    "description": "Defines the prompt structure for xml convertor. Invoked by the corresponding Python module to format LLM requests.",
+    "dependencies": [
+      "split_LLM.prompt"
+    ],
+    "priority": 145,
+    "filename": "xml_convertor_LLM.prompt",
+    "filepath": "prompts/xml_convertor_LLM.prompt",
+    "tags": [
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the detect change command.",
+    "description": "Command-line interface for detect change. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "detect_change_python.prompt"
+    ],
+    "priority": 146,
+    "filename": "detect_change_main_python.prompt",
+    "filepath": "pdd/detect_change_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "detect_change_main",
+            "signature": "(ctx: click.Context, prompt_files: List[str], change_file: str, output: Optional[str]) -> Tuple[List[Dict], float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the split command.",
+    "description": "Command-line interface for split. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "split_python.prompt"
+    ],
+    "priority": 147,
+    "filename": "split_main_python.prompt",
+    "filepath": "pdd/split_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "split_main",
+            "signature": "(ctx: click.Context, input_prompt_file: str, input_code_file: str, example_code_file: str, output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[str, str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the unified sync workflow.",
+    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users.",
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "sync_orchestration_python.prompt"
+    ],
+    "priority": 148,
+    "filename": "sync_main_python.prompt",
+    "filepath": "pdd/sync_main.py",
+    "tags": [
+      "cli",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "sync_main",
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool) -> Tuple[Dict[str, Any], float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Applies targeted patches to existing code based on prompt changes.",
+    "description": "Detects changes between prompt versions and generates minimal code patches. More efficient than full regeneration for small modifications.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "postprocess_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 149,
+    "filename": "incremental_code_generator_python.prompt",
+    "filepath": "pdd/incremental_code_generator.py",
+    "tags": [
+      "generation",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "incremental_code_generator",
+            "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True) -> Tuple[Optional[str], bool, float, str]",
+            "returns": "Tuple[Optional[str], bool, float, str]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for the change command.",
+    "description": "Command-line interface for change. Parses arguments, orchestrates the workflow, and formats output.",
+    "dependencies": [
+      "change_python.prompt",
+      "construct_paths_python.prompt",
+      "get_extension_python.prompt",
+      "process_csv_change_python.prompt"
+    ],
+    "priority": 150,
+    "filename": "change_main_python.prompt",
+    "filepath": "pdd/change_main.py",
+    "tags": [
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "change_main",
+            "signature": "(ctx: click.Context, change_prompt_file: str, input_code: str, input_prompt_file: Optional[str], output: Optional[str], use_csv: bool, budget: float) -> Tuple[str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes code based on failing unit test output.",
+    "description": "Analyzes test failures and generates code or test corrections. Determines whether to fix the code or the test based on error patterns.",
+    "dependencies": [
+      "code_generator_python.prompt",
+      "conflicts_in_prompts_python.prompt",
+      "context_generator_python.prompt",
+      "detect_change_python.prompt"
+    ],
+    "priority": 151,
+    "filename": "fix_errors_from_unit_tests_LLM.prompt",
+    "filepath": "prompts/fix_errors_from_unit_tests_LLM.prompt",
+    "tags": [
+      "config",
+      "fix",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  }
+]
