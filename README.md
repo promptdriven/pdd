@@ -1577,10 +1577,36 @@ pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --out
 
 ### 8. change
 
-Modify an input prompt file based on a change prompt and the corresponding input code.
+Implement a change request from a GitHub issue using an 8-step agentic workflow. The workflow researches the feature, analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, and verifies the results.
 
+**Agentic Mode (default):**
 ```
-pdd [GLOBAL OPTIONS] change [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE]
+pdd [GLOBAL OPTIONS] change GITHUB_ISSUE_URL
+```
+
+Arguments:
+- `GITHUB_ISSUE_URL`: The URL of the GitHub issue describing the change request.
+
+The 8-step workflow:
+1. **Duplicate Check**: Search for duplicate issues
+2. **Documentation Check**: Verify feature isn't already implemented
+3. **Research**: Web search to clarify specifications and find best practices
+4. **Documentation Changes**: Analyze what documentation updates are needed
+5. **Identify Dev Units**: Find affected prompts, code, examples, and tests
+6. **Analyze Changes**: Design prompt modifications
+7. **Implement Changes**: Modify prompts in an isolated git worktree
+8. **Verify**: Validate changes are syntactically correct
+
+Example (agentic mode):
+```bash
+pdd change https://github.com/myorg/myrepo/issues/239
+```
+
+After the workflow completes, review the changes in the worktree and run `pdd sync` to regenerate code.
+
+**Manual Mode (legacy):**
+```
+pdd [GLOBAL OPTIONS] change --manual [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE]
 ```
 
 Arguments:
@@ -1593,14 +1619,14 @@ Options:
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--csv`: Use a CSV file for the change prompts instead of a single change prompt file. The CSV file should have columns: `prompt_name` and `change_instructions`. When this option is used, `INPUT_PROMPT_FILE` is not needed, and `INPUT_CODE` should be the directory where the code files are located. The command expects prompt names in the CSV to follow the `<basename>_<language>.prompt` convention. For each `prompt_name` in the CSV, it will look for the corresponding code file (e.g., `<basename>.<language_extension>`) within the specified `INPUT_CODE` directory. Output files will overwrite existing files unless `--output LOCATION` is specified. If `LOCATION` is a directory, the modified prompt files will be saved inside this directory using the default naming convention otherwise, if a csv filename is specified the modified prompts will be saved in that CSV file with columns 'prompt_name' and 'modified_prompt'.
 
-Example (single prompt change):
+Example (manual single prompt change):
 ```
-pdd [GLOBAL OPTIONS] change --output modified_factorial_calculator_python.prompt changes_factorial.prompt src/factorial_calculator.py factorial_calculator_python.prompt
+pdd [GLOBAL OPTIONS] change --manual --output modified_factorial_calculator_python.prompt changes_factorial.prompt src/factorial_calculator.py factorial_calculator_python.prompt
 ```
 
-Example (batch change using CSV):
+Example (manual batch change using CSV):
 ```
-pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv src/
+pdd [GLOBAL OPTIONS] change --manual --csv --output modified_prompts/ changes_batch.csv src/
 ```
 
 ### 9. update
