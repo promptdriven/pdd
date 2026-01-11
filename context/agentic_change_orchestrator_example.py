@@ -8,7 +8,7 @@ without making actual LLM calls or requiring a real GitHub issue.
 
 Scenario:
     We simulate an issue where a user requests adding a new validation feature
-    to a user service module. The orchestrator will step through the 6-step process,
+    to a user service module. The orchestrator will step through the 12-step process,
     identifying affected dev units and modifying the relevant prompts.
 """
 
@@ -39,7 +39,7 @@ def mock_load_prompt_template(template_name: str) -> str:
 def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: bool, label: str, timeout: float = None):
     """
     Mock implementation of run_agentic_task.
-    Simulates the output of an LLM agent for each step of the 6-step change workflow.
+    Simulates the output of an LLM agent for each step of the 12-step change workflow.
     """
     step_num = label.replace("step", "")
 
@@ -54,23 +54,35 @@ def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: boo
     elif step_num == "2":
         output = "Checked documentation. This feature is not currently implemented."
     elif step_num == "3":
+        output = "Research complete. Specifications are clear."
+    elif step_num == "4":
+        output = "Requirements verified. No clarification needed."
+    elif step_num == "5":
+        output = "Documentation updates identified: user_service.md needs validation section."
+    elif step_num == "6":
         output = """Dev units identified:
         - prompts/user_service_python.prompt (primary)
         - context/user_service_example.py (needs update)
         - prompts/validation_python.prompt (new)"""
-    elif step_num == "4":
+    elif step_num == "7":
+        output = "Architecture review passed. No major changes needed."
+    elif step_num == "8":
         output = """Prompt changes analyzed:
         1. user_service_python.prompt: Add requirement for email validation
         2. validation_python.prompt: Create new module for validation utilities
         3. user_service_example.py: Update to show validation usage"""
-    elif step_num == "5":
+    elif step_num == "9":
         output = """FILES_MODIFIED: prompts/user_service_python.prompt, context/user_service_example.py
         FILES_CREATED: prompts/validation_python.prompt
         Changes applied successfully."""
-    elif step_num == "6":
-        output = "Verification complete. All modified prompts are syntactically valid."
+    elif step_num == "10":
+        output = "No Issues Found"
+    elif step_num == "11":
+        output = "Fixed issues."
+    elif step_num == "12":
+        output = "PR Created: https://github.com/example/myapp/pull/240"
     else:
-        output = "Unknown step executed."
+        output = f"Unknown step executed: {step_num}"
 
     return success, output, cost, provider
 
