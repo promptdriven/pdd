@@ -1,5 +1,6 @@
 import React from 'react';
-import { TokenMetrics } from '../api';
+import { TokenMetrics, ModelInfo } from '../api';
+import ModelSelector from './ModelSelector';
 
 interface PromptMetricsBarProps {
   rawMetrics: TokenMetrics | null;
@@ -12,6 +13,12 @@ interface PromptMetricsBarProps {
   // Code-to-prompt ratio props
   promptLineCount?: number;
   codeLineCount?: number;
+  // Context distribution props (can be derived from selectedModel)
+  contextLimit?: number;  // Model context limit (default 200K)
+  maxThinkingTokens?: number;  // Max thinking budget (default 128K for Claude)
+  // Model selection props
+  selectedModel?: ModelInfo | null;
+  onModelChange?: (model: ModelInfo | null) => void;
 }
 
 const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
@@ -24,8 +31,22 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
   timeValue = 0.25,
   promptLineCount,
   codeLineCount,
+  contextLimit: contextLimitProp,
+  maxThinkingTokens: maxThinkingTokensProp,
+  selectedModel,
+  onModelChange,
 }) => {
   const currentMetrics = viewMode === 'processed' ? processedMetrics : rawMetrics;
+
+  // Context distribution calculations
+  // Priority: selectedModel > backend-provided > prop > default
+  const contextLimit = selectedModel?.context_limit || currentMetrics?.context_limit || contextLimitProp || 200000;
+  // Max thinking tokens from model, or fall back to contextLimit-based default
+  const maxThinkingTokens = selectedModel?.max_thinking_tokens || maxThinkingTokensProp || (contextLimit >= 200000 ? 128000 : 32000);
+  const thinkingBudget = Math.floor(timeValue * maxThinkingTokens);
+  const inputTokens = currentMetrics?.token_count || 0;
+  const outputCapacity = Math.max(0, contextLimit - inputTokens - thinkingBudget);
+  const isOutputWarning = outputCapacity < 20000;  // Less than 20K for output
 
   // Determine context usage color
   const getUsageColor = (percent: number): string => {
@@ -67,9 +88,17 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
     return name.length > 20 ? name.substring(0, 17) + '...' : name;
   };
 
+  // Calculate distribution percentages for the bar
+  const totalBudget = contextLimit;
+  const inputPercent = (inputTokens / totalBudget) * 100;
+  const thinkingPercent = (thinkingBudget / totalBudget) * 100;
+  const outputPercent = (outputCapacity / totalBudget) * 100;
+
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 sm:px-4 py-2 sm:py-2.5 bg-surface-800/30 border-b border-surface-700/50 gap-2 sm:gap-4">
-      {/* Left side: View toggle */}
+    <div className="bg-surface-800/30 border-b border-surface-700/50">
+      {/* Main metrics row */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 sm:px-4 py-2 sm:py-2.5 gap-2 sm:gap-4">
+        {/* Left side: View toggle */}
       <div className="flex items-center gap-2">
         <span className="text-[10px] sm:text-xs text-surface-400">View:</span>
         <div className="flex rounded-lg overflow-hidden border border-surface-600/50">
@@ -100,6 +129,15 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
           <span className="text-[10px] sm:text-xs text-red-400 ml-1 sm:ml-2 truncate max-w-[100px] sm:max-w-none" title={preprocessingError}>
             Error
           </span>
+        )}
+        {/* Model selector */}
+        {onModelChange && (
+          <div className="hidden sm:block ml-2">
+            <ModelSelector
+              selectedModel={selectedModel || null}
+              onModelChange={onModelChange}
+            />
+          </div>
         )}
       </div>
 
@@ -149,8 +187,8 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
               </div>
             )}
 
-            {/* Thinking/Reasoning allocation */}
-            <div className="flex items-center gap-1.5">
+            {/* Thinking/Reasoning allocation - shows token count */}
+            <div className="flex items-center gap-1.5" title={`${formatTokens(thinkingBudget)} thinking tokens (${Math.round(timeValue * 100)}% of ${formatTokens(maxThinkingTokens)} max)`}>
               <span className="text-[10px] sm:text-xs text-surface-400 hidden sm:inline">Thinking:</span>
               <div className="flex items-center gap-1">
                 <div className="w-12 sm:w-16 h-1.5 sm:h-2 bg-surface-700 rounded-full overflow-hidden">
@@ -160,7 +198,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
                   />
                 </div>
                 <span className="text-xs sm:text-sm font-mono text-purple-400">
-                  {Math.round(timeValue * 100)}%
+                  {formatTokens(thinkingBudget)}
                 </span>
               </div>
             </div>
@@ -184,6 +222,56 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
           <span className="text-[10px] sm:text-xs text-surface-500">No metrics</span>
         )}
       </div>
+      </div>
+
+      {/* Context Distribution Bar */}
+      {currentMetrics && (
+        <div className="px-3 sm:px-4 pb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-surface-500 w-16 sm:w-20 flex-shrink-0">
+              {formatTokens(contextLimit)} ctx
+            </span>
+            <div className="flex-1 h-2 sm:h-2.5 bg-surface-700/50 rounded-full overflow-hidden flex">
+              {/* Input tokens (blue) */}
+              <div
+                className="h-full bg-blue-500 transition-all"
+                style={{ width: `${Math.min(inputPercent, 100)}%` }}
+                title={`Input: ${formatTokens(inputTokens)} tokens (${inputPercent.toFixed(1)}%)`}
+              />
+              {/* Thinking budget (purple) */}
+              <div
+                className="h-full bg-purple-500 transition-all"
+                style={{ width: `${Math.min(thinkingPercent, 100 - inputPercent)}%` }}
+                title={`Thinking: ${formatTokens(thinkingBudget)} tokens (${thinkingPercent.toFixed(1)}%)`}
+              />
+              {/* Output capacity (green/orange based on warning) */}
+              <div
+                className={`h-full transition-all ${isOutputWarning ? 'bg-orange-500/50' : 'bg-green-500/30'}`}
+                style={{ width: `${Math.max(outputPercent, 0)}%` }}
+                title={`Output capacity: ${formatTokens(outputCapacity)} tokens (${outputPercent.toFixed(1)}%)`}
+              />
+            </div>
+          </div>
+          {/* Legend */}
+          <div className="flex items-center gap-3 mt-1 text-[9px] sm:text-[10px] text-surface-500">
+            <div className="flex items-center gap-1">
+              <div className="w-2 h-2 rounded-sm bg-blue-500" />
+              <span>Input {formatTokens(inputTokens)}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-2 h-2 rounded-sm bg-purple-500" />
+              <span>Thinking {formatTokens(thinkingBudget)}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className={`w-2 h-2 rounded-sm ${isOutputWarning ? 'bg-orange-500' : 'bg-green-500/50'}`} />
+              <span className={isOutputWarning ? 'text-orange-400' : ''}>
+                Output {formatTokens(outputCapacity)}
+                {isOutputWarning && ' (low)'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
