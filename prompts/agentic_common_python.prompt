@@ -6,7 +6,7 @@ Write the pdd/agentic_common.py module.
 % Role & Scope
 Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration.
 
-% CLI Documentation (headless mode, JSON output, permissions)
+% External Documentation
 <claude_code_json_output>
 <web>https://claudelog.com/faqs/what-is-output-format-in-claude-code/</web>
 </claude_code_json_output>
@@ -102,10 +102,14 @@ Notes:
 - `--yolo` (Gemini): auto-approves all operations without prompts
 - `--full-auto` (Codex): exits read-only sandbox, allows file edits
 
+% Error Handling
+- Return `(False, "No agents available", 0.0, "")` if no providers have both CLI and API key configured
+- Return `(False, "{provider} error: {message}", 0.0, provider)` on subprocess failure
+- Try next provider in preference order on failure; return failure only if all providers fail
+- Log false positive detection at error level before trying next provider
+
 % Dependencies
-<module_dependencies>
-  <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
-</module_dependencies>
+<pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
 
 % Deliverables
 - Code: `pdd/agentic_common.py`
