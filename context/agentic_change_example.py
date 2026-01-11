@@ -22,11 +22,11 @@ def main():
 
     # Mock the agentic task execution to avoid real API calls
     with patch("pdd.agentic_change.run_agentic_change_orchestrator") as mock_orchestrator:
-        # Simulate successful 12-step workflow
+        # Simulate successful 6-step workflow
         mock_orchestrator.return_value = (
             True,  # success
             "Change complete. Modified prompts for new feature.",  # message
-            1.80,  # total_cost across all 12 steps
+            1.80,  # total_cost across all 6 steps
             "anthropic",  # model/provider used
             ["prompts/user_service_python.prompt", "context/user_service_example.py"]  # changed_files
         )

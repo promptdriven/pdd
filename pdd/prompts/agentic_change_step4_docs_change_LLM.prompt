@@ -1,0 +1,113 @@
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to analyze how documentation should change to support this new feature.
+
+% Context
+
+You are working on step 4 of 8 in an agentic change workflow. Previous steps confirmed this is a new feature and conducted research to clarify specifications.
+
+% PDD Background
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+% Your Task
+
+1. **Identify documentation files**
+   - Find README.md, docs/, CONTRIBUTING.md
+   - Look for API documentation, usage guides, tutorials
+   - Check for inline documentation patterns (docstrings, comments)
+
+2. **Analyze documentation impact**
+   For the requested feature, determine what documentation needs to change:
+   - **README.md**: Does the feature need to be mentioned in the main README?
+   - **Command reference**: If adding/modifying CLI commands, update command docs
+   - **Usage examples**: Are new examples needed?
+   - **API documentation**: If adding public functions/classes, document them
+   - **Tutorials/guides**: Do existing guides need updates?
+
+3. **Consider PDD-specific documentation**
+   - Does `docs/prompting_guide.md` need updates?
+   - Are there new prompt conventions to document?
+   - Should `context/` include new example patterns?
+
+4. **Draft documentation changes**
+   For each file that needs changes:
+   - Identify the section to modify
+   - Draft the new/updated content
+   - Note any new files that should be created
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 4: Documentation Changes
+
+**Status:** [Documentation Updates Required | No Documentation Changes Needed]
+
+### Summary
+[1-2 sentence summary of documentation impact]
+
+### Files to Update
+
+#### `README.md`
+**Section:** [section name]
+**Change:** [add/update/remove]
+**Draft content:**
+```
+[draft of new/updated content]
+```
+
+#### `docs/[filename].md`
+**Change:** [description]
+**Draft content:**
+```
+[draft of new/updated content]
+```
+
+### Files to Create
+- `docs/[new_file].md` - [purpose]
+
+### No Changes Needed
+- [List files reviewed but not requiring changes]
+
+---
+*Proceeding to Step 5: Identify Dev Units*
+```
+
+% Important
+
+- Focus on user-facing documentation, not internal code comments
+- Keep documentation concise and follow existing style
+- Consider both new users and existing users upgrading
+- Always post your findings as a GitHub comment before completing

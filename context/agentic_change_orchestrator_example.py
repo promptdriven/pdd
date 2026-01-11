@@ -8,12 +8,11 @@ without making actual LLM calls or requiring a real GitHub issue.
 
 Scenario:
     We simulate an issue where a user requests adding a new validation feature
-    to a user service module. The orchestrator will step through the 13-step process,
+    to a user service module. The orchestrator will step through the 6-step process,
     identifying affected dev units and modifying the relevant prompts.
 """
 
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -37,14 +36,12 @@ def mock_load_prompt_template(template_name: str) -> str:
     return f"MOCK PROMPT FOR: {template_name}\nContext: {{issue_content}}"
 
 
-def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: bool, label: str, timeout: float = None, max_retries: int = 3):
+def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: bool, label: str, timeout: float = None):
     """
     Mock implementation of run_agentic_task.
-    Simulates the output of an LLM agent for each step of the 13-step change workflow.
+    Simulates the output of an LLM agent for each step of the 6-step change workflow.
     """
-    # Handle labels like 'step11_iter1' by splitting on '_' and taking the first part
-    step_part = label.replace("step", "").split("_")[0]
-    step_num = step_part
+    step_num = label.replace("step", "")
 
     # Default return values
     success = True
@@ -57,88 +54,63 @@ def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: boo
     elif step_num == "2":
         output = "Checked documentation. This feature is not currently implemented."
     elif step_num == "3":
-        output = "Research complete. Specifications are clear."
-    elif step_num == "4":
-        output = "Requirements verified. No clarification needed."
-    elif step_num == "5":
-        output = "Documentation updates identified: user_service.md needs validation section."
-    elif step_num == "6":
         output = """Dev units identified:
         - prompts/user_service_python.prompt (primary)
         - context/user_service_example.py (needs update)
         - prompts/validation_python.prompt (new)"""
-    elif step_num == "7":
-        output = "Architecture review passed. No major changes needed."
-    elif step_num == "8":
+    elif step_num == "4":
         output = """Prompt changes analyzed:
         1. user_service_python.prompt: Add requirement for email validation
         2. validation_python.prompt: Create new module for validation utilities
         3. user_service_example.py: Update to show validation usage"""
-    elif step_num == "9":
+    elif step_num == "5":
         output = """FILES_MODIFIED: prompts/user_service_python.prompt, context/user_service_example.py
         FILES_CREATED: prompts/validation_python.prompt
         Changes applied successfully."""
-    elif step_num == "10":
-        output = "ARCHITECTURE_FILES_MODIFIED: prompts/architecture.md\nArchitecture metadata updated."
-    elif step_num == "11":
-        output = "No Issues Found"
-    elif step_num == "12":
-        output = "Fixed issues."
-    elif step_num == "13":
-        output = "PR Created: https://github.com/example/myapp/pull/240"
+    elif step_num == "6":
+        output = "Verification complete. All modified prompts are syntactically valid."
     else:
-        output = f"Unknown step executed: {step_num}"
+        output = "Unknown step executed."
 
     return success, output, cost, provider
 
 
 def main():
     """Main function to run the agentic change orchestrator simulation."""
-    # Create a temporary directory for the simulation
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_cwd = Path(temp_dir)
-        
-        # Define dummy issue data
-        issue_data = {
-            "issue_url": "https://github.com/example/myapp/issues/239",
-            "issue_content": "Add email validation to user registration. Should check format and domain.",
-            "repo_owner": "example",
-            "repo_name": "myapp",
-            "issue_number": 239,
-            "issue_author": "feature_requester",
-            "issue_title": "Add email validation to user service",
-            "cwd": temp_cwd,
-            "verbose": True,
-            "quiet": False
-        }
+    # Define dummy issue data
+    issue_data = {
+        "issue_url": "https://github.com/example/myapp/issues/239",
+        "issue_content": "Add email validation to user registration. Should check format and domain.",
+        "repo_owner": "example",
+        "repo_name": "myapp",
+        "issue_number": 239,
+        "issue_author": "feature_requester",
+        "issue_title": "Add email validation to user service",
+        "cwd": Path("./temp_workspace"),
+        "verbose": True,
+        "quiet": False
+    }
 
-        print("Starting Agentic Change Orchestrator Simulation...")
-        print("-" * 60)
+    print("Starting Agentic Change Orchestrator Simulation...")
+    print("-" * 60)
 
-        # Patch the internal dependencies to avoid real git/filesystem operations
-        with patch("pdd.agentic_change_orchestrator.load_prompt_template", side_effect=mock_load_prompt_template), \
-             patch("pdd.agentic_change_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task), \
-             patch("pdd.agentic_change_orchestrator._get_git_root", return_value=temp_cwd), \
-             patch("pdd.agentic_change_orchestrator._setup_worktree", return_value=(temp_cwd, None)), \
-             patch("pdd.agentic_change_orchestrator.load_workflow_state", return_value=(None, None)), \
-             patch("pdd.agentic_change_orchestrator.save_workflow_state", return_value=None), \
-             patch("pdd.agentic_change_orchestrator.clear_workflow_state", return_value=None), \
-             patch("pdd.agentic_change_orchestrator.build_dependency_graph", side_effect=Exception("Mocked graph")), \
-             patch("pdd.agentic_change_orchestrator.generate_sync_order_script", return_value="echo 'Mock sync'"):
+    # Patch the internal dependencies
+    with patch("pdd.agentic_change_orchestrator.load_prompt_template", side_effect=mock_load_prompt_template), \
+         patch("pdd.agentic_change_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task):
 
-            # Run the orchestrator
-            success, final_msg, total_cost, model, changed_files = run_agentic_change_orchestrator(
-                **issue_data
-            )
+        # Run the orchestrator
+        success, final_msg, total_cost, model, changed_files = run_agentic_change_orchestrator(
+            **issue_data
+        )
 
-        print("-" * 60)
-        print("Simulation Complete.")
-        print(f"Success: {success}")
-        print(f"Final Message: {final_msg}")
-        print(f"Total Cost: ${total_cost:.2f}")
-        print(f"Model Used: {model}")
-        print(f"Changed Files: {changed_files}")
-        print("\nNext step: Run 'pdd sync' on modified prompts to regenerate code.")
+    print("-" * 60)
+    print("Simulation Complete.")
+    print(f"Success: {success}")
+    print(f"Final Message: {final_msg}")
+    print(f"Total Cost: ${total_cost:.2f}")
+    print(f"Model Used: {model}")
+    print(f"Changed Files: {changed_files}")
+    print("\nNext step: Run 'pdd sync' on modified prompts to regenerate code.")
 
 
 if __name__ == "__main__":
