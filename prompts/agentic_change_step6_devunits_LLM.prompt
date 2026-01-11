@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 6 of 9 in an agentic change workflow. Previous steps conducted research, verified clarity, and analyzed documentation changes needed.
+You are working on step 6 of 10 in an agentic change workflow. Previous steps conducted research, verified clarity, and analyzed documentation changes needed.
 
 % PDD Background
 
@@ -102,7 +102,7 @@ Your comment should follow this format:
 - [List of files/directories checked]
 
 ---
-*Proceeding to Step 7: Analyze Prompt Changes*
+*Proceeding to Step 7: Architecture Review*
 ```
 
 **If no dev units can be identified (STOP workflow):**

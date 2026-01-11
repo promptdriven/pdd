@@ -4,7 +4,7 @@
 Write the `pdd/agentic_change.py` module.
 
 % Role & Scope
-CLI entry point for the agentic change workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 6-step change process.
+CLI entry point for the agentic change workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 10-step change process. The orchestrator handles state persistence to support resumption after clarification or architectural question pauses.
 
 % Requirements
 1. Function: `run_agentic_change(issue_url: str, *, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`

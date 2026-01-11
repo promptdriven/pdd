@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 8 of 9 in an agentic change workflow. Previous steps analyzed exactly what prompt changes are needed.
+You are working on step 9 of 10 in an agentic change workflow. Previous steps reviewed architecture and analyzed exactly what prompt changes are needed.
 
 **This step modifies files.** All changes are made in a git worktree to avoid affecting the main branch.
 
@@ -25,13 +25,13 @@ You are working on step 8 of 9 in an agentic change workflow. Previous steps ana
 </issue_content>
 
 % Previous Step Outputs
-<step6_output>
-{step6_output}
-</step6_output>
-
 <step7_output>
 {step7_output}
 </step7_output>
+
+<step8_output>
+{step8_output}
+</step8_output>
 
 % Your Task
 
@@ -40,14 +40,14 @@ You are working on step 8 of 9 in an agentic change workflow. Previous steps ana
    - All file modifications happen here, not in the main repo
 
 2. **Modify existing prompts**
-   For each prompt identified for modification in Step 7:
+   For each prompt identified for modification in Step 8:
    - Read the current prompt file
-   - Apply the changes specified in Step 7
+   - Apply the changes specified in Step 8
    - Preserve existing structure and formatting
    - Keep the prompt concise (10-30% of expected code size)
 
 3. **Create new prompts**
-   For each new prompt identified in Step 7:
+   For each new prompt identified in Step 8:
    - Use the standard prompt structure:
      ```
      <include>context/python_preamble.prompt</include>
@@ -90,7 +90,7 @@ Your comment should follow this format:
 
 **If changes successful:**
 ```markdown
-## Step 8: Implement Changes
+## Step 9: Implement Changes
 
 **Status:** Changes Applied
 
@@ -117,12 +117,12 @@ Changes are in: `{worktree_path}`
 After review, run `pdd sync` on modified prompts to regenerate code.
 
 ---
-*Proceeding to Step 9: Verify Changes*
+*Proceeding to Step 10: Verify Changes*
 ```
 
 **If changes failed (STOP workflow):**
 ```markdown
-## Step 8: Implement Changes
+## Step 9: Implement Changes
 
 **Status:** FAIL: Implementation Error
 
