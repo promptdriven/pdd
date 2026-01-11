@@ -244,7 +244,7 @@ def test_orchestrator_step9_failure_no_files(mock_dependencies, temp_cwd):
         if label == "step9":
             return (True, "I implemented it but forgot to list files.", 0.5, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
-    
+
     mock_run.side_effect = side_effect_run
 
     success, msg, _, _, _ = run_agentic_change_orchestrator(
@@ -261,6 +261,72 @@ def test_orchestrator_step9_failure_no_files(mock_dependencies, temp_cwd):
     assert success is False
     assert "Stopped at step 9" in msg
     assert "Implementation failed" in msg
+
+def test_orchestrator_step9_failure_preserves_completed_steps(mock_dependencies, temp_cwd):
+    """
+    Test that when step 9 fails, state correctly shows steps 6-8 as completed.
+
+    Bug scenario:
+    1. State loaded with last_completed_step=5
+    2. Steps 6, 7, 8 succeed
+    3. Step 9 triggers worktree setup, then fails (no FILES markers)
+    4. State should have last_completed_step=8, NOT 5
+
+    This catches a bug where line 313's state save uses a stale variable
+    instead of step_num - 1, causing progress from steps 6-8 to be lost.
+    """
+    mock_run, _, _, _ = mock_dependencies
+
+    # Create initial state with steps 1-5 completed
+    state_dir = temp_cwd / ".pdd/change-state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "issue-99.json"
+
+    initial_state = {
+        "issue_number": 99,
+        "last_completed_step": 5,
+        "step_outputs": {"1": "o1", "2": "o2", "3": "o3", "4": "o4", "5": "o5"},
+        "total_cost": 0.5,
+        "model_used": "gpt-4"
+    }
+    with open(state_file, "w") as f:
+        json.dump(initial_state, f)
+
+    def side_effect_run(prompt, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            # Return output WITHOUT FILES markers - triggers failure
+            return (True, "I did the work but no FILES_CREATED marker", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=99,
+        issue_author="me",
+        issue_title="State Bug",
+        cwd=temp_cwd
+    )
+
+    assert success is False
+    assert "step 9" in msg.lower()
+
+    # CRITICAL: Verify state was saved with correct last_completed_step
+    with open(state_file, "r") as f:
+        final_state = json.load(f)
+
+    # Steps 6, 7, 8 completed successfully before step 9 failed
+    assert final_state["last_completed_step"] == 8, \
+        f"Expected last_completed_step=8, got {final_state['last_completed_step']}"
+
+    # Verify step outputs exist for 6, 7, 8
+    assert "6" in final_state["step_outputs"]
+    assert "7" in final_state["step_outputs"]
+    assert "8" in final_state["step_outputs"]
 
 def test_orchestrator_review_loop_logic(mock_dependencies, temp_cwd):
     """

@@ -307,10 +307,12 @@ def run_agentic_change_orchestrator(
                 context["worktree_path"] = str(worktree_path)
                 
                 # Update state with worktree path immediately
+                # Note: Use step_num - 1 (not the stale last_completed_step variable)
+                # because steps up to step_num - 1 have completed successfully
                 _save_state(cwd, issue_number, {
                     "issue_url": issue_url,
                     "issue_number": issue_number,
-                    "last_completed_step": last_completed_step,
+                    "last_completed_step": step_num - 1,
                     "step_outputs": step_outputs,
                     "total_cost": total_cost,
                     "model_used": model_used,
