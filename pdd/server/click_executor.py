@@ -32,6 +32,9 @@ def _setup_headless_environment():
     affect ALL pdd commands (including CLI usage) because the connect command
     imports this module transitively.
     """
+    # Skip if already configured (idempotent)
+    if os.environ.get('CI') == '1':
+        return
     os.environ['CI'] = '1'  # Triggers headless mode in sync and other commands
     os.environ['PDD_FORCE'] = '1'  # Skip confirmation prompts
     os.environ['TERM'] = 'dumb'  # Disable fancy terminal features
