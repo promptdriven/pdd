@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 8 of 12 in an agentic change workflow. Previous steps identified dev units, reviewed architecture, and confirmed documentation changes needed.
+You are working on step 8 of 10 in an agentic change workflow. Previous steps identified dev units, reviewed architecture, and confirmed documentation changes needed.
 
 % PDD Background
 
@@ -50,22 +50,6 @@ You are working on step 8 of 12 in an agentic change workflow. Previous steps id
 {step7_output}
 </step7_output>
 
-% Scope
-
-**You MAY read and analyze** any files to understand the codebase:
-- Code files, example files, tests - READ to understand behavior
-
-**This workflow modifies ONLY:**
-- Prompt files (`.prompt` files in the prompts directory)
-- Documentation files (`.md`, `.txt`, etc.)
-
-**Do NOT recommend creating or modifying:**
-- Code files (these are GENERATED from prompts via `pdd sync`)
-- Example files (these are GENERATED artifacts)
-- Test files (these are updated during `pdd sync`)
-
-Code is a GENERATED artifact in PDD. To change code behavior, change the prompts that generate it.
-
 % Your Task
 
 1. **Read existing prompts**
@@ -73,28 +57,21 @@ Code is a GENERATED artifact in PDD. To change code behavior, change the prompts
    - Understand the current requirements, dependencies, and constraints
    - Note the prompt structure (Role, Requirements, Dependencies, etc.)
 
-2. **Extension Analysis (REQUIRED for new prompts)**
-   For any new prompt being designed, document:
-   - What existing modules were considered as alternatives
-   - Why those modules cannot be extended to provide this functionality
-   - What specific capability gap requires a new module
-   This analysis MUST appear in the output for each new prompt.
-
-3. **Design prompt changes**
+2. **Design prompt changes**
    For each prompt that needs modification:
    - What new requirements need to be added?
    - What existing requirements need to be updated?
    - Are there new dependencies to include?
    - Are there new constraints or error handling needs?
 
-4. **Design new prompts**
+3. **Design new prompts**
    For each new prompt to be created:
    - What is the role and scope?
    - What are the requirements (5-10 items, testable)?
    - What dependencies need to be included?
    - Follow the prompt structure from the PDD guide
 
-5. **Check for conflicts**
+4. **Check for conflicts**
    - Do any changes conflict with existing behavior?
    - Are there breaking changes to interfaces?
    - Will existing tests still pass?
@@ -119,16 +96,14 @@ Your comment should follow this format:
 
 ### Prompt Modifications
 
-#### `prompts/xxx_{language}.prompt`
+#### `prompts/xxx_python.prompt`
 **Current state:** [Brief description]
 **Changes needed:**
 1. Add requirement: [new requirement]
 2. Update requirement: [existing → new]
-3. Add dependency: `<include>{example_dir}/yyy_example.{ext}</include>`
+3. Add dependency: `<include>context/yyy_example.py</include>`
 
-*(Use actual language and paths from project structure in Step 6)*
-
-#### `prompts/zzz_{language}.prompt`
+#### `prompts/zzz_python.prompt`
 **New prompt to create:**
 - Role: [module purpose]
 - Requirements:
@@ -136,11 +111,6 @@ Your comment should follow this format:
   2. [requirement 2]
   ...
 - Dependencies: [list of includes]
-
-**Extension Analysis (REQUIRED):**
-- Modules considered: [list existing modules that were evaluated]
-- Why not extendable: [specific reason for each module]
-- Capability gap: [what new capability this module provides]
 
 ### Interface Changes
 - [List any breaking changes or interface updates]

@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 7 of 12 in an agentic change workflow. Previous steps identified the dev units involved. Now you must determine if there are architectural questions that require user input before designing prompt changes.
+You are working on step 7 of 10 in an agentic change workflow. Previous steps identified the dev units involved. Now you must determine if there are architectural questions that require user input before designing prompt changes.
 
 **This step may STOP the workflow** if architectural decisions are needed. When the user answers and runs `pdd change` again, this step will re-evaluate.
 
@@ -55,14 +55,7 @@ You are working on step 7 of 12 in an agentic change workflow. Previous steps id
    - Understand which modules/prompts will be affected
    - Consider the scope and complexity of changes
 
-2. **Apply Reuse-First Principle**
-   Before confirming the architecture, validate that extension is prioritized over creation:
-   - For any new modules proposed in Step 6, challenge whether they are truly necessary
-   - Ask: "Can this functionality be added to an existing module instead?"
-   - Consider if the new module duplicates logic that already exists elsewhere
-   - If reuse is possible but was overlooked, recommend changing CREATE to MODIFY
-
-3. **Identify architectural questions**
+2. **Identify architectural questions**
    Look for decisions that could significantly impact implementation:
    - **Design patterns**: Which pattern is most appropriate? (e.g., strategy vs factory)
    - **Trade-offs**: Performance vs simplicity? Flexibility vs complexity?
@@ -72,7 +65,7 @@ You are working on step 7 of 12 in an agentic change workflow. Previous steps id
    - **Error handling strategy**: Fail fast vs graceful degradation?
    - **Configuration**: Hardcoded vs configurable? Environment variables vs config file?
 
-4. **Decide: Proceed or Ask Questions**
+3. **Decide: Proceed or Ask Questions**
 
    **PROCEED** if:
    - Implementation approach is straightforward
@@ -86,7 +79,7 @@ You are working on step 7 of 12 in an agentic change workflow. Previous steps id
    - Changes could affect system behavior significantly
    - User preferences would change the implementation approach
 
-5. **If questions needed, formulate them**
+4. **If questions needed, formulate them**
    - Ask specific, technical questions
    - Provide 2-3 concrete options for each question
    - Explain trade-offs for each option
@@ -105,10 +98,6 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ## Step 7: Architecture Review
 
 **Status:** Architecture Clear
-
-### Reuse Validation
-- [Confirm each new module proposed in Step 6 is truly necessary]
-- [List any opportunities for extension instead of creation that were identified]
 
 ### Analysis
 The implementation approach is straightforward based on the dev units identified in Step 6.
@@ -176,16 +165,3 @@ Please reply with your preferred options (e.g., "1A, 2B"). Then run `pdd change 
 - Always tag the issue author (@{issue_author}) when asking questions
 - This is a HARD STOP - if questions are needed, the workflow terminates here
 - When `pdd change` is run again, this step will re-evaluate based on new comments
-
-% CRITICAL: Output Format for Stop Condition
-
-If architectural decisions are needed, your final response MUST include this exact line:
-
-STOP_CONDITION: Architectural decision needed
-
-This line MUST:
-- Appear in your final output (not just in the GitHub comment)
-- Use exact casing shown above (lowercase "decision needed")
-- Be on its own line for reliable parsing
-
-If NO architectural decisions are needed (proceeding to Step 8), do NOT include this line.
