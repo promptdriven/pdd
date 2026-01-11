@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions } from '../api';
 import DependencyViewer from './DependencyViewer';
 import FileBrowser from './FileBrowser';
@@ -10,6 +10,10 @@ interface ArchitectureViewProps {
   serverConnected: boolean;
   isExecuting: boolean;
   onOpenPromptSpace: (prompt: PromptInfo) => void;
+  // Batch operation callbacks for job dashboard tracking
+  onBatchStart?: (name: string, total: number) => void;
+  onBatchProgress?: (current: number, total: number, currentItem: string) => void;
+  onBatchComplete?: (success: boolean) => void;
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
@@ -18,6 +22,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   serverConnected,
   isExecuting,
   onOpenPromptSpace,
+  onBatchStart,
+  onBatchProgress,
+  onBatchComplete,
 }) => {
   // Architecture state
   const [architecture, setArchitecture] = useState<ArchitectureModule[] | null>(null);
@@ -32,7 +39,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [techStackContent, setTechStackContent] = useState('');
   const [techStackPath, setTechStackPath] = useState<string | null>(null);
   const [showTechStack, setShowTechStack] = useState(false);
-  const [showFileBrowser, setShowFileBrowser] = useState<'prd' | 'techStack' | null>(null);
+  const [showFileBrowser, setShowFileBrowser] = useState<'prd' | 'techStack' | 'architecture' | null>(null);
+  const [architecturePathInput, setArchitecturePathInput] = useState('architecture.json');
+  const [loadArchitectureError, setLoadArchitectureError] = useState<string | null>(null);
 
   // Architecture generation state
   const [isGenerating, setIsGenerating] = useState(false);
@@ -63,6 +72,26 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   // Sidebar collapsed state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // Existing prompts state - track which prompts already exist with their file info
+  const [existingPrompts, setExistingPrompts] = useState<Set<string>>(new Set());
+  const [promptsInfo, setPromptsInfo] = useState<PromptInfo[]>([]);
+
+  // Load existing prompts
+  const loadExistingPrompts = useCallback(async () => {
+    try {
+      const prompts = await api.listPrompts();
+      // Store full prompts info for file tracking
+      setPromptsInfo(prompts);
+      // Extract prompt filenames (e.g., "prompts/orders_Python.prompt" -> "orders_Python.prompt")
+      const promptFilenames = new Set(
+        prompts.map(p => p.prompt.split('/').pop() || '')
+      );
+      setExistingPrompts(promptFilenames);
+    } catch (e) {
+      console.error('Failed to load existing prompts:', e);
+    }
+  }, []);
+
   // Load architecture on mount
   useEffect(() => {
     const loadArchitecture = async () => {
@@ -71,12 +100,17 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         return;
       }
 
+      // Set loading true when server connects (handles reconnection case)
+      setLoading(true);
+
       try {
         const result = await api.checkArchitectureExists();
         if (result.exists) {
           const modules = await api.getArchitecture();
           setArchitecture(modules);
           setMode('graph');
+          // Load existing prompts after architecture is loaded
+          await loadExistingPrompts();
         } else {
           setMode('empty');
         }
@@ -89,7 +123,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     };
 
     loadArchitecture();
-  }, [serverConnected]);
+  }, [serverConnected, loadExistingPrompts]);
 
   // Handle file selection from browser
   const handleFileSelect = useCallback(async (path: string) => {
@@ -98,15 +132,58 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       if (showFileBrowser === 'prd') {
         setPrdContent(content.content);
         setPrdPath(path);
+        // Transition to editor mode if we were in empty state
+        if (mode === 'empty') {
+          setMode('editor');
+        }
       } else if (showFileBrowser === 'techStack') {
         setTechStackContent(content.content);
         setTechStackPath(path);
+      } else if (showFileBrowser === 'architecture') {
+        // Load architecture.json file directly
+        try {
+          const modules = JSON.parse(content.content) as ArchitectureModule[];
+          setArchitecture(modules);
+          setMode('graph');
+          // Load existing prompts after architecture is loaded
+          await loadExistingPrompts();
+        } catch (parseError) {
+          console.error('Failed to parse architecture.json:', parseError);
+          alert('Invalid architecture.json format. Please select a valid architecture file.');
+          return;
+        }
       }
       setShowFileBrowser(null);
     } catch (e: any) {
       console.error('Failed to load file:', e);
     }
-  }, [showFileBrowser]);
+  }, [showFileBrowser, mode, loadExistingPrompts]);
+
+  // Load architecture from path input
+  const handleLoadArchitectureFromPath = useCallback(async () => {
+    if (!architecturePathInput.trim()) {
+      setLoadArchitectureError('Please enter a file path');
+      return;
+    }
+
+    setLoadArchitectureError(null);
+    try {
+      const content = await api.getFileContent(architecturePathInput.trim());
+      const modules = JSON.parse(content.content) as ArchitectureModule[];
+      setArchitecture(modules);
+      setMode('graph');
+      await loadExistingPrompts();
+    } catch (e: any) {
+      console.error('Failed to load architecture:', e);
+      if (e.message?.includes('404') || e.message?.includes('not found')) {
+        setLoadArchitectureError(`File not found: ${architecturePathInput}`);
+      } else if (e instanceof SyntaxError) {
+        setLoadArchitectureError('Invalid JSON format in file');
+      } else {
+        setLoadArchitectureError(e.message || 'Failed to load architecture file');
+      }
+    }
+  }, [architecturePathInput, loadExistingPrompts]);
 
   // Generate architecture from PRD
   const handleGenerate = async () => {
@@ -207,6 +284,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       };
     });
 
+    // Notify parent that batch operation is starting (for job dashboard)
+    onBatchStart?.('Generating Prompts', moduleRequests.length);
+
     try {
       const results = await api.batchGeneratePrompts(
         {
@@ -218,10 +298,15 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         },
         (current, total, module) => {
           setPromptGenerationProgress({ current, total, currentModule: module });
+          // Also notify parent for job dashboard
+          onBatchProgress?.(current, total, module);
         },
         () => cancelRequestedRef.current
       );
       setPromptGenerationResults(results);
+      // Notify parent that batch completed successfully
+      const allSucceeded = results.every(r => r.success);
+      onBatchComplete?.(allSucceeded);
     } catch (e: any) {
       console.error('Failed to generate prompts:', e);
       setPromptGenerationResults([{
@@ -229,11 +314,13 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         success: false,
         error: e.message || 'Failed to generate prompts',
       }]);
+      // Notify parent that batch failed
+      onBatchComplete?.(false);
     } finally {
       setIsGeneratingPrompts(false);
       setPromptGenerationProgress(null);
     }
-  }, [prdPath, techStackPath, globalOptions]);
+  }, [prdPath, techStackPath, globalOptions, onBatchStart, onBatchProgress, onBatchComplete]);
 
   // Cancel prompt generation and current running command
   const handleCancelPromptGeneration = useCallback(async () => {
@@ -245,12 +332,14 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     }
   }, []);
 
-  // Close progress modal
-  const handleCloseProgressModal = useCallback(() => {
+  // Close progress modal and refresh existing prompts
+  const handleCloseProgressModal = useCallback(async () => {
     setShowProgressModal(false);
     setPromptGenerationResults(null);
     cancelRequestedRef.current = false;
-  }, []);
+    // Refresh existing prompts after generation
+    await loadExistingPrompts();
+  }, [loadExistingPrompts]);
 
   if (loading) {
     return (
@@ -278,9 +367,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           </div>
           <h2 className="text-xl font-semibold text-white mb-2">No architecture.json found</h2>
           <p className="text-surface-400 text-sm mb-6">
-            Create a PRD (Product Requirements Document) to generate your project architecture.
+            Generate a new architecture from a PRD, or load an existing architecture.json file.
           </p>
-          <div className="flex gap-3 justify-center">
+
+          {/* Primary actions */}
+          <div className="flex gap-3 justify-center mb-4">
             <button
               onClick={() => setMode('editor')}
               className="px-4 py-2.5 bg-accent-600 hover:bg-accent-500 text-white rounded-xl font-medium transition-colors"
@@ -293,9 +384,41 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
               className="px-4 py-2.5 bg-surface-700 hover:bg-surface-600 text-white rounded-xl font-medium transition-colors"
               disabled={!serverConnected}
             >
-              Load from file
+              Load PRD
             </button>
           </div>
+
+          {/* Secondary action - load existing architecture */}
+          <div className="pt-4 border-t border-surface-700/50">
+            <p className="text-surface-500 text-xs mb-3">Or load an existing architecture file</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={architecturePathInput}
+                onChange={(e) => {
+                  setArchitecturePathInput(e.target.value);
+                  setLoadArchitectureError(null);
+                }}
+                placeholder="architecture.json"
+                className="flex-1 px-3 py-2 bg-surface-900/50 border border-surface-600 rounded-lg text-sm text-white placeholder-surface-500 focus:outline-none focus:border-accent-500"
+                disabled={!serverConnected}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleLoadArchitectureFromPath();
+                }}
+              />
+              <button
+                onClick={handleLoadArchitectureFromPath}
+                className="px-4 py-2 bg-surface-700 hover:bg-surface-600 text-surface-300 hover:text-white rounded-lg text-sm font-medium transition-colors"
+                disabled={!serverConnected}
+              >
+                Load
+              </button>
+            </div>
+            {loadArchitectureError && (
+              <p className="text-red-400 text-xs mt-2">{loadArchitectureError}</p>
+            )}
+          </div>
+
           {!serverConnected && (
             <p className="text-yellow-400 text-xs mt-4">
               Connect to server to enable architecture generation
@@ -458,6 +581,15 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                       <label className="flex items-center gap-2 cursor-pointer group">
                         <input
                           type="checkbox"
+                          checked={globalOptions.local ?? false}
+                          onChange={(e) => setGlobalOptions(prev => ({ ...prev, local: e.target.checked }))}
+                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
+                        />
+                        <span className="text-xs text-surface-300 group-hover:text-white">Run locally (not cloud)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <input
+                          type="checkbox"
                           checked={globalOptions.verbose ?? false}
                           onChange={(e) => setGlobalOptions(prev => ({ ...prev, verbose: e.target.checked }))}
                           className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
@@ -515,6 +647,37 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                   </button>
                 )}
               </div>
+
+              {/* Load Different Architecture File */}
+              <div className="border-t border-surface-700/50">
+                <div className="p-3">
+                  <p className="text-xs font-medium text-surface-400 uppercase tracking-wider mb-2">Load Architecture File</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={architecturePathInput}
+                      onChange={(e) => {
+                        setArchitecturePathInput(e.target.value);
+                        setLoadArchitectureError(null);
+                      }}
+                      placeholder="architecture.json"
+                      className="flex-1 px-2 py-1.5 bg-surface-900/50 border border-surface-600 rounded text-xs text-white placeholder-surface-500 focus:outline-none focus:border-accent-500"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleLoadArchitectureFromPath();
+                      }}
+                    />
+                    <button
+                      onClick={handleLoadArchitectureFromPath}
+                      className="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 text-surface-300 hover:text-white rounded text-xs font-medium transition-colors"
+                    >
+                      Load
+                    </button>
+                  </div>
+                  {loadArchitectureError && (
+                    <p className="text-red-400 text-[10px] mt-1">{loadArchitectureError}</p>
+                  )}
+                </div>
+              </div>
             </>
           )}
         </div>
@@ -531,6 +694,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
             onModuleClick={handleModuleClick}
             onGeneratePrompts={handleGeneratePrompts}
             isGeneratingPrompts={isGeneratingPrompts}
+            existingPrompts={existingPrompts}
+            promptsInfo={promptsInfo}
           />
         ) : (
           <div className="glass rounded-xl border border-surface-700/50 h-full flex items-center justify-center">
@@ -559,6 +724,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         <PromptOrderModal
           isOpen={showOrderModal}
           modules={architecture}
+          existingPrompts={existingPrompts}
           onClose={() => setShowOrderModal(false)}
           onConfirm={handleConfirmGeneratePrompts}
         />

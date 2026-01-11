@@ -9,6 +9,7 @@ export const GLOBAL_DEFAULTS: GlobalDefaults = {
   verbose: false,
   quiet: false,
   force: false,
+  local: false,
   reviewExamples: false,
 };
 
@@ -70,6 +71,14 @@ export const GLOBAL_OPTIONS: GlobalOption[] = [
     placeholder: '',
     description: 'Skip interactive prompts (useful for automation)',
     defaultValue: GLOBAL_DEFAULTS.force,
+  },
+  {
+    name: 'local',
+    cliFlag: '--local',
+    type: 'checkbox',
+    placeholder: '',
+    description: 'Run commands locally instead of in the cloud',
+    defaultValue: GLOBAL_DEFAULTS.local,
   },
   {
     name: 'review-examples',
@@ -177,6 +186,42 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
     options: [
       { name: 'issue-url', type: 'text', placeholder: 'https://github.com/org/repo/issues/123', description: 'GitHub issue URL to investigate', required: true },
       { name: 'output', type: 'file', placeholder: 'e.g., tests/test_bug_123.py', description: 'Where to save generated test' },
+    ]
+  },
+  [CommandType.CRASH]: {
+    name: CommandType.CRASH,
+    backendName: 'crash',
+    description: "Fix code based on crash errors. Analyzes error file and proposes fixes.",
+    shortDescription: "Crash Fix",
+    icon: "💥",
+    requiresPrompt: true,
+    requiresCode: true,
+    options: [
+      { name: 'program-file', type: 'file', placeholder: 'program.py', description: 'Program file that crashed', required: true },
+      { name: 'error-file', type: 'file', placeholder: 'error.log', description: 'File containing error messages', required: true },
+      { name: 'output', type: 'file', placeholder: 'src/fixed_code.py', description: 'Where to save fixed code' },
+      { name: 'output-program', type: 'file', placeholder: 'program_fixed.py', description: 'Where to save fixed program' },
+      { name: 'loop', type: 'checkbox', placeholder: '', description: 'Enable iterative fixing process' },
+      { name: 'max-attempts', type: 'number', placeholder: '3', description: 'Maximum fix attempts', defaultValue: 3 },
+      { name: 'budget', type: 'number', placeholder: '5', description: 'Maximum cost in dollars', defaultValue: 5 },
+    ]
+  },
+  [CommandType.VERIFY]: {
+    name: CommandType.VERIFY,
+    backendName: 'verify',
+    description: "Verify code against prompt requirements using a verification program.",
+    shortDescription: "Verify",
+    icon: "✅",
+    requiresPrompt: true,
+    requiresCode: true,
+    options: [
+      { name: 'verification-program', type: 'file', placeholder: 'verify.py', description: 'Verification program to run', required: true },
+      { name: 'output-code', type: 'file', placeholder: 'src/verified_code.py', description: 'Where to save verified code' },
+      { name: 'output-program', type: 'file', placeholder: 'verify_fixed.py', description: 'Where to save fixed verification program' },
+      { name: 'output-results', type: 'file', placeholder: 'results.log', description: 'Where to save verification results' },
+      { name: 'max-attempts', type: 'number', placeholder: '3', description: 'Maximum verification attempts', defaultValue: 3 },
+      { name: 'budget', type: 'number', placeholder: '5', description: 'Maximum cost in dollars', defaultValue: 5 },
+      { name: 'agentic-fallback', type: 'checkbox', placeholder: '', description: 'Enable agentic fallback if primary fix fails', defaultValue: true },
     ]
   },
 

@@ -32,7 +32,7 @@
   3. **GET /commands/available**: List allowed commands with descriptions
 
   4. **Allowed commands** (ALLOWED_COMMANDS dict):
-     - Basic: sync, update, bug, generate, test, example, fix
+     - Basic: sync, update, bug, generate, test, example, fix, crash, verify
      - Advanced: split, change, detect, auto-deps, conflicts, preprocess
 
   5. **Error handling**: 400 invalid command, 404 unknown job, 409 conflicts
@@ -51,6 +51,8 @@
        - test: ["prompt_file", "code_file"]
        - example: ["prompt_file", "code_file"]
        - fix: ["prompt_file", "code_file", "unit_test_files", "error_file"]
+       - crash: ["prompt_file", "code_file", "program_file", "error_file"]
+       - verify: ["prompt_file", "code_file", "verification_program"]
        - bug, update, detect: ["args"] (special: args contains positional list)
        - split: ["input_prompt", "input_code", "example_code"]
        - change: ["change_prompt_file", "input_code", "input_prompt_file"]
@@ -61,8 +63,27 @@
      - Fallback: python -c "from pdd.cli import cli; sys.exit(cli())"
 
   8. **Response models**:
-     - RunResult: success, message, exit_code
+     - RunResult: success, message, exit_code, stdout (optional), stderr (optional), error_details (optional)
      - CancelResult: cancelled, message
+     - SpawnTerminalResponse: success, message, command, platform
+
+  9. **Error parsing** (`_parse_error_details`):
+     - Maps exit codes to user-friendly error messages
+     - Handles common exit codes: 1 (general failure), 2 (usage error), 126-143 (signals)
+
+  10. **Terminal Spawning API**:
+      - POST /commands/spawn-terminal: Spawn command in new terminal window
+      - Uses TerminalSpawner for cross-platform support (macOS, Linux, Windows)
+      - Returns SpawnTerminalResponse with success status and platform
+      - Smart output path detection: auto-computes --output for example/test commands
+        using detect_context_for_file() from pdd.construct_paths
+
+  11. **Smart Output Path Detection** (`_compute_smart_output_path`):
+      - For example/test commands, detects output path from .pddrc context
+      - Uses detect_context_for_file() to find matching context
+      - Preserves subdirectory structure from prompt path
+      - Example: prompts/server/foo.prompt + context.example_output_path="context"
+        -> output: "context/server/"
 
 % Dependencies
   <fastapi_example>
@@ -78,6 +99,8 @@
   <cli_reference>
   <pdd.cli><include>context/cli_example.py</include></pdd.cli>
   </cli_reference>
+  Use TerminalSpawner from pdd/server/terminal_spawner.py for spawning terminal windows
+  Use detect_context_for_file from pdd/construct_paths.py for smart output path detection
 
 % Instructions
   - Create router with prefix="/api/v1/commands", tags=["commands"]

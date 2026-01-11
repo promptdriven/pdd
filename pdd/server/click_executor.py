@@ -11,12 +11,29 @@ This module provides functionality to programmatically execute Click commands wi
 from __future__ import annotations
 
 import io
+import os
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 from unittest.mock import MagicMock
 
 import click
+
+
+def _setup_headless_environment():
+    """
+    Set up environment variables for headless command execution.
+
+    This ensures commands run in non-interactive mode without TUI,
+    which is necessary when running programmatically through the server.
+    """
+    os.environ['CI'] = '1'  # Triggers headless mode in sync and other commands
+    os.environ['PDD_FORCE'] = '1'  # Skip confirmation prompts
+    os.environ['TERM'] = 'dumb'  # Disable fancy terminal features
+
+
+# Set up headless environment when this module is imported
+_setup_headless_environment()
 
 
 # ============================================================================
@@ -164,6 +181,73 @@ def create_isolated_context(
 # Command Executor
 # ============================================================================
 
+# Options that should be integers when passed to Click commands
+INTEGER_OPTIONS = {
+    'max_attempts', 'target_coverage', 'depth', 'limit',
+    'max_tokens', 'timeout', 'retries', 'iterations',
+}
+
+# Options that should be floats when passed to Click commands
+FLOAT_OPTIONS = {
+    'strength', 'temperature', 'time', 'threshold', 'budget',
+}
+
+# Options that should be booleans when passed to Click commands
+BOOLEAN_OPTIONS = {
+    'verbose', 'quiet', 'force', 'loop', 'skip_verify', 'skip_tests',
+    'local', 'dry_run', 'auto_submit', 'recursive',
+}
+
+
+def _convert_option_type(key: str, value: Any) -> Any:
+    """
+    Convert option value to the appropriate type based on the option name.
+
+    Args:
+        key: The option name (with underscores, not hyphens)
+        value: The value to convert
+
+    Returns:
+        The value converted to the appropriate type
+    """
+    if value is None:
+        return None
+
+    normalized_key = key.replace("-", "_")
+
+    # Handle integers
+    if normalized_key in INTEGER_OPTIONS:
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        return value
+
+    # Handle floats
+    if normalized_key in FLOAT_OPTIONS:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return value
+        return value
+
+    # Handle booleans
+    if normalized_key in BOOLEAN_OPTIONS:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ('true', '1', 'yes', 'on')
+        return bool(value)
+
+    return value
+
+
 class ClickCommandExecutor:
     """
     Executes Click commands programmatically with output capture.
@@ -225,11 +309,17 @@ class ClickCommandExecutor:
         obj = {**self._base_context_obj, **(options or {})}
 
         # Merge args and options into params
+        # Convert hyphens to underscores in keys (CLI uses hyphens, Python uses underscores)
+        # Also convert string values to appropriate types for known options
         params = {}
         if args:
-            params.update(args)
+            for key, value in args.items():
+                normalized_key = key.replace("-", "_")
+                params[normalized_key] = _convert_option_type(normalized_key, value)
         if options:
-            params.update(options)
+            for key, value in options.items():
+                normalized_key = key.replace("-", "_")
+                params[normalized_key] = _convert_option_type(normalized_key, value)
 
         # Create isolated context
         ctx = create_isolated_context(command, obj)
@@ -357,6 +447,11 @@ def get_pdd_command(command_name: str) -> Optional[click.Command]:
             from pdd.commands.analysis import crash
             _command_cache[command_name] = crash
             return crash
+
+        elif command_name == "verify":
+            from pdd.commands.utility import verify
+            _command_cache[command_name] = verify
+            return verify
 
         else:
             return None

@@ -4,6 +4,7 @@ import { ArchitectureModule } from '../api';
 interface PromptOrderModalProps {
   isOpen: boolean;
   modules: ArchitectureModule[];
+  existingPrompts?: Set<string>;
   onClose: () => void;
   onConfirm: (orderedModules: ArchitectureModule[]) => void;
 }
@@ -12,33 +13,43 @@ interface ModuleItem {
   module: ArchitectureModule;
   selected: boolean;
   order: number;
+  hasExistingPrompt: boolean;
 }
 
 const PromptOrderModal: React.FC<PromptOrderModalProps> = ({
   isOpen,
   modules,
+  existingPrompts = new Set(),
   onClose,
   onConfirm,
 }) => {
-  // Initialize with all modules selected, in original order
+  // Initialize with only modules without existing prompts selected
   const [items, setItems] = useState<ModuleItem[]>(() =>
-    modules.map((module, index) => ({
-      module,
-      selected: true,
-      order: index,
-    }))
+    modules.map((module, index) => {
+      const hasExisting = existingPrompts.has(module.filename);
+      return {
+        module,
+        selected: !hasExisting,  // Only select modules without existing prompts
+        order: index,
+        hasExistingPrompt: hasExisting,
+      };
+    })
   );
 
-  // Reset items when modules change
+  // Reset items when modules or existingPrompts change
   React.useEffect(() => {
     setItems(
-      modules.map((module, index) => ({
-        module,
-        selected: true,
-        order: index,
-      }))
+      modules.map((module, index) => {
+        const hasExisting = existingPrompts.has(module.filename);
+        return {
+          module,
+          selected: !hasExisting,  // Only select modules without existing prompts
+          order: index,
+          hasExistingPrompt: hasExisting,
+        };
+      })
     );
-  }, [modules]);
+  }, [modules, existingPrompts]);
 
   // Toggle selection
   const toggleSelection = useCallback((index: number) => {
@@ -75,6 +86,11 @@ const PromptOrderModal: React.FC<PromptOrderModalProps> = ({
   // Deselect all
   const deselectAll = useCallback(() => {
     setItems(prev => prev.map(item => ({ ...item, selected: false })));
+  }, []);
+
+  // Select only missing prompts (modules without existing prompts)
+  const selectOnlyMissing = useCallback(() => {
+    setItems(prev => prev.map(item => ({ ...item, selected: !item.hasExistingPrompt })));
   }, []);
 
   // Handle confirm
@@ -122,6 +138,12 @@ const PromptOrderModal: React.FC<PromptOrderModalProps> = ({
         <div className="px-4 py-2 border-b border-surface-700/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <button
+              onClick={selectOnlyMissing}
+              className="px-2 py-1 text-xs text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 rounded transition-colors font-medium"
+            >
+              Select Missing
+            </button>
+            <button
               onClick={selectAll}
               className="px-2 py-1 text-xs text-surface-300 hover:text-white hover:bg-surface-700 rounded transition-colors"
             >
@@ -149,7 +171,7 @@ const PromptOrderModal: React.FC<PromptOrderModalProps> = ({
                   item.selected
                     ? 'bg-surface-800 border-surface-600'
                     : 'bg-surface-800/30 border-surface-700/30 opacity-60'
-                }`}
+                } ${item.hasExistingPrompt ? 'ring-1 ring-emerald-500/30' : ''}`}
               >
                 {/* Checkbox */}
                 <input
@@ -173,6 +195,15 @@ const PromptOrderModal: React.FC<PromptOrderModalProps> = ({
                     <span className="px-1.5 py-0.5 text-[10px] font-medium bg-surface-700 text-surface-300 rounded">
                       {getLanguage(item.module)}
                     </span>
+                    {/* Existing prompt indicator */}
+                    {item.hasExistingPrompt && (
+                      <span className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium bg-emerald-500/20 text-emerald-400 rounded">
+                        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        exists
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-surface-500 truncate">
                     {item.module.description?.substring(0, 60) || item.module.filepath}

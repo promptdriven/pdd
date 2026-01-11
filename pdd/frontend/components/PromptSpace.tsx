@@ -1,18 +1,43 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { EditorState, Compartment } from '@codemirror/state';
 import { EditorView, lineNumbers, highlightActiveLine, keymap } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { completionKeymap } from '@codemirror/autocomplete';
 import { markdown } from '@codemirror/lang-markdown';
+import { python } from '@codemirror/lang-python';
+import { javascript } from '@codemirror/lang-javascript';
+import { java } from '@codemirror/lang-java';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked, Marked } from 'marked';
-import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics } from '../api';
+import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics, RunResult, MatchCheckResponse } from '../api';
 import { CommandType, CommandConfig, CommandOption, GlobalOption } from '../types';
 import { COMMANDS, GLOBAL_OPTIONS, GLOBAL_DEFAULTS } from '../constants';
+import type { GlobalDefaults } from '../types';
 import PromptMetricsBar from './PromptMetricsBar';
 import GuidanceSidebar from './GuidanceSidebar';
+import SyncStatusBadge from './SyncStatusBadge';
+import ModelSelector from './ModelSelector';
+import { ModelInfo } from '../api';
 import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
 import { findIncludeAtCursor, IncludeTagInfo, parseIncludeManyPaths } from '../lib/includeAnalyzer';
+
+// Helper to get language extension based on file path
+function getLanguageExtension(filePath: string) {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'py':
+      return python();
+    case 'js':
+    case 'jsx':
+    case 'ts':
+    case 'tsx':
+      return javascript({ jsx: true, typescript: ext === 'ts' || ext === 'tsx' });
+    case 'java':
+      return java();
+    default:
+      return [];
+  }
+}
 
 // Create a configured marked instance
 const markedInstance = new Marked({
@@ -348,7 +373,7 @@ const CommandOptionsModal: React.FC<{
                   {/* Execution Options Group */}
                   <div className="space-y-1 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
                     <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-2">Execution Options</div>
-                    {GLOBAL_OPTIONS.filter(opt => ['verbose', 'quiet', 'force', 'review-examples'].includes(opt.name)).map(opt => (
+                    {GLOBAL_OPTIONS.filter(opt => ['local', 'verbose', 'quiet', 'force', 'review-examples'].includes(opt.name)).map(opt => (
                       <OptionInput
                         key={opt.name}
                         option={opt}
@@ -392,6 +417,7 @@ interface PromptSpaceProps {
   isExecuting: boolean;
   executionStatus?: 'idle' | 'running' | 'success' | 'failed';
   lastCommand?: string | null;
+  lastRunResult?: RunResult | null;
   onCancelCommand?: () => void;
 }
 
@@ -402,6 +428,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   isExecuting,
   executionStatus = 'idle',
   lastCommand = null,
+  lastRunResult = null,
   onCancelCommand,
 }) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
@@ -424,6 +451,9 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
+  // Model selection state
+  const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
+
   // Include token analysis state
   const [includeAnalysis, setIncludeAnalysis] = useState<{
     visible: boolean;
@@ -435,6 +465,21 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
 
   // Track content for preview (updated when toggling preview on)
   const [previewContent, setPreviewContent] = useState<string>('');
+
+  // Code panel state for side-by-side view
+  const [showCodePanel, setShowCodePanel] = useState(false);
+  const [codeContent, setCodeContent] = useState<string | null>(null);
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const codeEditorContainerRef = useRef<HTMLDivElement>(null);
+  const codeEditorViewRef = useRef<EditorView | null>(null);
+
+  // Match check modal state
+  const [showMatchModal, setShowMatchModal] = useState(false);
+  const [matchResult, setMatchResult] = useState<MatchCheckResponse | null>(null);
+  const [matchStrength, setMatchStrength] = useState(0.5);
+  const [isCheckingMatch, setIsCheckingMatch] = useState(false);
+  const [matchError, setMatchError] = useState<string | null>(null);
 
   // Update preview content when toggling preview on or when view mode changes
   useEffect(() => {
@@ -576,7 +621,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     };
   }, [content, showPreview, viewMode]);
 
-  // Analyze prompt for metrics (debounced) - uses current editor content
+  // Analyze prompt for metrics (debounced) - uses current editor content and selected model
   useEffect(() => {
     if (content === null) return;
 
@@ -588,9 +633,12 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
           ? editorViewRef.current.state.doc.toString()
           : editedContentRef.current || content;
 
+        // Use selected model for cost estimation, fallback to Claude Sonnet
+        const modelForAnalysis = selectedModel?.model || 'claude-sonnet-4-20250514';
+
         const result = await api.analyzePrompt({
           path: prompt.prompt,
-          model: 'claude-sonnet-4-20250514',
+          model: modelForAnalysis,
           preprocess: true,
           content: currentContent,  // Send current content instead of reading from file
         });
@@ -606,7 +654,129 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     // Debounce by 500ms
     const timeoutId = setTimeout(analyzePrompt, 500);
     return () => clearTimeout(timeoutId);
-  }, [content, prompt.prompt, hasChanges]);  // Re-analyze when content changes (tracked by hasChanges)
+  }, [content, prompt.prompt, hasChanges, selectedModel]);  // Re-analyze when content or model changes
+
+  // Load code content when code panel is opened
+  const loadCodeContent = useCallback(async () => {
+    if (!prompt.code) {
+      setCodeError('No code file associated with this prompt');
+      return;
+    }
+
+    setCodeLoading(true);
+    setCodeError(null);
+
+    try {
+      const file = await api.getFileContent(prompt.code);
+      setCodeContent(file.content);
+    } catch (e: any) {
+      setCodeError(e.message || 'Failed to load code file');
+    } finally {
+      setCodeLoading(false);
+    }
+  }, [prompt.code]);
+
+  // Toggle code panel
+  const handleToggleCodePanel = useCallback(() => {
+    if (!showCodePanel && !codeContent && prompt.code) {
+      loadCodeContent();
+    }
+    setShowCodePanel(!showCodePanel);
+  }, [showCodePanel, codeContent, prompt.code, loadCodeContent]);
+
+  // Reload code content (for refresh button)
+  const handleReloadCode = useCallback(() => {
+    loadCodeContent();
+  }, [loadCodeContent]);
+
+  // Handle match check
+  const handleCheckMatch = async () => {
+    if (!codeContent) {
+      // Load code content if not already loaded
+      if (prompt.code) {
+        await loadCodeContent();
+      } else {
+        setMatchError('No code file associated with this prompt');
+        return;
+      }
+    }
+
+    setIsCheckingMatch(true);
+    setMatchError(null);
+
+    try {
+      // Get current prompt content from editor or state
+      const promptContent = editorViewRef.current
+        ? editorViewRef.current.state.doc.toString()
+        : editedContentRef.current || content || '';
+
+      const result = await api.checkMatch({
+        prompt_content: promptContent,
+        code_content: codeContent || '',
+        strength: matchStrength,
+      });
+      setMatchResult(result);
+    } catch (error: any) {
+      setMatchError(error.message || 'Failed to check match');
+    } finally {
+      setIsCheckingMatch(false);
+    }
+  };
+
+  // Initialize code editor when content is loaded and panel is visible
+  useEffect(() => {
+    if (!showCodePanel || codeContent === null || !codeEditorContainerRef.current) return;
+
+    // Clean up existing editor
+    if (codeEditorViewRef.current) {
+      codeEditorViewRef.current.destroy();
+      codeEditorViewRef.current = null;
+    }
+
+    const state = EditorState.create({
+      doc: codeContent,
+      extensions: [
+        lineNumbers(),
+        highlightActiveLine(),
+        EditorView.editable.of(false), // Read-only
+        getLanguageExtension(prompt.code || ''),
+        oneDark,
+        EditorView.theme({
+          '&': {
+            height: '100%',
+            fontSize: '13px',
+            backgroundColor: 'rgb(17 24 39)',
+          },
+          '.cm-scroller': {
+            overflow: 'auto',
+            fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+          },
+          '.cm-gutters': {
+            backgroundColor: 'rgb(31 41 55)',
+            borderRight: '1px solid rgb(55 65 81)',
+          },
+          '.cm-activeLineGutter': {
+            backgroundColor: 'rgb(55 65 81)',
+          },
+          '.cm-activeLine': {
+            backgroundColor: 'rgba(55, 65, 81, 0.5)',
+          },
+        }),
+      ],
+    });
+
+    codeEditorViewRef.current = new EditorView({
+      state,
+      parent: codeEditorContainerRef.current,
+    });
+
+    return () => {
+      if (codeEditorViewRef.current) {
+        codeEditorViewRef.current.destroy();
+        codeEditorViewRef.current = null;
+      }
+    };
+  }, [showCodePanel, codeContent, prompt.code]);
 
   // Keyboard shortcut for include analysis (Cmd+. / Ctrl+.)
   useEffect(() => {
@@ -821,6 +991,13 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 {prompt.language}
               </span>
             )}
+            {prompt.sync_basename && prompt.language && (
+              <SyncStatusBadge
+                basename={prompt.sync_basename}
+                language={prompt.language}
+                refreshTrigger={saveSuccess ? 1 : 0}
+              />
+            )}
           </div>
         </div>
 
@@ -905,12 +1082,22 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
             </svg>
             Done
           </span>}
-          {executionStatus === 'failed' && <span className="flex items-center justify-center gap-2">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-            Failed
-          </span>}
+          {executionStatus === 'failed' && (
+            <div className="flex flex-col items-center gap-2">
+              <span className="flex items-center justify-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Failed
+                {lastRunResult?.exit_code ? ` (exit code: ${lastRunResult.exit_code})` : ''}
+              </span>
+              {lastRunResult?.error_details && (
+                <div className="text-xs text-red-200/80 max-w-xl text-center px-4">
+                  {lastRunResult.error_details}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1061,6 +1248,11 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 onViewModeChange={handleViewModeChange}
                 isLoading={isAnalyzing}
                 preprocessingError={analysisResult?.preprocessing_error}
+                timeValue={GLOBAL_DEFAULTS.time}
+                promptLineCount={content ? content.split('\n').length : undefined}
+                codeLineCount={codeContent ? codeContent.split('\n').length : undefined}
+                selectedModel={selectedModel}
+                onModelChange={setSelectedModel}
               />
 
               {/* Editor path bar - responsive */}
@@ -1085,6 +1277,24 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                   </svg>
                   <span className="hidden sm:inline">Tokens</span>
                 </button>
+                {/* Code panel toggle button */}
+                <button
+                  onClick={handleToggleCodePanel}
+                  disabled={!prompt.code}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
+                    !prompt.code
+                      ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                      : showCodePanel
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+                  }`}
+                  title={!prompt.code ? 'No code file available' : showCodePanel ? 'Hide code panel' : 'Show code side-by-side'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                  </svg>
+                  <span className="hidden sm:inline">Code</span>
+                </button>
                 {/* Guide toggle button */}
                 <button
                   onClick={() => setGuidanceSidebarOpen(!guidanceSidebarOpen)}
@@ -1099,6 +1309,29 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   <span className="hidden sm:inline">Guide</span>
+                </button>
+                {/* Check Match button */}
+                <button
+                  onClick={() => setShowMatchModal(true)}
+                  disabled={!prompt.code || isCheckingMatch}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
+                    !prompt.code
+                      ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                      : 'bg-purple-600/50 text-purple-200 hover:bg-purple-500 hover:text-white'
+                  }`}
+                  title={!prompt.code ? 'No code file available' : 'Check prompt-code match with LLM'}
+                >
+                  {isCheckingMatch ? (
+                    <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  )}
+                  <span className="hidden sm:inline">Match</span>
                 </button>
                 {/* Preview toggle button */}
                 <button
@@ -1129,17 +1362,95 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 </button>
               </div>
 
-              {/* Editor or Preview */}
-              {showPreview ? (
-                <div className="flex-1 overflow-auto bg-surface-900/50 p-4 sm:p-6 lg:p-8">
-                  <div
-                    className="markdown-body max-w-4xl mx-auto"
-                    dangerouslySetInnerHTML={{ __html: renderedMarkdown }}
-                  />
+              {/* Editor or Preview with optional Code Panel */}
+              <div className="flex-1 flex overflow-hidden">
+                {/* Main Editor / Preview Panel */}
+                <div className={`flex-1 flex flex-col overflow-hidden ${showCodePanel ? 'w-1/2' : 'w-full'}`}>
+                  {showPreview ? (
+                    <div className="flex-1 overflow-auto bg-surface-900/50 p-4 sm:p-6 lg:p-8">
+                      <div
+                        className="markdown-body max-w-4xl mx-auto"
+                        dangerouslySetInnerHTML={{ __html: renderedMarkdown }}
+                      />
+                    </div>
+                  ) : (
+                    <div ref={editorContainerRef} className="flex-1 overflow-hidden" />
+                  )}
                 </div>
-              ) : (
-                <div ref={editorContainerRef} className="flex-1 overflow-hidden" />
-              )}
+
+                {/* Code Panel - Side by Side */}
+                {showCodePanel && (
+                  <div className="w-1/2 flex flex-col border-l border-surface-700/50 bg-surface-900/50">
+                    {/* Code panel header */}
+                    <div className="px-3 py-2 bg-surface-800/50 border-b border-surface-700/50 flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <svg className="w-4 h-4 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                        </svg>
+                        <span className="text-xs text-surface-400 font-mono truncate" title={prompt.code || ''}>
+                          {prompt.code?.split('/').pop() || 'Code'}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 flex-shrink-0">
+                          Read Only
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {/* Refresh button */}
+                        <button
+                          onClick={handleReloadCode}
+                          disabled={codeLoading}
+                          className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors"
+                          title="Reload code file"
+                        >
+                          <svg className={`w-3.5 h-3.5 ${codeLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                        {/* Close button */}
+                        <button
+                          onClick={() => setShowCodePanel(false)}
+                          className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors"
+                          title="Close code panel"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Code content */}
+                    {codeLoading ? (
+                      <div className="flex-1 flex items-center justify-center">
+                        <div className="flex flex-col items-center gap-3">
+                          <svg className="animate-spin h-6 w-6 text-blue-400" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          <span className="text-sm text-surface-400">Loading code...</span>
+                        </div>
+                      </div>
+                    ) : codeError ? (
+                      <div className="flex-1 flex items-center justify-center">
+                        <div className="flex flex-col items-center gap-3 p-4 text-center">
+                          <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                          <span className="text-sm text-red-300">{codeError}</span>
+                          <button
+                            onClick={handleReloadCode}
+                            className="px-3 py-1.5 text-xs bg-surface-700 hover:bg-surface-600 rounded-lg transition-colors"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div ref={codeEditorContainerRef} className="flex-1 overflow-hidden" />
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* Error bar */}
               {error && (
@@ -1234,6 +1545,139 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
               <p className="text-[10px] text-surface-500">
                 Press <kbd className="px-1 py-0.5 bg-surface-700 rounded text-surface-400">Cmd+.</kbd> to analyze include at cursor
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Match Check Modal */}
+      {showMatchModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={() => setShowMatchModal(false)}>
+          <div
+            className="glass rounded-2xl border border-surface-600/50 shadow-2xl w-full max-w-lg animate-scale-in"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-surface-700/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Check Prompt-Code Match</h3>
+                  <p className="text-sm text-surface-400">Evaluate how well your code implements the prompt</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 space-y-4">
+              {/* Strength selector */}
+              <div>
+                <label className="text-sm text-surface-300 mb-2 block">Model Strength</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { value: 0.25, label: 'Fast', desc: 'Quick check' },
+                    { value: 0.5, label: 'Balanced', desc: 'Default' },
+                    { value: 0.75, label: 'Strong', desc: 'More accurate' },
+                    { value: 1.0, label: 'Best', desc: 'Highest accuracy' },
+                  ].map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setMatchStrength(opt.value)}
+                      className={`py-2 px-3 rounded-lg text-xs transition-all ${
+                        matchStrength === opt.value
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-surface-700 text-surface-300 hover:bg-surface-600'
+                      }`}
+                    >
+                      <div className="font-medium">{opt.label}</div>
+                      <div className="text-[10px] opacity-70">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Error display */}
+              {matchError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                  <p className="text-sm text-red-300">{matchError}</p>
+                </div>
+              )}
+
+              {/* Results display */}
+              {matchResult && (
+                <div className="p-4 bg-surface-900/50 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className="text-3xl font-bold"
+                      style={{
+                        color: matchResult.result.match_score >= 80 ? '#10b981' :
+                               matchResult.result.match_score >= 50 ? '#f59e0b' : '#ef4444'
+                      }}
+                    >
+                      {matchResult.result.match_score}%
+                    </span>
+                    <span className="text-xs text-surface-500">
+                      {matchResult.model} (${matchResult.cost.toFixed(4)})
+                    </span>
+                  </div>
+                  <p className="text-sm text-surface-300">{matchResult.result.summary}</p>
+
+                  {matchResult.result.missing && matchResult.result.missing.length > 0 && (
+                    <div>
+                      <p className="text-xs text-red-400 font-medium mb-1">Missing Requirements:</p>
+                      <ul className="text-xs text-surface-400 list-disc ml-4 space-y-0.5">
+                        {matchResult.result.missing.map((m, i) => <li key={i}>{m}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  {matchResult.result.extra && matchResult.result.extra.length > 0 && (
+                    <div>
+                      <p className="text-xs text-yellow-400 font-medium mb-1">Extra Code (not in prompt):</p>
+                      <ul className="text-xs text-surface-400 list-disc ml-4 space-y-0.5">
+                        {matchResult.result.extra.map((e, i) => <li key={i}>{e}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  {matchResult.result.suggestions && matchResult.result.suggestions.length > 0 && (
+                    <div>
+                      <p className="text-xs text-blue-400 font-medium mb-1">Suggestions:</p>
+                      <ul className="text-xs text-surface-400 list-disc ml-4 space-y-0.5">
+                        {matchResult.result.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-surface-700/50 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowMatchModal(false); setMatchResult(null); setMatchError(null); }}
+                className="px-4 py-2 text-sm text-surface-300 hover:text-white transition-colors"
+              >
+                Close
+              </button>
+              <button
+                onClick={handleCheckMatch}
+                disabled={isCheckingMatch}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+              >
+                {isCheckingMatch ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Checking...
+                  </>
+                ) : (
+                  'Run Check'
+                )}
+              </button>
             </div>
           </div>
         </div>

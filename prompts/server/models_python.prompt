@@ -45,6 +45,7 @@
 
   6. **Serialization**:
      - datetime fields should serialize to ISO 8601 strings
+     - Use timezone-aware datetime: `datetime.now(timezone.utc)` instead of deprecated `datetime.utcnow()`
      - Enums should serialize to string values
 
 % Dependencies
