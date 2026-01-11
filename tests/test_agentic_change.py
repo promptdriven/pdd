@@ -151,30 +151,30 @@ def test_happy_path_clone_repo(mock_dependencies):
     
     def subprocess_side_effect(args, **kwargs):
         cmd = args if isinstance(args, list) else []
-        
+
+        # Comments API (check BEFORE Issue API since comments URL contains "issues/1" too)
+        if "api" in cmd and "comments" in cmd[-1]:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = json.dumps(comments_data)
+            return m
+
         # Issue API
         if "api" in cmd and "issues/1" in cmd[-1]:
             m = MagicMock()
             m.returncode = 0
             m.stdout = json.dumps(issue_data)
             return m
-            
-        # Comments API
-        if "api" in cmd and "comments" in cmd[-1]:
-            m = MagicMock()
-            m.returncode = 0
-            m.stdout = json.dumps(comments_data)
-            return m
-            
+
         # Clone command
         if "repo" in cmd and "clone" in cmd:
             m = MagicMock()
             m.returncode = 0
             return m
-            
+
         # Default fallback
         m = MagicMock()
-        m.returncode = 1 # Fail other commands (like git remote) to force clone path
+        m.returncode = 1  # Fail other commands (like git remote) to force clone path
         return m
 
     mock_subprocess.side_effect = subprocess_side_effect
@@ -243,18 +243,21 @@ def test_happy_path_current_directory(mock_dependencies):
 
     mock_subprocess.side_effect = subprocess_side_effect
 
+    # Create a mock that behaves like Path("/local/repo")
+    mock_path = MagicMock()
+    mock_path.__truediv__ = MagicMock(return_value=MagicMock(exists=MagicMock(return_value=True)))
+    mock_path.__eq__ = lambda self, other: other == Path("/local/repo")
+    mock_path.__str__ = lambda self: "/local/repo"
+    mock_path.__fspath__ = lambda self: "/local/repo"
+
     # Mock Path.cwd() to simulate we are in a repo
     with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
-        # Make .git exist
-        mock_cwd.return_value.__truediv__.return_value.exists.return_value = True
-        # Make cwd return a specific path
-        mock_cwd.return_value = Path("/local/repo")
-        
+        mock_cwd.return_value = mock_path
         run_agentic_change("https://github.com/owner/repo/issues/1")
 
-    # Verify orchestrator called with local path
+    # Verify orchestrator called with local path (the mock_path)
     call_kwargs = mock_orch.call_args[1]
-    assert call_kwargs["cwd"] == Path("/local/repo")
+    assert call_kwargs["cwd"] == mock_path
     
     # Verify NO clone command was issued
     for call_obj in mock_subprocess.call_args_list:
