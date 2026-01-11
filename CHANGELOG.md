@@ -2,25 +2,29 @@
 
 ### Feat
 
-- add sync status, models, and match checking APIs
-- add automatic progress tracking for spawned terminal jobs
-- enhance frontend with code panel and ReactFlow graph
-- add dismiss button for spawned terminal jobs
-- add terminal spawning for isolated command execution
-- add thinking allocation indicator to metrics bar
-- add --local option to PromptSpace execution options
-- add --local option to global options in frontend
-- enhance pdd connect command and frontend interface
+- **Terminal Spawning:** Commands from `pdd connect` now spawn in separate OS terminal windows (macOS/Linux/Windows) with automatic progress callbacks via TerminalSpawner. Includes JobDashboard for batch operations and Toast notifications.
+
+- **Frontend Enhancements:** PromptSpace code panel with syntax highlighting; DependencyViewer refactored to ReactFlow with dagre auto-layout; custom architecture.json path support.
+
+- **Sync APIs:** New endpoints `/sync-status`, `/models`, `/check-match` with frontend ModelSelector and SyncStatusBadge components.
+
+- **Job Progress Tracking:** Spawned terminals report completion via WebSocket to real-time JobDashboard with dismiss functionality.
+
+- **CLI Options:** Thinking allocation indicator in metrics bar; `--local` flag for local-only model usage.
 
 ### Fix
 
-- replace deprecated substr with slice in useJobs
-- use project_root for spawned terminal working directory
-- update test_websocket mocks for JobStatus import change
-- track spawned terminal jobs in dashboard
-- convert hyphens to underscores in click command params
-- use msg parameter in headless confirmation callback
-- remember confirmation in headless mode (Issue #277)
+- **UV Detection on Windows:** Normalize backslash paths to forward slashes in `detect_installation_method()` for correct UV detection on Windows. Thank you Jiacheng Yin for your contribution!!
+- **Headless Confirmation (Issue #277):** Confirmation prompts no longer repeat on each sync loop in non-TTY/CI environments.
+- **Terminal CWD & Port:** Spawned terminals use `project_root` and correct callback port (9876).
+- **JS Deprecation:** Replaced `substr` with `slice` in useJobs hook.
+- **Click Params:** Convert hyphens to underscores for CLI argument parsing.
+
+### Chore
+
+- Replace deprecated `datetime.utcnow()` with `datetime.now(timezone.utc)`.
+- Add `architecture.json` for LLM module interface definitions.
+- JWT cache clearing for staging environment support.
 
 ## v0.0.108 (2026-01-09)
 
