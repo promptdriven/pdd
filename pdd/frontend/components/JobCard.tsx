@@ -188,8 +188,8 @@ const JobCard: React.FC<JobCardProps> = ({
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-2">
-        {/* Spawned jobs get Mark Done buttons instead of Cancel */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* Spawned jobs get Mark Done buttons and Dismiss */}
         {isActive && isSpawnedJob && onMarkDone && (
           <>
             <button
@@ -198,6 +198,7 @@ const JobCard: React.FC<JobCardProps> = ({
                 onMarkDone(true);
               }}
               className="px-3 py-1.5 text-xs font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 rounded-lg transition-colors"
+              title="Mark as successfully completed"
             >
               Done
             </button>
@@ -207,9 +208,22 @@ const JobCard: React.FC<JobCardProps> = ({
                 onMarkDone(false);
               }}
               className="px-3 py-1.5 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg transition-colors"
+              title="Mark as failed"
             >
               Failed
             </button>
+            {onRemove && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove();
+                }}
+                className="px-3 py-1.5 text-xs font-medium text-surface-400 bg-surface-700/50 hover:bg-surface-700 border border-surface-600/50 rounded-lg transition-colors"
+                title="Remove from dashboard (close terminal to stop command)"
+              >
+                Dismiss
+              </button>
+            )}
           </>
         )}
         {/* Regular jobs get Cancel button */}
