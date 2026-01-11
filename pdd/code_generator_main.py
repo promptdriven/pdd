@@ -22,6 +22,7 @@ from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
 from .core.cloud import CloudConfig
 from .python_env_detector import detect_host_python_executable
+from .validate_prompt_includes import validate_prompt_includes
 
 # Cloud request timeout
 CLOUD_REQUEST_TIMEOUT = 400  # seconds
@@ -1054,6 +1055,25 @@ def code_generator_main(
             if output_path:
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
+
+                # Validate <include> tags in generated prompt files (Issue #225)
+                # If generating a .prompt file, validate that all <include> tags reference existing files
+                if str(p_output).endswith('.prompt') or language == 'prompt':
+                    validated_content, invalid_includes = validate_prompt_includes(
+                        generated_code_content,
+                        base_dir=str(p_output.parent),
+                        remove_invalid=False  # Replace with comments instead of removing
+                    )
+                    if invalid_includes:
+                        if verbose or not quiet:
+                            console.print(
+                                f"[yellow]Warning: Found {len(invalid_includes)} invalid <include> tag(s) "
+                                f"referencing non-existent files. Replaced with comments.[/yellow]"
+                            )
+                            for inv_path in invalid_includes:
+                                console.print(f"  [dim]- {inv_path}[/dim]")
+                        generated_code_content = validated_content
+
                 p_output.write_text(generated_code_content, encoding="utf-8")
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
