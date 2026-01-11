@@ -1,9 +1,12 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { EditorState, Compartment } from '@codemirror/state';
 import { EditorView, lineNumbers, highlightActiveLine, keymap } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { completionKeymap } from '@codemirror/autocomplete';
 import { markdown } from '@codemirror/lang-markdown';
+import { python } from '@codemirror/lang-python';
+import { javascript } from '@codemirror/lang-javascript';
+import { java } from '@codemirror/lang-java';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked, Marked } from 'marked';
 import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics, RunResult } from '../api';
@@ -14,6 +17,24 @@ import PromptMetricsBar from './PromptMetricsBar';
 import GuidanceSidebar from './GuidanceSidebar';
 import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
 import { findIncludeAtCursor, IncludeTagInfo, parseIncludeManyPaths } from '../lib/includeAnalyzer';
+
+// Helper to get language extension based on file path
+function getLanguageExtension(filePath: string) {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'py':
+      return python();
+    case 'js':
+    case 'jsx':
+    case 'ts':
+    case 'tsx':
+      return javascript({ jsx: true, typescript: ext === 'ts' || ext === 'tsx' });
+    case 'java':
+      return java();
+    default:
+      return [];
+  }
+}
 
 // Create a configured marked instance
 const markedInstance = new Marked({
@@ -439,6 +460,14 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   // Track content for preview (updated when toggling preview on)
   const [previewContent, setPreviewContent] = useState<string>('');
 
+  // Code panel state for side-by-side view
+  const [showCodePanel, setShowCodePanel] = useState(false);
+  const [codeContent, setCodeContent] = useState<string | null>(null);
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const codeEditorContainerRef = useRef<HTMLDivElement>(null);
+  const codeEditorViewRef = useRef<EditorView | null>(null);
+
   // Update preview content when toggling preview on or when view mode changes
   useEffect(() => {
     if (showPreview) {
@@ -610,6 +639,94 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     const timeoutId = setTimeout(analyzePrompt, 500);
     return () => clearTimeout(timeoutId);
   }, [content, prompt.prompt, hasChanges]);  // Re-analyze when content changes (tracked by hasChanges)
+
+  // Load code content when code panel is opened
+  const loadCodeContent = useCallback(async () => {
+    if (!prompt.code) {
+      setCodeError('No code file associated with this prompt');
+      return;
+    }
+
+    setCodeLoading(true);
+    setCodeError(null);
+
+    try {
+      const file = await api.getFileContent(prompt.code);
+      setCodeContent(file.content);
+    } catch (e: any) {
+      setCodeError(e.message || 'Failed to load code file');
+    } finally {
+      setCodeLoading(false);
+    }
+  }, [prompt.code]);
+
+  // Toggle code panel
+  const handleToggleCodePanel = useCallback(() => {
+    if (!showCodePanel && !codeContent && prompt.code) {
+      loadCodeContent();
+    }
+    setShowCodePanel(!showCodePanel);
+  }, [showCodePanel, codeContent, prompt.code, loadCodeContent]);
+
+  // Reload code content (for refresh button)
+  const handleReloadCode = useCallback(() => {
+    loadCodeContent();
+  }, [loadCodeContent]);
+
+  // Initialize code editor when content is loaded and panel is visible
+  useEffect(() => {
+    if (!showCodePanel || codeContent === null || !codeEditorContainerRef.current) return;
+
+    // Clean up existing editor
+    if (codeEditorViewRef.current) {
+      codeEditorViewRef.current.destroy();
+      codeEditorViewRef.current = null;
+    }
+
+    const state = EditorState.create({
+      doc: codeContent,
+      extensions: [
+        lineNumbers(),
+        highlightActiveLine(),
+        EditorView.editable.of(false), // Read-only
+        getLanguageExtension(prompt.code || ''),
+        oneDark,
+        EditorView.theme({
+          '&': {
+            height: '100%',
+            fontSize: '13px',
+            backgroundColor: 'rgb(17 24 39)',
+          },
+          '.cm-scroller': {
+            overflow: 'auto',
+            fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+          },
+          '.cm-gutters': {
+            backgroundColor: 'rgb(31 41 55)',
+            borderRight: '1px solid rgb(55 65 81)',
+          },
+          '.cm-activeLineGutter': {
+            backgroundColor: 'rgb(55 65 81)',
+          },
+          '.cm-activeLine': {
+            backgroundColor: 'rgba(55, 65, 81, 0.5)',
+          },
+        }),
+      ],
+    });
+
+    codeEditorViewRef.current = new EditorView({
+      state,
+      parent: codeEditorContainerRef.current,
+    });
+
+    return () => {
+      if (codeEditorViewRef.current) {
+        codeEditorViewRef.current.destroy();
+        codeEditorViewRef.current = null;
+      }
+    };
+  }, [showCodePanel, codeContent, prompt.code]);
 
   // Keyboard shortcut for include analysis (Cmd+. / Ctrl+.)
   useEffect(() => {
@@ -1075,6 +1192,8 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 isLoading={isAnalyzing}
                 preprocessingError={analysisResult?.preprocessing_error}
                 timeValue={GLOBAL_DEFAULTS.time}
+                promptLineCount={content ? content.split('\n').length : undefined}
+                codeLineCount={codeContent ? codeContent.split('\n').length : undefined}
               />
 
               {/* Editor path bar - responsive */}
@@ -1098,6 +1217,24 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                   </svg>
                   <span className="hidden sm:inline">Tokens</span>
+                </button>
+                {/* Code panel toggle button */}
+                <button
+                  onClick={handleToggleCodePanel}
+                  disabled={!prompt.code}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
+                    !prompt.code
+                      ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                      : showCodePanel
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+                  }`}
+                  title={!prompt.code ? 'No code file available' : showCodePanel ? 'Hide code panel' : 'Show code side-by-side'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                  </svg>
+                  <span className="hidden sm:inline">Code</span>
                 </button>
                 {/* Guide toggle button */}
                 <button
@@ -1143,17 +1280,95 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 </button>
               </div>
 
-              {/* Editor or Preview */}
-              {showPreview ? (
-                <div className="flex-1 overflow-auto bg-surface-900/50 p-4 sm:p-6 lg:p-8">
-                  <div
-                    className="markdown-body max-w-4xl mx-auto"
-                    dangerouslySetInnerHTML={{ __html: renderedMarkdown }}
-                  />
+              {/* Editor or Preview with optional Code Panel */}
+              <div className="flex-1 flex overflow-hidden">
+                {/* Main Editor / Preview Panel */}
+                <div className={`flex-1 flex flex-col overflow-hidden ${showCodePanel ? 'w-1/2' : 'w-full'}`}>
+                  {showPreview ? (
+                    <div className="flex-1 overflow-auto bg-surface-900/50 p-4 sm:p-6 lg:p-8">
+                      <div
+                        className="markdown-body max-w-4xl mx-auto"
+                        dangerouslySetInnerHTML={{ __html: renderedMarkdown }}
+                      />
+                    </div>
+                  ) : (
+                    <div ref={editorContainerRef} className="flex-1 overflow-hidden" />
+                  )}
                 </div>
-              ) : (
-                <div ref={editorContainerRef} className="flex-1 overflow-hidden" />
-              )}
+
+                {/* Code Panel - Side by Side */}
+                {showCodePanel && (
+                  <div className="w-1/2 flex flex-col border-l border-surface-700/50 bg-surface-900/50">
+                    {/* Code panel header */}
+                    <div className="px-3 py-2 bg-surface-800/50 border-b border-surface-700/50 flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <svg className="w-4 h-4 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                        </svg>
+                        <span className="text-xs text-surface-400 font-mono truncate" title={prompt.code || ''}>
+                          {prompt.code?.split('/').pop() || 'Code'}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 flex-shrink-0">
+                          Read Only
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {/* Refresh button */}
+                        <button
+                          onClick={handleReloadCode}
+                          disabled={codeLoading}
+                          className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors"
+                          title="Reload code file"
+                        >
+                          <svg className={`w-3.5 h-3.5 ${codeLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                        {/* Close button */}
+                        <button
+                          onClick={() => setShowCodePanel(false)}
+                          className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors"
+                          title="Close code panel"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Code content */}
+                    {codeLoading ? (
+                      <div className="flex-1 flex items-center justify-center">
+                        <div className="flex flex-col items-center gap-3">
+                          <svg className="animate-spin h-6 w-6 text-blue-400" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          <span className="text-sm text-surface-400">Loading code...</span>
+                        </div>
+                      </div>
+                    ) : codeError ? (
+                      <div className="flex-1 flex items-center justify-center">
+                        <div className="flex flex-col items-center gap-3 p-4 text-center">
+                          <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                          <span className="text-sm text-red-300">{codeError}</span>
+                          <button
+                            onClick={handleReloadCode}
+                            className="px-3 py-1.5 text-xs bg-surface-700 hover:bg-surface-600 rounded-lg transition-colors"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div ref={codeEditorContainerRef} className="flex-1 overflow-hidden" />
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* Error bar */}
               {error && (
