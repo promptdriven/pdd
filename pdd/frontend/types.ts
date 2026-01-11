@@ -9,6 +9,7 @@ export enum CommandType {
   BUG = 'bug',
   CRASH = 'crash',
   VERIFY = 'verify',
+  SUBMIT_EXAMPLE = 'submit-example',
   // Advanced operations
   SPLIT = 'split',
   CHANGE = 'change',

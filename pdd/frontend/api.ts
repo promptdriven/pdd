@@ -220,6 +220,18 @@ export interface ArchitectureCheckResult {
   path?: string;
 }
 
+// Auth types
+export interface AuthStatus {
+  authenticated: boolean;
+  cached: boolean;
+  expires_at: number | null;
+}
+
+export interface LogoutResult {
+  success: boolean;
+  message: string;
+}
+
 // Global options that can be passed to any generation command
 export interface GenerationGlobalOptions {
   strength?: number;      // 0-1, model strength
@@ -297,6 +309,17 @@ class PDDApiClient {
   // Status
   async getStatus(): Promise<ServerStatus> {
     return this.request<ServerStatus>('/api/v1/status');
+  }
+
+  // Auth
+  async getAuthStatus(): Promise<AuthStatus> {
+    return this.request<AuthStatus>('/api/v1/auth/status');
+  }
+
+  async logout(): Promise<LogoutResult> {
+    return this.request<LogoutResult>('/api/v1/auth/logout', {
+      method: 'POST',
+    });
   }
 
   // Commands
