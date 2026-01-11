@@ -4,21 +4,22 @@
 Write the `pdd/agentic_change_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 10-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state.
+Orchestrator for the 12-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 10-11) that iterates until no issues are found.
 
 % Requirements
 1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
-3. Run 10 steps sequentially, each as a separate `run_agentic_task()` call
+3. Run 12 steps, with steps 10-11 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
 6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files
-7. Pass extracted files to Step 10 via `files_to_stage` context variable
+7. Pass extracted files to subsequent steps via `files_to_stage` context variable
 8. **State Persistence**: Save step outputs to state file after each step completes
 9. **Step Resumption**: On start, load saved state and skip steps that have already completed
+10. **Review Loop**: Steps 10-11 repeat until step 10 outputs "No Issues Found" (max 5 iterations)
 
 % Step Execution
-For each step (1-10):
+For steps 1-9 and 12:
 1. **Check if step already completed** (from saved state) - if so, skip and use cached output
 2. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
 3. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
@@ -28,6 +29,36 @@ For each step (1-10):
 5. Store the output for use by subsequent steps
 6. **Save state to file** after step completes (for resumption)
 7. Accumulate cost: `total_cost += step_cost`
+
+% Review Loop (Steps 10-11)
+Steps 10 and 11 form a review loop that repeats until no issues are found:
+
+```python
+review_iteration = 0
+MAX_REVIEW_ITERATIONS = 5
+previous_fixes = ""
+
+while review_iteration < MAX_REVIEW_ITERATIONS:
+    review_iteration += 1
+
+    # Step 10: Identify Issues
+    step10_output = run_step_10(review_iteration, previous_fixes)
+
+    if "No Issues Found" in step10_output:
+        break  # Exit loop, proceed to step 12
+
+    # Step 11: Fix Issues
+    step11_output = run_step_11(step10_output, review_iteration)
+    previous_fixes += f"\n\nIteration {review_iteration}:\n{step11_output}"
+
+if review_iteration >= MAX_REVIEW_ITERATIONS:
+    # Warn but continue to PR creation
+    print("Warning: Maximum review iterations reached")
+```
+
+Context for review loop:
+- Step 10 receives: files_to_stage, worktree_path, step9_output, review_iteration, previous_fixes
+- Step 11 receives: step10_output, worktree_path, review_iteration
 
 % Step Sequence
 | Step | Template Name | Purpose |
@@ -41,7 +72,9 @@ For each step (1-10):
 | 7 | agentic_change_step7_architecture_LLM | Review architecture, ask questions if decisions needed |
 | 8 | agentic_change_step8_analyze_LLM | Analyze how prompts should change |
 | 9 | agentic_change_step9_implement_LLM | Implement the prompt changes |
-| 10 | agentic_change_step10_verify_LLM | Verify the changes |
+| 10 | agentic_change_step10_identify_issues_LLM | Identify issues with prompts/docs (loop start) |
+| 11 | agentic_change_step11_fix_issues_LLM | Fix identified issues (loop end) |
+| 12 | agentic_change_step12_create_pr_LLM | Create PR and link to issue |
 
 % Context Accumulation
 - Step 1 receives: issue_content
@@ -53,12 +86,15 @@ For each step (1-10):
 - Step 7 receives: issue_content, step1_output through step6_output, issue_author
 - Step 8 receives: issue_content, step1_output through step7_output
 - Step 9 receives: issue_content, step7_output, step8_output, worktree_path
-- Step 10 receives: issue_content, step9_output, worktree_path, files_to_stage
+- Step 10 receives: issue_content, step9_output, worktree_path, files_to_stage, review_iteration, previous_fixes
+- Step 11 receives: issue_content, step10_output, worktree_path, review_iteration
+- Step 12 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title
 
 % Files to Stage
-After Step 9 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Step 10:
+After Step 9 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to subsequent steps:
 - `context["files_to_stage"] = ", ".join(changed_files)`
-- This ensures Step 10 knows exactly which files to stage for review
+- Step 10 uses this to know which files to review
+- Step 12 uses this to know which files to commit
 
 % Early Exit Conditions (Hard Stops)
 
@@ -75,7 +111,10 @@ The orchestrator must parse step output to detect stop conditions:
 | 7 | Architectural decision needed | Output contains "Architectural Decision Needed" |
 | 8 | No changes needed | Output contains "No Changes Required" |
 | 9 | Implementation failed | No FILES_CREATED or FILES_MODIFIED line, or output contains "FAIL:" |
-| 10 | Verification failed | Output contains "FAIL: Verification" |
+| 10 | Issues found | (not a hard stop - loops to step 11) |
+| 10 | No issues found | Output contains "No Issues Found" (exits loop, continues to step 12) |
+| 11 | Fixes applied | (not a hard stop - loops back to step 10) |
+| 12 | PR created | (workflow complete) |
 
 **Hard stop behavior:**
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
@@ -102,8 +141,8 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
 2. In orchestrator loop, before Step 9:
    - Call `_setup_worktree(cwd, issue_number, quiet)`
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
-   - Switch working directory to worktree path for Steps 9-10
-   - Add `worktree_path` to context dict (for Step 9 and 10 prompt formatting)
+   - Switch working directory to worktree path for Steps 9-12
+   - Add `worktree_path` to context dict (for Steps 9-12 prompt formatting)
    - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
 
 3. Additional helper functions:
@@ -124,7 +163,12 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 2. **Step progress** (before each step):
    ```
-   [Step N/10] {step_description}...
+   [Step N/12] {step_description}...
+   ```
+   For review loop iterations:
+   ```
+   [Step 10/12] Identifying issues (iteration 2/5)...
+   [Step 11/12] Fixing issues (iteration 2/5)...
    ```
 
 3. **Agentic output** (during each step):
@@ -144,14 +188,15 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 6. **Final summary** (at end):
    ```
-   Change workflow complete  (or Change workflow failed)
+   Change workflow complete
       Total cost: ${total_cost:.4f}
       Files changed: {comma_separated_list}
-      Worktree: {worktree_path}
+      PR: {pr_url}
+      Review iterations: {N}
 
    Next steps:
-      cd {worktree_path}
-      pdd sync <module>  # Regenerate code
+      1. Review and merge the PR
+      2. Run `pdd sync <module>` after merge
    ```
 
 Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
@@ -191,8 +236,9 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
    - If state exists: Print `"Resuming from step {start_step} (steps 1-{last_completed_step} cached)"`
    - For steps < start_step: Use cached output from `state["step_outputs"]`
    - For steps >= start_step: Execute normally, save state after each
-   - On successful completion (step 10 passes): Clear state file
+   - On successful completion (step 12 completes): Clear state file
    - On hard stop (e.g., clarification needed): State remains for next run
+   - Review loop state: Store current iteration count in state file
 
 5. **Console output for resumption**:
    ```

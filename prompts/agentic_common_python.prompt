@@ -66,10 +66,10 @@ Export workflow-specific timeout dictionaries:
 - Complex steps (4, 5, 8): 600 seconds (reproduce, root cause, verify)
 - Most complex step (7): 1000 seconds (generate fix)
 
-`CHANGE_STEP_TIMEOUTS: Dict[int, float]` - For 10-step agentic change workflow:
+`CHANGE_STEP_TIMEOUTS: Dict[int, float]` - For 12-step agentic change workflow:
 - Simple steps (1, 2): 240 seconds (duplicate check, docs comparison)
-- Medium steps (3, 4, 5, 6, 7, 10): 340 seconds (research, clarify, docs changes, identify dev units, architecture review, verify work)
-- Complex step (8): 600 seconds (analyze prompt changes)
+- Medium steps (3, 4, 5, 6, 7, 10, 12): 340 seconds (research, clarify, docs changes, identify dev units, architecture review, identify issues, create PR)
+- Complex steps (8, 11): 600 seconds (analyze prompt changes, fix issues)
 - Most complex step (9): 1000 seconds (implement changes)
 
 `STEP_TIMEOUTS: Dict[int, float]` - Alias for `BUG_STEP_TIMEOUTS` (backward compatibility)

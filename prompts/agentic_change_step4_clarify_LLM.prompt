@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 4 of 10 in an agentic change workflow. Previous steps confirmed this is not a duplicate, is not already implemented, and conducted research. Now you must determine if the requirements are sufficiently clear.
+You are working on step 4 of 12 in an agentic change workflow. Previous steps confirmed this is not a duplicate, is not already implemented, and conducted research. Now you must determine if the requirements are sufficiently clear.
 
 **This step may STOP the workflow** if clarifying questions are needed. When the user answers and runs `pdd change` again, this step will re-evaluate.
 
@@ -63,10 +63,12 @@ You are working on step 4 of 10 in an agentic change workflow. Previous steps co
    - Critical edge cases are undefined
    - Implementation would require guessing user intent
 
-4. **If clarification needed, formulate questions**
+4. **If clarification needed, formulate questions with options**
    - Ask specific, actionable questions
    - Provide context for why the answer matters
-   - Suggest options where applicable
+   - **Always provide 2-3 possible answers** with explanations
+   - Explain the implications of each option
+   - Make a recommendation if you have a preference
    - Limit to 2-4 most critical questions
 
 % Output
@@ -122,18 +124,30 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 
 To proceed with implementation, I need clarification on the following:
 
-1. **[Topic]**: [Specific question]
-   - Context: [Why this matters for implementation]
-   - Options: [A) option1, B) option2] (if applicable)
+1. **[Topic - e.g., "Input Validation"]**
 
-2. **[Topic]**: [Specific question]
-   - Context: [Why this matters]
+   [Brief context explaining why this matters for implementation]
 
-3. **[Topic]**: [Specific question]
-   - Context: [Why this matters]
+   **Options:**
+   - **A) [Option name]**: [Description of this approach]
+     - Implications: [What this means for the implementation]
+   - **B) [Option name]**: [Description of this approach]
+     - Implications: [What this means for the implementation]
+   - **C) [Option name]**: [Description of this approach]
+     - Implications: [What this means for the implementation]
+
+   **Recommendation:** [Your suggestion if you have one, and why]
+
+2. **[Topic]**
+
+   [Context]
+
+   **Options:**
+   - **A)** [Option and implications]
+   - **B)** [Option and implications]
 
 ### Next Steps
-Please reply to this comment with your answers. Then run `pdd change {issue_url}` again to continue the workflow.
+Please reply with your preferred options (e.g., "1A, 2B"). Then run `pdd change {issue_url}` again to continue.
 
 ---
 *Workflow paused - awaiting clarification from @{issue_author}*

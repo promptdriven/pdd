@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 7 of 10 in an agentic change workflow. Previous steps identified the dev units involved. Now you must determine if there are architectural questions that require user input before designing prompt changes.
+You are working on step 7 of 12 in an agentic change workflow. Previous steps identified the dev units involved. Now you must determine if there are architectural questions that require user input before designing prompt changes.
 
 **This step may STOP the workflow** if architectural decisions are needed. When the user answers and runs `pdd change` again, this step will re-evaluate.
 

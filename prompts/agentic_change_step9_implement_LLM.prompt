@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 9 of 10 in an agentic change workflow. Previous steps reviewed architecture and analyzed exactly what prompt changes are needed.
+You are working on step 9 of 12 in an agentic change workflow. Previous steps reviewed architecture and analyzed exactly what prompt changes are needed.
 
 **This step modifies files.** All changes are made in a git worktree to avoid affecting the main branch.
 
@@ -117,7 +117,7 @@ Changes are in: `{worktree_path}`
 After review, run `pdd sync` on modified prompts to regenerate code.
 
 ---
-*Proceeding to Step 10: Verify Changes*
+*Proceeding to Step 10: Identify Issues*
 ```
 
 **If changes failed (STOP workflow):**
