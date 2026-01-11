@@ -19,8 +19,8 @@ try:
 except ImportError:
     HAS_Z3 = False
 
-# Import model classes from conftest (these are defined there, not mocked)
-from tests.server.routes.conftest import (
+# Import model classes directly from pdd.server.models
+from pdd.server.models import (
     CommandRequest,
     JobHandle,
     JobResult,
@@ -676,6 +676,77 @@ def test_z3_duration_logic():
     # If UNSAT, then duration is always >= 0 given the preconditions
     assert s.check() == z3.unsat
 
+
+# ============================================================================
+# Tests for crash and verify commands
+# ============================================================================
+
+def test_crash_command_in_allowed_list(commands_module):
+    """Test that crash command is in the allowed commands list."""
+    assert "crash" in commands_module["ALLOWED_COMMANDS"]
+
+
+def test_verify_command_in_allowed_list(commands_module):
+    """Test that verify command is in the allowed commands list."""
+    assert "verify" in commands_module["ALLOWED_COMMANDS"]
+
+
+def test_execute_crash_command_via_client(client, mock_job_manager):
+    """Test submitting a crash command via HTTP client."""
+    mock_job = MockJob(
+        id="job-crash-1",
+        status=JobStatus.QUEUED,
+        created_at=datetime.now(timezone.utc)
+    )
+    mock_job_manager.submit.return_value = mock_job
+
+    payload = {
+        "command": "crash",
+        "args": {
+            "prompt_file": "prompts/foo.prompt",
+            "code_file": "src/foo.py",
+            "program_file": "main.py",
+            "error_file": "error.log"
+        },
+        "options": {}
+    }
+
+    response = client.post("/api/v1/commands/execute", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == "job-crash-1"
+
+
+def test_execute_verify_command_via_client(client, mock_job_manager):
+    """Test submitting a verify command via HTTP client."""
+    mock_job = MockJob(
+        id="job-verify-1",
+        status=JobStatus.QUEUED,
+        created_at=datetime.now(timezone.utc)
+    )
+    mock_job_manager.submit.return_value = mock_job
+
+    payload = {
+        "command": "verify",
+        "args": {
+            "prompt_file": "prompts/foo.prompt",
+            "code_file": "src/foo.py",
+            "verification_program": "verify.py"
+        },
+        "options": {}
+    }
+
+    response = client.post("/api/v1/commands/execute", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == "job-verify-1"
+
+
+# ============================================================================
+# Z3 Formal Verification Tests
+# ============================================================================
 
 @pytest.mark.skipif(not HAS_Z3, reason="z3-solver not installed")
 def test_z3_duration_logic_extended():
