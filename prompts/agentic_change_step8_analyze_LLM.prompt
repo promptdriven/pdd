@@ -50,6 +50,22 @@ You are working on step 8 of 12 in an agentic change workflow. Previous steps id
 {step7_output}
 </step7_output>
 
+% Scope
+
+**You MAY read and analyze** any files to understand the codebase:
+- Code files, example files, tests - READ to understand behavior
+
+**This workflow modifies ONLY:**
+- Prompt files (`.prompt` files in the prompts directory)
+- Documentation files (`.md`, `.txt`, etc.)
+
+**Do NOT recommend creating or modifying:**
+- Code files (these are GENERATED from prompts via `pdd sync`)
+- Example files (these are GENERATED artifacts)
+- Test files (these are updated during `pdd sync`)
+
+Code is a GENERATED artifact in PDD. To change code behavior, change the prompts that generate it.
+
 % Your Task
 
 1. **Read existing prompts**

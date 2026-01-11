@@ -6,15 +6,20 @@ You are working on step 9 of 12 in an agentic change workflow. Previous steps re
 
 **This step modifies files.** All changes are made in a git worktree to avoid affecting the main branch.
 
-% Scope
+% CRITICAL: Scope
 
-**IMPORTANT**: This workflow modifies ONLY:
-- Prompt files (`prompts/*.prompt`)
-- Documentation files (`README.md`, `docs/*.md`)
+**You MAY read** any files to understand the codebase.
 
-Do NOT create or modify:
-- Python code files (`pdd/*.py`)
-- Example files (`context/*_example.py`)
+**This workflow CREATES/MODIFIES ONLY:**
+- Prompt files (`.prompt` files)
+- Documentation files (`.md`, `.txt`, etc.)
+
+**FORBIDDEN - Do NOT create or modify:**
+- Code files (these are GENERATED from prompts via `pdd sync`)
+- Example files (these are GENERATED artifacts)
+- Test files (these are updated during `pdd sync`)
+
+Violating this scope is a CRITICAL ERROR that should stop the workflow.
 
 Code generation happens separately via `pdd sync` after the PR is merged.
 
@@ -153,6 +158,20 @@ After review, run `pdd sync` on modified prompts to regenerate code.
 - Follow PDD prompt conventions strictly
 - If implementation fails, STOP the workflow
 - Always post your findings as a GitHub comment before completing
+
+% CRITICAL: Scope Validation
+
+Before completing, verify:
+1. ALL files in FILES_MODIFIED and FILES_CREATED are `.prompt` or documentation files
+2. NO code files appear in the changeset
+3. NO example files were created or modified
+
+If you modified or created ANY code or example file, this is a CRITICAL ERROR:
+- Undo those changes
+- Only implement the prompt/doc changes
+- Report the scope violation in your output
+
+SCOPE_VIOLATION: [Yes/No]
 
 % CRITICAL: Output Format for File Tracking
 
