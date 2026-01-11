@@ -194,6 +194,7 @@ contexts:
                 "--local",  # Force local execution for unit test
                 "--context", "test-ctx",
                 "change",
+                "--manual",  # Use legacy/manual mode
                 "change.prompt",  # CHANGE_PROMPT_FILE
                 "code.py",  # INPUT_CODE
                 "input.prompt",  # INPUT_PROMPT_FILE (positional)

@@ -193,12 +193,13 @@ def run_agentic_change(
 
     # 5. Construct Full Context
     issue_content = f"Title: {title}\n\nDescription:\n{body}\n"
-    if comments_data:
+    if comments_data and isinstance(comments_data, list):
         issue_content += "\nComments:\n"
         for comment in comments_data:
-            c_user = comment.get("user", {}).get("login", "unknown")
-            c_body = comment.get("body", "")
-            issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
+            if isinstance(comment, dict):
+                c_user = comment.get("user", {}).get("login", "unknown")
+                c_body = comment.get("body", "")
+                issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
 
     # 6. Setup Repository (Clone or Use Current)
     try:

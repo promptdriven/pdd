@@ -93,22 +93,34 @@ def change(
         if manual:
             # Manual Mode Validation and Execution
             if csv:
-                # CSV Mode: Expecting CSV_FILE and CODE_DIRECTORY
+                # CSV Mode: Expecting CSV_FILE and CODE_DIRECTORY (no input_prompt)
+                if len(args) == 3:
+                    raise click.UsageError("Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously.")
                 if len(args) != 2:
                     raise click.UsageError("CSV mode requires 2 arguments: CSV_FILE CODE_DIRECTORY")
-                
+
                 change_file, input_code = args
                 input_prompt = None
+
+                # CSV mode requires input_code to be a directory
+                if not Path(input_code).is_dir():
+                    raise click.UsageError("INPUT_CODE must be a directory when using --csv")
             else:
                 # Standard Manual Mode: Expecting 2 or 3 arguments
-                if len(args) not in (2, 3):
+                if len(args) == 3:
+                    change_file, input_code, input_prompt = args
+                    # Non-CSV mode requires input_code to be a file, not a directory
+                    if Path(input_code).is_dir():
+                        raise click.UsageError("INPUT_CODE must be a file when not using --csv")
+                elif len(args) == 2:
+                    change_file, input_code = args
+                    input_prompt = None
+                    # Without CSV mode, input_prompt_file is required
+                    raise click.UsageError("INPUT_PROMPT_FILE is required when not using --csv")
+                else:
                     raise click.UsageError(
                         "Manual mode requires 2 or 3 arguments: CHANGE_PROMPT INPUT_CODE [INPUT_PROMPT]"
                     )
-                
-                change_file = args[0]
-                input_code = args[1]
-                input_prompt = args[2] if len(args) == 3 else None
 
             # Validate file existence
             if not Path(change_file).exists():
@@ -125,7 +137,8 @@ def change(
                 input_code=input_code,
                 input_prompt_file=input_prompt,
                 output=output,
-                use_csv=csv
+                use_csv=csv,
+                budget=budget
             )
             return result, cost, model
 
@@ -192,20 +205,42 @@ def update(
     try:
         # Determine mode based on argument count
         is_repo_mode = len(files) == 0
-        
-        # Call update_main with passed parameters
-        # Note: update_main is expected to handle the logic based on 'repo' flag and 'files'
+
+        # Validate mode-specific options
+        if is_repo_mode:
+            # Repo-wide mode: --git and --output are not allowed
+            if git:
+                raise click.UsageError(
+                    "Cannot use file-specific arguments or flags like --git in repository-wide mode"
+                )
+        else:
+            # Single-file mode: --extensions and --directory are not allowed
+            if extensions:
+                raise click.UsageError(
+                    "--extensions can only be used in repository-wide mode"
+                )
+            if directory:
+                raise click.UsageError(
+                    "--directory can only be used in repository-wide mode"
+                )
+
+        # In single-file mode, the one arg is the modified code file
+        modified_code_file = files[0] if len(files) > 0 else None
+
+        # Call update_main with correct parameters
         result, cost, model = update_main(
             ctx=ctx,
-            files=files,
+            input_prompt_file=None,
+            modified_code_file=modified_code_file,
+            input_code_file=None,
+            output=output,
+            use_git=git,
             repo=is_repo_mode,
             extensions=extensions,
             directory=directory,
-            git=git,
-            output=output,
             simple=simple
         )
-        
+
         return result, cost, model
 
     except click.Abort:
