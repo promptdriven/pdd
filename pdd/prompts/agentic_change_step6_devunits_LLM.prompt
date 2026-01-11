@@ -57,10 +57,10 @@ You are working on step 6 of 12 in an agentic change workflow. Previous steps co
 
 3. **Identify affected dev units**
    For each affected module, identify the complete dev unit:
-   - **Prompt file**: `prompts/{module}_python.prompt`
-   - **Code file**: `pdd/{module}.py` (or appropriate path)
-   - **Example file**: `context/{module}_example.py`
-   - **Test file**: `tests/test_{module}.py`
+   - **Prompt file**: `prompts/{{module}}_python.prompt`
+   - **Code file**: `pdd/{{module}}.py` (or appropriate path)
+   - **Example file**: `context/{{module}}_example.py`
+   - **Test file**: `tests/test_{{module}}.py`
 
 4. **Categorize dev units**
    - **MODIFY**: Existing dev units that need changes
