@@ -1,251 +1,62 @@
-# =============================================================================
 # TEST PLAN
-# =============================================================================
-# 1. FUNCTIONALITY ANALYSIS:
-#    - Function: hello()
-#    - Parameters: None
-#    - Return Value: None (returns None explicitly or implicitly)
-#    - Side Effect: Prints the exact string "hello" followed by a newline to stdout.
 #
-# 2. EDGE CASES & VERIFICATION STRATEGY:
-#    - Correct Output: Ensure the string printed is exactly "hello".
-#      (Strategy: Unit Test using capsys)
-#    - Return Value: Ensure the function returns None.
-#      (Strategy: Unit Test)
-#    - No Arguments: Ensure the function can be called without arguments.
-#      (Strategy: Unit Test)
-#    - Formal Verification: Since this function involves I/O (printing to console)
-#      and no complex logic or arithmetic, Z3 formal verification is not
-#      applicable in the traditional sense (Z3 is for logic/constraints, not
-#      side-effect verification). However, we can model the "contract" that
-#      the output must match the expected constant.
+# 1. Unit Tests:
+#    - The primary functionality is printing to stdout. This is best tested with unit tests using output capturing (capsys fixture in pytest).
+#    - Test Case 1: Verify that calling `hello()` results in "hello\n" being written to stdout.
+#    - Test Case 2: Verify that the function returns None (as indicated by the type hint).
 #
-# 3. TEST CASES:
-#    - test_hello_output: Captures stdout and asserts it equals "hello\n".
-#    - test_hello_return_value: Asserts that the function returns None.
-#    - test_hello_no_args: Verifies function can be called without arguments.
-#    - test_hello_multiple_calls: Verifies consistent output across multiple calls.
-#    - test_hello_formal_contract: A symbolic-style check ensuring the
-#      specification "output == 'hello'" is met using Z3.
-# =============================================================================
+# 2. Z3 Formal Verification:
+#    - The function `hello` is an imperative procedure with side effects (I/O) and no logical branching, mathematical computation, or state transformations.
+#    - Z3 is a theorem prover best suited for verifying logical constraints, arithmetic properties, and state transitions.
+#    - Since `hello` takes no input and performs no logic other than a side effect, there are no constraints to model or properties to prove formally.
+#    - Therefore, Z3 verification is not applicable or beneficial for this specific function. We will rely solely on unit tests.
 
 import sys
-from pathlib import Path
+import os
 
-# Add the parent directory to sys.path to allow importing hello module
-_current_file = Path(__file__).resolve()
-_src_dir = _current_file.parent.parent / "src"
-if str(_src_dir) not in sys.path:
-    sys.path.insert(0, str(_src_dir))
-
-import pytest
-
-from hello import hello
-
-
-def test_hello_output(capsys) -> None:
-    """
-    Test that the hello() function prints the exact string 'hello' to stdout.
-    """
-    hello()
-    captured = capsys.readouterr()
-    assert captured.out == "hello\n", f"Expected 'hello\\n', got {repr(captured.out)}"
-
-
-def test_hello_return_value() -> None:
-    """
-    Test that the hello() function returns None.
-    """
-    result = hello()
-    assert result is None, "The hello function should return None."
-
-
-def test_hello_no_args() -> None:
-    """
-    Test that the function can be called without arguments as defined.
-    """
-    try:
-        hello()
-    except TypeError:
-        pytest.fail("hello() raised TypeError unexpectedly!")
-
-
-def test_hello_multiple_calls(capsys) -> None:
-    """
-    Test that calling hello() multiple times produces consistent output.
-    """
-    hello()
-    hello()
-    hello()
-    captured = capsys.readouterr()
-    assert captured.out == "hello\nhello\nhello\n", "Multiple calls should each print 'hello'"
-
-
-def test_hello_no_stderr(capsys) -> None:
-    """
-    Test that hello() does not write anything to stderr.
-    """
-    hello()
-    captured = capsys.readouterr()
-    assert captured.err == "", "hello() should not write to stderr"
-
-
-def test_hello_formal_contract() -> None:
-    """
-    Formal verification style test.
-
-    While Z3 is typically used for SMT solving of logic/arithmetic,
-    we can use it here to verify the 'contract' of the string output
-    if we treat the output as a symbolic constant.
-    """
-    try:
-        import z3
-    except ImportError:
-        pytest.skip("z3-solver not installed")
-
-    # Define the specification: The output must be the string "hello"
-    # In a real-world scenario, this would be used for complex logic.
-    # Here we demonstrate the setup for a formal check.
-
-    s = z3.Solver()
-    output_str = z3.String('output_str')
-    expected_val = "hello"
-
-    # Constraint: The output of the function must match our expected value
-    s.add(output_str == expected_val)
-
-    # Check if the specification is satisfiable (it is)
-    assert s.check() == z3.sat
-
-    # Verify that there is no case where output_str != "hello"
-    # given our implementation's hardcoded nature.
-    s.push()
-    s.add(output_str != "hello")
-    assert s.check() == z3.unsat
-    s.pop()
-
-# =============================================================================
-# TEST PLAN
-# =============================================================================
-# 1. FUNCTIONALITY ANALYSIS:
-#    - Function: hello()
-#    - Parameters: None
-#    - Return Value: None (returns None explicitly or implicitly)
-#    - Side Effect: Prints the exact string "hello" followed by a newline to stdout.
-#
-# 2. EDGE CASES & VERIFICATION STRATEGY:
-#    - Correct Output: Ensure the string printed is exactly "hello".
-#      (Strategy: Unit Test using capsys)
-#    - Return Value: Ensure the function returns None.
-#      (Strategy: Unit Test)
-#    - No Arguments: Ensure the function can be called without arguments.
-#      (Strategy: Unit Test)
-#    - Formal Verification: Since this function involves I/O (printing to console)
-#      and no complex logic or arithmetic, Z3 formal verification is not
-#      applicable in the traditional sense (Z3 is for logic/constraints, not
-#      side-effect verification). However, we can model the "contract" that
-#      the output must match the expected constant.
-#
-# 3. TEST CASES:
-#    - test_hello_output: Captures stdout and asserts it equals "hello\n".
-#    - test_hello_return_value: Asserts that the function returns None.
-#    - test_hello_no_args: Verifies function can be called without arguments.
-#    - test_hello_multiple_calls: Verifies consistent output across multiple calls.
-#    - test_hello_formal_contract: A symbolic-style check ensuring the
-#      specification "output == 'hello'" is met using Z3.
-# =============================================================================
-
-import sys
-from pathlib import Path
-
-# Add the parent directory to sys.path to allow importing hello module
-_current_file = Path(__file__).resolve()
-_src_dir = _current_file.parent.parent / "src"
-if str(_src_dir) not in sys.path:
-    sys.path.insert(0, str(_src_dir))
+# Add the src directory to the path so we can import the module
+# The code under test is at: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/src/hello.py
+# The test file is at: /Users/gregtanaka/Documents/pdd_cloud/pdd/examples/hello/tests/test_hello.py
+# We need to add the parent of the 'src' directory or the 'src' directory itself depending on package structure.
+# Given the file path structure, adding the 'src' directory allows direct import of the module 'hello'.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 import pytest
-
 from hello import hello
 
-
-def test_hello_output(capsys) -> None:
+def test_hello_output(capsys):
     """
-    Test that the hello() function prints the exact string 'hello' to stdout.
+    Verify that the hello function prints exactly "hello" followed by a newline to stdout.
     """
+    # Act
     hello()
+    
+    # Assert
     captured = capsys.readouterr()
-    assert captured.out == "hello\n", f"Expected 'hello\\n', got {repr(captured.out)}"
+    assert captured.out == "hello\n"
+    assert captured.err == ""
 
-
-def test_hello_return_value() -> None:
+def test_hello_return_value():
     """
-    Test that the hello() function returns None.
+    Verify that the hello function returns None, adhering to its type hint.
     """
+    # Act
     result = hello()
-    assert result is None, "The hello function should return None."
+    
+    # Assert
+    assert result is None
 
-
-def test_hello_no_args() -> None:
+def test_hello_idempotency(capsys):
     """
-    Test that the function can be called without arguments as defined.
+    Verify that calling the hello function multiple times produces consistent output each time.
     """
-    try:
-        hello()
-    except TypeError:
-        pytest.fail("hello() raised TypeError unexpectedly!")
-
-
-def test_hello_multiple_calls(capsys) -> None:
-    """
-    Test that calling hello() multiple times produces consistent output.
-    """
+    # Act
     hello()
     hello()
     hello()
+    
+    # Assert
     captured = capsys.readouterr()
-    assert captured.out == "hello\nhello\nhello\n", "Multiple calls should each print 'hello'"
-
-
-def test_hello_no_stderr(capsys) -> None:
-    """
-    Test that hello() does not write anything to stderr.
-    """
-    hello()
-    captured = capsys.readouterr()
-    assert captured.err == "", "hello() should not write to stderr"
-
-
-def test_hello_formal_contract() -> None:
-    """
-    Formal verification style test.
-
-    While Z3 is typically used for SMT solving of logic/arithmetic,
-    we can use it here to verify the 'contract' of the string output
-    if we treat the output as a symbolic constant.
-    """
-    try:
-        import z3
-    except ImportError:
-        pytest.skip("z3-solver not installed")
-
-    # Define the specification: The output must be the string "hello"
-    # In a real-world scenario, this would be used for complex logic.
-    # Here we demonstrate the setup for a formal check.
-
-    s = z3.Solver()
-    output_str = z3.String('output_str')
-    expected_val = "hello"
-
-    # Constraint: The output of the function must match our expected value
-    s.add(output_str == expected_val)
-
-    # Check if the specification is satisfiable (it is)
-    assert s.check() == z3.sat
-
-    # Verify that there is no case where output_str != "hello"
-    # given our implementation's hardcoded nature.
-    s.push()
-    s.add(output_str != "hello")
-    assert s.check() == z3.unsat
-    s.pop()
+    # It should print "hello\n" three times
+    assert captured.out == "hello\nhello\nhello\n"
+    assert captured.err == ""

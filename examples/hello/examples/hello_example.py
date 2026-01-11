@@ -1,44 +1,26 @@
-#!/usr/bin/env python3
-"""
-Example usage of the hello module.
+import sys
+import os
 
-This script demonstrates how to use the hello() function which prints
-a greeting message to the console.
-"""
+# Add the src directory to the Python path so we can import the module
+# The structure is:
+#   examples/hello/src/hello.py
+#   examples/hello/examples/hello_example.py
+# We need to go up one level from 'examples' to 'hello', then down into 'src'
+current_dir = os.path.dirname(os.path.abspath(__file__))
+src_path = os.path.join(current_dir, '..', 'src')
+sys.path.insert(0, src_path)
 
-try:
-    # Attempt to import the hello function from the module
-    from hello import hello
-except ImportError:
-    # Fallback implementation if the module is not found in the path
-    def hello() -> None:
-        """
-        Prints the greeting message "hello".
-        """
-        print("hello")
+from hello import hello
 
-
-def main() -> None:
+def main():
     """
-    Main function demonstrating the usage of hello().
-    
-    The hello() function takes no arguments and returns nothing.
-    It simply prints the word "hello" to the console.
+    Demonstrates the usage of the hello function.
     """
+    print("Calling the hello function from the module:")
     
-    # Basic usage - call hello() to print "hello"
-    print("Calling hello():")
+    # The hello function takes no arguments and returns None.
+    # It simply prints "hello" to standard output.
     hello()
-    
-    # The function can be called multiple times
-    print("\nCalling hello() three times:")
-    for i in range(3):
-        hello()
-    
-    # Demonstrating that hello() returns None
-    print("\nDemonstrating return value:")
-    result = hello()
-    print(f"Return value: {result}")  # Will print: Return value: None
 
 
 if __name__ == "__main__":
