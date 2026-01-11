@@ -979,6 +979,10 @@ def sync_orchestration(
         """Get the confirmation callback from the app if available.
 
         Once user confirms, we remember it so subsequent operations don't ask again.
+
+        Fix for Issue #277: In headless mode, we now return a wrapper callback
+        that uses click.confirm AND sets user_confirmed_overwrite[0] = True,
+        so subsequent calls auto-confirm instead of prompting repeatedly.
         """
         if user_confirmed_overwrite[0]:
             # User already confirmed, return a callback that always returns True
@@ -991,6 +995,26 @@ def sync_orchestration(
                     user_confirmed_overwrite[0] = True
                 return result
             return confirming_callback
+
+        # Fix #277: In headless mode (app_ref is None), create a wrapper callback
+        # that sets the flag after confirmation, preventing repeated prompts
+        if confirm_callback is None:
+            def headless_confirming_callback(msg: str, title: str) -> bool:
+                """Headless mode callback that remembers user confirmation."""
+                try:
+                    prompt = msg or "Overwrite existing files?"
+                    result = click.confirm(
+                        click.style(prompt, fg="yellow"),
+                        default=True,
+                        show_default=True
+                    )
+                except (click.Abort, EOFError):
+                    return False
+                if result:
+                    user_confirmed_overwrite[0] = True
+                return result
+            return headless_confirming_callback
+
         return confirm_callback  # Fall back to provided callback
 
     def sync_worker_logic():
