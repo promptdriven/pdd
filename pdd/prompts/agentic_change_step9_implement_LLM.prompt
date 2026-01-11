@@ -143,6 +143,33 @@ After review, run `pdd sync` on modified prompts to regenerate code.
 
 - All changes must be in the worktree, not the main repo
 - Follow PDD prompt conventions strictly
-- Include FILES_MODIFIED and FILES_CREATED lines for tracking
 - If implementation fails, STOP the workflow
 - Always post your findings as a GitHub comment before completing
+
+% CRITICAL: Output Format for File Tracking
+
+Your final response MUST include these exact lines for the orchestrator to parse:
+
+```
+FILES_MODIFIED: file1.py, file2.py, file3.py
+FILES_CREATED: file4.py, file5.py
+```
+
+These lines MUST:
+- Start with `FILES_MODIFIED:` or `FILES_CREATED:` exactly (case-insensitive)
+- Be followed by a comma-separated list of file paths on the SAME LINE
+- NOT use markdown bullets, numbered lists, or multi-line formats
+- Appear in your final summary (not just in the GitHub comment)
+
+Example of CORRECT format:
+```
+FILES_MODIFIED: prompts/sync_main_python.prompt, prompts/fix_error_loop_python.prompt
+FILES_CREATED: prompts/parallel_fix_python.prompt, context/parallel_fix_example.py
+```
+
+Example of WRONG format (will cause workflow failure):
+```
+### Files Modified:
+1. prompts/sync_main_python.prompt
+2. prompts/fix_error_loop_python.prompt
+```
