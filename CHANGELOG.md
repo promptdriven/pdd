@@ -1,3 +1,27 @@
+## v0.0.109 (2026-01-10)
+
+### Feat
+
+- add sync status, models, and match checking APIs
+- add automatic progress tracking for spawned terminal jobs
+- enhance frontend with code panel and ReactFlow graph
+- add dismiss button for spawned terminal jobs
+- add terminal spawning for isolated command execution
+- add thinking allocation indicator to metrics bar
+- add --local option to PromptSpace execution options
+- add --local option to global options in frontend
+- enhance pdd connect command and frontend interface
+
+### Fix
+
+- replace deprecated substr with slice in useJobs
+- use project_root for spawned terminal working directory
+- update test_websocket mocks for JobStatus import change
+- track spawned terminal jobs in dashboard
+- convert hyphens to underscores in click command params
+- use msg parameter in headless confirmation callback
+- remember confirmation in headless mode (Issue #277)
+
 ## v0.0.108 (2026-01-09)
 
 ### Feat
