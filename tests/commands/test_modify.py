@@ -197,20 +197,19 @@ def test_change_agentic_invalid_args(runner, mock_run_agentic_change, mock_handl
     mock_run_agentic_change.assert_not_called()
 
 def test_change_manual_standard_success(runner, mock_change_main, mock_path_exists):
-    """Test manual mode (standard) with 3 arguments."""
+    """Test manual mode (standard) with 2 arguments."""
     mock_change_main.return_value = ("Modified Prompt", 0.5, "gpt-3.5")
-
-    # We mock Path.exists to return True and Path.is_dir to return False (it's a file)
-    with patch('pdd.commands.modify.Path.exists', return_value=True), \
-         patch('pdd.commands.modify.Path.is_dir', return_value=False):
-        result = runner.invoke(change, ['--manual', 'change.prompt', 'code.py', 'input.prompt'])
-
+    
+    # We mock Path.exists to return True so we don't need real files
+    with patch('pdd.commands.modify.Path.exists', return_value=True):
+        result = runner.invoke(change, ['--manual', 'change.prompt', 'code.py'])
+    
     assert result.exit_code == 0
     mock_change_main.assert_called_once()
     assert mock_change_main.call_args[1]['use_csv'] is False
     assert mock_change_main.call_args[1]['change_prompt_file'] == 'change.prompt'
     assert mock_change_main.call_args[1]['input_code'] == 'code.py'
-    assert mock_change_main.call_args[1]['input_prompt_file'] == 'input.prompt'
+    assert mock_change_main.call_args[1]['input_prompt_file'] is None
 
 def test_change_manual_standard_3args(runner, mock_change_main):
     """Test manual mode (standard) with 3 arguments."""
@@ -225,12 +224,10 @@ def test_change_manual_standard_3args(runner, mock_change_main):
 def test_change_manual_csv_success(runner, mock_change_main):
     """Test manual mode (CSV) with 2 arguments."""
     mock_change_main.return_value = ("Batch Done", 2.0, "gpt-4")
-
-    # CSV mode requires input_code to be a directory
-    with patch('pdd.commands.modify.Path.exists', return_value=True), \
-         patch('pdd.commands.modify.Path.is_dir', return_value=True):
+    
+    with patch('pdd.commands.modify.Path.exists', return_value=True):
         result = runner.invoke(change, ['--manual', '--csv', 'batch.csv', 'src_dir'])
-
+    
     assert result.exit_code == 0
     mock_change_main.assert_called_once()
     assert mock_change_main.call_args[1]['use_csv'] is True
@@ -239,11 +236,10 @@ def test_change_manual_csv_success(runner, mock_change_main):
 
 def test_change_manual_file_not_found(runner, mock_change_main, mock_handle_error):
     """Test manual mode validates file existence."""
-    # Mock Path.exists to return False and is_dir to return False
-    with patch('pdd.commands.modify.Path.exists', return_value=False), \
-         patch('pdd.commands.modify.Path.is_dir', return_value=False):
-        result = runner.invoke(change, ['--manual', 'missing.prompt', 'code.py', 'input.prompt'])
-
+    # Mock Path.exists to return False
+    with patch('pdd.commands.modify.Path.exists', return_value=False):
+        result = runner.invoke(change, ['--manual', 'missing.prompt', 'code.py'])
+    
     mock_change_main.assert_not_called()
     mock_handle_error.assert_called_once()
     # Ensure the error message relates to file not found
@@ -256,26 +252,26 @@ def test_change_manual_file_not_found(runner, mock_change_main, mock_handle_erro
 def test_update_repo_mode(runner, mock_update_main):
     """Test update command in repo mode (no file args)."""
     mock_update_main.return_value = ("Updated", 0.1, "gpt-4")
-
+    
     result = runner.invoke(update, ['--extensions', '.py,.js'])
-
+    
     assert result.exit_code == 0
     mock_update_main.assert_called_once()
     assert mock_update_main.call_args[1]['repo'] is True
     assert mock_update_main.call_args[1]['extensions'] == '.py,.js'
-    assert mock_update_main.call_args[1]['modified_code_file'] is None
+    assert len(mock_update_main.call_args[1]['files']) == 0
 
 def test_update_single_file_mode(runner, mock_update_main):
     """Test update command in single file mode (args provided)."""
     mock_update_main.return_value = ("Updated", 0.1, "gpt-4")
-
+    
     result = runner.invoke(update, ['file1.py', '--git'])
-
+    
     assert result.exit_code == 0
     mock_update_main.assert_called_once()
     assert mock_update_main.call_args[1]['repo'] is False
-    assert mock_update_main.call_args[1]['use_git'] is True
-    assert mock_update_main.call_args[1]['modified_code_file'] == 'file1.py'
+    assert mock_update_main.call_args[1]['git'] is True
+    assert mock_update_main.call_args[1]['files'] == ('file1.py',)
 
 def test_update_simple_flag(runner, mock_update_main):
     """Test update command passes simple flag."""
