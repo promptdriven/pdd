@@ -116,7 +116,20 @@ class ConnectionManager:
                 await connection.send_text(data)
             except Exception:
                 to_remove.append(connection)
-        
+
+        for connection in to_remove:
+            self.disconnect(connection)
+
+    async def broadcast_to_all(self, message: WSMessage):
+        """Send a message to ALL connected clients."""
+        data = message.model_dump_json()
+        to_remove = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(data)
+            except Exception:
+                to_remove.append(connection)
+
         for connection in to_remove:
             self.disconnect(connection)
 
@@ -405,6 +418,27 @@ async def emit_job_complete(job_id: str, result: Any, success: bool, cost: float
         }
     )
     await manager.broadcast_job_message(job_id, msg)
+
+
+async def emit_spawned_job_complete(job_id: str, command: str, success: bool, exit_code: int):
+    """
+    Helper to emit spawned job completion to ALL connected clients.
+
+    Spawned terminal jobs don't have WebSocket subscriptions, so we broadcast
+    to all connected clients. The frontend dashboard can filter by job_id.
+    """
+    msg = WSMessage(
+        type="spawned_job_complete",
+        data={
+            "job_id": job_id,
+            "command": command,
+            "success": success,
+            "exit_code": exit_code,
+            "status": "completed" if success else "failed",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    )
+    await manager.broadcast_to_all(msg)
 
 
 # ============================================================================

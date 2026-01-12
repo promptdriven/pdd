@@ -232,6 +232,20 @@ export interface LogoutResult {
   message: string;
 }
 
+export interface LoginResponse {
+  success: boolean;
+  user_code?: string;
+  verification_uri?: string;
+  expires_in?: number;
+  poll_id?: string;
+  error?: string;
+}
+
+export interface LoginPollResponse {
+  status: 'pending' | 'completed' | 'expired' | 'error';
+  message?: string;
+}
+
 // Global options that can be passed to any generation command
 export interface GenerationGlobalOptions {
   strength?: number;      // 0-1, model strength
@@ -320,6 +334,16 @@ class PDDApiClient {
     return this.request<LogoutResult>('/api/v1/auth/logout', {
       method: 'POST',
     });
+  }
+
+  async startLogin(): Promise<LoginResponse> {
+    return this.request<LoginResponse>('/api/v1/auth/login', {
+      method: 'POST',
+    });
+  }
+
+  async pollLoginStatus(pollId: string): Promise<LoginPollResponse> {
+    return this.request<LoginPollResponse>(`/api/v1/auth/login/poll/${encodeURIComponent(pollId)}`);
   }
 
   // Commands
