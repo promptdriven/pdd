@@ -2,3 +2,64 @@
     - Created files should be in the `output` directory.
     - Data files (language_format.csv and llm_model.csv) already exist in the PDD_PATH/`data` directory. Do not write over them. It already contains data for popular languages and LLM models and can be used for tests.
     - The PDD_PATH environment variable is already set.
+
+% PYTEST TEST ISOLATION AND ANTI-POLLUTION RULES:
+% CRITICAL: Generated tests MUST be isolated and not pollute state for other tests. Follow these rules strictly:
+
+% 1. ENVIRONMENT VARIABLES:
+    - ALWAYS use monkeypatch.setenv() or monkeypatch.delenv() instead of os.environ["VAR"] = "value"
+    - NEVER use direct os.environ manipulation - it persists beyond the test and pollutes other tests
+    - BAD:  os.environ["API_KEY"] = "test_key"  # POLLUTION: persists after test ends
+    - GOOD: monkeypatch.setenv("API_KEY", "test_key")  # Auto-cleaned by pytest
+
+% 2. MOCKING EXTERNAL DEPENDENCIES:
+    - Use context managers or monkeypatch for mocks - they auto-cleanup after the test
+    - Prefer monkeypatch.setattr() over unittest.mock.patch() decorators at module level
+    - BAD:  @patch('module.func') at module/class level  # Can leak if exception occurs
+    - GOOD: monkeypatch.setattr('module.func', mock_func)  # Always cleaned up
+    - GOOD: with patch('module.func') as mock:  # Context manager ensures cleanup
+
+% 3. FIXTURE CLEANUP WITH YIELD:
+    - Use yield-based fixtures with cleanup code after yield for any resources
+    - Prefer function-scoped fixtures over module or session scope to ensure isolation
+    - BAD:  @pytest.fixture(scope="module") without cleanup  # State leaks between tests
+    - GOOD: @pytest.fixture with yield and cleanup after yield  # Always cleans up
+    - Example of proper fixture:
+        @pytest.fixture
+        def temp_resource():
+            resource = setup_resource()
+            yield resource
+            resource.cleanup()  # Always runs after test, even on failure
+
+% 4. SYS.MODULES MANIPULATION:
+    - AVOID manipulating sys.modules directly whenever possible
+    - If unavoidable, ALWAYS save and restore in try/finally or fixture with yield
+    - BAD:  sys.modules["module"] = mock_module  # Pollutes all subsequent tests
+    - GOOD: Use a fixture that saves, mocks, and restores:
+        @pytest.fixture
+        def mock_module():
+            saved = sys.modules.get("module")
+            sys.modules["module"] = MagicMock()
+            yield
+            if saved is not None:
+                sys.modules["module"] = saved
+            elif "module" in sys.modules:
+                del sys.modules["module"]
+
+% 5. FILE SYSTEM OPERATIONS:
+    - ALWAYS use the tmp_path fixture for creating temporary files and directories
+    - NEVER create files in the working directory or fixed paths
+    - BAD:  with open("test_output.txt", "w") as f: ...  # Leaves file behind
+    - GOOD: def test_file(tmp_path): (tmp_path / "test_output.txt").write_text(...)
+
+% 6. GLOBAL/MODULE STATE:
+    - Never modify global variables or module-level state directly in tests
+    - Use monkeypatch.setattr() for any module-level variables that need changing
+    - Reset any singleton instances using fixtures with proper teardown
+
+% SUMMARY OF GOOD PATTERNS:
+    - Use tmp_path fixture for file operations
+    - Use monkeypatch fixture for environment variables and attributes
+    - Use pytest.raises() as context manager for exception testing
+    - Prefer function-scoped fixtures over module or session scope
+    - Use yield in fixtures to ensure cleanup runs even on test failure
