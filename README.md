@@ -2024,6 +2024,7 @@ PDD automatically detects the appropriate context based on:
 3. **Fallback**: Uses `default` context if no path matches
 
 **Available Context Settings**:
+- `prompts_dir`: Directory where prompt files are located (default: "prompts")
 - `generate_output_path`: Where generated code files are saved
 - `test_output_path`: Where test files are saved
 - `example_output_path`: Where example files are saved
@@ -2068,6 +2069,7 @@ PDD uses several environment variables to customize its behavior:
 
 **Note**: When using `.pddrc` configuration, context-specific settings take precedence over these global environment variables.
 
+- **`PDD_PROMPTS_DIR`**: Default directory where prompt files are located (default: "prompts").
 - **`PDD_GENERATE_OUTPUT_PATH`**: Default path for the `generate` command.
 - **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
 - **`PDD_TEST_OUTPUT_PATH`**: Default path for the unit test file.
