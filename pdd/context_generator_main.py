@@ -115,18 +115,18 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                 if format_lower == "md":
                     # Replace extension with .md to match format constraint
                     resolved_output = str(output_path.with_suffix(".md"))
-                elif format_lower == "py":
-                    # For py format, determine the correct language extension from construct_paths
-                    # Extract the extension from the format-adjusted path, or use user's path if unavailable
-                    format_adjusted_path = output_file_paths.get("output")
-                    if format_adjusted_path:
-                        # Get the extension from the format-adjusted path
-                        adjusted_ext = Path(format_adjusted_path).suffix
-                        # Apply this extension to the user's output path
-                        resolved_output = str(output_path.with_suffix(adjusted_ext))
-                    else:
-                        # Fallback to user's path if format-adjusted path unavailable
-                        resolved_output = output
+                elif format_lower == "code":
+                    # For py format, determine the correct language extension based on language
+                    # Use the same mapping as construct_paths for consistency
+                    builtin_ext_map = {
+                        'python': '.py', 'javascript': '.js', 'typescript': '.ts', 'java': '.java',
+                        'cpp': '.cpp', 'c': '.c', 'go': '.go', 'ruby': '.rb', 'rust': '.rs',
+                        'kotlin': '.kt', 'swift': '.swift', 'csharp': '.cs', 'php': '.php',
+                        'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
+                        'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
+                    }
+                    lang_ext = builtin_ext_map.get(language.lower() if language else '', f".{language.lower()}" if language else '.py')
+                    resolved_output = str(output_path.with_suffix(lang_ext))
                 else:
                     # Fallback (shouldn't happen due to click.Choice validation)
                     resolved_output = output
@@ -198,8 +198,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             generated_code, total_cost, model_name = context_generator(code_module=code_content, prompt=prompt_content, language=language, strength=strength, temperature=temperature, verbose=not quiet, source_file_path=source_file_path, example_file_path=example_file_path, module_name=module_name, time=ctx.obj.get('time'))
         if not generated_code:
             raise click.UsageError("Example generation failed, no code produced.")
-        # Only validate Python syntax when format is "py" (default) or None, not when format is "md"
-        if language and language.lower() == "python" and (format is None or format.lower() == "py"):
+        # Only validate Python syntax when format is "code" (default) or None, not when format is "md"
+        if language and language.lower() == "python" and (format is None or format.lower() == "code"):
             generated_code = _validate_and_fix_python_syntax(generated_code, quiet)
         if resolved_output:
             out_path = Path(resolved_output)

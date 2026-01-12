@@ -163,10 +163,10 @@ def generate(
 )
 @click.option(
     "--format",
-    type=click.Choice(["py", "md"], case_sensitive=False),
-    default="py",
+    type=click.Choice(["code", "md"], case_sensitive=False),
+    default="code",
     show_default=True,
-    help="Output format: 'py' (default, uses language extension) or 'md' (markdown).",
+    help="Output format: 'code' (default, uses language extension) or 'md' (markdown).",
 )
 @click.pass_context
 @log_operation("example", updates_fingerprint=True)
