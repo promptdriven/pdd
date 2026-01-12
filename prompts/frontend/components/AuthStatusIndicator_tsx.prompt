@@ -1,0 +1,64 @@
+% You are an expert React/TypeScript engineer. Your goal is to write `pdd/frontend/components/AuthStatusIndicator.tsx`.
+
+% Role & Scope
+  This component displays the current PDD Cloud authentication status in the header.
+  It shows whether the user is logged in or not, and triggers a callback when
+  clicked to open the re-authentication modal.
+
+% Requirements
+  1. **Authentication Status Display**:
+     - Fetch auth status on mount using api.getAuthStatus()
+     - Show loading state while checking status
+     - Display different visual states:
+       - Authenticated: Blue color scheme with "Logged In" text
+       - Not authenticated: Yellow/warning color scheme with "Login" text
+     - Include key icon to indicate authentication purpose
+     - Include status dot (solid for authenticated, pulsing for not authenticated)
+
+  2. **Polling**:
+     - Poll auth status every 30 seconds to detect changes
+     - Clean up interval on unmount
+
+  3. **Interaction**:
+     - Entire component is clickable (button element)
+     - Calls onReauth callback when clicked
+     - Show helpful tooltip explaining the action
+
+  4. **Responsive Design**:
+     - Compact view on small screens (icon + dot only)
+     - Full view on larger screens (icon + text + dot)
+     - Smooth transitions between states
+
+  5. **Accessibility**:
+     - Proper button semantics
+     - Descriptive title attribute
+     - Visible focus states
+
+  6. **Error Handling**:
+     - On fetch error, default to unauthenticated state
+     - Continue polling despite transient errors
+
+% Dependencies
+  <api_note>
+  Use api client from '../api':
+  - api.getAuthStatus(): Promise<AuthStatus>
+  - AuthStatus: { authenticated: boolean, cached: boolean, expires_at: number | null }
+  </api_note>
+
+% Props Interface
+  ```typescript
+  interface AuthStatusIndicatorProps {
+    onReauth: () => void;  // Callback when user wants to manage authentication
+  }
+  ```
+
+% Styling
+  - Use Tailwind CSS classes
+  - Blue theme for authenticated (bg-blue-500/10, text-blue-400, border-blue-500/20)
+  - Yellow theme for not authenticated (bg-yellow-500/10, text-yellow-400, border-yellow-500/20)
+  - Rounded pill shape (rounded-full)
+  - Hover state transitions
+
+% Deliverables
+  - Code: `pdd/frontend/components/AuthStatusIndicator.tsx`
+  - Export: default export of AuthStatusIndicator component

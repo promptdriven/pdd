@@ -1,0 +1,116 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/auth.py`.
+
+% Role & Scope
+  This module provides REST API endpoints for authentication management.
+  It enables the web frontend to check authentication status, logout (clear tokens),
+  and trigger GitHub Device Flow login directly from the browser without
+  requiring users to run CLI commands.
+
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+
+% Documentation References
+  - FastAPI Routers:
+    <web>https://fastapi.tiangolo.com/tutorial/bigger-applications/</web>
+  - FastAPI Background Tasks:
+    <web>https://fastapi.tiangolo.com/tutorial/background-tasks/</web>
+  - GitHub Device Flow:
+    <web>https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow</web>
+
+% Requirements
+  1. **GET /auth/status**:
+     - Returns: AuthStatus with authentication state
+     - Use get_jwt_cache_info() from pdd.auth_service to check JWT cache
+     - Use has_refresh_token() from pdd.auth_service to check keyring
+     - Return authenticated=true if either exists and valid
+     - Include expires_at timestamp if JWT is cached
+
+  2. **POST /auth/logout**:
+     - Use clear_jwt_cache() from pdd.auth_service to clear JWT cache
+     - Use clear_refresh_token() from pdd.auth_service to clear keyring
+     - Returns: LogoutResult with success status and message
+     - Handle missing files/tokens gracefully (already logged out)
+
+  3. **POST /auth/login**:
+     - Initiates GitHub Device Flow authentication
+     - Clears existing tokens first (force fresh login)
+     - Calls DeviceFlow.request_device_code() from get_jwt_token module
+     - Opens browser automatically to verification URL
+     - Starts background polling task for token completion
+     - Returns: LoginResponse with:
+       - success: bool
+       - user_code: str (e.g., "ABCD-1234")
+       - verification_uri: str (e.g., "https://github.com/login/device")
+       - expires_in: int (seconds until code expires)
+       - poll_id: str (UUID for polling status)
+       - error: str (if failed)
+
+  4. **GET /auth/login/poll/{poll_id}**:
+     - Poll for authentication completion status
+     - Returns: LoginPollResponse with:
+       - status: "pending" | "completed" | "expired" | "error"
+       - message: Optional status message
+     - Clean up completed/expired sessions after timeout
+
+  5. **Background Authentication Task**:
+     - Poll GitHub for device code authorization
+     - On success: exchange GitHub token for Firebase JWT
+     - Store refresh token in keyring
+     - Cache JWT in ~/.pdd/jwt_cache
+     - Update session status to "completed"
+     - On timeout: update session status to "expired"
+     - On error: update session status to "error" with message
+
+  6. **Session Management**:
+     - Store active login sessions in module-level dict
+     - Key: poll_id (UUID string)
+     - Value: dict with status, message, created_at
+     - Clean up stale sessions after 15 minutes
+
+  7. **Environment Variables**:
+     - GITHUB_CLIENT_ID: Required for GitHub Device Flow
+     - NEXT_PUBLIC_FIREBASE_API_KEY: Required for Firebase auth
+     - Return appropriate error if not set
+
+  8. **Error Handling**:
+     - AuthError from get_jwt_token for auth failures
+     - NetworkError for network issues
+     - TokenError for token exchange failures
+     - UserCancelledError if user denies on GitHub
+
+% Dependencies
+  <auth_service_note>
+  Use shared auth functions from pdd/auth_service.py:
+  - get_jwt_cache_info() -> (is_valid: bool, expires_at: Optional[float])
+  - has_refresh_token() -> bool
+  - clear_jwt_cache() -> (success: bool, error: Optional[str])
+  - clear_refresh_token() -> (success: bool, error: Optional[str])
+  Import these with aliases to maintain internal naming convention:
+    from pdd.auth_service import (
+        get_jwt_cache_info as _get_jwt_cache_info,
+        has_refresh_token as _has_refresh_token,
+        clear_jwt_cache as _clear_jwt_cache,
+        clear_refresh_token as _clear_refresh_token,
+    )
+  </auth_service_note>
+  <get_jwt_token_note>
+  Use DeviceFlow, FirebaseAuthenticator, and exceptions from pdd/get_jwt_token.py:
+  - DeviceFlow.request_device_code() -> dict with user_code, verification_uri, device_code, interval, expires_in
+  - DeviceFlow.poll_for_token(device_code, interval, expires_in) -> github_token
+  - FirebaseAuthenticator.exchange_github_token_for_firebase_token(github_token) -> (id_token, refresh_token)
+  - FirebaseAuthenticator._store_refresh_token(refresh_token)
+  - _cache_jwt(id_token) helper function
+  - AuthError, NetworkError, TokenError, UserCancelledError exceptions
+  </get_jwt_token_note>
+
+% Instructions
+  - Create router with prefix="/api/v1/auth", tags=["auth"]
+  - Use Pydantic BaseModel for request/response schemas
+  - Use FastAPI BackgroundTasks for async polling
+  - Use webbrowser.open() to launch verification URL
+  - Import auth helpers from pdd.auth_service for status/logout operations
+  - Use uuid.uuid4() for poll_id generation
+  - Import DeviceFlow and related classes lazily in endpoint functions
+
+% Deliverables
+  - Code: `pdd/server/routes/auth.py`
+  - Export: router (APIRouter instance)
