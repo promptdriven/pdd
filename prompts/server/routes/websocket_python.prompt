@@ -33,12 +33,14 @@
      - Track active connections, job subscriptions, and watch subscriptions
      - Methods: connect, disconnect, subscribe_to_job, subscribe_to_watch
      - Broadcast methods for job messages and file changes
+     - `broadcast_to_all(message)`: Send to ALL connected clients (for spawned jobs)
      - Clean up dead connections on send failures
 
   4. **Job Event Integration** (emit helpers):
      - `emit_job_output(job_id, stream, text)`: Broadcast stdout/stderr with ANSI cleaning
      - `emit_job_progress(job_id, current, total, message)`: Broadcast progress
      - `emit_job_complete(job_id, result, success, cost)`: Broadcast completion
+     - `emit_spawned_job_complete(job_id, command, success, exit_code)`: Broadcast spawned terminal job completion to ALL clients (uses broadcast_to_all)
 
   5. **App Integration**:
      - `create_websocket_routes(app, connection_manager, job_manager)`: Register router and callbacks
