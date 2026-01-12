@@ -1,0 +1,68 @@
+% You are an expert Python engineer. Your goal is to write `pdd/auth_service.py`.
+
+% Role & Scope
+  This module provides shared authentication helper functions for PDD Cloud.
+  It centralizes auth logic used by both:
+  - REST API endpoints (pdd/server/routes/auth.py) for the web frontend
+  - CLI commands (pdd/commands/auth.py) for terminal-based auth management
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **Constants**:
+     - JWT_CACHE_FILE: Path to ~/.pdd/jwt_cache
+     - KEYRING_SERVICE_NAME: "firebase-auth-pdd"
+     - KEYRING_USER_NAME: "refresh_token"
+
+  2. **get_jwt_cache_info**:
+     - Check if JWT cache file exists and contains a valid token.
+     - Returns Tuple[bool, Optional[float]] - (is_valid, expires_at).
+     - Token is valid if expires_at > current_time + 300 (5 minute buffer).
+     - Return (False, None) if file doesn't exist or is invalid.
+
+  3. **has_refresh_token**:
+     - Check if refresh token exists in system keyring.
+     - Try standard keyring first, fall back to keyrings.alt.file.PlaintextKeyring.
+     - Returns bool - True if token exists.
+     - Handle ImportError gracefully (return False).
+
+  4. **clear_jwt_cache**:
+     - Delete the JWT cache file if it exists.
+     - Returns Tuple[bool, Optional[str]] - (success, error_message).
+     - Return (True, None) if file doesn't exist (nothing to clear).
+
+  5. **clear_refresh_token**:
+     - Delete refresh token from system keyring.
+     - Try standard keyring first, fall back to keyrings.alt.file.PlaintextKeyring.
+     - Returns Tuple[bool, Optional[str]] - (success, error_message).
+     - Ignore "not found" errors (token already deleted).
+     - Return (True, None) if no keyring available.
+
+  6. **get_auth_status**:
+     - Get current authentication status.
+     - Check JWT cache first, then check for refresh token.
+     - Returns Dict with keys:
+       - authenticated: bool
+       - cached: bool (True if using cached JWT)
+       - expires_at: Optional[float]
+
+  7. **logout**:
+     - Clear all authentication tokens.
+     - Call both clear_jwt_cache() and clear_refresh_token().
+     - Returns Tuple[bool, Optional[str]] - (success, combined_error_message).
+     - Collect errors from both operations if any.
+
+% Dependencies
+  <get_jwt_token><include>context/get_jwt_token_example.py</include></get_jwt_token>
+
+% Instructions
+  - Use pathlib.Path for file operations.
+  - Use json module for reading JWT cache.
+  - Use time.time() for timestamp comparisons.
+  - Import keyring inside functions to handle ImportError gracefully.
+  - All functions should be synchronous (not async).
+  - Include comprehensive docstrings with Args and Returns sections.
+
+% Deliverables
+  - Code: `pdd/auth_service.py`
+  - Exports: get_jwt_cache_info, has_refresh_token, clear_jwt_cache, clear_refresh_token, get_auth_status, logout, JWT_CACHE_FILE, KEYRING_SERVICE_NAME, KEYRING_USER_NAME
