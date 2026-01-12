@@ -192,7 +192,7 @@ def example_example_command():
     
     Options:
         --output PATH: Where to save the generated example code
-        --format FORMAT: Output format (default: py). Valid values: py (uses language extension), md (markdown)
+        --format FORMAT: Output format (default: code). Valid values: code (uses language extension), md (markdown)
     
     Returns:
         Tuple[str, float, str]: (example_code, total_cost_in_dollars, model_name)
