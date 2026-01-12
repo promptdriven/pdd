@@ -98,15 +98,40 @@ async def _run_cloud_generation(prompt_content: str, code_content: str, language
         except Exception as e:
             return None, 0.0, f"Cloud error: {e}"
 
-def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str]) -> Tuple[str, float, str]:
+def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str], format: Optional[str] = None) -> Tuple[str, float, str]:
     try:
         input_file_paths = {"prompt_file": prompt_file, "code_file": code_file}
         command_options = {"output": output}
+        if format is not None:
+            command_options["format"] = format
         resolved_config, input_strings, output_file_paths, language = construct_paths(input_file_paths=input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="example", command_options=command_options, context_override=ctx.obj.get('context'), confirm_callback=ctx.obj.get('confirm_callback'))
         prompt_content = input_strings.get("prompt_file", "")
         code_content = input_strings.get("code_file", "")
         if output and not output.endswith("/") and not Path(output).is_dir():
-            resolved_output = output
+            # When format is specified, ensure the output path uses the correct extension
+            if format is not None:
+                output_path = Path(output)
+                format_lower = format.lower()
+                if format_lower == "md":
+                    # Replace extension with .md to match format constraint
+                    resolved_output = str(output_path.with_suffix(".md"))
+                elif format_lower == "py":
+                    # For py format, determine the correct language extension from construct_paths
+                    # Extract the extension from the format-adjusted path, or use user's path if unavailable
+                    format_adjusted_path = output_file_paths.get("output")
+                    if format_adjusted_path:
+                        # Get the extension from the format-adjusted path
+                        adjusted_ext = Path(format_adjusted_path).suffix
+                        # Apply this extension to the user's output path
+                        resolved_output = str(output_path.with_suffix(adjusted_ext))
+                    else:
+                        # Fallback to user's path if format-adjusted path unavailable
+                        resolved_output = output
+                else:
+                    # Fallback (shouldn't happen due to click.Choice validation)
+                    resolved_output = output
+            else:
+                resolved_output = output
         else:
             resolved_output = output_file_paths.get("output")
         is_local = ctx.obj.get("local", False)

@@ -1064,6 +1064,19 @@ def construct_paths(
             'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini'
         }
         file_extension = builtin_ext_map.get(language.lower(), f".{language.lower()}" if language else '')
+    
+    # Handle --format option for commands that support it (e.g., example)
+    format_option = command_options.get("format")
+    if format_option and command == "example":
+        format_lower = format_option.lower()
+        if format_lower == "md":
+            file_extension = ".md"
+        elif format_lower == "py":
+            # Keep the language-based extension (file_extension already set above)
+            pass
+        else:
+            # This should not happen due to click.Choice validation, but handle it anyway
+            raise click.UsageError(f"Unknown format '{format_option}'. Valid values: py, md")
 
 
 

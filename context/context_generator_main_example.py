@@ -13,6 +13,7 @@ def run_example():
         - prompt_file (str): Path to the .prompt file used to generate the original code.
         - code_file (str): Path to the existing source code file.
         - output (Optional[str]): Path to save the generated example. If None, uses default naming.
+        - format (Optional[str]): Output format (default: None, uses 'py'). Valid values: 'py' (uses language extension), 'md' (markdown).
 
     Outputs of context_generator_main:
         - generated_code (str): The resulting example code string.
