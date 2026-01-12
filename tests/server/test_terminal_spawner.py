@@ -197,3 +197,262 @@ class TestWindowsSpawner:
         with patch('subprocess.Popen', side_effect=Exception("All failed")):
             result = TerminalSpawner._windows("pdd sync foo")
             assert result is False
+
+
+# ============================================================================
+# Tests for Callback URL Port Handling
+# ============================================================================
+
+
+class TestTerminalSpawnerCallbackPort:
+    """Tests for callback URL port handling in terminal spawner."""
+
+    def test_darwin_callback_uses_provided_port(self):
+        """Test macOS callback URL uses the server_port parameter."""
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    TerminalSpawner._darwin(
+                        "pdd generate test.prompt",
+                        job_id="test-job-123",
+                        server_port=8000  # Non-default port
+                    )
+
+                    script_content = mock_write.call_args[0][0]
+                    # Verify the callback URL uses port 8000
+                    assert "localhost:8000" in script_content
+                    # Verify default port is NOT used
+                    assert "localhost:9876" not in script_content
+
+    def test_darwin_callback_uses_default_port_when_not_specified(self):
+        """Test default port 9876 is used when server_port not specified."""
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    TerminalSpawner._darwin(
+                        "pdd generate test.prompt",
+                        job_id="test-job-123"
+                        # server_port not specified - should use default 9876
+                    )
+
+                    script_content = mock_write.call_args[0][0]
+                    assert "localhost:9876" in script_content
+
+    def test_linux_callback_uses_provided_port(self):
+        """Test Linux callback URL uses the server_port parameter."""
+        with patch('shutil.which', return_value="/usr/bin/gnome-terminal"):
+            with patch('subprocess.Popen') as mock_popen:
+                TerminalSpawner._linux(
+                    "pdd generate test.prompt",
+                    job_id="test-job-123",
+                    server_port=8000
+                )
+
+                call_args = mock_popen.call_args[0][0]
+                full_command = " ".join(str(arg) for arg in call_args)
+                assert "localhost:8000" in full_command
+                assert "localhost:9876" not in full_command
+
+    def test_windows_callback_uses_provided_port(self):
+        """Test Windows callback URL uses the server_port parameter."""
+        with patch('subprocess.Popen') as mock_popen:
+            TerminalSpawner._windows(
+                "pdd generate test.prompt",
+                job_id="test-job-123",
+                server_port=8000
+            )
+
+            call_args = mock_popen.call_args[0][0]
+            full_command = " ".join(str(arg) for arg in call_args)
+            assert "localhost:8000" in full_command
+            assert "localhost:9876" not in full_command
+
+    def test_spawn_passes_server_port_to_darwin(self):
+        """Test that spawn method passes server_port to _darwin."""
+        with patch.object(TerminalSpawner, '_darwin', return_value=True) as mock_darwin:
+            with patch('sys.platform', 'darwin'):
+                TerminalSpawner.spawn(
+                    "pdd generate test.prompt",
+                    job_id="test-job-123",
+                    server_port=8000
+                )
+
+                mock_darwin.assert_called_once()
+                call_args = mock_darwin.call_args
+                assert call_args[0][1] == "test-job-123"  # job_id
+                assert call_args[0][2] == 8000  # server_port
+
+    def test_spawn_passes_server_port_to_linux(self):
+        """Test that spawn method passes server_port to _linux."""
+        with patch.object(TerminalSpawner, '_linux', return_value=True) as mock_linux:
+            with patch('sys.platform', 'linux'):
+                TerminalSpawner.spawn(
+                    "pdd generate test.prompt",
+                    job_id="test-job-123",
+                    server_port=8000
+                )
+
+                mock_linux.assert_called_once()
+                call_args = mock_linux.call_args
+                assert call_args[0][1] == "test-job-123"  # job_id
+                assert call_args[0][2] == 8000  # server_port
+
+
+# ============================================================================
+# Tests for Callback Execution Order (Race Condition Bug)
+# ============================================================================
+
+
+class TestCallbackExecutionOrder:
+    """
+    Tests to verify that callback curl completes BEFORE exec bash runs.
+
+    BUG: The curl callback was running in background (&) and then exec bash
+    immediately replaces the shell process, potentially killing curl before
+    it can send the HTTP request.
+
+    FIX: Curl must run synchronously (without &) before exec bash.
+    """
+
+    def test_darwin_callback_not_backgrounded(self):
+        """
+        FAILING TEST: macOS callback should NOT be backgrounded.
+
+        The curl command must complete before exec bash runs, otherwise
+        the HTTP request may never be sent.
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    TerminalSpawner._darwin(
+                        "pdd generate test.prompt",
+                        job_id="test-job-123",
+                        server_port=9876
+                    )
+
+                    script_content = mock_write.call_args[0][0]
+
+                    # Find the curl command line
+                    lines = script_content.split('\n')
+                    curl_lines = [l for l in lines if 'curl' in l and 'POST' in l]
+
+                    assert len(curl_lines) >= 1, "Should have a curl command"
+
+                    # The curl line should NOT end with '&' (background)
+                    # This is the bug - curl runs in background and exec bash kills it
+                    for curl_line in curl_lines:
+                        # Check if line ends with & (backgrounded)
+                        # Note: &>/dev/null is ok, but &>/dev/null & is not
+                        assert not curl_line.rstrip().endswith('&'), \
+                            f"Curl should NOT be backgrounded! Found: {curl_line}"
+
+    def test_darwin_callback_completes_before_exec(self):
+        """
+        Test that the callback script ensures curl completes before exec bash.
+
+        Either:
+        1. curl runs synchronously (no &), OR
+        2. There's a 'wait' command before exec bash
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    TerminalSpawner._darwin(
+                        "pdd generate test.prompt",
+                        job_id="test-job-123",
+                        server_port=9876
+                    )
+
+                    script_content = mock_write.call_args[0][0]
+
+                    # Check that curl is NOT backgrounded OR there's a wait
+                    has_backgrounded_curl = '&>/dev/null &' in script_content or \
+                                           "& #" in script_content or \
+                                           script_content.count('curl') > 0 and \
+                                           any(l.rstrip().endswith('&') for l in script_content.split('\n') if 'curl' in l)
+
+                    has_wait_before_exec = 'wait' in script_content and \
+                                          script_content.index('wait') < script_content.index('exec bash')
+
+                    # Either curl is synchronous OR there's a wait
+                    assert not has_backgrounded_curl or has_wait_before_exec, \
+                        "Curl must complete before exec bash - either run synchronously or add 'wait'"
+
+    def test_linux_callback_not_backgrounded(self):
+        """
+        FAILING TEST: Linux callback should NOT be backgrounded.
+        """
+        with patch('shutil.which', return_value="/usr/bin/gnome-terminal"):
+            with patch('subprocess.Popen') as mock_popen:
+                TerminalSpawner._linux(
+                    "pdd generate test.prompt",
+                    job_id="test-job-123",
+                    server_port=9876
+                )
+
+                call_args = mock_popen.call_args[0][0]
+                full_command = " ".join(str(arg) for arg in call_args)
+
+                # Find if curl is backgrounded (ends with &)
+                # The pattern is: curl ... &>/dev/null &
+                # This is wrong - should be: curl ... &>/dev/null (no trailing &)
+
+                # Check for the problematic pattern
+                assert "&>/dev/null &" not in full_command and \
+                       ">/dev/null &" not in full_command, \
+                    f"Curl should NOT be backgrounded! Found backgrounded curl in: {full_command}"
+
+    def test_linux_callback_completes_before_exec(self):
+        """
+        Test that Linux callback ensures curl completes before exec bash.
+        """
+        with patch('shutil.which', return_value="/usr/bin/gnome-terminal"):
+            with patch('subprocess.Popen') as mock_popen:
+                TerminalSpawner._linux(
+                    "pdd generate test.prompt",
+                    job_id="test-job-123",
+                    server_port=9876
+                )
+
+                call_args = mock_popen.call_args[0][0]
+                full_command = " ".join(str(arg) for arg in call_args)
+
+                # Check for backgrounded curl pattern
+                has_backgrounded_curl = "&>/dev/null &" in full_command or \
+                                       ">/dev/null &" in full_command
+
+                # Check for wait before exec
+                has_wait_before_exec = "wait" in full_command and \
+                                      full_command.index("wait") < full_command.index("exec bash")
+
+                assert not has_backgrounded_curl or has_wait_before_exec, \
+                    "Curl must complete before exec bash - either run synchronously or add 'wait'"
+
+    def test_windows_callback_is_synchronous(self):
+        """
+        Test that Windows callback is synchronous (Invoke-RestMethod is sync by default).
+        This test should PASS - Windows implementation is correct.
+        """
+        with patch('subprocess.Popen') as mock_popen:
+            TerminalSpawner._windows(
+                "pdd generate test.prompt",
+                job_id="test-job-123",
+                server_port=9876
+            )
+
+            call_args = mock_popen.call_args[0][0]
+            full_command = " ".join(str(arg) for arg in call_args)
+
+            # Invoke-RestMethod is synchronous by default
+            # Just verify it's present and not backgrounded with Start-Job
+            assert "Invoke-RestMethod" in full_command
+            assert "Start-Job" not in full_command, \
+                "Windows callback should be synchronous, not using Start-Job"

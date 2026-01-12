@@ -815,3 +815,561 @@ def test_z3_duration_logic_extended():
     result = s.check()
     assert result == z3.unsat, "Duration incorrect for completed job"
     s.pop()
+
+
+# ============================================================================
+# Tests for Spawned Job Terminal Port Bug (TDD - should FAIL initially)
+# ============================================================================
+
+from pathlib import Path
+from unittest.mock import patch
+
+
+class TestSpawnTerminalPortBug:
+    """Tests that expose the server_port bug in spawn_terminal_command."""
+
+    def test_spawn_terminal_should_pass_server_port_to_spawner(self, commands_module, mock_job_manager):
+        """
+        FAILING TEST: Exposes the bug.
+        TerminalSpawner.spawn should receive server_port parameter.
+        Currently fails because spawn is called without server_port.
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        with patch.object(TerminalSpawner, 'spawn', return_value=True) as mock_spawn:
+            client = TestClient(app)
+            response = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+
+            assert response.status_code == 200
+            mock_spawn.assert_called_once()
+
+            # THIS ASSERTION WILL FAIL - current code doesn't pass server_port
+            call_kwargs = mock_spawn.call_args.kwargs
+            assert "server_port" in call_kwargs, "server_port must be passed to TerminalSpawner.spawn"
+
+    def test_spawn_terminal_should_use_configured_port(self, commands_module, mock_job_manager):
+        """
+        FAILING TEST: When server is on port 8000, spawn should use that port.
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+        # After fix: app.dependency_overrides[get_server_port] = lambda: 8000
+
+        captured_port = []
+
+        def capture_spawn(*args, **kwargs):
+            captured_port.append(kwargs.get('server_port'))
+            return True
+
+        with patch.object(TerminalSpawner, 'spawn', side_effect=capture_spawn):
+            client = TestClient(app)
+            client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+
+            # THIS WILL FAIL until fix is implemented
+            assert len(captured_port) == 1
+            assert captured_port[0] is not None, "server_port should not be None"
+
+
+# ============================================================================
+# Tests for Spawned Job Complete Endpoint
+# ============================================================================
+
+
+class TestSpawnedJobCompleteEndpoint:
+    """Tests for /spawned-jobs/{job_id}/complete endpoint."""
+
+    def test_complete_spawned_job_success(self, commands_module, mock_job_manager):
+        """Test completing a spawned job with success."""
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        # Complete the job
+        complete_resp = client.post(
+            f"/api/v1/commands/spawned-jobs/{job_id}/complete",
+            json={"success": True, "exit_code": 0}
+        )
+
+        assert complete_resp.status_code == 200
+        assert complete_resp.json()["updated"] is True
+        assert complete_resp.json()["job_id"] == job_id
+
+    def test_complete_spawned_job_failure(self, commands_module, mock_job_manager):
+        """Test completing a spawned job with failure status."""
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        # Complete the job with failure
+        complete_resp = client.post(
+            f"/api/v1/commands/spawned-jobs/{job_id}/complete",
+            json={"success": False, "exit_code": 1}
+        )
+
+        assert complete_resp.status_code == 200
+        assert complete_resp.json()["updated"] is True
+
+        # Verify status was updated to failed
+        status_resp = client.get(f"/api/v1/commands/spawned-jobs/{job_id}/status")
+        assert status_resp.json()["status"] == "failed"
+        assert status_resp.json()["exit_code"] == 1
+
+    def test_complete_unknown_job_returns_not_updated(self, commands_module, mock_job_manager):
+        """Test completing a job that doesn't exist returns updated=False."""
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v1/commands/spawned-jobs/nonexistent-job/complete",
+            json={"success": True, "exit_code": 0}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["updated"] is False
+
+
+# ============================================================================
+# Tests for Spawned Job Status Endpoint
+# ============================================================================
+
+
+class TestSpawnedJobStatusEndpoint:
+    """Tests for /spawned-jobs/{job_id}/status endpoint."""
+
+    def test_get_running_job_status(self, commands_module, mock_job_manager):
+        """Test getting status of a running spawned job."""
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        status_resp = client.get(f"/api/v1/commands/spawned-jobs/{job_id}/status")
+        assert status_resp.status_code == 200
+        assert status_resp.json()["status"] == "running"
+        assert status_resp.json()["command"] == "generate"
+        assert status_resp.json()["job_id"] == job_id
+
+    def test_get_completed_job_status(self, commands_module, mock_job_manager):
+        """Test getting status after job completes successfully."""
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        # Complete the job
+        client.post(
+            f"/api/v1/commands/spawned-jobs/{job_id}/complete",
+            json={"success": True, "exit_code": 0}
+        )
+
+        status_resp = client.get(f"/api/v1/commands/spawned-jobs/{job_id}/status")
+        assert status_resp.json()["status"] == "completed"
+        assert status_resp.json()["exit_code"] == 0
+        assert status_resp.json()["completed_at"] is not None
+
+    def test_get_unknown_job_status(self, commands_module, mock_job_manager):
+        """Test getting status of unknown job returns unknown status."""
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        resp = client.get("/api/v1/commands/spawned-jobs/nonexistent/status")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "unknown"
+
+
+# ============================================================================
+# Tests for WebSocket Notification on Spawned Job Completion
+# ============================================================================
+
+
+class TestSpawnedJobWebSocketNotification:
+    """Tests for WebSocket notifications on spawned job completion."""
+
+    @pytest.mark.asyncio
+    async def test_complete_spawned_job_broadcasts_to_all_clients(self, commands_module, mock_job_manager):
+        """
+        Test that completing a spawned job broadcasts to ALL WebSocket clients.
+
+        Spawned jobs don't have specific subscribers (no one connects to /ws/jobs/{job_id}/stream),
+        so we must broadcast to all connected clients using emit_spawned_job_complete.
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        # Create a mock for emit_spawned_job_complete
+        mock_emit = AsyncMock()
+
+        # Patch the websocket module's emit_spawned_job_complete at the point where commands imports it
+        with patch.dict('sys.modules', {'pdd.server.routes.websocket': MagicMock(emit_spawned_job_complete=mock_emit)}):
+            app = FastAPI()
+            app.include_router(router)
+            app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+            app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+            client = TestClient(app)
+
+            with patch.object(TerminalSpawner, 'spawn', return_value=True):
+                spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                    "command": "generate",
+                    "args": {"prompt_file": "test.prompt"},
+                    "options": {}
+                })
+                job_id = spawn_resp.json()["job_id"]
+
+            # Complete the job
+            client.post(
+                f"/api/v1/commands/spawned-jobs/{job_id}/complete",
+                json={"success": True, "exit_code": 0}
+            )
+
+            # Verify WebSocket broadcast was called
+            mock_emit.assert_called_once()
+            call_kwargs = mock_emit.call_args.kwargs
+            assert call_kwargs["job_id"] == job_id
+            assert call_kwargs["success"] is True
+            assert call_kwargs["exit_code"] == 0
+            assert call_kwargs["command"] == "generate"
+
+
+# ============================================================================
+# Tests for Curl Callback Format (Integer Booleans)
+# ============================================================================
+
+
+class TestCurlCallbackFormat:
+    """
+    Tests to verify the callback endpoint accepts the exact format sent by curl.
+
+    The bash script sends JSON with integer booleans:
+    - Success: {"success": 1, "exit_code": 0}
+    - Failure: {"success": 0, "exit_code": 1}
+
+    Pydantic must accept these integer values as booleans.
+    """
+
+    def test_complete_with_integer_boolean_success(self, commands_module, mock_job_manager):
+        """
+        Test that endpoint accepts success=1 (integer) as True.
+        This is the exact format sent by: $((EXIT_CODE == 0))
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        # First spawn a job
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        # Complete with INTEGER boolean (1 = true) - exactly what curl sends
+        complete_resp = client.post(
+            f"/api/v1/commands/spawned-jobs/{job_id}/complete",
+            json={"success": 1, "exit_code": 0}  # Integer, not bool!
+        )
+
+        assert complete_resp.status_code == 200
+        assert complete_resp.json()["updated"] is True
+
+        # Verify status was updated to "completed"
+        status_resp = client.get(f"/api/v1/commands/spawned-jobs/{job_id}/status")
+        assert status_resp.json()["status"] == "completed"
+
+    def test_complete_with_integer_boolean_failure(self, commands_module, mock_job_manager):
+        """
+        Test that endpoint accepts success=0 (integer) as False.
+        This is the exact format sent by: $((EXIT_CODE == 0)) when EXIT_CODE != 0
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        # First spawn a job
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        # Complete with INTEGER boolean (0 = false) - exactly what curl sends
+        complete_resp = client.post(
+            f"/api/v1/commands/spawned-jobs/{job_id}/complete",
+            json={"success": 0, "exit_code": 1}  # Integer, not bool!
+        )
+
+        assert complete_resp.status_code == 200
+        assert complete_resp.json()["updated"] is True
+
+        # Verify status was updated to "failed"
+        status_resp = client.get(f"/api/v1/commands/spawned-jobs/{job_id}/status")
+        assert status_resp.json()["status"] == "failed"
+
+    def test_complete_with_raw_curl_json_format(self, commands_module, mock_job_manager):
+        """
+        Test with the exact raw JSON string that curl would send.
+        Simulates: -d '{"success": 1, "exit_code": 0}'
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        # First spawn a job
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        # Send raw content like curl would
+        complete_resp = client.post(
+            f"/api/v1/commands/spawned-jobs/{job_id}/complete",
+            content='{"success": 1, "exit_code": 0}',
+            headers={"Content-Type": "application/json"}
+        )
+
+        assert complete_resp.status_code == 200
+        assert complete_resp.json()["updated"] is True
+
+
+# ============================================================================
+# Tests for _spawned_jobs Dictionary Persistence
+# ============================================================================
+
+
+class TestSpawnedJobsDictPersistence:
+    """
+    Tests to verify that _spawned_jobs dict persists correctly across requests.
+    """
+
+    def test_spawned_jobs_dict_persists_between_spawn_and_complete(self, commands_module, mock_job_manager):
+        """
+        Test that a job spawned in one request can be completed in another.
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root, _spawned_jobs
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        # Clear any existing jobs
+        _spawned_jobs.clear()
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        # Spawn a job
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        # Verify job is in _spawned_jobs dict
+        assert job_id in _spawned_jobs, f"Job {job_id} should be in _spawned_jobs"
+        assert _spawned_jobs[job_id]["status"] == "running"
+
+        # Complete the job in a separate request
+        complete_resp = client.post(
+            f"/api/v1/commands/spawned-jobs/{job_id}/complete",
+            json={"success": True, "exit_code": 0}
+        )
+
+        assert complete_resp.status_code == 200
+        assert complete_resp.json()["updated"] is True
+
+        # Verify job status was updated
+        assert _spawned_jobs[job_id]["status"] == "completed"
+
+    def test_multiple_spawned_jobs_tracked_independently(self, commands_module, mock_job_manager):
+        """
+        Test that multiple spawned jobs are tracked independently.
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root, _spawned_jobs
+        from pdd.server.terminal_spawner import TerminalSpawner
+
+        # Clear any existing jobs
+        _spawned_jobs.clear()
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        # Spawn multiple jobs
+        job_ids = []
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            for i in range(3):
+                spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                    "command": "generate",
+                    "args": {"prompt_file": f"test{i}.prompt"},
+                    "options": {}
+                })
+                job_ids.append(spawn_resp.json()["job_id"])
+
+        # All jobs should be tracked
+        assert len(_spawned_jobs) >= 3
+        for job_id in job_ids:
+            assert job_id in _spawned_jobs
+            assert _spawned_jobs[job_id]["status"] == "running"
+
+        # Complete first job with success
+        client.post(
+            f"/api/v1/commands/spawned-jobs/{job_ids[0]}/complete",
+            json={"success": 1, "exit_code": 0}
+        )
+
+        # Complete second job with failure
+        client.post(
+            f"/api/v1/commands/spawned-jobs/{job_ids[1]}/complete",
+            json={"success": 0, "exit_code": 1}
+        )
+
+        # Third job still running
+        assert _spawned_jobs[job_ids[0]]["status"] == "completed"
+        assert _spawned_jobs[job_ids[1]]["status"] == "failed"
+        assert _spawned_jobs[job_ids[2]]["status"] == "running"
+
+    def test_job_id_format_matches_expected_pattern(self, commands_module, mock_job_manager):
+        """
+        Test that spawned job IDs match the expected format.
+        Format: spawned-{timestamp}-{uuid8}
+        """
+        from pdd.server.routes.commands import router, get_job_manager, get_project_root
+        from pdd.server.terminal_spawner import TerminalSpawner
+        import re
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_job_manager] = lambda: mock_job_manager
+        app.dependency_overrides[get_project_root] = lambda: Path("/tmp/test")
+
+        client = TestClient(app)
+
+        with patch.object(TerminalSpawner, 'spawn', return_value=True):
+            spawn_resp = client.post("/api/v1/commands/spawn-terminal", json={
+                "command": "generate",
+                "args": {"prompt_file": "test.prompt"},
+                "options": {}
+            })
+            job_id = spawn_resp.json()["job_id"]
+
+        # Job ID should match pattern: spawned-{13-digit-timestamp}-{8-char-hex}
+        pattern = r'^spawned-\d{13}-[a-f0-9]{8}$'
+        assert re.match(pattern, job_id), f"Job ID {job_id} doesn't match expected pattern"
