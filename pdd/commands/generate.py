@@ -158,13 +158,21 @@ def generate(
     default=None,
     help="Specify where to save the generated example code (file or directory).",
 )
+@click.option(
+    "--format",
+    type=click.Choice(["py", "md"], case_sensitive=False),
+    default="py",
+    show_default=True,
+    help="Output format: 'py' (default, uses language extension) or 'md' (markdown).",
+)
 @click.pass_context
 @track_cost
 def example(
     ctx: click.Context, 
     prompt_file: str, 
     code_file: str, 
-    output: Optional[str]
+    output: Optional[str],
+    format: str,
 ) -> Optional[Tuple[str, float, str]]:
     """Generate example code for a given prompt and implementation."""
     try:
@@ -173,6 +181,7 @@ def example(
             prompt_file=prompt_file,
             code_file=code_file,
             output=output,
+            format=format,
         )
         return example_code, total_cost, model_name
     except click.Abort:
