@@ -1,0 +1,241 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Optional, Dict, Any
+
+import click
+from rich.console import Console
+
+# Internal imports
+try:
+    from ..auth_service import (
+        get_auth_status,
+        logout as service_logout,
+        JWT_CACHE_FILE,
+    )
+    from ..get_jwt_token import (
+        get_jwt_token,
+        AuthError,
+        NetworkError,
+        TokenError,
+        UserCancelledError,
+        RateLimitError,
+    )
+except ImportError:
+    pass
+
+console = Console()
+
+# Constants
+PDD_ENV = os.environ.get("PDD_ENV", "local")
+
+
+def _load_firebase_api_key() -> str:
+    """Load the Firebase API key from environment or .env files."""
+    # 1. Check direct env var
+    env_key = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY")
+    if env_key:
+        return env_key
+
+    # 2. Check .env files in current directory
+    candidates = [Path(".env"), Path(".env.local")]
+    
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                content = candidate.read_text(encoding="utf-8")
+                for line in content.splitlines():
+                    if line.strip().startswith("NEXT_PUBLIC_FIREBASE_API_KEY="):
+                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+            except Exception:
+                continue
+                
+    return ""
+
+
+def _get_client_id() -> Optional[str]:
+    """Get the GitHub Client ID for the current environment."""
+    return os.environ.get(f"GITHUB_CLIENT_ID_{PDD_ENV.upper()}") or os.environ.get("GITHUB_CLIENT_ID")
+
+
+def _decode_jwt_payload(token: str) -> Dict[str, Any]:
+    """Decode JWT payload without verification to extract claims."""
+    try:
+        # JWT is header.payload.signature
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {}
+        
+        payload = parts[1]
+        # Add padding if needed
+        padding = len(payload) % 4
+        if padding:
+            payload += "=" * (4 - padding)
+            
+        decoded = base64.urlsafe_b64decode(payload)
+        return json.loads(decoded)
+    except Exception:
+        return {}
+
+
+@click.group("auth")
+def auth_group():
+    """Manage PDD Cloud authentication."""
+    pass
+
+
+@auth_group.command("login")
+def login():
+    """Authenticate with PDD Cloud via GitHub."""
+    
+    api_key = _load_firebase_api_key()
+    if not api_key:
+        console.print("[red]Error: NEXT_PUBLIC_FIREBASE_API_KEY not found.[/red]")
+        console.print("Please set it in your environment or .env file.")
+        sys.exit(1)
+        
+    client_id = _get_client_id()
+    app_name = "PDD CLI"
+    
+    async def run_login():
+        try:
+            # Note: The underlying get_jwt_token handles the device flow interaction.
+            # If it supports a no_browser flag in the future, it should be passed here.
+            token = await get_jwt_token(
+                firebase_api_key=api_key,
+                github_client_id=client_id,
+                app_name=app_name
+            )
+            
+            if not token:
+                console.print("[red]Authentication failed: No token received.[/red]")
+                sys.exit(1)
+                
+            # Decode token to get expiration
+            payload = _decode_jwt_payload(token)
+            expires_at = payload.get("exp")
+            
+            # Ensure cache directory exists
+            if not JWT_CACHE_FILE.parent.exists():
+                JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Save token and expiration to cache
+            # We store id_token for retrieval and expires_at for auth_service checks
+            cache_data = {
+                "id_token": token,
+                "expires_at": expires_at
+            }
+            
+            JWT_CACHE_FILE.write_text(json.dumps(cache_data))
+            
+            console.print("[green]Successfully authenticated to PDD Cloud.[/green]")
+            
+        except AuthError as e:
+            console.print(f"[red]Authentication failed: {e}[/red]")
+            sys.exit(1)
+        except NetworkError as e:
+            console.print(f"[red]Network error: {e}[/red]")
+            sys.exit(1)
+        except TokenError as e:
+            console.print(f"[red]Token error: {e}[/red]")
+            sys.exit(1)
+        except UserCancelledError:
+            console.print("[yellow]Authentication cancelled by user.[/yellow]")
+            sys.exit(1)
+        except RateLimitError as e:
+            console.print(f"[red]Rate limit exceeded: {e}[/red]")
+            sys.exit(1)
+        except Exception as e:
+            console.print(f"[red]An unexpected error occurred: {e}[/red]")
+            sys.exit(1)
+
+    asyncio.run(run_login())
+
+
+@auth_group.command("status")
+def status():
+    """Check current authentication status."""
+    auth_status = get_auth_status()
+    
+    if not auth_status.get("authenticated"):
+        console.print("Not authenticated.")
+        sys.exit(1)
+        
+    username = "Unknown"
+    
+    # If we have a cached token, try to extract user info
+    if auth_status.get("cached") and JWT_CACHE_FILE.exists():
+        try:
+            data = json.loads(JWT_CACHE_FILE.read_text())
+            token = data.get("id_token")
+            if token:
+                payload = _decode_jwt_payload(token)
+                # Try to find a meaningful identifier
+                username = payload.get("email") or payload.get("sub")
+                
+                # Check for GitHub specific claims if available in Firebase token
+                firebase_claims = payload.get("firebase", {})
+                identities = firebase_claims.get("identities", {})
+                if "github.com" in identities:
+                    # identities['github.com'] is a list of IDs, not usernames usually
+                    pass
+        except Exception:
+            pass
+            
+    console.print(f"Authenticated as: [bold green]{username}[/bold green]")
+    sys.exit(0)
+
+
+@auth_group.command("logout")
+def logout_cmd():
+    """Log out of PDD Cloud."""
+    success, error = service_logout()
+    if success:
+        console.print("Logged out of PDD Cloud.")
+    else:
+        console.print(f"[red]Failed to logout: {error}[/red]")
+        # We don't exit with 1 here as partial logout might have occurred
+        # and the user is effectively logged out locally anyway.
+
+
+@auth_group.command("token")
+@click.option("--format", "output_format", type=click.Choice(["raw", "json"]), default="raw", help="Output format.")
+def token_cmd(output_format: str):
+    """Print the current authentication token."""
+    
+    token_str = None
+    expires_at = None
+    
+    # Attempt to read valid token from cache
+    if JWT_CACHE_FILE.exists():
+        try:
+            data = json.loads(JWT_CACHE_FILE.read_text())
+            cached_token = data.get("id_token")
+            cached_exp = data.get("expires_at")
+            
+            # Simple expiry check
+            if cached_token and cached_exp and cached_exp > time.time():
+                token_str = cached_token
+                expires_at = cached_exp
+        except Exception:
+            pass
+            
+    if not token_str:
+        # Removed err=True because rich.console.Console.print does not support it
+        console.print("[red]No valid token available. Please login.[/red]")
+        sys.exit(1)
+        
+    if output_format == "json":
+        output = {
+            "token": token_str,
+            "expires_at": expires_at
+        }
+        console.print_json(data=output)
+    else:
+        console.print(token_str)
