@@ -284,21 +284,21 @@ def test_format_md_with_explicit_output_path(mock_ctx, mock_construct_paths, moc
     # Original .py path should not exist
     assert not explicit_output.exists(), f"Original path {explicit_output} should not exist (extension was changed)"
 
-def test_format_py_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
-    """Test that --format py option uses language extension from construct_paths even with explicit --output path."""
+def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that --format code option uses language extension based on language variable even with explicit --output path."""
     mock_ctx.obj['local'] = True
     prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "test.py"
     explicit_output = tmp_path / "custom_example.md"  # User provides .md extension
     prompt_file.write_text("Prompt")
     code_file.write_text("Code")
-    # construct_paths returns format-adjusted path with language extension (.py for Python)
-    format_adjusted_path = str(tmp_path / "test_example.py")
-    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": format_adjusted_path}, "python")
+    # construct_paths returns the user's path unchanged (or default path) and language
+    default_path = str(tmp_path / "test_example.py")  # Default path would have .py extension
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": default_path}, "python")
     mock_context_generator.return_value = ("# Python Example", 0.0, "model")
     
-    # Call with format="py" and explicit output path
-    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="py")
+    # Call with format="code" and explicit output path with wrong extension
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="code")
     
     # Should have saved to .py file (extension overridden from .md to match language)
     expected_output = tmp_path / "custom_example.py"
@@ -325,8 +325,8 @@ def test_format_md_without_explicit_output(mock_ctx, mock_construct_paths, mock_
     assert output_file.exists()
     assert output_file.read_text() == "# Markdown Example"
 
-def test_format_py_default_behavior(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
-    """Test that --format py (default) uses language extension."""
+def test_format_code_default_behavior(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that --format code (default) uses language extension."""
     mock_ctx.obj['local'] = True
     prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "test.py"
@@ -337,8 +337,8 @@ def test_format_py_default_behavior(mock_ctx, mock_construct_paths, mock_context
     mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
     mock_context_generator.return_value = ("# Python Example", 0.0, "model")
     
-    # Call with format="py" (explicitly)
-    context_generator_main(mock_ctx, str(prompt_file), str(code_file), None, format="py")
+    # Call with format="code" (explicitly)
+    context_generator_main(mock_ctx, str(prompt_file), str(code_file), None, format="code")
     
     assert output_file.exists()
     assert output_file.read_text() == "# Python Example"
