@@ -1,11 +1,17 @@
-# output/pdd/tests/test_agentic_common.py
 import pytest
 import json
 import os
-from unittest.mock import patch, MagicMock, ANY
+from unittest.mock import patch, MagicMock, ANY, call
 from pathlib import Path
 
-from pdd.agentic_common import get_available_agents, run_agentic_task
+from pdd.agentic_common import (
+    get_available_agents,
+    run_agentic_task,
+    _calculate_gemini_cost,
+    _calculate_codex_cost,
+    GEMINI_PRICING_BY_FAMILY,
+    CODEX_PRICING
+)
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification
@@ -129,6 +135,16 @@ def mock_shutil_which():
 @pytest.fixture
 def mock_subprocess():
     with patch('subprocess.run') as mock:
+        yield mock
+
+@pytest.fixture
+def mock_subprocess_run():
+    with patch("subprocess.run") as mock:
+        yield mock
+
+@pytest.fixture
+def mock_console():
+    with patch("pdd.agentic_common.console") as mock:
         yield mock
 
 def test_get_available_agents_none(mock_env, mock_load_model_data, mock_shutil_which):
@@ -338,44 +354,36 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert "--full-auto" in cmd
     assert "--json" in cmd
 
-def test_run_agentic_task_fallback(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """Test fallback mechanism: Anthropic fails, Google succeeds."""
-    mock_shutil_which.return_value = "/bin/exe"
-    os.environ["ANTHROPIC_API_KEY"] = "key"
-    os.environ["GEMINI_API_KEY"] = "key"
-
-    # Side effect for subprocess.run
-    # First call (Anthropic): Fails
-    # Second call (Google): Succeeds
-
-    anthropic_fail = MagicMock()
-    anthropic_fail.returncode = 1
-    anthropic_fail.stdout = json.dumps({"error": {"message": "Overloaded"}})
-
-    google_success = MagicMock()
-    google_success.returncode = 0
-    google_success.stdout = json.dumps({
-        "response": "Task completed successfully. I have analyzed the code and made the requested changes.",
-        "stats": {"models": {"flash": {"tokens": {"prompt": 100, "candidates": 50}}}}
+def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """Test fallback from Anthropic (failure) to Google (success)."""
+    # Setup availability for both
+    mock_shutil_which.return_value = "/bin/cmd"
+    mock_env["GEMINI_API_KEY"] = "key"
+    
+    # Setup subprocess responses
+    # First call (Anthropic) fails
+    fail_response = MagicMock()
+    fail_response.returncode = 1
+    fail_response.stdout = ""
+    fail_response.stderr = "Error"
+    
+    # Second call (Google) succeeds
+    success_response = MagicMock()
+    success_response.returncode = 0
+    # Fix: Make response long enough to pass false positive check (>50 chars)
+    success_response.stdout = json.dumps({
+        "response": "Google success. This response is now long enough to pass the false positive detection check which requires at least 50 characters of output.",
+        "stats": {}
     })
-
-    # We need to inspect the command to decide which mock to return
-    def run_side_effect(cmd, **kwargs):
-        if "claude" in cmd:
-            return anthropic_fail
-        if "gemini" in cmd:
-            return google_success
-        return MagicMock(returncode=1)
-
-    mock_subprocess.side_effect = run_side_effect
-
-    success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
-
+    
+    mock_subprocess_run.side_effect = [fail_response, success_response]
+    
+    success, msg, cost, provider = run_agentic_task("Do work", tmp_path)
+    
     assert success
+    assert "Google success" in msg
     assert provider == "google"
-    assert "Task completed successfully" in msg
-    # Cost is based on Google's token usage
-    assert cost >= 0.0
+    assert mock_subprocess_run.call_count == 2
 
 def test_run_agentic_task_all_fail(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test when all providers fail."""
@@ -734,3 +742,250 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     assert "analyzed the code" in msg, "Should have Google's actual response"
     # Cost should include Google's real cost (not just Anthropic's $0.00)
     assert cost > 0, "Cost should be > 0 from Google's actual work"
+
+# --- Tests for get_available_agents ---
+
+def test_get_available_agents_anthropic_cli_only(mock_shutil_which, mock_env, mock_load_model_data):
+    """Test that Anthropic is available if CLI exists, even without API key."""
+    def which_side_effect(cmd):
+        return "/bin/claude" if cmd == "claude" else None
+    mock_shutil_which.side_effect = which_side_effect
+    
+    agents = get_available_agents()
+    assert "anthropic" in agents
+    assert "google" not in agents
+
+def test_get_available_agents_google_needs_key(mock_shutil_which, mock_env, mock_load_model_data):
+    """Test that Google requires both CLI and API key."""
+    def which_side_effect(cmd):
+        return "/bin/gemini" if cmd == "gemini" else None
+    mock_shutil_which.side_effect = which_side_effect
+    
+    # No key
+    assert "google" not in get_available_agents()
+    
+    # With key
+    mock_env["GEMINI_API_KEY"] = "secret"
+    assert "google" in get_available_agents()
+
+def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
+    """Test that agents are returned in the correct preference order."""
+    mock_shutil_which.return_value = "/bin/cmd"
+    mock_env["ANTHROPIC_API_KEY"] = "key" # Not strictly needed for logic but good for completeness
+    mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["OPENAI_API_KEY"] = "key"
+    
+    agents = get_available_agents()
+    assert agents == ["anthropic", "google", "openai"]
+
+# --- Tests for Cost Calculation ---
+
+def test_calculate_gemini_cost_flash():
+    """Test cost calculation for Gemini Flash model."""
+    stats = {
+        "models": {
+            "gemini-1.5-flash": {
+                "tokens": {
+                    "prompt": 1000,
+                    "candidates": 1000,
+                    "cached": 0
+                }
+            }
+        }
+    }
+    cost = _calculate_gemini_cost(stats)
+    
+    pricing = GEMINI_PRICING_BY_FAMILY["flash"]
+    expected = (1000 * pricing.input_per_million / 1e6) + (1000 * pricing.output_per_million / 1e6)
+    assert cost == pytest.approx(expected)
+
+def test_calculate_gemini_cost_cached():
+    """Test cost calculation for Gemini with cached tokens."""
+    stats = {
+        "models": {
+            "gemini-1.5-pro": {
+                "tokens": {
+                    "prompt": 2000,
+                    "candidates": 0,
+                    "cached": 1000 # 1000 cached, 1000 new
+                }
+            }
+        }
+    }
+    cost = _calculate_gemini_cost(stats)
+    
+    pricing = GEMINI_PRICING_BY_FAMILY["pro"]
+    # 1000 new input + 1000 cached input (at discount)
+    expected = (1000 * pricing.input_per_million / 1e6) + \
+               (1000 * pricing.input_per_million * pricing.cached_input_multiplier / 1e6)
+    assert cost == pytest.approx(expected)
+
+def test_calculate_codex_cost():
+    """Test cost calculation for Codex."""
+    usage = {
+        "input_tokens": 2000,
+        "output_tokens": 1000,
+        "cached_input_tokens": 1000
+    }
+    cost = _calculate_codex_cost(usage)
+    
+    pricing = CODEX_PRICING
+    # 1000 new input + 1000 cached input + 1000 output
+    expected = (1000 * pricing.input_per_million / 1e6) + \
+               (1000 * pricing.input_per_million * pricing.cached_input_multiplier / 1e6) + \
+               (1000 * pricing.output_per_million / 1e6)
+    assert cost == pytest.approx(expected)
+
+# --- Tests for run_agentic_task ---
+
+def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_subprocess_run, mock_console, tmp_path):
+    """Test successful execution with Anthropic."""
+    # Setup availability
+    mock_shutil_which.side_effect = lambda cmd: "/bin/claude" if cmd == "claude" else None
+    
+    # Setup subprocess response
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps({
+        "result": "Task completed.",
+        "total_cost_usd": 0.15
+    })
+    
+    success, msg, cost, provider = run_agentic_task("Do work", tmp_path, verbose=True)
+    
+    assert success
+    assert msg == "Task completed."
+    assert cost == 0.15
+    assert provider == "anthropic"
+    
+    # Verify command arguments
+    args, kwargs = mock_subprocess_run.call_args
+    cmd = args[0]
+    assert cmd[0] == "claude"
+    assert "--dangerously-skip-permissions" in cmd
+    # Should NOT have -p flag for interactive mode
+    assert "-p" not in cmd
+    
+    # Verify env sanitization
+    env = kwargs['env']
+    assert env['TERM'] == 'dumb'
+    assert "ANTHROPIC_API_KEY" not in env # Should be removed for CLI auth
+
+def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """Test successful execution with Gemini."""
+    # Setup availability
+    mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
+    mock_env["GEMINI_API_KEY"] = "key"
+    
+    # Setup subprocess response
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps({
+        "response": "Gemini done.",
+        "stats": {
+            "models": {
+                "gemini-1.5-flash": {"tokens": {"prompt": 1000, "candidates": 1000}}
+            }
+        }
+    })
+    
+    success, msg, cost, provider = run_agentic_task("Do work", tmp_path)
+    
+    assert success
+    assert msg == "Gemini done."
+    assert cost > 0.0
+    assert provider == "google"
+    
+    # Verify command
+    cmd = mock_subprocess_run.call_args[0][0]
+    assert cmd[0] == "gemini"
+    assert "--yolo" in cmd
+
+def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """
+    Test detection of false positive:
+    Provider returns success (0 exit code) but 0 cost and very short output.
+    Should trigger fallback.
+    """
+    # Setup availability for Anthropic and Google
+    mock_shutil_which.return_value = "/bin/cmd"
+    mock_env["GEMINI_API_KEY"] = "key"
+    
+    # 1. Anthropic: Success but suspicious (0 cost, short output)
+    suspicious_response = MagicMock()
+    suspicious_response.returncode = 0
+    suspicious_response.stdout = json.dumps({
+        "result": "Ok", # Too short (< 50 chars)
+        "total_cost_usd": 0.0
+    })
+    
+    # 2. Google: Real success
+    real_response = MagicMock()
+    real_response.returncode = 0
+    real_response.stdout = json.dumps({
+        "response": "This is a much longer response that indicates actual work was done by the agent.",
+        "stats": {"models": {"flash": {"tokens": {"prompt": 100}}}} # Non-zero cost implied
+    })
+    
+    mock_subprocess_run.side_effect = [suspicious_response, real_response]
+    
+    success, msg, cost, provider = run_agentic_task("Do work", tmp_path)
+    
+    assert success
+    assert "actual work was done" in msg
+    assert provider == "google"
+    # Cost should include the 0.0 from the first attempt + the cost from the second
+    assert cost > 0.0
+
+def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_run, tmp_path):
+    """Test that the temp prompt file is created and then cleaned up."""
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps({"result": "ok", "total_cost_usd": 0.1})
+    
+    # We need to intercept the file creation to verify it exists during execution
+    # Since run_agentic_task does everything in one go, we can check the instruction passed to CLI
+    
+    success, _, _, _ = run_agentic_task("Instruction", tmp_path)
+    
+    assert success
+    
+    # Check that the command included a reference to a .agentic_prompt file
+    cmd = mock_subprocess_run.call_args[0][0]
+    # The instruction is the last argument for Anthropic interactive mode
+    instruction_arg = cmd[-1]
+    assert ".agentic_prompt_" in instruction_arg
+    
+    # Verify no temp files remain in tmp_path
+    temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))
+    assert len(temp_files) == 0
+
+def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_console, tmp_path):
+    """Test that suspicious files (C, E, T) are detected and logged."""
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps({"result": "ok", "total_cost_usd": 0.1})
+    
+    # Create suspicious files
+    (tmp_path / "C").touch()
+    (tmp_path / "E").touch()
+    
+    run_agentic_task("Instruction", tmp_path)
+    
+    # Check console output for warning
+    # We need to inspect the calls to console.print
+    printed_messages = [call_args[0][0] for call_args in mock_console.print.call_args_list]
+    combined_output = "\n".join(str(m) for m in printed_messages)
+    
+    assert "SUSPICIOUS FILES DETECTED" in combined_output
+    assert "- C" in combined_output
+    assert "- E" in combined_output
+
+def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_run, tmp_path):
+    """Test that explicit timeout overrides default."""
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps({"result": "ok"})
+    
+    run_agentic_task("Instruction", tmp_path, timeout=999.0)
+    
+    kwargs = mock_subprocess_run.call_args[1]
+    assert kwargs['timeout'] == 999.0
