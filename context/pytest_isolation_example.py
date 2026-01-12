@@ -85,7 +85,7 @@ def test_create_temp_directory_structure(tmp_path):
     subdir = tmp_path / "subdir" / "nested"
     subdir.mkdir(parents=True)
     config_file = subdir / "config.json"
-    config_file.write_text('{"key": "value"}')
+    config_file.write_text('{{"key": "value"}}')
     assert config_file.exists()
 
 
@@ -100,7 +100,7 @@ def resource_with_cleanup():
     The cleanup code after yield always runs, even if the test fails.
     """
     # Setup
-    resource = {"initialized": True, "data": []}
+    resource = {{"initialized": True, "data": []}}
     yield resource
     # Cleanup - always runs
     resource["initialized"] = False
@@ -168,7 +168,7 @@ def test_combined_env_and_file(monkeypatch, tmp_path):
     monkeypatch.setenv("CONFIG_DIR", str(config_path))
 
     config_file = config_path / "settings.json"
-    config_file.write_text('{"debug": true}')
+    config_file.write_text('{{"debug": true}}')
 
     assert os.environ["CONFIG_DIR"] == str(config_path)
     assert config_file.exists()
