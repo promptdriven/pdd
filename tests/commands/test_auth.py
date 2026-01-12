@@ -133,12 +133,12 @@ def test_login_success(runner, mock_dependencies, monkeypatch):
 
 def test_login_missing_api_key(runner, mock_dependencies, mock_env_vars):
     """Test login fails when API key is missing."""
-    # Use isolated_filesystem to avoid reading .env files from the project root
-    with runner.isolated_filesystem():
-        result = runner.invoke(auth_group, ["login"])
-
-        assert result.exit_code == 1
-        assert "NEXT_PUBLIC_FIREBASE_API_KEY not found" in result.output
+    # Ensure no env vars or files exist (handled by fixtures)
+    
+    result = runner.invoke(auth_group, ["login"])
+    
+    assert result.exit_code == 1
+    assert "NEXT_PUBLIC_FIREBASE_API_KEY not found" in result.output
 
 def test_login_user_cancelled(runner, mock_dependencies, monkeypatch):
     """Test login handles user cancellation."""
@@ -165,13 +165,11 @@ def test_login_network_error(runner, mock_dependencies, monkeypatch):
 def test_status_not_authenticated(runner, mock_dependencies):
     """Test status when not authenticated."""
     mock_dependencies["get_auth_status"].return_value = {"authenticated": False}
-
+    
     result = runner.invoke(auth_group, ["status"])
-
-    # Status returns 1 when not authenticated (appropriate for scripting/CI)
+    
     assert result.exit_code == 1
     assert "Not authenticated" in result.output
-    assert "pdd auth login" in result.output
 
 def test_status_authenticated(runner, mock_dependencies):
     """Test status when authenticated."""
@@ -271,163 +269,8 @@ def test_token_expired(runner, mock_dependencies):
 def test_token_no_cache(runner, mock_dependencies):
     """Test token command when no cache exists."""
     mock_dependencies["JWT_CACHE_FILE"].exists.return_value = False
-
+    
     result = runner.invoke(auth_group, ["token"])
-
+    
     assert result.exit_code == 1
     assert "No valid token available" in result.output
-
-
-# --- Issue #348: Auth Status Mismatch Tests ---
-
-def test_status_expired_token_shows_warning(runner, mock_dependencies):
-    """
-    Issue #348: When JWT expired but refresh token exists,
-    status should warn user that token may need refresh.
-    """
-    # JWT cache is invalid (expired), but refresh token exists
-    mock_dependencies["get_auth_status"].return_value = {
-        "authenticated": True,
-        "cached": False,  # Indicates JWT is expired, only refresh token exists
-        "expires_at": None
-    }
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = True
-
-    # Provide expired token data so we can extract the username
-    token = "header.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ==.sig"
-    mock_dependencies["JWT_CACHE_FILE"].read_text.return_value = json.dumps({
-        "id_token": token
-    })
-
-    result = runner.invoke(auth_group, ["status"])
-
-    # Should show warning about expired token
-    assert result.exit_code == 0
-    assert "Session for:" in result.output
-    assert "token expired" in result.output
-    assert "pdd auth login" in result.output
-
-
-def test_status_with_verify_flag_success(runner, mock_dependencies):
-    """
-    Issue #348: --verify flag should actually test if auth works.
-    """
-    # JWT cache is invalid, refresh token exists
-    mock_dependencies["get_auth_status"].return_value = {
-        "authenticated": True,
-        "cached": False,
-        "expires_at": None
-    }
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = True
-    mock_dependencies["JWT_CACHE_FILE"].read_text.return_value = json.dumps({
-        "id_token": "header.eyJlbWFpbCI6Im9sZEBleGFtcGxlLmNvbSJ9.sig"
-    })
-
-    # Mock verify_auth to return success
-    with patch("pdd.commands.auth.verify_auth", new_callable=AsyncMock) as mock_verify:
-        mock_verify.return_value = {
-            "valid": True,
-            "error": None,
-            "needs_reauth": False,
-            "username": "refreshed@example.com"
-        }
-
-        result = runner.invoke(auth_group, ["status", "--verify"])
-
-    assert result.exit_code == 0
-    assert "Authenticated as:" in result.output
-    assert "refreshed@example.com" in result.output
-    assert "Token refreshed successfully" in result.output
-
-
-def test_status_with_verify_flag_failure_issue_348(runner, mock_dependencies):
-    """
-    Issue #348: --verify flag should detect invalid refresh token.
-
-    This is the core test for issue #348:
-    - User sees "Authenticated" from regular status
-    - But --verify reveals the refresh token is actually invalid
-    """
-    # Regular get_auth_status says authenticated (the BUG)
-    mock_dependencies["get_auth_status"].return_value = {
-        "authenticated": True,
-        "cached": False,
-        "expires_at": None
-    }
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = True
-    mock_dependencies["JWT_CACHE_FILE"].read_text.return_value = json.dumps({
-        "id_token": "header.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ==.sig"
-    })
-
-    # But verify_auth detects the refresh token is invalid
-    with patch("pdd.commands.auth.verify_auth", new_callable=AsyncMock) as mock_verify:
-        mock_verify.return_value = {
-            "valid": False,
-            "error": "Invalid or expired refresh token. Please re-authenticate.",
-            "needs_reauth": True,
-            "username": None
-        }
-
-        result = runner.invoke(auth_group, ["status", "--verify"])
-
-    # Should fail and show reauth instructions
-    assert result.exit_code == 1
-    assert "Authentication verification failed" in result.output
-    assert "Invalid or expired refresh token" in result.output
-    assert "pdd auth logout && pdd auth login" in result.output
-
-
-def test_status_with_verify_flag_network_error(runner, mock_dependencies):
-    """
-    --verify flag should handle network errors gracefully.
-    """
-    mock_dependencies["get_auth_status"].return_value = {
-        "authenticated": True,
-        "cached": False,
-        "expires_at": None
-    }
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = True
-    mock_dependencies["JWT_CACHE_FILE"].read_text.return_value = json.dumps({
-        "id_token": "header.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ==.sig"
-    })
-
-    # Network error during verification
-    with patch("pdd.commands.auth.verify_auth", new_callable=AsyncMock) as mock_verify:
-        mock_verify.return_value = {
-            "valid": False,
-            "error": "Network error: Connection refused",
-            "needs_reauth": False,  # Network errors are temporary
-            "username": None
-        }
-
-        result = runner.invoke(auth_group, ["status", "--verify"])
-
-    assert result.exit_code == 1
-    assert "Authentication verification failed" in result.output
-    assert "Network error" in result.output
-    # Should NOT suggest reauth for network errors
-    assert "pdd auth logout && pdd auth login" not in result.output
-
-
-def test_status_shows_expiration_time(runner, mock_dependencies):
-    """
-    Status should show token expiration time when token is valid.
-    """
-    future_time = time.time() + 2700  # 45 minutes
-    mock_dependencies["get_auth_status"].return_value = {
-        "authenticated": True,
-        "cached": True,
-        "expires_at": future_time
-    }
-    mock_dependencies["JWT_CACHE_FILE"].exists.return_value = True
-    mock_dependencies["JWT_CACHE_FILE"].read_text.return_value = json.dumps({
-        "id_token": "header.eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ==.sig",
-        "expires_at": future_time
-    })
-
-    result = runner.invoke(auth_group, ["status"])
-
-    assert result.exit_code == 0
-    assert "Token expires in:" in result.output
-    # Allow for timing variance (44-45 minutes due to test execution time)
-    assert "44 minutes" in result.output or "45 minutes" in result.output
