@@ -354,7 +354,7 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert "--full-auto" in cmd
     assert "--json" in cmd
 
-def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
+def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """Test fallback from Anthropic (failure) to Google (success)."""
     # Setup availability for both
     mock_shutil_which.return_value = "/bin/cmd"
@@ -870,7 +870,7 @@ def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_su
     assert env['TERM'] == 'dumb'
     assert "ANTHROPIC_API_KEY" not in env # Should be removed for CLI auth
 
-def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
+def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """Test successful execution with Gemini."""
     # Setup availability
     mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
@@ -899,7 +899,7 @@ def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_ru
     assert cmd[0] == "gemini"
     assert "--yolo" in cmd
 
-def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
+def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """
     Test detection of false positive:
     Provider returns success (0 exit code) but 0 cost and very short output.
