@@ -26,6 +26,15 @@ litellm_logger = logging.getLogger("litellm")
 litellm_log_level = os.getenv("LITELLM_LOG_LEVEL", "WARNING" if PRODUCTION_MODE else "INFO")
 litellm_logger.setLevel(getattr(logging, litellm_log_level, logging.WARNING))
 
+# Suppress LiteLLM debug messages and error info that includes "Give Feedback / Get Help"
+# This prevents LiteLLM from printing these messages before raising exceptions
+try:
+    litellm.set_verbose = False
+    litellm.suppress_debug_info = True
+except Exception:
+    # If these attributes don't exist in this LiteLLM version, continue silently
+    pass
+
 # Ensure LiteLLM drops provider-unsupported params instead of erroring
 # This prevents failures like UnsupportedParamsError for OpenAI gpt-5-* when
 # passing generic params (e.g., reasoning_effort) not accepted by that API path.
