@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 def hello() -> None:
-    """Print a friendly greeting to stdout."""
+    """Prints a hello message to the console."""
     print("hello")
 
 if __name__ == "__main__":

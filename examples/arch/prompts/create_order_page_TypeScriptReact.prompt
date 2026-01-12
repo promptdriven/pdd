@@ -1,0 +1,46 @@
+<prompt>
+The create_order_page module is a Next.js page component responsible for the end-to-end workflow of creating a new order within the system. As a critical frontend entry point, it manages complex form state for item selection, quantity adjustments, and real-time price calculations, while ensuring data integrity through client-side validation and robust interaction with the backend Order API. It serves as the primary interface for users to transition from intent to a persisted order record, handling the orchestration of UI components, state management, and asynchronous submission processes.
+
+Requirements
+1. Implement a multi-step or dynamic form for order creation at the route `/orders/create`, allowing users to select products, specify quantities, and review totals.
+2. Integrate real-time total calculation logic that updates as items are added, removed, or modified, ensuring the UI reflects the current state of the `OrderCreateRequest`.
+3. Enforce strict client-side validation using TypeScript and a form library (e.g., React Hook Form) to ensure all required fields (user_id, items) are present before submission.
+4. Handle the POST request to `/api/orders` with proper JWT authentication headers and comprehensive error handling for network failures or API validation errors.
+5. Implement loading states for the submission process and provide clear feedback (success/error toasts or messages) upon completion.
+6. Ensure idempotency and prevent double-submission by disabling the submit button during active requests.
+7. Redirect the user to the newly created order's detail page (`/orders/[orderId]`) upon successful creation.
+8. Maintain high accessibility standards (ARIA labels, keyboard navigation) for all form inputs and interactive elements.
+
+Dependencies
+<order_api>
+  <include>context/order_api_example.py</include>
+</order_api>
+<order_components>
+  <include>context/order_components_example.tsx</include>
+</order_components>
+
+Prompt Dependencies:
+- order_api_Python.prompt
+- order_components_TypeScriptReact.prompt
+
+Instructions
+- Use Next.js App Router conventions for the page structure in `app/orders/create/page.tsx`.
+- Utilize the `OrderList` or related sub-components from `order_components` for displaying selected items if applicable, or create local sub-components for the item selection grid.
+- Implement a `useOrderForm` custom hook or similar state management pattern to handle the `items` array (containing product IDs and quantities).
+- Ensure the `calculate_total` logic on the frontend mirrors the backend logic defined in the `Order` model to provide a consistent user experience.
+- For the `POST /api/orders` call, map the local form state to the `OrderCreateRequest` schema defined in the API documentation.
+- Handle 401 (Unauthorized) errors by redirecting to login and 400 (Bad Request) errors by displaying field-specific validation messages.
+- Include unit tests for the total calculation logic and integration tests for the form submission flow using a mocking library for the API calls.
+
+Deliverable
+- A production-ready Next.js page component file: `app/orders/create/page.tsx`.
+- Associated TypeScript interfaces for form state and API request/response bodies.
+- Any necessary local styled-components or sub-components specific to the creation workflow.
+
+Implementation assumptions (explicit)
+- The user's JWT token is available via a global auth provider or cookie for inclusion in the API request.
+- A product selection mechanism (e.g., a searchable dropdown or modal) is available or can be mocked to provide product IDs and unit prices.
+- The backend `OrderResponse` will include the `order_id` needed for redirection.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.
+</prompt>

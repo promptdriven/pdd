@@ -1,0 +1,39 @@
+The `database_config` module is a critical infrastructure component responsible for establishing and managing the connection between the Python backend and the PostgreSQL database. As a core configuration layer, it ensures robust connection pooling, handles environment-specific settings, and provides the foundational session management required by all data-access modules (such as `order_models`). Its primary role is to abstract the complexities of database connectivity, providing a reliable and thread-safe interface for the application to interact with the persistence layer.
+
+Requirements
+1. Implement a singleton-style database engine using SQLAlchemy's `create_engine` with support for PostgreSQL.
+2. Manage connection pooling using `DATABASE_POOL_SIZE` (default: 10) and `DATABASE_TIMEOUT` (default: 30) sourced from environment variables.
+3. Provide a `get_db` dependency/generator function for FastAPI to manage session lifecycles (opening and closing sessions per request).
+4. Implement a `check_health` function that executes a simple query (e.g., `SELECT 1`) to verify database connectivity.
+5. Support environment-based configuration using `pydantic-settings` or a similar pattern to validate `DATABASE_URL`.
+6. Ensure thread safety for the session factory to prevent connection leaks in a multi-threaded environment.
+7. Include comprehensive error handling for connection failures, including logging of connection attempts and timeouts.
+
+Dependencies
+<order_models>
+  <include>context/order_models_example.py</include>
+</order_models>
+
+Prompt Dependencies:
+- order_models_Python.prompt
+
+Instructions
+- Use SQLAlchemy's `sessionmaker` and `scoped_session` to create a robust session factory.
+- Utilize `pydantic` or `os.getenv` to parse and validate the `DATABASE_URL`, ensuring it follows the `postgresql://` or `postgresql+psycopg2://` format.
+- Implement the `get_db` function as a context manager or a generator suitable for FastAPI's `Depends` mechanism.
+- Configure the engine with `pool_pre_ping=True` to handle stale connections automatically.
+- Ensure the `check_health` function returns a boolean and logs specific exception details if the connection fails.
+- Define a `Base` class using `declarative_base` if not already defined in models, to be shared across the application for ORM mapping.
+- Add a graceful shutdown hook or method to dispose of the engine's connection pool when the application stops.
+
+Deliverable
+- A production-ready `src/database/config.py` file containing the engine initialization, session factory, and health check utility.
+- A configuration schema or class that handles environment variable extraction and validation.
+
+Implementation assumptions (explicit)
+- The application uses PostgreSQL as the primary relational database.
+- The backend framework is FastAPI, requiring a generator-based session dependency.
+- SQLAlchemy 2.0+ syntax and patterns are preferred.
+- Environment variables are managed via a `.env` file or system environment.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

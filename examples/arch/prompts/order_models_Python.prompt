@@ -1,0 +1,39 @@
+The `order_models` module is a core backend component responsible for defining the data structures and persistence logic for the order management system. Operating within the database layer using SQLAlchemy, it serves as the single source of truth for order-related entities, including orders and order items. Its primary role is to ensure data integrity through strict schema definitions, relationship mapping, and server-side validation, providing a robust foundation for the API layer to perform CRUD operations and business logic.
+
+Requirements
+1. Define a SQLAlchemy `Order` model with fields for `id` (UUID), `user_id` (UUID), `status` (Enum), `total_amount` (Decimal), and timestamps (`created_at`, `updated_at`).
+2. Define an `OrderItem` model representing individual products within an order, including `product_id` (UUID), `quantity` (Integer), and `unit_price` (Decimal).
+3. Implement a one-to-many relationship between `Order` and `OrderItem` with cascading deletes to maintain referential integrity.
+4. Include an `OrderStatus` enumeration (e.g., PENDING, PROCESSING, SHIPPED, DELIVERED, CANCELLED) to enforce state consistency.
+5. Implement a `calculate_total` method within the `Order` model that aggregates the cost of all associated `OrderItem` records.
+6. Ensure all Decimal fields use appropriate precision (e.g., 10, 2) to prevent rounding errors in financial calculations.
+7. Add database-level constraints, such as non-nullable fields for essential data and positive value checks for quantities and prices.
+8. Provide a method or hook to automatically update the `updated_at` timestamp on record modification.
+
+Dependencies
+<database_config>
+  <include>context/database_config_example.py</include>
+</database_config>
+
+Prompt Dependencies:
+- database_config_Python.prompt
+
+Instructions
+- Use SQLAlchemy's declarative base (imported from the database configuration) to define the models.
+- Implement the `Order.__init__` method to handle the initialization of an order with its nested items, ensuring the `user_id` and initial `status` are correctly assigned.
+- The `calculate_total` method must iterate through `self.items`, multiplying quantity by unit price, and return a `Decimal` object.
+- The `update_status` method should validate the transition logic (e.g., an order cannot move from 'DELIVERED' back to 'PENDING') before updating the database record.
+- Use `uuid.uuid4` for primary key generation to ensure uniqueness across distributed systems.
+- Ensure that the `OrderItem` model includes a foreign key back to the `Order` table.
+- Add docstrings to all classes and methods explaining their purpose and any side effects on the database state.
+
+Deliverable
+- A single Python file `src/models/order.py` containing the `OrderStatus` Enum, `Order` SQLAlchemy model, and `OrderItem` SQLAlchemy model.
+- The file must include all necessary imports (SQLAlchemy, UUID, Decimal, datetime).
+
+Implementation assumptions (explicit)
+- The system uses PostgreSQL as the primary database, supporting UUID and Enum types natively.
+- A shared `Base` class for SQLAlchemy models is provided in `src/database/config.py`.
+- Financial calculations require the `decimal` module for precision rather than floating-point math.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

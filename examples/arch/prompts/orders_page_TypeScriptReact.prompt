@@ -1,0 +1,44 @@
+The orders_page module is a high-level Next.js page component responsible for providing a comprehensive interface for users to view, filter, and manage their order history. As a central hub in the order management lifecycle, it orchestrates data fetching from the backend API, manages complex UI states for filtering and pagination, and integrates reusable UI components to ensure a consistent and responsive user experience.
+
+Requirements
+1. Implement a robust data fetching strategy using Next.js patterns to retrieve orders from `/api/orders` with support for status, date range, and user filters.
+2. Provide a responsive layout featuring a filter sidebar or header, a paginated order list, and clear empty/loading states.
+3. Integrate real-time updates by implementing a 30-second polling interval or revalidation strategy to keep order statuses current.
+4. Handle pagination state (page number and limit) via URL query parameters to ensure shareable and bookmarkable filtered views.
+5. Implement comprehensive error handling for API failures, including toast notifications and "retry" mechanisms.
+6. Ensure strict TypeScript typing for all API responses, filter states, and component props, adhering to the schemas defined in the backend models.
+7. Optimize performance by memoizing filter callbacks and using efficient rendering patterns for large lists.
+8. Secure the page by ensuring JWT authentication is handled (redirecting to login if the token is missing or expired).
+
+Dependencies
+<order_api>
+  <include>context/order_api_example.py</include>
+</order_api>
+<order_components>
+  <include>context/order_components_example.tsx</include>
+</order_components>
+
+Prompt Dependencies:
+- order_api_Python.prompt
+- order_components_TypeScriptReact.prompt
+
+Instructions
+- Use the `OrderList` component from `src/components/orders/OrderList.tsx` to render the main data grid.
+- Implement a `useOrders` custom hook or utilize a library like SWR/React Query to manage the GET request to `/api/orders` with the specified query parameters (status, start_date, end_date, user_id, page, limit).
+- Map the API response (OrderListResponse) to the component state, ensuring `totalCount` and `hasNextPage` are used to drive the pagination UI.
+- Create a filter form using controlled components that updates the URL search parameters on submission or change.
+- Implement a status badge mapping that translates backend status strings (pending, processing, shipped, delivered) into theme-consistent UI colors.
+- Handle the `onStatusChange` event from the `OrderList` component by calling the PATCH `/api/orders/{order_id}/status` endpoint and refreshing the local data.
+- Ensure the page is mobile-responsive, collapsing filters into a drawer or accordion on smaller screens.
+
+Deliverable
+- A production-ready Next.js page file located at `app/orders/page.tsx`.
+- Associated TypeScript interfaces for the page's internal state and filter criteria.
+- Unit tests for the filtering logic and pagination state transitions.
+
+Implementation assumptions (explicit)
+- The application uses a global authentication provider (e.g., NextAuth.js or a custom React Context) that attaches the JWT token to API requests.
+- Tailwind CSS is available for styling.
+- The backend API follows the RESTful conventions defined in the `order_api_Python.prompt`.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.

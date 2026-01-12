@@ -253,22 +253,30 @@ def run_process_with_output(cmd_args, timeout=300):
         except Exception:
             pass
 
-    # Close pipes to unblock reader threads
-    try:
-        proc.stdout.close()
-    except Exception:
-        pass
-    try:
-        proc.stderr.close()
-    except Exception:
-        pass
+    # Wait for threads to finish reading with timeout
+    # For normal completion, threads will exit when they read EOF from the pipe
+    # For timeout/kill cases, we may need to close pipes to unblock them
+    THREAD_JOIN_TIMEOUT = 5  # seconds - enough time to drain normal output buffers
 
-    # Wait for threads with timeout to prevent indefinite hangs
-    THREAD_JOIN_TIMEOUT = 5  # seconds
     t_out.join(timeout=THREAD_JOIN_TIMEOUT)
     t_err.join(timeout=THREAD_JOIN_TIMEOUT)
 
-    # If threads are still alive after timeout, log it (they're daemon threads so won't block exit)
+    # If threads are still alive after first timeout, close pipes to unblock them
+    # This handles cases where child processes keep pipes open
+    if t_out.is_alive() or t_err.is_alive():
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        try:
+            proc.stderr.close()
+        except Exception:
+            pass
+        # Give threads a bit more time after closing pipes
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+
+    # If threads are still alive after all attempts, log it
     if t_out.is_alive() or t_err.is_alive():
         captured_stderr.append(b"\n[Thread join timeout - some output may be lost]\n")
 
