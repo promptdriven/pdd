@@ -253,6 +253,21 @@ def set_project_root(project_root: Path) -> None:
     _project_root = project_root
 
 
+# Server port dependency - for terminal spawner callbacks
+_server_port: int = 9876  # Default port
+
+
+def get_server_port() -> int:
+    """Dependency to get the server port for terminal callbacks."""
+    return _server_port
+
+
+def set_server_port(port: int) -> None:
+    """Configure the server port."""
+    global _server_port
+    _server_port = port
+
+
 @router.post("/execute", response_model=JobHandle)
 async def execute_command(
     request: CommandRequest,
@@ -767,7 +782,22 @@ async def complete_spawned_job(job_id: str, request: SpawnedJobCompleteRequest):
         _spawned_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         status_str = "completed" if request.success else "failed"
+        command = _spawned_jobs[job_id].get("command", "unknown")
         console.print(f"[cyan]Spawned job {job_id[:16]}... {status_str} (exit code: {request.exit_code})[/cyan]")
+
+        # Broadcast to ALL connected WebSocket clients
+        # (spawned jobs don't have specific subscribers, so we broadcast to all)
+        try:
+            from .websocket import emit_spawned_job_complete
+            await emit_spawned_job_complete(
+                job_id=job_id,
+                command=command,
+                success=request.success,
+                exit_code=request.exit_code
+            )
+        except ImportError:
+            # WebSocket module may not be available in test environment
+            pass
 
         return SpawnedJobCompleteResponse(updated=True, job_id=job_id)
 
@@ -804,6 +834,7 @@ async def get_spawned_job_status(job_id: str):
 async def spawn_terminal_command(
     request: CommandRequest,
     project_root: Path = Depends(get_project_root),
+    server_port: int = Depends(get_server_port),
 ):
     """
     Spawn a PDD command in a new terminal window.
@@ -860,8 +891,10 @@ async def spawn_terminal_command(
         "exit_code": None,
     }
 
-    # Spawn terminal with job_id for callback
-    success = TerminalSpawner.spawn(cmd_str, working_dir=cwd, job_id=job_id)
+    # Spawn terminal with job_id and server_port for callback
+    success = TerminalSpawner.spawn(
+        cmd_str, working_dir=cwd, job_id=job_id, server_port=server_port
+    )
 
     if success:
         console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")

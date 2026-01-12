@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { api } from '../api';
+import { api, AuthStatus } from '../api';
 import { PddrcConfig, PddrcContext, PddrcContextDefaults } from '../types';
 import { Cog6ToothIcon, ChevronDownIcon, ChevronUpIcon, TrashIcon, PlusIcon, FolderIcon, SpinnerIcon } from './Icon';
 import Tooltip from './Tooltip';
@@ -360,6 +360,11 @@ const ProjectSettings: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // Auth state
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authResult, setAuthResult] = useState<{ success: boolean; message: string } | null>(null);
+
   const loadConfig = async () => {
     setLoading(true);
     setError(null);
@@ -390,6 +395,45 @@ const ProjectSettings: React.FC = () => {
   useEffect(() => {
     loadConfig();
   }, []);
+
+  // Load auth status on mount
+  useEffect(() => {
+    const loadAuthStatus = async () => {
+      try {
+        const status = await api.getAuthStatus();
+        setAuthStatus(status);
+      } catch (e) {
+        setAuthStatus({ authenticated: false, cached: false, expires_at: null });
+      }
+    };
+    loadAuthStatus();
+  }, []);
+
+  const handleLogout = async () => {
+    setAuthLoading(true);
+    setAuthResult(null);
+    try {
+      const result = await api.logout();
+      if (result.success) {
+        setAuthResult({
+          success: true,
+          message: 'Tokens cleared. Run any pdd command to re-authenticate with GitHub.',
+        });
+        // Refresh auth status
+        const newStatus = await api.getAuthStatus();
+        setAuthStatus(newStatus);
+      } else {
+        setAuthResult(result);
+      }
+    } catch (e) {
+      setAuthResult({
+        success: false,
+        message: e instanceof Error ? e.message : 'Failed to clear tokens',
+      });
+    } finally {
+      setAuthLoading(false);
+    }
+  };
 
   const hasChanges = useCallback(() => {
     if (!config) return false;
@@ -572,6 +616,77 @@ const ProjectSettings: React.FC = () => {
         <PlusIcon className="w-5 h-5" />
         Add Context
       </button>
+
+      {/* PDD Cloud Authentication Section */}
+      <div className="mt-8 glass rounded-xl border border-surface-700/50 p-4 sm:p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
+            <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-white">PDD Cloud Authentication</h2>
+            <p className="text-sm text-surface-400">Manage your GitHub authentication for PDD Cloud</p>
+          </div>
+        </div>
+
+        {/* Current Status */}
+        <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-800/50 mb-4">
+          <div className={`w-3 h-3 rounded-full ${
+            authStatus?.authenticated ? 'bg-green-400' : 'bg-yellow-400 animate-pulse'
+          }`} />
+          <div>
+            <p className="text-sm font-medium text-white">
+              {authStatus?.authenticated ? 'Currently Authenticated' : 'Not Authenticated'}
+            </p>
+            <p className="text-xs text-surface-400">
+              {authStatus?.authenticated
+                ? authStatus.cached
+                  ? 'Using cached JWT token'
+                  : 'Using refresh token'
+                : 'No valid tokens found'}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-sm text-surface-300 mb-4">
+          Clear stored tokens to force a fresh GitHub Device Flow login on the next PDD command.
+        </p>
+
+        {authResult && (
+          <div className={`mb-4 p-3 rounded-lg text-sm ${
+            authResult.success
+              ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+              : 'bg-red-500/20 text-red-300 border border-red-500/30'
+          }`}>
+            {authResult.message}
+          </div>
+        )}
+
+        <button
+          onClick={handleLogout}
+          disabled={authLoading}
+          className="px-4 py-2 bg-red-600/80 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+        >
+          {authLoading ? (
+            <>
+              <SpinnerIcon className="w-4 h-4 animate-spin" />
+              Clearing...
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Force Re-authentication
+            </>
+          )}
+        </button>
+        <p className="mt-2 text-xs text-surface-500">
+          Clears JWT cache (~/.pdd/jwt_cache) and refresh token from system keyring.
+        </p>
+      </div>
 
       {/* Unsaved changes warning */}
       {hasChanges() && (
