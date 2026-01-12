@@ -1,3 +1,31 @@
+## v0.0.110 (2026-01-11)
+
+### Feat
+
+- add test isolation anti-pollution rules to test generation prompt
+- Add context examples for auth routes and terminal spawner
+- Add terminal spawner callback and WebSocket broadcast for spawned jobs
+- Add context/auth_service_example.py for prompt generation
+- Add shared auth_service module and prompts
+- **connect**: add re-authentication button and submit example feature
+
+### Fix
+
+- address Copilot review feedback for accessibility and test cleanup
+- remove outdated prompt content checks from test_generate_test.py
+- correct test_auth_service.py mocking and Z3 assertions
+- update tests for auth router and server port dependencies
+- add --manual flag to change commands in regression test
+- resolve test pollution and pipe truncation issues
+- restore original context/test.prompt include
+- escape curly braces in pytest_isolation_example.py
+- prevent headless mode from being triggered at import time
+
+### Refactor
+
+- move pytest-specific isolation rules to context/test.prompt
+- make _setup_headless_environment() idempotent
+
 ## v0.0.109 (2026-01-10)
 
 ### Feat
