@@ -993,12 +993,12 @@ def construct_paths(
         format_lower = format_option.lower()
         if format_lower == "md":
             file_extension = ".md"
-        elif format_lower == "py":
+        elif format_lower == "code":
             # Keep the language-based extension (file_extension already set above)
             pass
         else:
             # This should not happen due to click.Choice validation, but handle it anyway
-            raise click.UsageError(f"Unknown format '{format_option}'. Valid values: py, md")
+            raise click.UsageError(f"Unknown format '{format_option}'. Valid values: code, md")
 
 
 
