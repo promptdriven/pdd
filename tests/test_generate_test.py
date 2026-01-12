@@ -199,6 +199,32 @@ class TestPromptContainsAntiPollutionGuidance:
 class TestContextFileExists:
     """Tests verifying the test isolation context file exists and has content."""
 
+    def test_context_file_has_escaped_curly_braces(self):
+        """Verify curly braces are escaped for prompt formatting.
+
+        When context files are included in prompts via <include>, curly braces
+        are interpreted as format string placeholders. Unescaped braces like
+        {"key": "value"} will cause 'Missing key' errors during prompt formatting.
+
+        All curly braces must be doubled: {{"key": "value"}}
+        """
+        import re
+        content = read_prompt_file("context/pytest_isolation_example.py")
+
+        # Find all curly braces that are NOT doubled
+        # Pattern: single { not preceded by { OR single } not followed by }
+        unescaped_open = re.findall(r'(?<!\{)\{(?!\{)', content)
+        unescaped_close = re.findall(r'(?<!\})\}(?!\})', content)
+
+        assert len(unescaped_open) == 0, (
+            f"Found {len(unescaped_open)} unescaped '{{' in context file. "
+            "All curly braces must be doubled for prompt formatting."
+        )
+        assert len(unescaped_close) == 0, (
+            f"Found {len(unescaped_close)} unescaped '}}' in context file. "
+            "All curly braces must be doubled for prompt formatting."
+        )
+
     def test_test_isolation_examples_exists(self):
         """Verify the pytest_isolation_example.py context file exists."""
         project_root = get_project_root()
