@@ -253,6 +253,54 @@ class TestConnectionManager:
         await manager.broadcast_file_change(msg)
         ws.send_text.assert_called_once()
 
+    async def test_broadcast_to_all(self, websocket_module):
+        """Test that broadcast_to_all sends to ALL active connections."""
+        ConnectionManager = websocket_module["ConnectionManager"]
+        WSMessage = websocket_module["WSMessage"]
+        manager = ConnectionManager()
+
+        # Create multiple websocket mocks
+        ws1 = AsyncMock()
+        ws2 = AsyncMock()
+        ws3 = AsyncMock()
+
+        # Add them to active_connections
+        manager.active_connections = [ws1, ws2, ws3]
+
+        msg = WSMessage(type="spawned_job_complete", data={"job_id": "test-123"})
+        await manager.broadcast_to_all(msg)
+
+        # All three should receive the message
+        ws1.send_text.assert_called_once()
+        ws2.send_text.assert_called_once()
+        ws3.send_text.assert_called_once()
+
+        # Verify message content
+        sent_json = ws1.send_text.call_args[0][0]
+        assert "spawned_job_complete" in sent_json
+        assert "test-123" in sent_json
+
+    async def test_broadcast_to_all_cleanup_on_error(self, websocket_module):
+        """Test that dead connections are removed during broadcast_to_all."""
+        ConnectionManager = websocket_module["ConnectionManager"]
+        WSMessage = websocket_module["WSMessage"]
+        manager = ConnectionManager()
+
+        ws_alive = AsyncMock()
+        ws_dead = AsyncMock()
+        ws_dead.send_text.side_effect = Exception("Connection closed")
+
+        manager.active_connections = [ws_alive, ws_dead]
+
+        msg = WSMessage(type="test")
+        await manager.broadcast_to_all(msg)
+
+        # Alive connection should receive message
+        ws_alive.send_text.assert_called_once()
+        # Dead connection should be removed
+        assert ws_dead not in manager.active_connections
+        assert ws_alive in manager.active_connections
+
 
 class TestAsyncFileEventHandler:
     def test_debounce_logic(self, websocket_module):

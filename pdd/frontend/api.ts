@@ -220,6 +220,32 @@ export interface ArchitectureCheckResult {
   path?: string;
 }
 
+// Auth types
+export interface AuthStatus {
+  authenticated: boolean;
+  cached: boolean;
+  expires_at: number | null;
+}
+
+export interface LogoutResult {
+  success: boolean;
+  message: string;
+}
+
+export interface LoginResponse {
+  success: boolean;
+  user_code?: string;
+  verification_uri?: string;
+  expires_in?: number;
+  poll_id?: string;
+  error?: string;
+}
+
+export interface LoginPollResponse {
+  status: 'pending' | 'completed' | 'expired' | 'error';
+  message?: string;
+}
+
 // Global options that can be passed to any generation command
 export interface GenerationGlobalOptions {
   strength?: number;      // 0-1, model strength
@@ -297,6 +323,27 @@ class PDDApiClient {
   // Status
   async getStatus(): Promise<ServerStatus> {
     return this.request<ServerStatus>('/api/v1/status');
+  }
+
+  // Auth
+  async getAuthStatus(): Promise<AuthStatus> {
+    return this.request<AuthStatus>('/api/v1/auth/status');
+  }
+
+  async logout(): Promise<LogoutResult> {
+    return this.request<LogoutResult>('/api/v1/auth/logout', {
+      method: 'POST',
+    });
+  }
+
+  async startLogin(): Promise<LoginResponse> {
+    return this.request<LoginResponse>('/api/v1/auth/login', {
+      method: 'POST',
+    });
+  }
+
+  async pollLoginStatus(pollId: string): Promise<LoginPollResponse> {
+    return this.request<LoginPollResponse>(`/api/v1/auth/login/poll/${encodeURIComponent(pollId)}`);
   }
 
   // Commands

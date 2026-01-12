@@ -74,6 +74,7 @@
   10. **Terminal Spawning API**:
       - POST /commands/spawn-terminal: Spawn command in new terminal window
       - Uses TerminalSpawner for cross-platform support (macOS, Linux, Windows)
+      - Passes server_port to TerminalSpawner for callback URL
       - Returns SpawnTerminalResponse with success status and platform
       - Smart output path detection: auto-computes --output for example/test commands
         using detect_context_for_file() from pdd.construct_paths
@@ -84,6 +85,19 @@
       - Preserves subdirectory structure from prompt path
       - Example: prompts/server/foo.prompt + context.example_output_path="context"
         -> output: "context/server/"
+
+  12. **Server Port Dependency**:
+      - `get_server_port()`: Dependency function returning current server port
+      - `set_server_port(port)`: Configure server port (called by app startup)
+      - Default port: 9876
+      - Used by spawn_terminal_command to pass correct callback URL to spawner
+
+  13. **Spawned Job Completion API**:
+      - POST /commands/spawned-jobs/{job_id}/complete: Terminal callback endpoint
+      - Request body: SpawnedJobCompleteRequest with success (bool) and exit_code (int)
+      - Updates _spawned_jobs dict with completion status
+      - Broadcasts completion via WebSocket to all connected clients
+      - Returns SpawnedJobCompleteResponse with updated status
 
 % Dependencies
   <fastapi_example>
@@ -101,6 +115,7 @@
   </cli_reference>
   Use TerminalSpawner from pdd/server/terminal_spawner.py for spawning terminal windows
   Use detect_context_for_file from pdd/construct_paths.py for smart output path detection
+  Use emit_spawned_job_complete from pdd/server/routes/websocket.py for broadcasting completions
 
 % Instructions
   - Create router with prefix="/api/v1/commands", tags=["commands"]

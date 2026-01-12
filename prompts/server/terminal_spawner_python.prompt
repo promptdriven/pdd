@@ -10,29 +10,43 @@ to the user in a new terminal window rather than captured by the server.
 
 % Requirements
 1. **TerminalSpawner class** (static methods only):
-   - `spawn(command, working_dir) -> bool`: Main entry point
+   - `spawn(command, working_dir, job_id, server_port) -> bool`: Main entry point
      - Prepends `cd working_dir &&` if working_dir provided
      - Dispatches to platform-specific method based on sys.platform
+     - Passes job_id and server_port for callback functionality
      - Returns True on success, False on failure
 
-   - `_darwin(command) -> bool`: macOS implementation
+   - `_darwin(command, job_id, server_port) -> bool`: macOS implementation
      - Creates temporary shell script in /tmp with unique name (using pid and id)
-     - Script runs command then `exec bash` to keep terminal open
+     - Script runs command, captures exit code
+     - If job_id provided: POST callback to server with success/exit_code
+       - URL: http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete
+       - Payload: {"success": true/false, "exit_code": N}
+       - Use curl with debug output for troubleshooting
+     - Shows result message (green checkmark or red X)
+     - Ends with `exec bash` to keep terminal open
      - Makes script executable (chmod 0o755)
      - Opens with Terminal.app via `open -a Terminal <script>`
 
-   - `_linux(command) -> bool`: Linux implementation
+   - `_linux(command, job_id, server_port) -> bool`: Linux implementation
      - Tries terminal emulators in order: gnome-terminal, xfce4-terminal, konsole, xterm
      - Uses shutil.which() to check availability
-     - Each terminal runs: bash -c "{command}; exec bash"
+     - Builds command with callback if job_id provided (same as macOS)
+     - Each terminal runs: bash -c "{command_with_callback}; exec bash"
      - Returns False if no supported terminal found
 
-   - `_windows(command) -> bool`: Windows implementation
+   - `_windows(command, job_id, server_port) -> bool`: Windows implementation
      - Tries Windows Terminal first: wt.exe new-tab powershell -NoExit -Command
      - Falls back to PowerShell: powershell.exe -NoExit -Command
+     - Includes callback via Invoke-RestMethod if job_id provided
      - Returns True if either succeeds
 
-2. **Error handling**:
+2. **Callback URL Construction**:
+   - Default server_port: 9876
+   - Callback endpoint: /api/v1/commands/spawned-jobs/{job_id}/complete
+   - JSON payload: {"success": <exit_code==0>, "exit_code": <exit_code>}
+
+3. **Error handling**:
    - All methods catch exceptions and return False
    - Print error message on failure for debugging
 
