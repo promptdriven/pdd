@@ -2012,11 +2012,13 @@ pdd auth login
 
 ##### auth status
 
-Displays the active account and current authentication state.
+Displays the active account and current authentication state. Exit code is 0 if authenticated, 1 otherwise.
 
 ```bash
 pdd auth status
 ```
+
+**Note:** If only a refresh token exists (no cached JWT), the status will show "Authenticated as: Unknown" since user info is extracted from the cached JWT. Run `pdd auth login` to refresh the token and display the full account information.
 
 ##### auth logout
 
