@@ -216,7 +216,10 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
                   className="group relative inline-flex items-center gap-2 px-6 py-3 bg-gray-700 rounded-lg hover:bg-gray-600 transition-colors"
                   title="Click to copy"
                 >
-                  <span className="text-2xl font-mono font-bold text-white tracking-wider">
+                  <span
+                    className="text-2xl font-mono font-bold text-white tracking-wider"
+                    aria-label="Device verification code"
+                  >
                     {loginState.userCode}
                   </span>
                   <svg className="w-5 h-5 text-gray-400 group-hover:text-white transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
