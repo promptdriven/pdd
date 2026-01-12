@@ -94,6 +94,7 @@
     - Prefer function-scoped fixtures over module or session scope
     - Use yield in fixtures to ensure cleanup runs even on test failure
 
+<include>context/test.prompt</include>
 <include>context/pytest_isolation_example.py</include>
 
 <instructions>
