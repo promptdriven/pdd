@@ -177,6 +177,10 @@ const App: React.FC = () => {
       // e.g., "calculator" not "calculator_python"
       if (command === CommandType.SYNC) {
         args.basename = prompt.sync_basename;
+        // Pass context to ensure sync finds the prompt in the correct location
+        if (prompt.context) {
+          options['context'] = prompt.context;
+        }
       } else if (command === CommandType.UPDATE) {
         // Update command: pdd update [PROMPT_FILE] <CODE_FILE> [ORIGINAL_CODE_FILE]
         // - If only code: generates new prompt for the code
