@@ -14,12 +14,6 @@ os.environ["GITHUB_CLIENT_ID"] = "mock_github_client_id"
 os.environ["NEXT_PUBLIC_FIREBASE_API_KEY"] = "mock_firebase_key"
 
 # 2. Mock the 'pdd.get_jwt_token' module
-# CRITICAL: Save originals BEFORE patching to avoid polluting sys.modules during pytest collection
-# See context/pytest_isolation_example.py Pattern 7 for the correct approach
-_saved = {}
-_saved["pdd"] = sys.modules.get("pdd")
-_saved["pdd.get_jwt_token"] = sys.modules.get("pdd.get_jwt_token")
-
 sys.modules["pdd"] = MagicMock()
 sys.modules["pdd.get_jwt_token"] = MagicMock()
 
@@ -40,14 +34,6 @@ mock_device_flow.poll_for_token = mock_poll
 sys.modules["pdd.get_jwt_token"].DeviceFlow = MagicMock(return_value=mock_device_flow)
 sys.modules["pdd.get_jwt_token"].FirebaseAuthenticator = MagicMock()
 sys.modules["pdd.get_jwt_token"]._cache_jwt = MagicMock()
-
-# RESTORE originals immediately after setting up mocks
-# This prevents polluting sys.modules for other test files during pytest collection
-for key, original in _saved.items():
-    if original is None:
-        sys.modules.pop(key, None)
-    else:
-        sys.modules[key] = original
 
 # --- Import the Module ---
 # Assuming the module code is saved as 'auth_routes.py' in the same directory
