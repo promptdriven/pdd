@@ -1,0 +1,64 @@
+% You are an expert TypeScript/React engineer. Your goal is to write `pdd/frontend/api.ts`.
+
+% Role & Scope
+  This module provides a typed API client for the PDD server.
+  It enables the React frontend to interact with all backend endpoints
+  including commands, jobs, auth, and WebSocket streaming.
+
+% Requirements
+  1. **PDDApiClient Class**:
+     - Constructor accepts optional baseUrl (default: window.location.origin)
+     - Generic request method with error handling and JSON parsing
+     - Methods mirror REST API endpoints
+
+  2. **Command Execution**:
+     - `executeCommand(request)`: POST /api/v1/commands/execute -> JobHandle
+     - `runCommand(request)`: POST /api/v1/commands/run -> RunResult
+     - `cancelCommand()`: POST /api/v1/commands/cancel -> CancelResult
+     - `getCommandStatus()`: GET /api/v1/commands/status -> CommandStatus
+     - `getAvailableCommands()`: GET /api/v1/commands/available -> CommandInfo[]
+     - `spawnTerminal(request)`: POST /api/v1/commands/spawn-terminal -> SpawnTerminalResponse
+
+  3. **Job Management**:
+     - `getJob(jobId)`: GET /api/v1/commands/jobs/{jobId} -> JobResult
+     - `cancelJob(jobId)`: POST /api/v1/commands/jobs/{jobId}/cancel
+     - `getJobHistory(params)`: GET /api/v1/commands/history -> JobHistoryResponse
+
+  4. **Authentication**:
+     - `getAuthStatus()`: GET /api/v1/auth/status -> AuthStatus
+     - `logout()`: POST /api/v1/auth/logout -> LogoutResult
+     - `startLogin()`: POST /api/v1/auth/login -> LoginResponse
+     - `pollLoginStatus(pollId)`: GET /api/v1/auth/login/poll/{pollId} -> LoginPollResponse
+
+  5. **File Operations**:
+     - `listPrompts()`: GET /api/v1/prompts
+     - `getPrompt(path)`: GET /api/v1/prompts/{path}
+     - `savePrompt(path, content)`: PUT /api/v1/prompts/{path}
+
+  6. **Type Definitions** (interfaces):
+     - CommandRequest: command, args, options
+     - JobHandle: job_id
+     - JobResult: job_id, status, result, error, started_at, completed_at, duration, cost
+     - RunResult: success, message, exit_code, stdout?, stderr?, error_details?
+     - CancelResult: cancelled, message
+     - SpawnTerminalResponse: success, message, command, platform
+     - CommandStatus: running, command_info?
+     - AuthStatus: authenticated, cached, expires_at?
+     - LogoutResult: success, message
+     - LoginResponse: success, user_code?, verification_uri?, expires_in?, poll_id?, error?
+     - LoginPollResponse: status ('pending'|'completed'|'expired'|'error'), message?
+     - GenerationGlobalOptions: strength?, temperature?, time?, verbose?, etc.
+
+  7. **Error Handling**:
+     - Throw Error with message from server response on non-ok status
+     - Include status code in error message
+
+% Instructions
+  - Use fetch API for HTTP requests
+  - Export singleton `api` instance for app-wide use
+  - Use TypeScript strict typing for all interfaces
+  - Handle URL encoding for path parameters (encodeURIComponent)
+
+% Deliverables
+  - Code: `pdd/frontend/api.ts`
+  - Export: PDDApiClient class, api singleton, all type interfaces
