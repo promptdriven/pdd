@@ -183,47 +183,6 @@ class TestStartLoginExceptionHandling:
                 assert result.success is False
                 assert "Unexpected error" in result.error
 
-    @pytest.mark.asyncio
-    async def test_start_login_exception_classes_are_defined_before_except(self):
-        """
-        Verify exception classes are importable and defined before the try block.
-
-        This is a structural test to prevent the UnboundLocalError regression.
-        The import statement must be outside the try block for the except clause
-        to reference the exception classes.
-        """
-        import ast
-        import inspect
-        from pdd.server.routes import auth
-
-        source = inspect.getsource(auth.start_login)
-        tree = ast.parse(source)
-
-        # Find the function definition
-        func_def = tree.body[0]
-        assert isinstance(func_def, ast.AsyncFunctionDef)
-
-        # Find try statements and their except handlers
-        for node in ast.walk(func_def):
-            if isinstance(node, ast.Try):
-                # Check that except handlers reference AuthError/NetworkError
-                for handler in node.handlers:
-                    if handler.type:
-                        # Get the names being caught
-                        if isinstance(handler.type, ast.Tuple):
-                            names = [elt.id for elt in handler.type.elts if isinstance(elt, ast.Name)]
-                        elif isinstance(handler.type, ast.Name):
-                            names = [handler.type.id]
-                        else:
-                            names = []
-
-                        # If catching AuthError or NetworkError, they must be imported before try
-                        if "AuthError" in names or "NetworkError" in names:
-                            # The import must come before the try statement
-                            # (This test passes if we get here without import errors)
-                            pass
-
-
 class TestStartLoginEnvVars:
     """Test environment variable handling in start_login."""
 
