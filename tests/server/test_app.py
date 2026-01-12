@@ -196,6 +196,8 @@ def app_module_with_mocks():
         _mock_routes_commands.get_job_manager = MagicMock(__name__="get_job_manager_mock")
         _mock_routes_commands.get_project_root = MagicMock(__name__="get_project_root_mock")
         _mock_routes_commands.set_project_root = MagicMock(__name__="set_project_root_mock")
+        _mock_routes_commands.get_server_port = MagicMock(__name__="get_server_port_mock")
+        _mock_routes_commands.set_server_port = MagicMock(__name__="set_server_port_mock")
         sys.modules["pdd.server.routes.commands"] = _mock_routes_commands
 
         _mock_routes_ws = types.ModuleType("pdd.server.routes.websocket")
@@ -212,6 +214,10 @@ def app_module_with_mocks():
         _mock_routes_prompts.get_path_validator = MagicMock(__name__="get_path_validator_mock")
         _mock_routes_prompts.set_path_validator = MagicMock(__name__="set_path_validator_mock")
         sys.modules["pdd.server.routes.prompts"] = _mock_routes_prompts
+
+        _mock_routes_auth = types.ModuleType("pdd.server.routes.auth")
+        _mock_routes_auth.router = APIRouter()
+        sys.modules["pdd.server.routes.auth"] = _mock_routes_auth
 
         # Remove cached app module if any
         if "pdd.server.app" in sys.modules:
