@@ -49,11 +49,12 @@
        - prompt: path to .prompt file
        - sync_basename: basename for sync command (without language suffix)
        - language: detected language (python, typescript, etc.)
+       - context: matched .pddrc context name (for --context flag in pdd sync)
        - code, test, example: paths to related files if they exist
      - Uses .pddrc configuration for context-specific paths
      - Supports helper functions:
        - `load_pddrc(project_root)`: Load .pddrc YAML config
-       - `match_context(prompt_path, pddrc)`: Get context defaults for path
+       - `match_context(prompt_path, pddrc) -> tuple[str, dict]`: Return (context_name, defaults) for path
        - `parse_prompt_stem(stem)`: Extract sync_basename and language
 
   6. **Language detection**:
