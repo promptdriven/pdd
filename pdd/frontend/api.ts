@@ -68,6 +68,7 @@ export interface PromptInfo {
   prompt: string;           // Full path: "prompts/calculator_python.prompt"
   sync_basename: string;    // For sync command: "calculator" (without language suffix)
   language?: string;        // Detected language: "python"
+  context?: string;         // Matched .pddrc context name
   code?: string;
   test?: string;
   example?: string;
