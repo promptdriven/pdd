@@ -2,29 +2,29 @@
 
 ### Feat
 
-- add test isolation anti-pollution rules to test generation prompt
-- Add context examples for auth routes and terminal spawner
-- Add terminal spawner callback and WebSocket broadcast for spawned jobs
-- Add context/auth_service_example.py for prompt generation
-- Add shared auth_service module and prompts
-- **connect**: add re-authentication button and submit example feature
+- **Agentic Change Command:** New `pdd change` workflow implementing 12-step orchestrated GitHub issue resolution. Includes duplicate detection, spec research, requirement clarification, documentation analysis, dev unit identification, architecture review, prompt analysis, implementation, issue detection, fixing, and PR creation. Supports state persistence, worktree isolation, manual intervention mode, and resume capabilities. Added `agentic_change.py`, `agentic_change_orchestrator.py`, and 12 LLM step prompt files (2,377 lines total).
+
+- **Auth Service Module:** Shared authentication service (`auth_service.py`) for PDD Connect with JWT token management, keyring integration, token refresh logic, and API client factory. Includes server-side `/auth` routes for login, logout, status checking, and token refresh. Added `ReauthModal.tsx` and `AuthStatusIndicator.tsx` frontend components for seamless re-authentication UX.
+
+- **Terminal Spawner Enhancements:** Spawned terminals now send completion callbacks to the server via HTTP POST with success status and exit codes. WebSocket broadcasts notify connected clients of job completion in real-time. Added debug logging for callback troubleshooting.
+
+- **Test Isolation Framework:** Comprehensive pytest anti-pollution rules added to `context/test.prompt` (65 lines). Enforces monkeypatch for env vars, fixture cleanup with yield, tmp_path for file ops, and proper mocking patterns. Includes `context/pytest_isolation_example.py` demonstrating safe test patterns.
+
+- **Modify Command Refactor:** Complete rewrite of `pdd/commands/modify.py` integrating agentic change workflow, improved error handling with Rich console, and streamlined argument parsing.
 
 ### Fix
 
-- address Copilot review feedback for accessibility and test cleanup
-- remove outdated prompt content checks from test_generate_test.py
-- correct test_auth_service.py mocking and Z3 assertions
-- update tests for auth router and server port dependencies
-- add --manual flag to change commands in regression test
-- resolve test pollution and pipe truncation issues
-- restore original context/test.prompt include
-- escape curly braces in pytest_isolation_example.py
-- prevent headless mode from being triggered at import time
+- **Test Suite Cleanup:** Removed outdated prompt content checks from `test_generate_test.py`, corrected Z3 solver assertions and mocking in `test_auth_service.py`, updated port dependencies in auth router tests, and resolved test pollution from direct `os.environ` manipulation.
+
+- **Headless Mode Stability:** Made `_setup_headless_environment()` idempotent and prevented it from triggering at import time, eliminating side effects in non-interactive contexts.
+
+- **Template Sanitization:** Escaped curly braces in `pytest_isolation_example.py` to prevent Jinja2 template errors during prompt generation.
+
+- **Regression Test Support:** Added `--manual` flag to change commands in regression tests for automated testing of orchestrator workflows.
 
 ### Refactor
 
-- move pytest-specific isolation rules to context/test.prompt
-- make _setup_headless_environment() idempotent
+- Consolidated pytest-specific isolation rules from scattered locations into `context/test.prompt` as the single source of truth for test generation guidance.
 
 ## v0.0.109 (2026-01-10)
 
