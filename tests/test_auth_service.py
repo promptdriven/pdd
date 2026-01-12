@@ -88,7 +88,7 @@ def mock_keyring():
 
 def test_constants():
     """Verify module constants."""
-    assert auth_service.KEYRING_SERVICE_NAME == "firebase-auth-pdd"
+    assert auth_service.KEYRING_SERVICE_NAME == "firebase-auth-PDD CLI"
     assert auth_service.KEYRING_USER_NAME == "refresh_token"
     # We can't easily assert the exact path of JWT_CACHE_FILE without mocking home during import,
     # but we can check the suffix.
