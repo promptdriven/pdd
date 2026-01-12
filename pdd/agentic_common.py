@@ -30,7 +30,7 @@ TIMEOUT_ENV_VAR: str = "PDD_AGENTIC_TIMEOUT"
 
 # Per-step timeouts for agentic bug orchestrator (Issue #256)
 # Complex steps (reproduce, root cause, generate) get more time.
-STEP_TIMEOUTS: Dict[int, float] = {
+BUG_STEP_TIMEOUTS: Dict[int, float] = {
     1: 240.0,  # Setup
     2: 240.0,  # Review
     3: 240.0,  # Plan
@@ -41,6 +41,25 @@ STEP_TIMEOUTS: Dict[int, float] = {
     8: 600.0,  # Verify
     9: 240.0,  # Final Verify
 }
+
+# Per-step timeouts for agentic change orchestrator
+CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,  # Duplicate Check
+    2: 240.0,  # Docs Comparison
+    3: 340.0,  # Research
+    4: 340.0,  # Clarify
+    5: 340.0,  # Docs Changes
+    6: 340.0,  # Identify Dev Units
+    7: 340.0,  # Architecture Review
+    8: 600.0,  # Analyze Prompt Changes (Complex)
+    9: 1000.0,  # Implement Changes (Most Complex)
+    10: 340.0,  # Identify Issues
+    11: 600.0,  # Fix Issues (Complex)
+    12: 340.0,  # Create PR
+}
+
+# Alias for backward compatibility
+STEP_TIMEOUTS: Dict[int, float] = BUG_STEP_TIMEOUTS
 
 # Issue #261: False positive detection
 # Minimum output length to consider a response as legitimate work
@@ -301,9 +320,10 @@ def _build_subprocess_env(
                       robust as it uses the user's Claude subscription.
     """
     env: Dict[str, str] = dict(base or os.environ)
-    env.setdefault("TERM", "dumb")
-    env.setdefault("NO_COLOR", "1")
-    env.setdefault("CI", "1")
+    # Force these values to ensure consistent headless behavior
+    env["TERM"] = "dumb"
+    env["NO_COLOR"] = "1"
+    env["CI"] = "1"
 
     if use_cli_auth:
         # Remove API key to force Claude CLI subscription auth
@@ -507,7 +527,7 @@ def _parse_anthropic_result(data: Mapping[str, Any]) -> Tuple[bool, str, float]:
         error_msg = str(error_info.get("message") or error_info)
     elif error_info is not None:
         error_msg = str(error_info)
-    else:
+    else: # error_info is None
         error_msg = ""
 
     response_text = str(data.get("result") or data.get("response") or "")

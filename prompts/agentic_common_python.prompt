@@ -6,7 +6,7 @@ Write the pdd/agentic_common.py module.
 % Role & Scope
 Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration.
 
-% CLI Documentation (headless mode, JSON output, permissions)
+% External Documentation
 <claude_code_json_output>
 <web>https://claudelog.com/faqs/what-is-output-format-in-claude-code/</web>
 </claude_code_json_output>
@@ -56,12 +56,23 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 % Environment Variables
 - `PDD_AGENTIC_TIMEOUT`: Agent CLI timeout in seconds (default: 240)
 
-% Per-Step Timeouts (Issue #256)
-Export `STEP_TIMEOUTS: Dict[int, float]` mapping step numbers to timeout values:
+% Per-Step Timeouts (Issue #256, #239)
+
+Export workflow-specific timeout dictionaries:
+
+`BUG_STEP_TIMEOUTS: Dict[int, float]` - For 9-step agentic bug workflow:
 - Simple steps (1-3, 9): 240 seconds (setup, review, plan, final verify)
 - Medium step (6): 340 seconds (verify fix plan)
 - Complex steps (4, 5, 8): 600 seconds (reproduce, root cause, verify)
 - Most complex step (7): 1000 seconds (generate fix)
+
+`CHANGE_STEP_TIMEOUTS: Dict[int, float]` - For 12-step agentic change workflow:
+- Simple steps (1, 2): 240 seconds (duplicate check, docs comparison)
+- Medium steps (3, 4, 5, 6, 7, 10, 12): 340 seconds (research, clarify, docs changes, identify dev units, architecture review, identify issues, create PR)
+- Complex steps (8, 11): 600 seconds (analyze prompt changes, fix issues)
+- Most complex step (9): 1000 seconds (implement changes)
+
+`STEP_TIMEOUTS: Dict[int, float]` - Alias for `BUG_STEP_TIMEOUTS` (backward compatibility)
 
 % False Positive Detection (Issue #261)
 Export `MIN_VALID_OUTPUT_LENGTH: int = 50`
@@ -91,10 +102,14 @@ Notes:
 - `--yolo` (Gemini): auto-approves all operations without prompts
 - `--full-auto` (Codex): exits read-only sandbox, allows file edits
 
+% Error Handling
+- Return `(False, "No agents available", 0.0, "")` if no providers have both CLI and API key configured
+- Return `(False, "{provider} error: {message}", 0.0, provider)` on subprocess failure
+- Try next provider in preference order on failure; return failure only if all providers fail
+- Log false positive detection at error level before trying next provider
+
 % Dependencies
-<module_dependencies>
-  <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
-</module_dependencies>
+<pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>
 
 % Deliverables
 - Code: `pdd/agentic_common.py`

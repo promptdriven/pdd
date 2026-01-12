@@ -1,8 +1,11 @@
 {
-  "timestamp": "2025-12-22T02:28:01.351574+00:00",
+  "timestamp": "2026-01-11T06:34:51.664421+00:00",
   "exit_code": 0,
-  "tests_passed": 16,
+  "tests_passed": 34,
   "tests_failed": 0,
-  "coverage": 75.0,
-  "test_hash": "bce96f009d034acffbfbc82d2e3a6e8429ec6739e8f28556b9c488942cbdc5fb"
+  "coverage": 81.0,
+  "test_hash": "e667ee536f4a66ee5cf806342ed64e40d054a9f47b0dd92eb1c118a83554ee7c",
+  "test_files": {
+    "test_agentic_common.py": "e667ee536f4a66ee5cf806342ed64e40d054a9f47b0dd92eb1c118a83554ee7c"
+  }
 }

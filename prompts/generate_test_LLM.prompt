@@ -32,7 +32,16 @@
     - Setup and teardown methods should only use public APIs and environment variables, never reset internal module state directly.
     - Design tests to be independent of implementation details that might change when code is regenerated.
     - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state. In general minimize the amount of mocking needed so that the tests are more robust to changes in the code under test and more code is tested.
-<include>./context/test.prompt</include>
+
+% TEST ISOLATION PRINCIPLE:
+% CRITICAL: Each test MUST be isolated and not pollute state for other tests.
+    - Tests must clean up any state they modify (environment variables, global state, files, mocks)
+    - Use the testing framework's built-in isolation mechanisms (fixtures, setup/teardown, context managers)
+    - Avoid modifying global or module-level state directly; if unavoidable, always restore original state
+    - Prefer function-scoped test resources over shared/module-scoped ones to ensure isolation
+
+<include>context/test.prompt</include>
+<include>context/pytest_isolation_example.py</include>
 
 <instructions>
     1. FIRST: Carefully analyze the ACTUAL code provided in code_under_test:
