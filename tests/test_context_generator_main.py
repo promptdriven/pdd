@@ -362,6 +362,31 @@ def test_format_option_passed_to_construct_paths(mock_ctx, mock_construct_paths,
     command_options = call_args.kwargs.get('command_options', {})
     assert command_options.get('format') == 'md', "format option should be passed to construct_paths"
 
+def test_format_md_skips_python_syntax_validation(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
+    """Test that --format md option skips Python syntax validation for markdown output."""
+    from unittest.mock import patch
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "test.py"
+    output_file = tmp_path / "test_example.md"
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+    # Markdown content that would fail Python syntax validation
+    markdown_content = "# Example Usage\n\nThis is markdown, not Python code.\n- Item 1\n- Item 2"
+    mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": str(output_file)}, "python")
+    mock_context_generator.return_value = (markdown_content, 0.0, "model")
+    
+    # Patch _validate_and_fix_python_syntax to verify it's NOT called
+    with patch('pdd.context_generator_main._validate_and_fix_python_syntax') as mock_validate:
+        context_generator_main(mock_ctx, str(prompt_file), str(code_file), None, format="md")
+        
+        # Verify Python syntax validation was NOT called (markdown shouldn't be validated as Python)
+        mock_validate.assert_not_called()
+        
+        # Verify the markdown content was saved unchanged
+        assert output_file.exists()
+        assert output_file.read_text() == markdown_content
+
 def test_z3_syntax_fixer_logic():
     try:
         import z3

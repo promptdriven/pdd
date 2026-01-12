@@ -198,7 +198,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             generated_code, total_cost, model_name = context_generator(code_module=code_content, prompt=prompt_content, language=language, strength=strength, temperature=temperature, verbose=not quiet, source_file_path=source_file_path, example_file_path=example_file_path, module_name=module_name, time=ctx.obj.get('time'))
         if not generated_code:
             raise click.UsageError("Example generation failed, no code produced.")
-        if language and language.lower() == "python":
+        # Only validate Python syntax when format is "py" (default) or None, not when format is "md"
+        if language and language.lower() == "python" and (format is None or format.lower() == "py"):
             generated_code = _validate_and_fix_python_syntax(generated_code, quiet)
         if resolved_output:
             out_path = Path(resolved_output)
