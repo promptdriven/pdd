@@ -76,10 +76,13 @@ class TerminalSpawner:
             # Build callback section if job_id provided
             if job_id:
                 callback_section = f'''
-# Report completion to server (non-blocking)
-curl -s -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \\
+# Report completion to server (must complete before exec bash)
+echo "[DEBUG] Sending callback to http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete"
+echo "[DEBUG] Payload: {{\\"success\\": '$((EXIT_CODE == 0))', \\"exit_code\\": '$EXIT_CODE'}}"
+CURL_RESPONSE=$(curl -s -w "\\n[HTTP_STATUS:%{{http_code}}]" -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \\
   -H "Content-Type: application/json" \\
-  -d '{{"success": '$((EXIT_CODE == 0))', "exit_code": '$EXIT_CODE'}}' &>/dev/null &
+  -d '{{"success": '$((EXIT_CODE == 0))', "exit_code": '$EXIT_CODE'}}' 2>&1)
+echo "[DEBUG] Curl response: $CURL_RESPONSE"
 
 # Show result to user
 echo ""
@@ -128,9 +131,11 @@ exec bash
             if job_id:
                 callback_cmd = f'''
 EXIT_CODE=$?
-curl -s -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \
+echo "[DEBUG] Sending callback to http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete"
+CURL_RESPONSE=$(curl -s -w "\\n[HTTP_STATUS:%{{http_code}}]" -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \
   -H "Content-Type: application/json" \
-  -d '{{"success": '$((EXIT_CODE == 0))', "exit_code": '$EXIT_CODE'}}' &>/dev/null &
+  -d '{{"success": '$((EXIT_CODE == 0))', "exit_code": '$EXIT_CODE'}}' 2>&1)
+echo "[DEBUG] Curl response: $CURL_RESPONSE"
 echo ""
 if [ $EXIT_CODE -eq 0 ]; then echo -e "\\033[32m✓ Command completed successfully\\033[0m"; else echo -e "\\033[31m✗ Command failed (exit code: $EXIT_CODE)\\033[0m"; fi
 '''
