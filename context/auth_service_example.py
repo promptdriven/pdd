@@ -81,49 +81,6 @@ def logout() -> Tuple[bool, Optional[str]]:
     ...
 
 
-def get_refresh_token() -> Optional[str]:
-    """
-    Get the stored refresh token from keyring.
-
-    Tries standard keyring first, falls back to keyrings.alt.file.PlaintextKeyring.
-
-    Returns:
-        The refresh token string if found, None otherwise.
-    """
-    ...
-
-
-async def verify_auth() -> Dict[str, Any]:
-    """
-    Verify authentication by attempting to get a valid token.
-
-    This function performs a deep validation of authentication state by
-    actually attempting to refresh the token if the JWT is expired.
-
-    Returns:
-        Dict with keys:
-        - valid: bool - True if we can get a valid token
-        - error: Optional[str] - Error message if validation failed
-        - needs_reauth: bool - True if user needs to re-login
-        - username: Optional[str] - User email/identifier if available
-    """
-    ...
-
-
-def get_cached_jwt() -> Optional[str]:
-    """
-    Get the cached JWT token if it exists and is valid.
-
-    Reads from JWT_CACHE_FILE, checks expiration with 5-minute buffer,
-    and returns the token if valid. Supports both 'id_token' (new format)
-    and 'jwt' (legacy format) keys for backwards compatibility.
-
-    Returns:
-        The JWT token string if valid, None otherwise.
-    """
-    ...
-
-
 # Example usage in CLI commands:
 #
 # # In status command:
@@ -141,34 +98,3 @@ def get_cached_jwt() -> Optional[str]:
 #     click.echo("Logged out of PDD Cloud.")
 # else:
 #     click.echo(f"Failed to logout: {error}", err=True)
-#
-# # Get cached JWT for API calls:
-# from pdd.auth_service import get_cached_jwt
-# token = get_cached_jwt()
-# if token:
-#     headers = {"Authorization": f"Bearer {token}"}
-#     # Make API call with headers
-# else:
-#     click.echo("Not authenticated or token expired")
-#
-# # Get refresh token (for re-authentication flows):
-# from pdd.auth_service import get_refresh_token
-# refresh = get_refresh_token()
-# if refresh:
-#     # Can attempt token refresh
-#     pass
-#
-# # Deep verification with auto-refresh (async):
-# import asyncio
-# from pdd.auth_service import verify_auth
-#
-# async def check_auth():
-#     result = await verify_auth()
-#     if result["valid"]:
-#         click.echo(f"Authenticated as: {result['username']}")
-#     elif result["needs_reauth"]:
-#         click.echo(f"Please re-login: {result['error']}")
-#     else:
-#         click.echo(f"Temporary error: {result['error']}")
-#
-# asyncio.run(check_auth())
