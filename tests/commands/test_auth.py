@@ -165,10 +165,11 @@ def test_login_network_error(runner, mock_dependencies, monkeypatch):
 def test_status_not_authenticated(runner, mock_dependencies):
     """Test status when not authenticated."""
     mock_dependencies["get_auth_status"].return_value = {"authenticated": False}
-    
+
     result = runner.invoke(auth_group, ["status"])
-    
-    assert result.exit_code == 1
+
+    # Status returns 0 even when not authenticated (informational, not an error)
+    assert result.exit_code == 0
     assert "Not authenticated" in result.output
 
 def test_status_authenticated(runner, mock_dependencies):
