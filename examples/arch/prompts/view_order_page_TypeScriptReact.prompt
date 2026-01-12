@@ -1,0 +1,47 @@
+<prompt>
+The view_order_page component is a critical frontend module within the Next.js application, responsible for providing a comprehensive, read-only (or state-managed) detailed view of a specific customer order. Located at the dynamic route `app/orders/[orderId]/page.tsx`, it serves as the primary interface for users and administrators to verify order contents, track fulfillment progress via a status timeline, and review financial totals. Its role is to aggregate data from the Order API and present it in a clear, accessible, and responsive layout, ensuring data consistency between the backend state and the user's view.
+
+Requirements
+1. Data Fetching: Implement server-side or client-side fetching (based on Next.js App Router patterns) to retrieve complete order details using the `GET /api/orders/{order_id}` endpoint.
+2. Dynamic Routing: Correctly extract and validate the `orderId` parameter from the dynamic route segment.
+3. UI Layout: Display order metadata (ID, date, customer), a detailed list of order items (product name, quantity, unit price, subtotal), and a summary section (tax, shipping, total).
+4. Status Visualization: Render a visual timeline or progress indicator representing the order's lifecycle (e.g., Pending -> Processing -> Shipped -> Delivered).
+5. Error Handling: Implement robust error boundaries and empty states for scenarios where the order is not found (404) or the API is unreachable (500).
+6. Loading States: Provide skeleton screens or loading spinners to maintain a high-quality user experience during data transition.
+7. Security: Ensure the JWT token is correctly passed in the Authorization header for all API requests and handle unauthorized (401) or forbidden (403) responses by redirecting to login or showing an access-denied message.
+8. Responsive Design: Ensure the order details are legible across mobile, tablet, and desktop breakpoints.
+
+Dependencies
+<order_api>
+  <include>context/order_api_example.py</include>
+</order_api>
+<order_components>
+  <include>context/order_components_example.tsx</include>
+</order_components>
+
+Prompt Dependencies:
+- order_api_Python.prompt
+- order_components_TypeScriptReact.prompt
+
+Instructions
+- Use Next.js 13+ App Router conventions, utilizing `page.tsx` for the main entry point.
+- Define TypeScript interfaces for the `Order`, `OrderItem`, and `OrderStatus` based on the backend schema provided in the architecture.
+- Implement a "Back to Orders" navigation link that preserves the user's previous context if possible.
+- For the status timeline, map the `status` string from the API to a set of predefined steps; use distinct visual styles (colors/icons) for each state.
+- Format currency values using `Intl.NumberFormat` for consistency.
+- Ensure the component is optimized for performance, avoiding unnecessary re-renders of the item list.
+- If the order status is "Shipped", conditionally display tracking information if available in the API response.
+
+Deliverable
+- A production-ready Next.js page component located at `app/orders/[orderId]/page.tsx`.
+- Supporting sub-components (if not extracted to the shared library) for OrderSummary, ItemList, and StatusTimeline.
+- TypeScript type definitions for the API response and component props.
+
+Implementation assumptions (explicit)
+- The API returns a standard JSON response with a nested `items` array.
+- Authentication is handled via a shared utility or middleware that attaches the JWT to the request.
+- Tailwind CSS or a similar utility-first framework is available for styling.
+- The `orderId` is a valid UUID string as per the backend model.
+
+Please produce production-ready prompt content that will generate the module consistent with the above.
+</prompt>

@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.109-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.110-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.109
+Current version: 0.0.110
 
 To check your installed version, run:
 ```
@@ -1577,10 +1577,44 @@ pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --out
 
 ### 8. change
 
-Modify an input prompt file based on a change prompt and the corresponding input code.
+Implement a change request from a GitHub issue using a 12-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), reviews architecture (asking for decisions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, runs a review loop to identify and fix issues, and creates a PR.
 
+**Agentic Mode (default):**
 ```
-pdd [GLOBAL OPTIONS] change [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE]
+pdd [GLOBAL OPTIONS] change GITHUB_ISSUE_URL
+```
+
+Arguments:
+- `GITHUB_ISSUE_URL`: The URL of the GitHub issue describing the change request.
+
+The 12-step workflow:
+1. **Duplicate Check**: Search for duplicate issues
+2. **Documentation Check**: Verify feature isn't already implemented
+3. **Research**: Web search to clarify specifications and find best practices
+4. **Clarification**: Ensure requirements are clear; ask questions with options if not (stops workflow until answered)
+5. **Documentation Changes**: Analyze what documentation updates are needed
+6. **Identify Dev Units**: Find affected prompts, code, examples, and tests
+7. **Architecture Review**: Identify architectural decisions; ask questions with options if needed (stops workflow until answered)
+8. **Analyze Changes**: Design prompt modifications
+9. **Implement Changes**: Modify prompts in an isolated git worktree
+10. **Identify Issues**: Review changes for problems (part of review loop)
+11. **Fix Issues**: Fix identified issues (part of review loop, max 5 iterations)
+12. **Create PR**: Create a pull request linking to the issue
+
+**Workflow Resumption**: Steps 4 and 7 may pause the workflow to ask clarifying or architectural questions. When this happens, answer the questions in the GitHub issue and run `pdd change` again. The workflow will resume from where it left off, skipping already-completed steps to save tokens.
+
+**Review Loop**: Steps 10-11 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
+
+Example (agentic mode):
+```bash
+pdd change https://github.com/myorg/myrepo/issues/239
+```
+
+After the workflow completes, a PR is automatically created linking to the issue. Review the PR and run `pdd sync` on the modified prompts to regenerate code.
+
+**Manual Mode (legacy):**
+```
+pdd [GLOBAL OPTIONS] change --manual [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE]
 ```
 
 Arguments:
@@ -1593,14 +1627,14 @@ Options:
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--csv`: Use a CSV file for the change prompts instead of a single change prompt file. The CSV file should have columns: `prompt_name` and `change_instructions`. When this option is used, `INPUT_PROMPT_FILE` is not needed, and `INPUT_CODE` should be the directory where the code files are located. The command expects prompt names in the CSV to follow the `<basename>_<language>.prompt` convention. For each `prompt_name` in the CSV, it will look for the corresponding code file (e.g., `<basename>.<language_extension>`) within the specified `INPUT_CODE` directory. Output files will overwrite existing files unless `--output LOCATION` is specified. If `LOCATION` is a directory, the modified prompt files will be saved inside this directory using the default naming convention otherwise, if a csv filename is specified the modified prompts will be saved in that CSV file with columns 'prompt_name' and 'modified_prompt'.
 
-Example (single prompt change):
+Example (manual single prompt change):
 ```
-pdd [GLOBAL OPTIONS] change --output modified_factorial_calculator_python.prompt changes_factorial.prompt src/factorial_calculator.py factorial_calculator_python.prompt
+pdd [GLOBAL OPTIONS] change --manual --output modified_factorial_calculator_python.prompt changes_factorial.prompt src/factorial_calculator.py factorial_calculator_python.prompt
 ```
 
-Example (batch change using CSV):
+Example (manual batch change using CSV):
 ```
-pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv src/
+pdd [GLOBAL OPTIONS] change --manual --csv --output modified_prompts/ changes_batch.csv src/
 ```
 
 ### 9. update

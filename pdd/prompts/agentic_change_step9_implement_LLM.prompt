@@ -1,0 +1,202 @@
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to implement the prompt changes analyzed in the previous step.
+
+% Context
+
+You are working on step 9 of 12 in an agentic change workflow. Previous steps reviewed architecture and analyzed exactly what prompt changes are needed.
+
+**This step modifies files.** All changes are made in a git worktree to avoid affecting the main branch.
+
+% CRITICAL: Scope
+
+**You MAY read** any files to understand the codebase.
+
+**This workflow CREATES/MODIFIES ONLY:**
+- Prompt files (`.prompt` files)
+- Documentation files (`.md`, `.txt`, etc.)
+
+**FORBIDDEN - Do NOT create or modify:**
+- Code files (these are GENERATED from prompts via `pdd sync`)
+- Example files (these are GENERATED artifacts)
+- Test files (these are updated during `pdd sync`)
+
+Violating this scope is a CRITICAL ERROR that should stop the workflow.
+
+Code generation happens separately via `pdd sync` after the PR is merged.
+
+% PDD Background
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Worktree Path: {worktree_path}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step7_output>
+{step7_output}
+</step7_output>
+
+<step8_output>
+{step8_output}
+</step8_output>
+
+% Your Task
+
+1. **Navigate to worktree**
+   - Change to the worktree directory: {worktree_path}
+   - All file modifications happen here, not in the main repo
+
+2. **Modify existing prompts**
+   For each prompt identified for modification in Step 8:
+   - Read the current prompt file
+   - Apply the changes specified in Step 8
+   - Preserve existing structure and formatting
+   - Keep the prompt concise (10-30% of expected code size)
+
+3. **Create new prompts**
+   For each new prompt identified in Step 8:
+   - Use the standard prompt structure:
+     ```
+     <include>context/python_preamble.prompt</include>
+
+     % Goal
+     [One sentence describing the module]
+
+     % Role & Scope
+     [Module purpose and boundaries]
+
+     % Requirements
+     1. [Testable requirement]
+     2. [Testable requirement]
+     ...
+
+     % Dependencies
+     <module_name><include>context/module_example.py</include></module_name>
+
+     % Deliverables
+     - Code: `pdd/module_name.py`
+     ```
+
+4. **Track changes**
+   - Report all files modified with `FILES_MODIFIED:` prefix
+   - Report all files created with `FILES_CREATED:` prefix
+
+% Output
+
+After completing your changes, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If changes successful:**
+```markdown
+## Step 9: Implement Changes
+
+**Status:** Changes Applied
+
+### Files Modified
+FILES_MODIFIED: prompts/xxx_python.prompt, README.md
+
+### Files Created
+FILES_CREATED: prompts/yyy_python.prompt
+
+### Summary of Changes
+
+#### `prompts/xxx_python.prompt`
+- Added requirement for [feature]
+- Updated dependency to include [module]
+
+#### `prompts/yyy_python.prompt` (new)
+- Created new prompt for [purpose]
+- Includes [N] requirements
+
+### Worktree Location
+Changes are in: `{worktree_path}`
+
+### Next Steps
+After review, run `pdd sync` on modified prompts to regenerate code.
+
+---
+*Proceeding to Step 10: Identify Issues*
+```
+
+**If changes failed (STOP workflow):**
+```markdown
+## Step 9: Implement Changes
+
+**Status:** FAIL: Implementation Error
+
+### Error Details
+[What went wrong]
+
+### Attempted Changes
+[What was attempted before failure]
+
+### Recommendation
+[How to resolve the issue]
+
+---
+*Investigation paused - implementation failed.*
+```
+
+% Important
+
+- All changes must be in the worktree, not the main repo
+- Follow PDD prompt conventions strictly
+- If implementation fails, STOP the workflow
+- Always post your findings as a GitHub comment before completing
+
+% CRITICAL: Scope Validation
+
+Before completing, verify:
+1. ALL files in FILES_MODIFIED and FILES_CREATED are `.prompt` or documentation files
+2. NO code files appear in the changeset
+3. NO example files were created or modified
+
+If you modified or created ANY code or example file, this is a CRITICAL ERROR:
+- Undo those changes
+- Only implement the prompt/doc changes
+- Report the scope violation in your output
+
+SCOPE_VIOLATION: [Yes/No]
+
+% CRITICAL: Output Format for File Tracking
+
+Your final response MUST include these exact lines for the orchestrator to parse:
+
+```
+FILES_MODIFIED: prompts/file1_python.prompt, prompts/file2_python.prompt
+FILES_CREATED: prompts/file3_python.prompt
+```
+
+These lines MUST:
+- Start with `FILES_MODIFIED:` or `FILES_CREATED:` exactly (case-insensitive)
+- Be followed by a comma-separated list of file paths on the SAME LINE
+- NOT use markdown bullets, numbered lists, or multi-line formats
+- Appear in your final summary (not just in the GitHub comment)
+
+Example of CORRECT format:
+```
+FILES_MODIFIED: prompts/sync_main_python.prompt, prompts/fix_error_loop_python.prompt
+FILES_CREATED: prompts/parallel_fix_python.prompt
+```
+
+Example of WRONG format (will cause workflow failure):
+```
+### Files Modified:
+1. prompts/sync_main_python.prompt
+2. prompts/fix_error_loop_python.prompt
+```

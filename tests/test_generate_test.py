@@ -1,7 +1,30 @@
+"""Tests for pdd/generate_test.py and the generate_test_LLM.prompt."""
+
+from pathlib import Path
+
 import pytest
 from rich.console import Console
 from pdd import DEFAULT_STRENGTH
 from pdd.generate_test import generate_test, _validate_inputs
+
+
+def get_project_root() -> Path:
+    """Get the project root directory."""
+    current = Path(__file__).parent
+    while current != current.parent:
+        if (current / "prompts").is_dir():
+            return current
+        current = current.parent
+    raise RuntimeError("Could not find project root with prompts/ directory")
+
+
+def read_prompt_file(relative_path: str) -> str:
+    """Read a prompt file from the project."""
+    project_root = get_project_root()
+    prompt_path = project_root / relative_path
+    if not prompt_path.exists():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+    return prompt_path.read_text()
 
 # Test fixtures
 @pytest.fixture
@@ -105,3 +128,60 @@ def test_generate_test_different_languages(monkeypatch):
         )
         assert isinstance(result, tuple)
         assert len(result) == 3
+
+
+class TestContextFileExists:
+    """Tests verifying the test isolation context file exists and has content."""
+
+    def test_context_file_has_escaped_curly_braces(self):
+        """Verify curly braces are escaped for prompt formatting.
+
+        When context files are included in prompts via <include>, curly braces
+        are interpreted as format string placeholders. Unescaped braces like
+        {"key": "value"} will cause 'Missing key' errors during prompt formatting.
+
+        All curly braces must be doubled: {{"key": "value"}}
+        """
+        import re
+        content = read_prompt_file("context/pytest_isolation_example.py")
+
+        # Find all curly braces that are NOT doubled
+        # Pattern: single { not preceded by { OR single } not followed by }
+        unescaped_open = re.findall(r'(?<!\{)\{(?!\{)', content)
+        unescaped_close = re.findall(r'(?<!\})\}(?!\})', content)
+
+        assert len(unescaped_open) == 0, (
+            f"Found {len(unescaped_open)} unescaped '{{' in context file. "
+            "All curly braces must be doubled for prompt formatting."
+        )
+        assert len(unescaped_close) == 0, (
+            f"Found {len(unescaped_close)} unescaped '}}' in context file. "
+            "All curly braces must be doubled for prompt formatting."
+        )
+
+    def test_test_isolation_examples_exists(self):
+        """Verify the pytest_isolation_example.py context file exists."""
+        project_root = get_project_root()
+        context_file = project_root / "context" / "pytest_isolation_example.py"
+        assert context_file.exists(), f"Context file {context_file} must exist."
+
+    def test_test_isolation_examples_has_patterns(self):
+        """Verify the context file contains concrete examples."""
+        content = read_prompt_file("context/pytest_isolation_example.py")
+        assert content.count("PATTERN") >= 3, (
+            "Context file should contain multiple pattern sections."
+        )
+        assert "GOOD" in content, "Context file must show GOOD patterns"
+
+    def test_context_file_covers_key_pollution_sources(self):
+        """Verify context file covers all major pollution sources."""
+        content = read_prompt_file("context/pytest_isolation_example.py")
+        pollution_sources = {
+            "environment variable": ["os.environ", "monkeypatch.setenv"],
+            "sys.modules": ["sys.modules"],
+            "file operations": ["tmp_path"],
+            "fixtures": ["@pytest.fixture", "yield"],
+        }
+        for source, keywords in pollution_sources.items():
+            found = any(kw in content for kw in keywords)
+            assert found, f"Context file must cover {source} pollution."
