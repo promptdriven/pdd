@@ -165,7 +165,7 @@ def status():
     
     if not auth_status.get("authenticated"):
         console.print("Not authenticated.")
-        sys.exit(1)
+        return
         
     username = "Unknown"
     
