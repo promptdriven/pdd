@@ -19,6 +19,7 @@
     - `verify` (from `.utility`)
     - `templates_group` (from `.templates`)
     - `connect` (from `.connect`) - Web frontend server command
+    - `auth_group` (from `.auth`) - PDD Cloud authentication management
 
 % Instructions
   - Ensure clean imports.
