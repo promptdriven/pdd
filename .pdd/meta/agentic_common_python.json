@@ -1,9 +1,12 @@
 {
-  "pdd_version": "0.0.88",
-  "timestamp": "2025-12-22T02:28:03.885465+00:00",
-  "command": "test",
-  "prompt_hash": "ff707cd9a1991ced5d7face7c529cfec9223b25fffcb9073d28f9c5da68534a7",
-  "code_hash": "22d7d00eb762dfcd63f66db0c8d9d77be7f61fb2b9bc254ca8e2af702161ca23",
-  "example_hash": "30bd518519792e9d8a7e0cbb91c11946d42446b4e3ba0457b281c30d92986076",
-  "test_hash": "bce96f009d034acffbfbc82d2e3a6e8429ec6739e8f28556b9c488942cbdc5fb"
+  "pdd_version": "0.0.108",
+  "timestamp": "2026-01-11T06:34:51.663564+00:00",
+  "command": "fix",
+  "prompt_hash": "90746fb538902b7dfe126feea162457e16da6d5c439e9d376d6eb3cd42c202cb",
+  "code_hash": "20541d609cddc0a503cbd94e100e54c97f6ec1242dbdd5e005aed466185c14b9",
+  "example_hash": "5c2a5da7c0281a5277e775bda0e64e1de379f546b59eef359179052fafe7dea9",
+  "test_hash": "e667ee536f4a66ee5cf806342ed64e40d054a9f47b0dd92eb1c118a83554ee7c",
+  "test_files": {
+    "test_agentic_common.py": "e667ee536f4a66ee5cf806342ed64e40d054a9f47b0dd92eb1c118a83554ee7c"
+  }
 }

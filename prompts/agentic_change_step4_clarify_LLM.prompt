@@ -1,0 +1,164 @@
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to determine if the feature change request is clear enough to proceed with implementation.
+
+% Context
+
+You are working on step 4 of 12 in an agentic change workflow. Previous steps confirmed this is not a duplicate, is not already implemented, and conducted research. Now you must determine if the requirements are sufficiently clear.
+
+**This step may STOP the workflow** if clarifying questions are needed. When the user answers and runs `pdd change` again, this step will re-evaluate.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Author: {issue_author}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+% Your Task
+
+1. **Analyze clarity of requirements**
+   Review the issue content and research findings to assess:
+   - Is the problem statement clear and unambiguous?
+   - Are the expected outcomes/behaviors well-defined?
+   - Are there conflicting or vague requirements?
+   - Are edge cases and error handling addressed?
+   - Is the scope bounded (not too broad)?
+
+2. **Check for missing information**
+   Identify gaps that would block implementation:
+   - Missing input/output specifications
+   - Undefined behavior for edge cases
+   - Unclear integration points with existing code
+   - Ambiguous terminology or concepts
+   - Missing acceptance criteria
+
+3. **Decide: Clear or Needs Clarification**
+
+   **CLEAR ENOUGH** if:
+   - Core functionality is well-defined
+   - Implementation approach can be determined
+   - Edge cases can be reasonably inferred
+   - Minor ambiguities can be resolved during implementation
+
+   **NEEDS CLARIFICATION** if:
+   - Core requirements are ambiguous
+   - Multiple valid interpretations exist
+   - Critical edge cases are undefined
+   - Implementation would require guessing user intent
+
+4. **If clarification needed, formulate questions with options**
+   - Ask specific, actionable questions
+   - Provide context for why the answer matters
+   - **Always provide 2-3 possible answers** with explanations
+   - Explain the implications of each option
+   - Make a recommendation if you have a preference
+   - Limit to 2-4 most critical questions
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+**If requirements are CLEAR ENOUGH:**
+```markdown
+## Step 4: Requirements Clarity Check
+
+**Status:** Requirements Clear
+
+### Clarity Assessment
+| Aspect | Status |
+|--------|--------|
+| Problem statement | :white_check_mark: Clear |
+| Expected outcomes | :white_check_mark: Defined |
+| Scope | :white_check_mark: Bounded |
+| Edge cases | :white_check_mark: Addressable |
+
+### Understanding Summary
+[1-2 sentence summary of what will be implemented]
+
+### Assumptions Made
+- [Any reasonable assumptions for minor ambiguities]
+
+---
+*Proceeding to Step 5: Documentation Changes*
+```
+
+**If CLARIFICATION NEEDED (STOP workflow):**
+```markdown
+## Step 4: Requirements Clarity Check
+
+**Status:** Clarification Needed
+
+### Clarity Assessment
+| Aspect | Status |
+|--------|--------|
+| Problem statement | :white_check_mark: Clear |
+| Expected outcomes | :x: Unclear |
+| Scope | :warning: Partially defined |
+| Edge cases | :x: Not addressed |
+
+### What's Clear
+[Summary of well-defined aspects]
+
+### Questions for @{issue_author}
+
+To proceed with implementation, I need clarification on the following:
+
+1. **[Topic - e.g., "Input Validation"]**
+
+   [Brief context explaining why this matters for implementation]
+
+   **Options:**
+   - **A) [Option name]**: [Description of this approach]
+     - Implications: [What this means for the implementation]
+   - **B) [Option name]**: [Description of this approach]
+     - Implications: [What this means for the implementation]
+   - **C) [Option name]**: [Description of this approach]
+     - Implications: [What this means for the implementation]
+
+   **Recommendation:** [Your suggestion if you have one, and why]
+
+2. **[Topic]**
+
+   [Context]
+
+   **Options:**
+   - **A)** [Option and implications]
+   - **B)** [Option and implications]
+
+### Next Steps
+Please reply with your preferred options (e.g., "1A, 2B"). Then run `pdd change {issue_url}` again to continue.
+
+---
+*Workflow paused - awaiting clarification from @{issue_author}*
+```
+
+% Important
+
+- Be pragmatic: don't block on minor details that can be reasonably inferred
+- Focus on questions that would significantly impact implementation approach
+- If requirements are 80%+ clear, proceed rather than block
+- Consider that the issue author may not be technical - phrase questions accessibly
+- Always tag the issue author (@{issue_author}) in clarification requests
+- This is a HARD STOP - if clarification is needed, the workflow terminates here
+- When `pdd change` is run again, this step will re-evaluate based on new comments
