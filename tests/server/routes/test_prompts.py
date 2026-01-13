@@ -725,8 +725,11 @@ async def test_analyze_diff_basic(prompts_test_env):
                 'totalRequirements': 2,
                 'matchedRequirements': 2,
                 'missingRequirements': 0,
-                'extraCodeSections': 0,
-                'coveragePercent': 100.0
+                'totalCodeFeatures': 2,
+                'documentedFeatures': 2,
+                'undocumentedFeatures': 0,
+                'promptToCodeCoverage': 100.0,
+                'codeToPromptCoverage': 100.0
             },
             'missing': [],
             'extra': [],
@@ -752,7 +755,7 @@ async def test_analyze_diff_basic(prompts_test_env):
     assert response.result.sections[0].status == 'matched'
     assert len(response.result.lineMappings) == 2
     assert response.result.stats.totalRequirements == 2
-    assert response.result.stats.coveragePercent == 100.0
+    assert response.result.stats.promptToCodeCoverage == 100.0
     assert response.cost == 0.002
     assert response.analysisMode == "detailed"
     assert response.cached is False
@@ -778,8 +781,11 @@ async def test_analyze_diff_quick_mode(prompts_test_env):
                 'totalRequirements': 1,
                 'matchedRequirements': 1,
                 'missingRequirements': 0,
-                'extraCodeSections': 0,
-                'coveragePercent': 100.0
+                'totalCodeFeatures': 1,
+                'documentedFeatures': 1,
+                'undocumentedFeatures': 0,
+                'promptToCodeCoverage': 100.0,
+                'codeToPromptCoverage': 100.0
             },
             'missing': [],
             'extra': [],
@@ -823,8 +829,11 @@ async def test_analyze_diff_caching(prompts_test_env):
                 'totalRequirements': 1,
                 'matchedRequirements': 1,
                 'missingRequirements': 0,
-                'extraCodeSections': 0,
-                'coveragePercent': 100.0
+                'totalCodeFeatures': 1,
+                'documentedFeatures': 1,
+                'undocumentedFeatures': 0,
+                'promptToCodeCoverage': 100.0,
+                'codeToPromptCoverage': 100.0
             },
             'missing': [],
             'extra': [],
@@ -907,8 +916,11 @@ async def test_analyze_diff_with_missing_requirements(prompts_test_env):
                 'totalRequirements': 2,
                 'matchedRequirements': 1,
                 'missingRequirements': 1,
-                'extraCodeSections': 0,
-                'coveragePercent': 50.0
+                'totalCodeFeatures': 2,
+                'documentedFeatures': 1,
+                'undocumentedFeatures': 1,
+                'promptToCodeCoverage': 50.0,
+                'codeToPromptCoverage': 50.0
             },
             'missing': ['Input validation is not implemented'],
             'extra': [],
@@ -955,8 +967,11 @@ async def test_analyze_diff_handles_string_result(prompts_test_env):
                 'totalRequirements': 1,
                 'matchedRequirements': 1,
                 'missingRequirements': 0,
-                'extraCodeSections': 0,
-                'coveragePercent': 100.0
+                'totalCodeFeatures': 1,
+                'documentedFeatures': 1,
+                'undocumentedFeatures': 0,
+                'promptToCodeCoverage': 100.0,
+                'codeToPromptCoverage': 100.0
             },
             'missing': [],
             'extra': [],

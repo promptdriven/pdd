@@ -155,22 +155,28 @@ class LineMapping(BaseModel):
 
 class DiffStats(BaseModel):
     """Aggregated statistics for the diff analysis."""
-    totalRequirements: int = Field(..., description="Total number of requirements identified")
+    totalRequirements: int = Field(..., description="Total number of requirements identified in prompt")
     matchedRequirements: int = Field(..., description="Number of fully matched requirements")
-    missingRequirements: int = Field(..., description="Number of missing requirements")
-    extraCodeSections: int = Field(..., description="Number of extra code sections not in prompt")
-    coveragePercent: float = Field(..., description="Overall coverage percentage")
+    missingRequirements: int = Field(..., description="Number of requirements not implemented in code")
+    totalCodeFeatures: int = Field(0, description="Total number of code features/sections identified")
+    documentedFeatures: int = Field(0, description="Number of code features documented in prompt")
+    undocumentedFeatures: int = Field(0, description="Number of code features not in prompt")
+    promptToCodeCoverage: float = Field(..., description="How much of the prompt is implemented in code (0-100)")
+    codeToPromptCoverage: float = Field(0.0, description="How much of the code is documented in prompt (0-100)")
 
 
 class DiffAnalysisResult(BaseModel):
     """Detailed diff analysis result."""
-    overallScore: int = Field(..., description="Overall match score 0-100")
+    overallScore: int = Field(..., description="Overall bidirectional match score 0-100")
+    promptToCodeScore: int = Field(0, description="How well code implements prompt (0-100)")
+    codeToPromptScore: int = Field(0, description="How well prompt describes code (0-100)")
     summary: str = Field(..., description="Summary of the analysis")
-    sections: list[DiffSection] = Field(default_factory=list, description="Semantic sections with mappings")
+    sections: list[DiffSection] = Field(default_factory=list, description="Prompt requirement sections with code mappings")
+    codeSections: list[DiffSection] = Field(default_factory=list, description="Code feature sections with prompt mappings")
     lineMappings: list[LineMapping] = Field(default_factory=list, description="Line-level mappings")
     stats: DiffStats = Field(..., description="Aggregated statistics")
-    missing: list[str] = Field(default_factory=list, description="Missing requirements (text)")
-    extra: list[str] = Field(default_factory=list, description="Extra code features (text)")
+    missing: list[str] = Field(default_factory=list, description="Requirements in prompt but not in code")
+    extra: list[str] = Field(default_factory=list, description="Code features not documented in prompt")
     suggestions: list[str] = Field(default_factory=list, description="Improvement suggestions")
 
 
@@ -624,8 +630,8 @@ async def analyze_diff(request: DiffAnalysisRequest):
         if request.mode == "quick":
             strength = min(strength, 0.25)
 
-        # Build the LLM prompt for diff analysis
-        diff_prompt = """You are an expert code analyst. Analyze how well the following code implements the requirements in the prompt.
+        # Build the LLM prompt for bidirectional diff analysis
+        diff_prompt = """You are an expert code analyst. Perform a BIDIRECTIONAL analysis between the prompt and code.
 
 PROMPT/REQUIREMENTS (with line numbers):
 ```
@@ -637,45 +643,56 @@ CODE (with line numbers):
 {code_numbered}
 ```
 
-Perform a detailed analysis and respond with a JSON object containing:
+Analyze BOTH directions:
+1. Prompt → Code: How well does the code implement the prompt requirements?
+2. Code → Prompt: How well does the prompt describe what the code does?
 
-1. "overallScore": integer 0-100, overall match quality
-2. "summary": 1-2 sentence summary
-3. "sections": array of semantic sections, each with:
-   - "id": unique string like "sec_1", "sec_2"
+Respond with a JSON object containing:
+
+1. "overallScore": integer 0-100, overall bidirectional match quality
+2. "promptToCodeScore": integer 0-100, how well code implements prompt requirements
+3. "codeToPromptScore": integer 0-100, how well prompt describes the code
+4. "summary": 1-2 sentence summary covering both directions
+5. "sections": array of PROMPT requirement sections (prompt → code), each with:
+   - "id": unique string like "req_1", "req_2"
    - "promptRange": {{"startLine": int, "endLine": int, "text": "excerpt"}}
-   - "codeRanges": array of {{"startLine": int, "endLine": int, "text": "excerpt"}} (can be empty if missing)
-   - "status": one of "matched", "partial", "missing", "extra"
+   - "codeRanges": array of {{"startLine": int, "endLine": int, "text": "excerpt"}} (empty if missing)
+   - "status": "matched", "partial", or "missing"
    - "matchConfidence": 0-100
    - "semanticLabel": descriptive label like "Error Handling", "Input Validation"
    - "notes": optional explanation
-4. "lineMappings": array of line-level mappings:
+6. "codeSections": array of CODE feature sections (code → prompt), each with:
+   - "id": unique string like "code_1", "code_2"
+   - "promptRange": {{"startLine": int, "endLine": int, "text": "excerpt"}} (the prompt lines that document this, empty text if undocumented)
+   - "codeRanges": array of {{"startLine": int, "endLine": int, "text": "excerpt"}}
+   - "status": "matched" (documented in prompt), "partial", or "extra" (not in prompt)
+   - "matchConfidence": 0-100
+   - "semanticLabel": descriptive label like "Helper Function", "Error Handler"
+   - "notes": optional explanation
+7. "lineMappings": array of line-level mappings from prompt to code:
    - "promptLine": int
    - "codeLines": array of ints (corresponding code lines, can be empty)
    - "matchType": one of "exact", "semantic", "partial", "none"
-5. "stats": {{
-   "totalRequirements": int,
+8. "stats": {{
+   "totalRequirements": int (from prompt),
    "matchedRequirements": int,
-   "missingRequirements": int,
-   "extraCodeSections": int,
-   "coveragePercent": float
+   "missingRequirements": int (in prompt but not in code),
+   "totalCodeFeatures": int (distinct features in code),
+   "documentedFeatures": int (code features documented in prompt),
+   "undocumentedFeatures": int (code features not in prompt),
+   "promptToCodeCoverage": float (% of prompt implemented),
+   "codeToPromptCoverage": float (% of code documented)
 }}
-6. "missing": array of strings describing missing requirements
-7. "extra": array of strings describing extra code features
-8. "suggestions": array of improvement suggestions
+9. "missing": array of strings describing requirements in prompt but not implemented in code
+10. "extra": array of strings describing code features/behaviors not documented in prompt
+11. "suggestions": array of improvement suggestions for both prompt and code
 
-For sections:
-- Parse the prompt into logical requirement sections
-- Find corresponding code implementations
-- Mark as "missing" if no code implements the requirement
-- Mark as "extra" for code sections not in the prompt
-- Mark as "partial" if implementation is incomplete
-
-For lineMappings:
-- Map each prompt line to relevant code lines
-- Use "exact" for direct implementations
-- Use "semantic" for conceptual matches
-- Use "none" for unmatched lines"""
+Guidelines:
+- For "sections": Parse prompt into logical requirements, find code implementations
+- For "codeSections": Parse code into logical features/functions, find prompt documentation
+- "missing" = prompt requirements without code implementation
+- "extra" = code behaviors/features without prompt documentation
+- Be thorough in identifying undocumented code behavior"""
 
         # Add line numbers to content
         prompt_lines = request.prompt_content.split('\n')
@@ -688,47 +705,49 @@ For lineMappings:
             f"{i+1}: {line}" for i, line in enumerate(code_lines)
         )
 
-        # Define the output schema for structured output
-        output_schema = {
+        # Define the output schema for bidirectional structured output
+        section_schema = {
             "type": "object",
             "properties": {
-                "overallScore": {"type": "integer", "minimum": 0, "maximum": 100},
-                "summary": {"type": "string"},
-                "sections": {
+                "id": {"type": "string"},
+                "promptRange": {
+                    "type": "object",
+                    "properties": {
+                        "startLine": {"type": "integer"},
+                        "endLine": {"type": "integer"},
+                        "text": {"type": "string"}
+                    },
+                    "required": ["startLine", "endLine", "text"]
+                },
+                "codeRanges": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id": {"type": "string"},
-                            "promptRange": {
-                                "type": "object",
-                                "properties": {
-                                    "startLine": {"type": "integer"},
-                                    "endLine": {"type": "integer"},
-                                    "text": {"type": "string"}
-                                },
-                                "required": ["startLine", "endLine", "text"]
-                            },
-                            "codeRanges": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "startLine": {"type": "integer"},
-                                        "endLine": {"type": "integer"},
-                                        "text": {"type": "string"}
-                                    },
-                                    "required": ["startLine", "endLine", "text"]
-                                }
-                            },
-                            "status": {"type": "string", "enum": ["matched", "partial", "missing", "extra"]},
-                            "matchConfidence": {"type": "integer", "minimum": 0, "maximum": 100},
-                            "semanticLabel": {"type": "string"},
-                            "notes": {"type": "string"}
+                            "startLine": {"type": "integer"},
+                            "endLine": {"type": "integer"},
+                            "text": {"type": "string"}
                         },
-                        "required": ["id", "promptRange", "status", "matchConfidence", "semanticLabel"]
+                        "required": ["startLine", "endLine", "text"]
                     }
                 },
+                "status": {"type": "string", "enum": ["matched", "partial", "missing", "extra"]},
+                "matchConfidence": {"type": "integer", "minimum": 0, "maximum": 100},
+                "semanticLabel": {"type": "string"},
+                "notes": {"type": "string"}
+            },
+            "required": ["id", "promptRange", "status", "matchConfidence", "semanticLabel"]
+        }
+
+        output_schema = {
+            "type": "object",
+            "properties": {
+                "overallScore": {"type": "integer", "minimum": 0, "maximum": 100},
+                "promptToCodeScore": {"type": "integer", "minimum": 0, "maximum": 100},
+                "codeToPromptScore": {"type": "integer", "minimum": 0, "maximum": 100},
+                "summary": {"type": "string"},
+                "sections": {"type": "array", "items": section_schema},
+                "codeSections": {"type": "array", "items": section_schema},
                 "lineMappings": {
                     "type": "array",
                     "items": {
@@ -747,16 +766,19 @@ For lineMappings:
                         "totalRequirements": {"type": "integer"},
                         "matchedRequirements": {"type": "integer"},
                         "missingRequirements": {"type": "integer"},
-                        "extraCodeSections": {"type": "integer"},
-                        "coveragePercent": {"type": "number"}
+                        "totalCodeFeatures": {"type": "integer"},
+                        "documentedFeatures": {"type": "integer"},
+                        "undocumentedFeatures": {"type": "integer"},
+                        "promptToCodeCoverage": {"type": "number"},
+                        "codeToPromptCoverage": {"type": "number"}
                     },
-                    "required": ["totalRequirements", "matchedRequirements", "missingRequirements", "extraCodeSections", "coveragePercent"]
+                    "required": ["totalRequirements", "matchedRequirements", "missingRequirements", "promptToCodeCoverage"]
                 },
                 "missing": {"type": "array", "items": {"type": "string"}},
                 "extra": {"type": "array", "items": {"type": "string"}},
                 "suggestions": {"type": "array", "items": {"type": "string"}}
             },
-            "required": ["overallScore", "summary", "sections", "stats"]
+            "required": ["overallScore", "promptToCodeScore", "codeToPromptScore", "summary", "sections", "codeSections", "stats"]
         }
 
         result = llm_invoke(
@@ -775,9 +797,8 @@ For lineMappings:
         if isinstance(llm_result, str):
             llm_result = json.loads(llm_result)
 
-        # Build sections
-        sections = []
-        for sec in llm_result.get('sections', []):
+        def parse_section(sec: dict) -> DiffSection:
+            """Helper to parse a section from LLM output."""
             prompt_range = sec.get('promptRange', {})
             code_ranges = [
                 CodeRange(
@@ -787,7 +808,7 @@ For lineMappings:
                 )
                 for cr in sec.get('codeRanges', [])
             ]
-            sections.append(DiffSection(
+            return DiffSection(
                 id=sec.get('id', ''),
                 promptRange=PromptRange(
                     startLine=prompt_range.get('startLine', 1),
@@ -799,7 +820,13 @@ For lineMappings:
                 matchConfidence=sec.get('matchConfidence', 0),
                 semanticLabel=sec.get('semanticLabel', ''),
                 notes=sec.get('notes'),
-            ))
+            )
+
+        # Build prompt → code sections
+        sections = [parse_section(sec) for sec in llm_result.get('sections', [])]
+
+        # Build code → prompt sections
+        code_sections = [parse_section(sec) for sec in llm_result.get('codeSections', [])]
 
         # Build line mappings
         line_mappings = []
@@ -810,22 +837,28 @@ For lineMappings:
                 matchType=lm.get('matchType', 'none'),
             ))
 
-        # Build stats
+        # Build stats with bidirectional coverage
         stats_data = llm_result.get('stats', {})
         stats = DiffStats(
             totalRequirements=stats_data.get('totalRequirements', 0),
             matchedRequirements=stats_data.get('matchedRequirements', 0),
             missingRequirements=stats_data.get('missingRequirements', 0),
-            extraCodeSections=stats_data.get('extraCodeSections', 0),
-            coveragePercent=stats_data.get('coveragePercent', 0.0),
+            totalCodeFeatures=stats_data.get('totalCodeFeatures', 0),
+            documentedFeatures=stats_data.get('documentedFeatures', 0),
+            undocumentedFeatures=stats_data.get('undocumentedFeatures', 0),
+            promptToCodeCoverage=stats_data.get('promptToCodeCoverage', 0.0),
+            codeToPromptCoverage=stats_data.get('codeToPromptCoverage', 0.0),
         )
 
-        # Build response
+        # Build response with bidirectional scores
         response = DiffAnalysisResponse(
             result=DiffAnalysisResult(
                 overallScore=llm_result.get('overallScore', 0),
+                promptToCodeScore=llm_result.get('promptToCodeScore', 0),
+                codeToPromptScore=llm_result.get('codeToPromptScore', 0),
                 summary=llm_result.get('summary', ''),
                 sections=sections,
+                codeSections=code_sections,
                 lineMappings=line_mappings,
                 stats=stats,
                 missing=llm_result.get('missing', []),

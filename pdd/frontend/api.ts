@@ -234,18 +234,24 @@ export interface DiffStats {
   totalRequirements: number;
   matchedRequirements: number;
   missingRequirements: number;
-  extraCodeSections: number;
-  coveragePercent: number;
+  totalCodeFeatures: number;
+  documentedFeatures: number;
+  undocumentedFeatures: number;
+  promptToCodeCoverage: number;  // % of prompt implemented in code
+  codeToPromptCoverage: number;  // % of code documented in prompt
 }
 
 export interface DiffAnalysisResult {
-  overallScore: number;
+  overallScore: number;           // Overall bidirectional match score
+  promptToCodeScore: number;      // How well code implements prompt
+  codeToPromptScore: number;      // How well prompt describes code
   summary: string;
-  sections: DiffSection[];
+  sections: DiffSection[];        // Prompt requirements → code mappings
+  codeSections: DiffSection[];    // Code features → prompt mappings
   lineMappings: LineMapping[];
   stats: DiffStats;
-  missing: string[];
-  extra: string[];
+  missing: string[];              // Requirements in prompt but not in code
+  extra: string[];                // Code features not documented in prompt
   suggestions: string[];
 }
 

@@ -1,9 +1,10 @@
 /**
  * PromptCodeDiffModal.tsx
  *
- * A full-screen modal for detailed prompt-code diff visualization.
- * Shows prompt requirements on the left, code on the right, with
- * highlighting to show how requirements map to implementations.
+ * A full-screen modal for detailed bidirectional prompt-code diff visualization.
+ * Shows both directions:
+ * - Prompt → Code: How well code implements the prompt requirements
+ * - Code → Prompt: How well the prompt describes what the code does
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -26,6 +27,8 @@ const STATUS_COLORS = {
   extra: { bg: 'bg-blue-500/20', border: 'border-blue-500', text: 'text-blue-400', dot: 'bg-blue-500' },
 };
 
+type Direction = 'prompt-to-code' | 'code-to-prompt';
+
 export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
   isOpen,
   onClose,
@@ -41,6 +44,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
   const [strength, setStrength] = useState(0.5);
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [hoveredSection, setHoveredSection] = useState<string | null>(null);
+  const [direction, setDirection] = useState<Direction>('prompt-to-code');
 
   const promptRef = useRef<HTMLDivElement>(null);
   const codeRef = useRef<HTMLDivElement>(null);
@@ -51,6 +55,12 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
       runAnalysis();
     }
   }, [isOpen]);
+
+  // Reset selected section when direction changes
+  useEffect(() => {
+    setSelectedSection(null);
+    setHoveredSection(null);
+  }, [direction]);
 
   const runAnalysis = async () => {
     setIsAnalyzing(true);
@@ -71,13 +81,21 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
     }
   };
 
+  // Get current sections based on direction
+  const getCurrentSections = useCallback((): DiffSection[] => {
+    if (!diffResult) return [];
+    return direction === 'prompt-to-code'
+      ? diffResult.result.sections
+      : diffResult.result.codeSections;
+  }, [diffResult, direction]);
+
   // Scroll to section in both panels
   const scrollToSection = useCallback((section: DiffSection) => {
     setSelectedSection(section.id);
 
     // Scroll prompt panel
     if (promptRef.current) {
-      const lineHeight = 20; // Approximate line height
+      const lineHeight = 20;
       const scrollTop = (section.promptRange.startLine - 1) * lineHeight;
       promptRef.current.scrollTop = Math.max(0, scrollTop - 50);
     }
@@ -120,6 +138,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
 
   const promptLines = promptContent.split('\n');
   const codeLines = codeContent.split('\n');
+  const currentSections = getCurrentSections();
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
@@ -133,28 +152,42 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
               </svg>
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">Prompt-Code Diff Analysis</h2>
+              <h2 className="text-lg font-semibold text-white">Bidirectional Diff Analysis</h2>
               <p className="text-sm text-surface-400">
                 {diffResult?.cached && <span className="text-emerald-400">(cached) </span>}
-                {promptPath && codePath ? `${promptPath} vs ${codePath}` : 'Comparing prompt requirements with code implementation'}
+                {promptPath && codePath ? `${promptPath} vs ${codePath}` : 'Comparing prompt and code in both directions'}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Score display */}
+            {/* Bidirectional scores */}
             {diffResult && (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-800 rounded-lg">
-                <span className="text-sm text-surface-400">Score:</span>
-                <span
-                  className="text-xl font-bold"
-                  style={{
-                    color: diffResult.result.overallScore >= 80 ? '#10b981' :
-                           diffResult.result.overallScore >= 50 ? '#f59e0b' : '#ef4444'
-                  }}
-                >
-                  {diffResult.result.overallScore}%
-                </span>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-800 rounded-lg">
+                  <span className="text-xs text-purple-400">Prompt→Code</span>
+                  <span
+                    className="text-lg font-bold"
+                    style={{
+                      color: diffResult.result.promptToCodeScore >= 80 ? '#10b981' :
+                             diffResult.result.promptToCodeScore >= 50 ? '#f59e0b' : '#ef4444'
+                    }}
+                  >
+                    {diffResult.result.promptToCodeScore}%
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-800 rounded-lg">
+                  <span className="text-xs text-emerald-400">Code→Prompt</span>
+                  <span
+                    className="text-lg font-bold"
+                    style={{
+                      color: diffResult.result.codeToPromptScore >= 80 ? '#10b981' :
+                             diffResult.result.codeToPromptScore >= 50 ? '#f59e0b' : '#ef4444'
+                    }}
+                  >
+                    {diffResult.result.codeToPromptScore}%
+                  </span>
+                </div>
               </div>
             )}
 
@@ -217,15 +250,48 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
         {/* Main content area */}
         <div className="flex-1 flex overflow-hidden">
           {/* Section Navigator (left sidebar) */}
-          <div className="w-64 border-r border-surface-700/50 flex flex-col overflow-hidden flex-shrink-0">
+          <div className="w-72 border-r border-surface-700/50 flex flex-col overflow-hidden flex-shrink-0">
+            {/* Direction toggle */}
             <div className="px-4 py-3 border-b border-surface-700/50">
-              <h3 className="text-sm font-medium text-white">Sections</h3>
+              <div className="flex items-center bg-surface-800 rounded-lg p-0.5 mb-3">
+                <button
+                  onClick={() => setDirection('prompt-to-code')}
+                  className={`flex-1 px-2 py-1.5 text-xs rounded-md transition-all flex items-center justify-center gap-1 ${
+                    direction === 'prompt-to-code' ? 'bg-purple-600 text-white' : 'text-surface-400 hover:text-white'
+                  }`}
+                >
+                  <span>Prompt</span>
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                  </svg>
+                  <span>Code</span>
+                </button>
+                <button
+                  onClick={() => setDirection('code-to-prompt')}
+                  className={`flex-1 px-2 py-1.5 text-xs rounded-md transition-all flex items-center justify-center gap-1 ${
+                    direction === 'code-to-prompt' ? 'bg-emerald-600 text-white' : 'text-surface-400 hover:text-white'
+                  }`}
+                >
+                  <span>Code</span>
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                  </svg>
+                  <span>Prompt</span>
+                </button>
+              </div>
+              <h3 className="text-sm font-medium text-white">
+                {direction === 'prompt-to-code' ? 'Requirements' : 'Code Features'}
+              </h3>
               {diffResult && (
                 <p className="text-xs text-surface-500 mt-1">
-                  {diffResult.result.stats.matchedRequirements}/{diffResult.result.stats.totalRequirements} matched
+                  {direction === 'prompt-to-code'
+                    ? `${diffResult.result.stats.matchedRequirements}/${diffResult.result.stats.totalRequirements} implemented`
+                    : `${diffResult.result.stats.documentedFeatures}/${diffResult.result.stats.totalCodeFeatures} documented`
+                  }
                 </p>
               )}
             </div>
+
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
               {isAnalyzing && (
                 <div className="flex items-center justify-center py-8">
@@ -235,7 +301,10 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                   </svg>
                 </div>
               )}
-              {diffResult?.result.sections.map((section) => {
+              {currentSections.length === 0 && !isAnalyzing && diffResult && (
+                <p className="text-xs text-surface-500 text-center py-4">No sections found</p>
+              )}
+              {currentSections.map((section) => {
                 const colors = STATUS_COLORS[section.status as keyof typeof STATUS_COLORS];
                 return (
                   <button
@@ -250,12 +319,15 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${colors.dot}`} />
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${colors.dot}`} />
                       <span className="text-sm text-white truncate flex-1">{section.semanticLabel}</span>
-                      <span className={`text-xs ${colors.text}`}>{section.matchConfidence}%</span>
+                      <span className={`text-xs flex-shrink-0 ${colors.text}`}>{section.matchConfidence}%</span>
                     </div>
                     <p className="text-xs text-surface-500 mt-1 truncate">
-                      Lines {section.promptRange.startLine}-{section.promptRange.endLine}
+                      {direction === 'prompt-to-code'
+                        ? `Prompt L${section.promptRange.startLine}-${section.promptRange.endLine}`
+                        : `Code L${section.codeRanges[0]?.startLine || '?'}-${section.codeRanges[0]?.endLine || '?'}`
+                      }
                     </p>
                   </button>
                 );
@@ -264,12 +336,38 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
 
             {/* Legend */}
             <div className="px-4 py-3 border-t border-surface-700/50 space-y-1.5">
-              {Object.entries(STATUS_COLORS).map(([status, colors]) => (
-                <div key={status} className="flex items-center gap-2 text-xs">
-                  <span className={`w-2 h-2 rounded-full ${colors.dot}`} />
-                  <span className="text-surface-400 capitalize">{status}</span>
-                </div>
-              ))}
+              <p className="text-[10px] text-surface-500 uppercase tracking-wider mb-2">Legend</p>
+              {direction === 'prompt-to-code' ? (
+                <>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className="text-surface-400">Implemented in code</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                    <span className="text-surface-400">Partially implemented</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                    <span className="text-surface-400">Missing in code</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className="text-surface-400">Documented in prompt</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                    <span className="text-surface-400">Partially documented</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-blue-500" />
+                    <span className="text-surface-400">Not in prompt (extra)</span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -277,13 +375,18 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
           <div className="flex-1 flex overflow-hidden">
             {/* Prompt panel */}
             <div className="flex-1 flex flex-col border-r border-surface-700/50 overflow-hidden">
-              <div className="px-4 py-2 border-b border-surface-700/50 bg-surface-800/50">
+              <div className="px-4 py-2 border-b border-surface-700/50 bg-surface-800/50 flex items-center justify-between">
                 <h4 className="text-sm font-medium text-purple-400">Prompt Requirements</h4>
+                {diffResult && (
+                  <span className="text-xs text-surface-500">
+                    {diffResult.result.stats.promptToCodeCoverage.toFixed(0)}% implemented
+                  </span>
+                )}
               </div>
               <div ref={promptRef} className="flex-1 overflow-y-auto font-mono text-sm">
                 {promptLines.map((line, idx) => {
                   const lineNum = idx + 1;
-                  const highlight = diffResult ? getLineHighlight(lineNum, true, diffResult.result.sections) : null;
+                  const highlight = diffResult ? getLineHighlight(lineNum, true, currentSections) : null;
                   return (
                     <div
                       key={idx}
@@ -303,13 +406,18 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
 
             {/* Code panel */}
             <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="px-4 py-2 border-b border-surface-700/50 bg-surface-800/50">
+              <div className="px-4 py-2 border-b border-surface-700/50 bg-surface-800/50 flex items-center justify-between">
                 <h4 className="text-sm font-medium text-emerald-400">Code Implementation</h4>
+                {diffResult && (
+                  <span className="text-xs text-surface-500">
+                    {diffResult.result.stats.codeToPromptCoverage.toFixed(0)}% documented
+                  </span>
+                )}
               </div>
               <div ref={codeRef} className="flex-1 overflow-y-auto font-mono text-sm">
                 {codeLines.map((line, idx) => {
                   const lineNum = idx + 1;
-                  const highlight = diffResult ? getLineHighlight(lineNum, false, diffResult.result.sections) : null;
+                  const highlight = diffResult ? getLineHighlight(lineNum, false, currentSections) : null;
                   return (
                     <div
                       key={idx}
@@ -341,11 +449,16 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
           ) : diffResult ? (
             <div className="flex items-center gap-6">
               <div className="text-sm text-surface-300">{diffResult.result.summary}</div>
-              <div className="flex items-center gap-4 text-xs text-surface-500">
-                <span className="text-emerald-400">{diffResult.result.stats.matchedRequirements} matched</span>
-                <span className="text-red-400">{diffResult.result.stats.missingRequirements} missing</span>
-                <span className="text-blue-400">{diffResult.result.stats.extraCodeSections} extra</span>
-                <span>{diffResult.result.stats.coveragePercent.toFixed(0)}% coverage</span>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="text-purple-400">
+                  {diffResult.result.stats.missingRequirements} missing in code
+                </span>
+                <span className="text-blue-400">
+                  {diffResult.result.stats.undocumentedFeatures} undocumented features
+                </span>
+                <span className="text-surface-500">
+                  Overall: {diffResult.result.overallScore}%
+                </span>
               </div>
             </div>
           ) : (
