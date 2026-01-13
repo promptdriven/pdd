@@ -40,6 +40,7 @@ def test_routes_module_exports():
     and exports them via __all__.
     """
     # 1. Create mocks for the dependencies
+    mock_architecture_module = MagicMock()
     mock_auth_module = MagicMock()
     mock_files_module = MagicMock()
     mock_commands_module = MagicMock()
@@ -47,12 +48,14 @@ def test_routes_module_exports():
     mock_prompts_module = MagicMock()
 
     # 2. Define the 'router' objects that should be imported
+    mock_architecture_router = MagicMock(name="architecture_router_obj")
     mock_auth_router = MagicMock(name="auth_router_obj")
     mock_files_router = MagicMock(name="files_router_obj")
     mock_commands_router = MagicMock(name="commands_router_obj")
     mock_websocket_router = MagicMock(name="websocket_router_obj")
     mock_prompts_router = MagicMock(name="prompts_router_obj")
 
+    mock_architecture_module.router = mock_architecture_router
     mock_auth_module.router = mock_auth_router
     mock_files_module.router = mock_files_router
     mock_commands_module.router = mock_commands_router
@@ -62,6 +65,7 @@ def test_routes_module_exports():
     # 3. Patch sys.modules to simulate the existence of the submodules
     # We use a dict to update sys.modules temporarily
     module_patches = {
+        "pdd.server.routes.architecture": mock_architecture_module,
         "pdd.server.routes.auth": mock_auth_module,
         "pdd.server.routes.files": mock_files_module,
         "pdd.server.routes.commands": mock_commands_module,
@@ -80,6 +84,9 @@ def test_routes_module_exports():
         # 5. Assertions
 
         # Verify attributes exist and point to the correct mock objects
+        assert hasattr(routes_module, "architecture_router")
+        assert routes_module.architecture_router is mock_architecture_router
+
         assert hasattr(routes_module, "auth_router")
         assert routes_module.auth_router is mock_auth_router
 
@@ -97,7 +104,7 @@ def test_routes_module_exports():
 
         # Verify __all__ definition
         assert hasattr(routes_module, "__all__")
-        expected_all = ["auth", "files", "commands", "prompts", "auth_router", "files_router", "commands_router", "websocket_router", "prompts_router"]
+        expected_all = ["architecture", "auth", "files", "commands", "prompts", "architecture_router", "auth_router", "files_router", "commands_router", "websocket_router", "prompts_router"]
         assert sorted(routes_module.__all__) == sorted(expected_all)
 
 def test_routes_import_failure():
@@ -109,6 +116,7 @@ def test_routes_import_failure():
     bad_mock_module = MagicMock(spec=[])  # Empty spec, no attributes
 
     module_patches = {
+        "pdd.server.routes.architecture": MagicMock(),
         "pdd.server.routes.auth": bad_mock_module,
         "pdd.server.routes.files": MagicMock(),
         # We don't strictly need the others for this specific failure test
