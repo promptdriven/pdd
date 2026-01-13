@@ -201,6 +201,69 @@ export interface MatchCheckResponse {
   model: string;
 }
 
+// Diff analysis types (detailed prompt-code comparison)
+export interface PromptRange {
+  startLine: number;
+  endLine: number;
+  text: string;
+}
+
+export interface CodeRange {
+  startLine: number;
+  endLine: number;
+  text: string;
+}
+
+export interface DiffSection {
+  id: string;
+  promptRange: PromptRange;
+  codeRanges: CodeRange[];
+  status: 'matched' | 'partial' | 'missing' | 'extra';
+  matchConfidence: number;
+  semanticLabel: string;
+  notes?: string;
+}
+
+export interface LineMapping {
+  promptLine: number;
+  codeLines: number[];
+  matchType: 'exact' | 'semantic' | 'partial' | 'none';
+}
+
+export interface DiffStats {
+  totalRequirements: number;
+  matchedRequirements: number;
+  missingRequirements: number;
+  extraCodeSections: number;
+  coveragePercent: number;
+}
+
+export interface DiffAnalysisResult {
+  overallScore: number;
+  summary: string;
+  sections: DiffSection[];
+  lineMappings: LineMapping[];
+  stats: DiffStats;
+  missing: string[];
+  extra: string[];
+  suggestions: string[];
+}
+
+export interface DiffAnalysisRequest {
+  prompt_content: string;
+  code_content: string;
+  strength?: number;
+  mode?: 'quick' | 'detailed';
+}
+
+export interface DiffAnalysisResponse {
+  result: DiffAnalysisResult;
+  cost: number;
+  model: string;
+  analysisMode: string;
+  cached: boolean;
+}
+
 // Architecture types (re-exported for convenience)
 export interface ArchitectureModule {
   reason: string;
@@ -219,6 +282,25 @@ export interface ArchitectureModule {
 export interface ArchitectureCheckResult {
   exists: boolean;
   path?: string;
+}
+
+// Architecture validation types
+export interface ArchitectureValidationError {
+  type: 'circular_dependency' | 'missing_dependency' | 'invalid_field';
+  message: string;
+  modules: string[];
+}
+
+export interface ArchitectureValidationWarning {
+  type: 'duplicate_dependency' | 'orphan_module';
+  message: string;
+  modules: string[];
+}
+
+export interface ArchitectureValidationResult {
+  valid: boolean;
+  errors: ArchitectureValidationError[];
+  warnings: ArchitectureValidationWarning[];
 }
 
 // Auth types
@@ -518,6 +600,23 @@ class PDDApiClient {
     });
   }
 
+  /**
+   * Perform detailed diff analysis between prompt and code.
+   * Returns semantic sections with line-level mappings showing how each
+   * requirement in the prompt corresponds to code implementation.
+   *
+   * @param request.prompt_content - The prompt/requirements content
+   * @param request.code_content - The code content to analyze
+   * @param request.strength - Model strength (0-1), default 0.5
+   * @param request.mode - Analysis mode: 'quick' (faster) or 'detailed' (more accurate)
+   */
+  async analyzeDiff(request: DiffAnalysisRequest): Promise<DiffAnalysisResponse> {
+    return this.request<DiffAnalysisResponse>('/api/v1/prompts/diff-analysis', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
   // Architecture operations
 
   /**
@@ -540,6 +639,27 @@ class PDDApiClient {
   async getArchitecture(): Promise<ArchitectureModule[]> {
     const content = await this.getFileContent('architecture.json');
     return JSON.parse(content.content) as ArchitectureModule[];
+  }
+
+  /**
+   * Save architecture.json to the project.
+   * Writes the array of architecture modules as formatted JSON.
+   */
+  async saveArchitecture(modules: ArchitectureModule[]): Promise<{ success: boolean; path: string; error?: string }> {
+    const content = JSON.stringify(modules, null, 2);
+    return this.writeFile('architecture.json', content);
+  }
+
+  /**
+   * Validate architecture for structural issues.
+   * Returns validation result with errors and warnings.
+   * Errors block saving, warnings are informational.
+   */
+  async validateArchitecture(modules: ArchitectureModule[]): Promise<ArchitectureValidationResult> {
+    return this.request<ArchitectureValidationResult>('/api/v1/architecture/validate', {
+      method: 'POST',
+      body: JSON.stringify({ modules }),
+    });
   }
 
   /**
