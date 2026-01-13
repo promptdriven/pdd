@@ -1,0 +1,82 @@
+[build-system]
+# Setuptools + wheel is widely compatible for PyPI publishing and local builds.
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edit-file-tool"
+version = "0.1.0"
+description = "CLI + library tool for applying Claude-assisted file edits with caching and cost tracking."
+readme = "README.md" # Assumes README.md exists at repo root.
+requires-python = ">=3.9"
+license = { file = "LICENSE" } # Assumes LICENSE exists at repo root.
+authors = [{ name = "Your Name", email = "you@example.com" }]
+keywords = ["claude", "anthropic", "editing", "cli", "prompt-caching"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Environment :: Console",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Utilities",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+# Runtime deps kept minimal for supply-chain/security and portability.
+dependencies = [
+  # Official Anthropic SDK. Conservative compatibility range (assumption): keep <1 to avoid unexpected breaking changes.
+  "anthropic>=0.40,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/edit-file-tool"
+Repository = "https://github.com/your-org/edit-file-tool"
+Issues = "https://github.com/your-org/edit-file-tool/issues"
+
+[project.scripts]
+# Expose the CLI command `edit-file` -> edit_file_tool.cli:main
+edit-file = "edit_file_tool.cli:main"
+
+[project.optional-dependencies]
+# Test dependencies are isolated so runtime installs stay minimal.
+test = [
+  "pytest>=7.4",
+  "pytest-asyncio>=0.21",
+]
+
+dev = [
+  # Keep dev as a superset of test for convenience (duplicated to avoid tool-specific extra references).
+  "pytest>=7.4",
+  "pytest-asyncio>=0.21",
+  "ruff>=0.5",
+  # Optional type checking (kept light; remove if not used)
+  "mypy>=1.7",
+]
+
+[tool.setuptools]
+# src/ layout configuration
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["edit_file_tool*"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+extend-exclude = ["dist", "build", ".venv", ".git"]
+
+[tool.ruff.lint]
+# Keep defaults; enable a sensible baseline.
+select = ["E", "F", "I", "B", "UP"]

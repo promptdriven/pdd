@@ -1,0 +1,243 @@
+[
+  {
+    "reason": "Core package configuration file needed for Python packaging and metadata",
+    "description": "Defines package metadata, dependencies, entry points, and build configuration for the edit-file-tool. Includes console script entry point for CLI usage.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "pyproject_TOML.prompt",
+    "filepath": "pyproject.toml",
+    "tags": [
+      "config",
+      "packaging"
+    ],
+    "interface": {
+      "type": "module",
+      "package_config": {
+        "packageType": "both",
+        "entryPoints": {
+          "console_scripts": {
+            "edit-file": "edit_file_tool.cli:main"
+          }
+        },
+        "sourceLayout": "src",
+        "installModes": [
+          "pip"
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Main CLI interface for the edit-file-tool command-line utility",
+    "description": "Implements the command-line interface with argument parsing for file path, edit instructions, model selection, caching options, and verbosity. Handles CLI entry point and cost display.",
+    "dependencies": [
+      "corePython.prompt",
+      "cost_tracker_utility_Python.prompt",
+      "cache_manager_utility_Python.prompt"
+    ],
+    "runtimeDependencies": [
+      "corePython.prompt",
+      "cost_tracker_utility_Python.prompt",
+      "cache_manager_utility_Python.prompt"
+    ],
+    "priority": 2,
+    "filename": "cli_Python.prompt",
+    "filepath": "src/edit_file_tool/cli.py",
+    "tags": [
+      "cli",
+      "interface"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "edit-file",
+            "flags": [
+              {
+                "name": "verbose",
+                "type": "bool",
+                "description": "Enable verbose output with detailed cost breakdowns"
+              },
+              {
+                "name": "model",
+                "type": "str",
+                "default": "claude-sonnet-4-5@20250929",
+                "description": "Claude model to use for editing"
+              },
+              {
+                "name": "cache",
+                "type": "str",
+                "default": "auto",
+                "choices": [
+                  "auto",
+                  "always",
+                  "never"
+                ],
+                "description": "Cache mode for prompt caching optimization"
+              }
+            ],
+            "description": "Edit files using natural language instructions with Claude"
+          }
+        ],
+        "entryPoint": "cli:main"
+      }
+    }
+  },
+  {
+    "reason": "Core async wrapper for the Claude API with text_editor_20250124 tool integration",
+    "description": "Implements the main async function for file editing using Claude's text_editor_20250124 tool. Handles tool invocation, result processing, conversation iterations, and cost calculation. Includes enhanced insert support to parse natural language insertion requests (before/after/at line) into precise tool parameters.",
+    "dependencies": [
+      "cost_tracker_utility_Python.prompt",
+      "cache_manager_utility_Python.prompt",
+      "think_tool_capability_Python.prompt"
+    ],
+    "runtimeDependencies": [
+      "cost_tracker_utility_Python.prompt",
+      "cache_manager_utility_Python.prompt",
+      "think_tool_capability_Python.prompt"
+    ],
+    "externalApiDependencies": [
+      "Anthropic Claude API"
+    ],
+    "priority": 3,
+    "filename": "corePython.prompt",
+    "filepath": "src/edit_file_tool/core.py",
+    "tags": [
+      "async",
+      "api",
+      "core"
+    ],
+    "interface": {
+      "type": "module",
+      "async_module": {
+        "asyncFunctions": [
+          {
+            "name": "edit_file",
+            "signature": "edit_file(file_path: str, edit_instructions: str, model: str = 'claude-sonnet-4-5@20250929', verbose: bool = False, use_cache: Union[str, bool] = 'auto', max_iterations: int = 10) -> Tuple[bool, str, float]",
+            "returns": "Tuple of (success, error_message, cost_in_usd)",
+            "errorHandling": "Retries up to max_iterations, returns error message on failure",
+            "retryPolicy": "Maximum 10 conversation iterations",
+            "description": "Primary function to edit files using natural language instructions, supporting enhanced insertion logic"
+          }
+        ],
+        "apiWrapper": true,
+        "rateLimiting": "Anthropic API rate limits apply",
+        "costTracking": true
+      }
+    }
+  },
+  {
+    "reason": "Utility module for tracking and calculating LLM API costs",
+    "description": "Calculates costs based on input/output tokens for different Claude models. Returns cost in USD as float with accurate pricing including cache write/read costs.",
+    "dependencies": [],
+    "priority": 4,
+    "filename": "cost_tracker_utility_Python.prompt",
+    "filepath": "src/edit_file_tool/cost_tracker_utility.py",
+    "tags": [
+      "utility",
+      "cost"
+    ],
+    "interface": {
+      "type": "module",
+      "utility": {
+        "purpose": "Track and calculate LLM API usage costs with model-specific pricing",
+        "functions": [
+          {
+            "name": "calculate_cost",
+            "signature": "calculate_cost(model: str, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0, cache_read_tokens: int = 0) -> float",
+            "returns": "Cost in USD as float",
+            "description": "Calculate total cost including standard tokens and cache operations"
+          }
+        ],
+        "stateless": true
+      }
+    }
+  },
+  {
+    "reason": "Utility module managing Anthropic's native prompt caching for cost optimization",
+    "description": "Implements intelligent caching that separates content from instructions in API requests. Auto-detects when caching is beneficial based on file size and complexity, with manual override options.",
+    "dependencies": [
+      "cost_tracker_utility_Python.prompt"
+    ],
+    "runtimeDependencies": [
+      "cost_tracker_utility_Python.prompt"
+    ],
+    "priority": 5,
+    "filename": "cache_manager_utility_Python.prompt",
+    "filepath": "src/edit_file_tool/cache_manager_utility.py",
+    "tags": [
+      "utility",
+      "caching",
+      "optimization"
+    ],
+    "interface": {
+      "type": "module",
+      "utility": {
+        "purpose": "Manage prompt caching to reduce API costs by up to 53% for large files",
+        "functions": [
+          {
+            "name": "should_use_cache",
+            "signature": "should_use_cache(file_path: str, file_size: int, use_cache: Union[str, bool] = 'auto') -> bool",
+            "returns": "Boolean indicating whether caching should be used",
+            "description": "Determine if caching is beneficial based on file characteristics and user preference"
+          }
+        ],
+        "stateless": true
+      }
+    }
+  },
+  {
+    "reason": "Implements Claude's think tool capability for complex editing planning and token efficiency",
+    "description": "Provides externalized thinking space for Claude when planning complex edits, reducing token usage by 13-43% and preventing token overflow in multi-step edits.",
+    "dependencies": [
+      "cost_tracker_utility_Python.prompt"
+    ],
+    "runtimeDependencies": [
+      "cost_tracker_utility_Python.prompt"
+    ],
+    "priority": 6,
+    "filename": "think_tool_capability_Python.prompt",
+    "filepath": "src/edit_file_tool/think_tool_capability.py",
+    "tags": [
+      "utility",
+      "thinking",
+      "optimization"
+    ],
+    "interface": {
+      "type": "module",
+      "utility": {
+        "purpose": "Leverage Claude's think tool for externalized planning and reduced token usage",
+        "functions": [
+          {
+            "name": "invoke_with_thinking",
+            "signature": "invoke_with_thinking(messages: List[dict], tools: List[dict], model: str) -> Tuple[dict, float]",
+            "returns": "Tuple of (tool_result, cost_in_usd)",
+            "description": "Invoke Claude API with think tool enabled for complex reasoning"
+          }
+        ],
+        "stateless": true
+      }
+    }
+  },
+  {
+    "reason": "Package initialization file to make edit_file_tool a proper Python package",
+    "description": "Defines package-level imports and metadata, exposing the main edit_file function and EditTool20250124 class for direct usage.",
+    "dependencies": [
+      "corePython.prompt"
+    ],
+    "priority": 7,
+    "filename": "init_Python.prompt",
+    "filepath": "src/edit_file_tool/__init__.py",
+    "tags": [
+      "config",
+      "package"
+    ],
+    "interface": {
+      "type": "module",
+      "package_config": {
+        "packageType": "library",
+        "sourceLayout": "src"
+      }
+    }
+  }
+]

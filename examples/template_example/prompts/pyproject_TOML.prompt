@@ -1,0 +1,31 @@
+You will create a standards-compliant pyproject.toml for the "Edit File Tool" (Python library + CLI) using a src/ layout with edit_file_tool package.
+
+Requirements
+1. Use PEP 517/518 build system (setuptools or hatchling) configured for src/ layout; ensure editable installs and standard tooling (pip, build) work correctly.
+2. Project metadata: name="edit-file-tool", version="0.1.0", description covering Claude-assisted file editing with caching and cost tracking, requires-python=">=3.9", include readme/license/authors/classifiers/keywords appropriate for a developer CLI tool.
+3. Runtime dependencies: anthropic SDK with compatible version range (e.g., ">=0.40,<1") to receive security updates while maintaining stability.
+4. Console script entry point: edit-file = "edit_file_tool.cli:main"
+5. Optional dependency groups: "test" (pytest, pytest-asyncio for async support), "dev" (test dependencies plus ruff and mypy for linting/type checking).
+6. Tool configuration for pytest: testpaths pointing to src/tests, pythonpath=["src"], asyncio_mode="auto", asyncio_default_fixture_loop_scope="function".
+7. Tool configuration for ruff: target-version="py39", line-length=100, select baseline lints (E, F, I, B, UP).
+8. Include project.urls section with Homepage, Repository, and Issues pointing to appropriate GitHub locations.
+9. Validation: no invalid TOML, conflicting keys, or missing mandatory fields; installation must yield importable edit_file_tool and working edit-file command.
+10. Security: no embedded secrets, no pinning to insecure versions; use compatible ranges.
+
+Dependencies
+Prompt Dependencies:
+- cli_Python.prompt (entry point target: edit_file_tool.cli:main)
+- core_async_module_Python.prompt (runtime library surface)
+- cost_tracker_utility_Python.prompt (runtime utility)
+- cache_manager_utility_Python.prompt (runtime utility)
+- think_tool_capability_Python.prompt (runtime utility)
+- init_Python.prompt (package export surface)
+
+Deliverable
+Production-ready pyproject.toml at repository root implementing PEP 621 metadata, src/ layout packaging configuration, runtime and optional dependencies, console script entry point, and tool configurations for pytest and ruff.
+
+Implementation assumptions
+- Distribution name: "edit-file-tool"; importable package: "edit_file_tool" under src/
+- Tests located at src/tests/ (not tests/ at root)
+- Anthropic SDK package: "anthropic" (exact version chosen conservatively)
+- Project URLs: placeholder GitHub org/repo paths (adjust as needed)
