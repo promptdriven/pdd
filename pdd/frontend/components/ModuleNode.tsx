@@ -15,10 +15,15 @@ export interface ModuleNodeData {
     text: string;
   };
   onClick?: (module: ArchitectureModule) => void;
+  // Edit mode props
+  editMode?: boolean;
+  onEdit?: (module: ArchitectureModule) => void;
+  onDelete?: (filename: string) => void;
+  isHighlighted?: boolean;  // For error highlighting (e.g., circular dependencies)
 }
 
 const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected }) => {
-  const { label, module, promptInfo, hasPrompt, colors, onClick } = data;
+  const { label, module, promptInfo, hasPrompt, colors, onClick, editMode, onEdit, isHighlighted } = data;
   const hasCode = !!promptInfo?.code;
   const hasTest = !!promptInfo?.test;
   const hasExample = !!promptInfo?.example;
@@ -26,6 +31,13 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected }) => 
   const handleClick = () => {
     if (onClick) {
       onClick(module);
+    }
+  };
+
+  const handleEditClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onEdit) {
+      onEdit(module);
     }
   };
 
@@ -61,13 +73,27 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected }) => 
           onClick={handleClick}
           className={`
             relative px-4 py-3 rounded-xl border cursor-pointer
-            transition-all duration-200 hover:scale-105
+            transition-all duration-200 hover:scale-105 group
             ${colors.bg} ${colors.border} ${colors.hover}
             ${hasPrompt ? 'ring-2 ring-emerald-500/50' : ''}
             ${selected ? 'ring-2 ring-accent-500' : ''}
+            ${isHighlighted ? 'ring-2 ring-red-500 animate-pulse' : ''}
           `}
           style={{ width: 200, minHeight: 70 }}
         >
+          {/* Edit button overlay - only visible in edit mode on hover */}
+          {editMode && (
+            <button
+              onClick={handleEditClick}
+              className="absolute -top-2 -left-2 w-6 h-6 bg-accent-600 hover:bg-accent-500 rounded-full flex items-center justify-center shadow-lg z-20 opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Edit module"
+            >
+              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+              </svg>
+            </button>
+          )}
+
           {/* Prompt status indicator */}
           {hasPrompt && (
             <div className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg z-10">
