@@ -21,12 +21,11 @@ The test should FAIL on buggy code (missing additionalProperties: false) and
 PASS once the fix is applied.
 """
 
+import os
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
-
-from pdd import cli
 
 
 @pytest.fixture(autouse=True)
@@ -65,9 +64,9 @@ class TestOpenAIStrictModeSchemaE2E:
         - Schema is missing additionalProperties
         - OpenAI rejects: "'additionalProperties' is required to be supplied and to be false"
         """
-        # 1. Create a simple prompt file (use _python suffix for language detection)
+        # 1. Create a simple prompt file
         prompt_content = """I need a Python program that prints "Hello, World!"."""
-        (tmp_path / "test_python.prompt").write_text(prompt_content)
+        (tmp_path / "test.prompt").write_text(prompt_content)
 
         monkeypatch.chdir(tmp_path)
 
@@ -79,12 +78,37 @@ class TestOpenAIStrictModeSchemaE2E:
         # Track the schema that would be sent to OpenAI
         captured_schemas = []
 
-        # 2. Mock litellm.completion and litellm.responses
-        # OpenAI gpt-5* models use the Responses API path, others use completion
+        def capture_completion_schema(*args, **kwargs):
+            """Capture the response_format schema sent to litellm.completion."""
+            response_format = kwargs.get("response_format")
+            if response_format and response_format.get("type") == "json_schema":
+                json_schema = response_format.get("json_schema", {})
+                schema = json_schema.get("schema", {})
+                captured_schemas.append({
+                    "name": json_schema.get("name"),
+                    "strict": json_schema.get("strict"),
+                    "schema": schema,
+                    "additionalProperties": schema.get("additionalProperties"),
+                })
+
+            # Return a mock response that satisfies the ExtractedCode schema
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = '''{"focus": "hello world", "explanation": "Simple print statement", "extracted_code": "print(\\"Hello, World!\\")"}'''
+            mock_response.choices[0].finish_reason = "stop"
+            mock_response.model = "gpt-5-nano"
+            mock_response.usage = MagicMock()
+            mock_response.usage.prompt_tokens = 100
+            mock_response.usage.completion_tokens = 50
+            mock_response.usage.total_tokens = 150
+            return mock_response
+
+        # 2. Mock only the very edge - litellm.completion
+        # Also need to mock the first LLM call for code generation
         call_count = [0]
 
         def mock_completion_with_counter(*args, **kwargs):
-            """Mock that handles litellm.completion calls."""
+            """Mock that handles both code generation and postprocess calls."""
             call_count[0] += 1
 
             # Capture schema if it's a structured output call
@@ -94,7 +118,6 @@ class TestOpenAIStrictModeSchemaE2E:
                 schema = json_schema.get("schema", {})
                 captured_schemas.append({
                     "call_number": call_count[0],
-                    "source": "completion",
                     "name": json_schema.get("name"),
                     "strict": json_schema.get("strict"),
                     "schema": schema,
@@ -120,44 +143,6 @@ class TestOpenAIStrictModeSchemaE2E:
                 mock_response.choices[0].message.content = '''```python
 print("Hello, World!")
 ```'''
-
-            return mock_response
-
-        def mock_responses_api(*args, **kwargs):
-            """Mock that handles litellm.responses calls (OpenAI Responses API)."""
-            call_count[0] += 1
-
-            # Capture schema from text.format block (Responses API uses different structure)
-            text_block = kwargs.get("text", {})
-            format_block = text_block.get("format", {})
-            if format_block.get("type") == "json_schema":
-                schema = format_block.get("schema", {})
-                captured_schemas.append({
-                    "call_number": call_count[0],
-                    "source": "responses",
-                    "name": format_block.get("name"),
-                    "strict": format_block.get("strict"),
-                    "schema": schema,
-                    "additionalProperties": schema.get("additionalProperties"),
-                })
-
-            # Build mock response matching Responses API structure
-            mock_response = MagicMock()
-
-            # Responses API returns output as list of items with content
-            mock_content_item = MagicMock()
-            mock_content_item.text = '''{"focus": "hello world", "explanation": "Simple print statement", "extracted_code": "print(\\"Hello, World!\\")"}'''
-
-            mock_message_item = MagicMock()
-            mock_message_item.type = "message"
-            mock_message_item.content = [mock_content_item]
-
-            mock_response.output = [mock_message_item]
-            mock_response.model = "gpt-5-nano"
-            mock_response.usage = MagicMock()
-            mock_response.usage.prompt_tokens = 100
-            mock_response.usage.completion_tokens = 50
-            mock_response.usage.total_tokens = 150
 
             return mock_response
 
@@ -191,20 +176,21 @@ print("Hello, World!")
         # 4. Run the CLI command
         with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
             with patch('pdd.llm_invoke.litellm.completion', side_effect=mock_completion_with_counter):
-                with patch('pdd.llm_invoke.litellm.responses', side_effect=mock_responses_api):
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 100, "output_tokens": 50}):
-                        runner = CliRunner()
-                        result = runner.invoke(cli.cli, [
-                            "--local",  # Force local execution
-                            "generate",
-                            "test_python.prompt",
-                            "--output", "output.py"
-                        ], catch_exceptions=False)
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 100, "output_tokens": 50}):
+                    from pdd import cli
+
+                    runner = CliRunner()
+                    result = runner.invoke(cli.cli, [
+                        "--local",  # Force local execution
+                        "generate",
+                        "test.prompt",
+                        "--output", "output.py"
+                    ], catch_exceptions=False)
 
         # 5. THE KEY ASSERTIONS
         # There should be at least one captured schema (from postprocess calling llm_invoke)
         assert len(captured_schemas) > 0, \
-            f"No structured output schemas were captured - postprocess may not have been called. CLI output: {result.output}"
+            "No structured output schemas were captured - postprocess may not have been called"
 
         # Find the ExtractedCode schema call
         extracted_code_schemas = [s for s in captured_schemas if s.get("name") == "ExtractedCode"]
