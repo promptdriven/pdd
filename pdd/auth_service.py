@@ -17,8 +17,8 @@ from typing import Optional, Tuple, Dict, Any
 # JWT file cache path
 JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
 
-# Keyring configuration (must match app_name="PDD CLI" used in commands/auth.py)
-KEYRING_SERVICE_NAME = "firebase-auth-PDD CLI"
+# Keyring configuration (must match app_name used in commands/auth.py)
+KEYRING_SERVICE_NAME = "firebase-auth-pdd-cli"
 KEYRING_USER_NAME = "refresh_token"
 
 
