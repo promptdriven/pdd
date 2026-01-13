@@ -366,7 +366,10 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
                 assert response_format['type'] == 'json_schema'
                 json_schema = response_format['json_schema']
                 assert json_schema['strict'] == True
-                assert json_schema['schema'] == SampleOutputModel.model_json_schema()
+                # Schema should include additionalProperties: false (required by OpenAI)
+                expected_schema = SampleOutputModel.model_json_schema()
+                expected_schema['additionalProperties'] = False
+                assert json_schema['schema'] == expected_schema
 
 def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_set_llm_cache):
     model_key_name = "GOOGLE_API_KEY"
@@ -395,7 +398,10 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
                 assert response_format['type'] == 'json_schema'
                 json_schema = response_format['json_schema']
                 assert json_schema['strict'] == True
-                assert json_schema['schema'] == SampleOutputModel.model_json_schema()
+                # Schema should include additionalProperties: false (required by OpenAI)
+                expected_schema = SampleOutputModel.model_json_schema()
+                expected_schema['additionalProperties'] = False
+                assert json_schema['schema'] == expected_schema
 
 def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mock_set_llm_cache):
     """Test that when ALL models fail Pydantic validation, RuntimeError is raised.
