@@ -42,12 +42,33 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Configure pytest: mirror --run-all flag.
+    """Configure pytest: populate JWT cache and mirror --run-all flag.
 
-    Note: JWT auto-population was removed to prevent browser popups during
-    test runs (especially from test explorers like VS Code/PyCharm).
-    Tests needing auth should mock it or use PDD_JWT_TOKEN env var.
+    JWT cache population runs only in master process (not xdist workers)
+    to ensure cache is ready before workers spawn. This prevents multiple
+    keyring password prompts when running tests with pytest-xdist.
     """
+    # --- Populate JWT cache (master process only) ---
+    # With xdist, session-scoped fixtures run once per worker, causing race
+    # conditions. pytest_configure runs in master BEFORE workers spawn.
+    if not hasattr(config, 'workerinput'):
+        # Skip auto-auth in CI or when explicitly disabled (prevents browser popups)
+        if os.environ.get("CI") or os.environ.get("PDD_SKIP_AUTH"):
+            pass  # Skip JWT population
+        else:
+            # We're in master process (or running without xdist)
+            try:
+                from pdd.get_jwt_token import _get_cached_jwt
+                from pdd.core.cloud import CloudConfig
+
+                # Only fetch JWT if cache is empty/expired
+                if not _get_cached_jwt():
+                    CloudConfig.get_jwt_token()
+            except Exception:
+                # Auth failure is fine - tests needing JWT will fail appropriately
+                pass
+
+    # --- Mirror --run-all into PDD_RUN_ALL_TESTS ---
     run_all: Any = config.getoption("--run-all")
     if run_all:
         os.environ["PDD_RUN_ALL_TESTS"] = "1"
