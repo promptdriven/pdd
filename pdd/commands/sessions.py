@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..core.cloud import CloudConfig
+from ..core.errors import handle_error
 from ..remote_session import RemoteSessionManager, RemoteSessionError
 
 console = Console()
@@ -36,7 +37,7 @@ def list_sessions(json_output: bool) -> None:
     try:
         sessions_list = asyncio.run(RemoteSessionManager.list_sessions(jwt_token))
     except Exception as e:
-        console.print(f"[red]Error listing sessions: {e}[/red]")
+        handle_error(e)
         return
 
     if json_output:
@@ -112,7 +113,7 @@ def session_info(session_id: str) -> None:
         # Note: Assuming get_session exists on RemoteSessionManager
         session = asyncio.run(RemoteSessionManager.get_session(jwt_token, session_id))
     except Exception as e:
-        console.print(f"[red]Error fetching session: {e}[/red]")
+        handle_error(e)
         return
 
     if not session:
@@ -142,141 +143,3 @@ def session_info(session_id: str) -> None:
         table.add_row(display_key, str(value))
 
     console.print(table)
-
-
-@sessions.command(name="cleanup")
-@click.option("--all", "cleanup_all", is_flag=True, help="Cleanup all sessions (including active).")
-@click.option("--stale", "cleanup_stale", is_flag=True, help="Cleanup only stale sessions.")
-@click.option("--force", is_flag=True, help="Skip confirmation prompt.")
-def cleanup_sessions(cleanup_all: bool, cleanup_stale: bool, force: bool) -> None:
-    """Cleanup (deregister) remote sessions.
-
-    By default, lists sessions and prompts for cleanup.
-    Use --all to cleanup all sessions, or --stale to cleanup only stale sessions.
-    """
-    jwt_token = CloudConfig.get_jwt_token()
-    if not jwt_token:
-        console.print("[red]Error: Not authenticated. Please run 'pdd auth login'.[/red]")
-        return
-
-    try:
-        sessions_list = asyncio.run(RemoteSessionManager.list_sessions(jwt_token))
-    except Exception as e:
-        console.print(f"[red]Error listing sessions: {e}[/red]")
-        return
-
-    if not sessions_list:
-        console.print("[yellow]No active remote sessions found.[/yellow]")
-        return
-
-    # Filter sessions based on flags
-    if cleanup_stale:
-        sessions_to_cleanup = [s for s in sessions_list if getattr(s, "status", "").lower() == "stale"]
-        if not sessions_to_cleanup:
-            console.print("[yellow]No stale sessions found.[/yellow]")
-            return
-    elif cleanup_all:
-        sessions_to_cleanup = sessions_list
-    else:
-        # Interactive mode - show sessions and ask which to cleanup
-        console.print("[bold]Current remote sessions:[/bold]")
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("#", style="dim", width=3)
-        table.add_column("SESSION ID", style="dim", width=12)
-        table.add_column("PROJECT")
-        table.add_column("STATUS")
-        table.add_column("LAST SEEN")
-
-        for idx, session in enumerate(sessions_list, 1):
-            s_id = getattr(session, "session_id", "unknown")
-            project = getattr(session, "project_name", "default")
-            status = getattr(session, "status", "unknown")
-            last_seen = getattr(session, "last_heartbeat", "never")
-
-            display_id = s_id[:8] if len(s_id) > 8 else s_id
-
-            status_str = str(status)
-            if status_str.lower() == "active":
-                status_render = f"[green]{status_str}[/green]"
-            elif status_str.lower() == "stale":
-                status_render = f"[yellow]{status_str}[/yellow]"
-            else:
-                status_render = status_str
-
-            table.add_row(
-                str(idx),
-                display_id,
-                str(project),
-                status_render,
-                str(last_seen)
-            )
-
-        console.print(table)
-        console.print("\n[bold]Options:[/bold]")
-        console.print("  - Enter session numbers (comma-separated) to cleanup specific sessions")
-        console.print("  - Enter 'stale' to cleanup all stale sessions")
-        console.print("  - Enter 'all' to cleanup all sessions")
-        console.print("  - Press Enter to cancel")
-
-        choice = click.prompt("\nYour choice", default="", show_default=False)
-
-        if not choice:
-            console.print("[yellow]Cancelled.[/yellow]")
-            return
-
-        if choice.lower() == "all":
-            sessions_to_cleanup = sessions_list
-        elif choice.lower() == "stale":
-            sessions_to_cleanup = [s for s in sessions_list if getattr(s, "status", "").lower() == "stale"]
-            if not sessions_to_cleanup:
-                console.print("[yellow]No stale sessions found.[/yellow]")
-                return
-        else:
-            # Parse comma-separated numbers
-            try:
-                indices = [int(x.strip()) - 1 for x in choice.split(",")]
-                sessions_to_cleanup = [sessions_list[i] for i in indices if 0 <= i < len(sessions_list)]
-                if not sessions_to_cleanup:
-                    console.print("[red]Invalid selection.[/red]")
-                    return
-            except (ValueError, IndexError):
-                console.print("[red]Invalid input. Please enter numbers separated by commas.[/red]")
-                return
-
-    # Confirm cleanup
-    if not force:
-        console.print(f"\n[bold yellow]About to cleanup {len(sessions_to_cleanup)} session(s):[/bold yellow]")
-        for session in sessions_to_cleanup:
-            s_id = getattr(session, "session_id", "unknown")
-            project = getattr(session, "project_name", "default")
-            console.print(f"  - {s_id[:8]} ({project})")
-
-        if not click.confirm("\nProceed with cleanup?", default=False):
-            console.print("[yellow]Cancelled.[/yellow]")
-            return
-
-    # Perform cleanup
-    success_count = 0
-    fail_count = 0
-
-    async def cleanup_session(session_id: str) -> bool:
-        """Helper to deregister a single session."""
-        from pathlib import Path
-        manager = RemoteSessionManager(jwt_token, project_path=Path.cwd())
-        manager.session_id = session_id
-        return await manager.deregister()
-
-    with console.status("[bold green]Cleaning up sessions..."):
-        for session in sessions_to_cleanup:
-            s_id = getattr(session, "session_id", "unknown")
-            if asyncio.run(cleanup_session(s_id)):
-                success_count += 1
-            else:
-                fail_count += 1
-
-    if success_count > 0:
-        console.print(f"\n[bold green]✓[/bold green] Successfully cleaned up {success_count} session(s)")
-    if fail_count > 0:
-        console.print(f"[bold red]✗[/bold red] Failed to cleanup {fail_count} session(s)")
-    if success_count == 0 and fail_count == 0:
-        console.print("[yellow]No sessions were cleaned up.[/yellow]")

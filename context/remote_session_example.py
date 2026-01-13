@@ -68,31 +68,12 @@ with patch("pdd.remote_session.CloudConfig") as MockCloudConfig:
 
         # 3. Start Heartbeat
         # This runs in the background to keep the session alive in the cloud
-        # Key features:
-        # - First heartbeat is sent IMMEDIATELY on startup (prevents early timeout)
-        # - Uses 5-second delay after first heartbeat, then 30-second intervals
-        # - 3 retries with exponential backoff on network errors
-        # - Automatic JWT token refresh on 401 errors
         print("\n--- Starting Heartbeat ---")
         manager.start_heartbeat()
         print("Heartbeat task started in background.")
-        print("  - Sends first heartbeat immediately")
-        print("  - Retries 3 times with exponential backoff on errors")
-        print("  - Auto-refreshes JWT token on 401 (expiration)")
 
         # Simulate some runtime...
         await asyncio.sleep(0.1)
-
-        # 3b. Token Refresh Example (handled automatically by heartbeat/polling)
-        # The manager's _refresh_token() method is called automatically when
-        # heartbeat or get_pending_commands() receives a 401 response.
-        # This uses the Firebase refresh token stored in the system keyring.
-        print("\n--- Token Refresh (automatic on 401) ---")
-        print("Token refresh is automatic - no manual intervention needed.")
-        print("If the JWT expires (~1 hour), the manager will:")
-        print("  1. Detect 401 error from cloud API")
-        print("  2. Call _refresh_token() to get new JWT")
-        print("  3. Retry the failed request with new token")
 
         # 4. List Active Sessions
         # This is a static method to see what sessions are available for this user
