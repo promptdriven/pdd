@@ -609,8 +609,8 @@ def test_step_timeouts_dictionary_exists():
     assert isinstance(STEP_TIMEOUTS, dict), "STEP_TIMEOUTS must be a dictionary"
 
     # Verify complex steps have longer timeouts
-    # Steps 4 (reproduce), 5 (root cause), 7 (generate), 8 (verify) need >= 600 seconds
-    complex_steps = [4, 5, 7, 8]
+    # Steps 4 (reproduce), 5 (root cause), 7 (generate), 8 (verify), 9 (E2E test) need >= 600 seconds
+    complex_steps = [4, 5, 7, 8, 9]
     for step in complex_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
         assert STEP_TIMEOUTS[step] >= 600.0, (
@@ -626,7 +626,7 @@ def test_step_timeouts_dictionary_exists():
     )
 
     # Verify simple steps have standard timeout (240 seconds)
-    simple_steps = [1, 2, 3, 9]
+    simple_steps = [1, 2, 3, 10]
     for step in simple_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
         assert STEP_TIMEOUTS[step] == 240.0, (

@@ -641,7 +641,7 @@ release: check-deps check-suspicious-files
 	@$(MAKE) check-suspicious-files
 	@# Update CHANGELOG.md with changes from this release
 	@echo "Updating CHANGELOG.md..."
-	@claude --dangerously-skip-permissions -p "do a git diff between the prior version and the current version to update CHANGELOG.md to make the description more accurate and complete but concise. We are using a prompt driven development approach: docs/prompting_guide.md."
+	@claude --dangerously-skip-permissions -p "do a git diff between the prior version and the current version to update CHANGELOG.md to make the description more accurate and complete but concise. Be sure to not missing any updates. We are using a prompt driven development approach: docs/prompting_guide.md."
 
 analysis:
 	@echo "Running regression analysis"
