@@ -5,6 +5,9 @@
   It launches a local REST server that enables the web frontend
   to interact with PDD commands through a browser interface.
 
+  For authenticated users, it automatically registers with PDD Cloud for remote access.
+  The cloud acts as a message bus - commands from browser are relayed via Firestore.
+
 <include>context/python_preamble.prompt</include>
 
 % Documentation References
@@ -29,6 +32,8 @@
        - --token (optional): Bearer token for authentication
        - --no-browser (flag): Don't open browser automatically
        - --frontend-url (optional): Custom frontend URL
+       - --local-only (flag): Skip cloud registration (local access only)
+       - --session-name (optional): Custom session name for identification
 
   2. **Security warnings**:
      - If --allow-remote without --token: Warn and confirm
@@ -55,11 +60,54 @@
      - Handle KeyboardInterrupt
      - Print shutdown message
      - Clean up server resources
+     - If remote session registered: stop command listener, stop heartbeat, deregister
+
+  7. **Cloud registration** (automatic for authenticated users):
+     - Check if user is authenticated via CloudConfig.get_jwt_token()
+     - If authenticated AND not --local-only:
+       - Create RemoteSessionManager with jwt_token and project_path
+       - Call register() to get cloud URL (no public URL needed - cloud hosts everything)
+       - Start heartbeat background task
+       - Start command listener for Firestore message bus
+       - Display cloud access URL to user
+       - Use set_active_session_manager() to store for server access
+     - If not authenticated or --local-only:
+       - Run in local-only mode (existing behavior)
+       - Show message that remote access is disabled
+     - On shutdown: stop command listener, stop heartbeat, deregister from cloud
 
 % Dependencies
   <server_app_example>
   <include>context/server/app_example.py</include>
   </server_app_example>
+  <remote_session_example>
+  Example usage of RemoteSessionManager:
+  ```python
+  from pdd.remote_session import (
+      RemoteSessionManager,
+      RemoteSessionError,
+      set_active_session_manager,
+  )
+  from pdd.core.cloud import CloudConfig
+
+  # Auto-register for authenticated users (no public URL needed)
+  jwt_token = CloudConfig.get_jwt_token()
+  if jwt_token and not local_only:
+      manager = RemoteSessionManager(jwt_token, project_root)
+      cloud_url = await manager.register(session_name=session_name)
+      print(f"Access URL: {cloud_url}")
+
+      await manager.start_heartbeat()
+      await manager.start_command_listener(handle_command)
+      set_active_session_manager(manager)
+
+      # On shutdown:
+      await manager.stop_command_listener()
+      await manager.stop_heartbeat()
+      await manager.deregister()
+      set_active_session_manager(None)
+  ```
+  </remote_session_example>
 
 <pdd.commands.misc><include>context/commands/misc_example.py</include></pdd.commands.misc>
 <pdd.commands><include>context/commands/__init___example.py</include></pdd.commands>

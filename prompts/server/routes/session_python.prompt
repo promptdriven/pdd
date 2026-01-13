@@ -1,0 +1,52 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/session.py`.
+
+% Role & Scope
+  This module provides REST API endpoints for remote session information.
+  It allows the web frontend to query the current server's remote session
+  registration status. For authenticated users, sessions are automatically
+  registered with PDD Cloud for remote access.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **GET /session/info**:
+     - Returns: RemoteSessionInfo with current session registration status
+     - Use get_active_session_manager() from pdd.remote_session
+     - If no active session manager: return registered=false
+     - If session manager exists: return session_id, cloud_url, registered=true, registered_at
+
+  2. **Response Model (RemoteSessionInfo)**:
+     - session_id: Optional[str] - Session ID if registered
+     - cloud_url: Optional[str] - Cloud access URL (e.g., https://pdd.dev/connect/{session_id})
+     - registered: bool - Whether session is registered with cloud
+     - registered_at: Optional[datetime] - When session was registered
+
+% Dependencies
+  <remote_session_example>
+  Example usage:
+  ```python
+  from pdd.remote_session import get_active_session_manager
+
+  # Get active session manager (if any)
+  manager = get_active_session_manager()
+  if manager and manager.session_id:
+      return RemoteSessionInfo(
+          session_id=manager.session_id,
+          cloud_url=manager.cloud_url,
+          registered=True,
+          registered_at=datetime.now(timezone.utc),  # or store actual time
+      )
+  else:
+      return RemoteSessionInfo(registered=False)
+  ```
+  </remote_session_example>
+
+% Instructions
+  - Create router with prefix="/api/v1/session", tags=["session"]
+  - Use Pydantic BaseModel for response schemas
+  - Import get_active_session_manager from pdd.remote_session
+  - Handle ImportError gracefully (if remote_session module not available)
+
+% Deliverables
+  - Code: `pdd/server/routes/session.py`
+  - Export: router (APIRouter instance)

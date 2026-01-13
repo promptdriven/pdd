@@ -46,6 +46,14 @@ CLOUD_ENDPOINTS = {
     "trackUsage": "/trackUsage",
     "getCreditBalance": "/getCreditBalance",
     "llmInvoke": "/llmInvoke",
+    # Remote session endpoints
+    "registerSession": "/registerSession",
+    "listSessions": "/listSessions",
+    "heartbeatSession": "/heartbeatSession",
+    "deregisterSession": "/deregisterSession",
+    # Command relay endpoints (Firestore message bus)
+    "getCommands": "/getCommands",
+    "updateCommand": "/updateCommand",
 }
 
 

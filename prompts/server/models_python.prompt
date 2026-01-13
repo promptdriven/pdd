@@ -38,12 +38,16 @@
      - `ServerStatus`: version, project_root, uptime_seconds, active_jobs, connected_clients
      - `ServerConfig`: host, port, token (optional), allow_remote flag
 
-  5. **Validation**:
+  5. **Remote Session Models**:
+     - `RemoteSessionInfo`: session_id (optional), cloud_url (optional, e.g., https://pdd.dev/connect/{session_id}), registered (bool), registered_at (optional datetime)
+     - `SessionListItem`: session_id, cloud_url (cloud access URL), project_name, created_at, last_heartbeat, status, metadata
+
+  6. **Validation**:
      - Path fields should validate against directory traversal (no "..")
      - Use Field() for descriptions and constraints
      - Use field_validator for custom validation
 
-  6. **Serialization**:
+  7. **Serialization**:
      - datetime fields should serialize to ISO 8601 strings
      - Use timezone-aware datetime: `datetime.now(timezone.utc)` instead of deprecated `datetime.utcnow()`
      - Enums should serialize to string values
