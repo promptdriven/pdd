@@ -99,14 +99,13 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
 
   /**
    * Add a new task to the queue.
-   * Returns the task ID if successful, or null if queue is full.
    */
   const addTask = useCallback((
     command: string,
     prompt: PromptInfo | null,
     request: CommandRequest,
     displayCommand: string
-  ): string | null => {
+  ) => {
     const newTask: TaskQueueItem = {
       id: generateTaskId(),
       command,
@@ -117,21 +116,13 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
       createdAt: new Date(),
     };
 
-    let wasAdded = false;
-
     setTasks(prev => {
       if (prev.length >= MAX_QUEUE_SIZE) {
-        wasAdded = false;
+        console.warn(`Task queue is full (${MAX_QUEUE_SIZE} items). Cannot add more tasks.`);
         return prev;
       }
-      wasAdded = true;
       return [...prev, newTask];
     });
-
-    if (!wasAdded) {
-      // Queue is full - caller should show user feedback
-      return null;
-    }
 
     return newTask.id;
   }, []);
