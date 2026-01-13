@@ -1851,17 +1851,21 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 2. **Documentation check** - Review repo documentation to determine if this is a bug or user error. Posts comment with findings.
 
-3. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
+3. **Triage** - Assess if enough information is provided to proceed. Posts comment requesting more info if needed.
 
-4. **Root cause analysis** - Run experiments to identify the root cause. Posts comment explaining the root cause.
+4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
 
-5. **Test plan** - Design a plan for creating tests to detect the problem. Posts comment with the test plan.
+5. **Root cause analysis** - Run experiments to identify the root cause. Posts comment explaining the root cause.
 
-6. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
+6. **Test plan** - Design a plan for creating tests to detect the problem. Posts comment with the test plan.
 
-7. **Verify detection** - Confirm the test successfully detects the bug. Posts comment confirming verification.
+7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
 
-8. **Create draft PR** - Create a draft pull request with the failing test and link it to the issue. Posts comment with PR link.
+8. **Verify detection** - Confirm the unit test successfully detects the bug. Posts comment confirming verification.
+
+9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Posts comment with E2E test results.
+
+10. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
 
 Arguments:
 - `ISSUE_URL`: GitHub issue URL (e.g., https://github.com/owner/repo/issues/123)

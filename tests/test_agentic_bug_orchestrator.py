@@ -2,7 +2,7 @@
 Test Plan for pdd.agentic_bug_orchestrator
 
 1. **Happy Path Execution**:
-   - Verify that the orchestrator runs through all 9 steps when no hard stops are triggered.
+   - Verify that the orchestrator runs through all 10 steps when no hard stops are triggered.
    - Verify that costs are accumulated correctly.
    - Verify that changed files are aggregated correctly.
    - Verify that the final success message is returned.
@@ -89,7 +89,7 @@ def default_args(tmp_path):
 
 def test_happy_path_execution(mock_dependencies, default_args):
     """
-    Test that all 9 steps execute successfully when no stop conditions are met.
+    Test that all 10 steps execute successfully when no stop conditions are met.
     """
     mock_run, mock_load, _ = mock_dependencies
 
@@ -107,9 +107,9 @@ def test_happy_path_execution(mock_dependencies, default_args):
 
     assert success is True
     assert "Investigation complete" in msg
-    assert mock_run.call_count == 9
+    assert mock_run.call_count == 10
     # Use approx for floating point comparison
-    assert cost == pytest.approx(0.9)
+    assert cost == pytest.approx(1.0)  # 10 steps × 0.1 each
     assert files == ["test_file.py"]
     assert model == "gpt-4"
 
@@ -246,7 +246,7 @@ def test_soft_failure_continuation(mock_dependencies, default_args):
     # The overall workflow should succeed because soft failures are allowed
     assert success is True
     assert "Investigation complete" in msg
-    assert mock_run.call_count == 9
+    assert mock_run.call_count == 10
 
 
 def test_template_loading_failure(mock_dependencies, default_args):
@@ -375,7 +375,7 @@ def test_step7_files_modified_for_append(mock_dependencies, default_args):
     assert "Investigation complete" in msg
     # The modified file should be tracked
     assert "tests/test_existing_module.py" in changed_files
-    assert mock_run.call_count == 9
+    assert mock_run.call_count == 10
 
 
 def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_args):
@@ -400,7 +400,7 @@ def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_arg
     run_agentic_bug_orchestrator(**default_args)
 
     # Verify timeout is passed for each step
-    assert mock_run.call_count == 9
+    assert mock_run.call_count == 10
 
     for call_obj in mock_run.call_args_list:
         label = call_obj.kwargs.get('label', '')
@@ -415,20 +415,20 @@ def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_arg
         )
 
 
-def test_files_to_stage_passed_to_step9(mock_dependencies, default_args):
+def test_files_to_stage_passed_to_step10(mock_dependencies, default_args):
     """
-    Test that files_to_stage context variable is passed to Step 9.
+    Test that files_to_stage context variable is passed to Step 10 (PR).
 
     This verifies the fix for Issue #268: The pdd bug command was including
-    unrelated files in PRs because the Step 9 prompt didn't have explicit
-    file paths to stage. Now the orchestrator passes files_to_stage to Step 9.
+    unrelated files in PRs because the Step 10 prompt didn't have explicit
+    file paths to stage. Now the orchestrator passes files_to_stage to Step 10.
     """
     mock_run, mock_load, _ = mock_dependencies
 
     # Setup templates that use the files_to_stage variable
     def side_effect_load(name):
-        if "step9" in name:
-            # Step 9 template now uses files_to_stage
+        if "step10" in name:
+            # Step 10 (PR) template uses files_to_stage
             return "Files to stage: {files_to_stage}"
         return "Generic prompt for {issue_number}"
 
@@ -444,15 +444,15 @@ def test_files_to_stage_passed_to_step9(mock_dependencies, default_args):
 
     run_agentic_bug_orchestrator(**default_args)
 
-    # Find the Step 9 call and verify files_to_stage was formatted into the prompt
-    step9_call = None
+    # Find the Step 10 call and verify files_to_stage was formatted into the prompt
+    step10_call = None
     for call_obj in mock_run.call_args_list:
-        if call_obj.kwargs.get('label') == 'step9':
-            step9_call = call_obj
+        if call_obj.kwargs.get('label') == 'step10':
+            step10_call = call_obj
             break
 
-    assert step9_call is not None, "Step 9 should have been called"
-    instruction = step9_call.kwargs['instruction']
+    assert step10_call is not None, "Step 10 should have been called"
+    instruction = step10_call.kwargs['instruction']
     assert instruction == "Files to stage: tests/test_bug_fix.py"
 
 
@@ -466,7 +466,7 @@ def test_files_to_stage_with_multiple_files(mock_dependencies, default_args):
     mock_run, mock_load, _ = mock_dependencies
 
     def side_effect_load(name):
-        if "step9" in name:
+        if "step10" in name:
             return "Stage these: {files_to_stage}"
         return "Generic prompt for {issue_number}"
 
@@ -483,14 +483,14 @@ def test_files_to_stage_with_multiple_files(mock_dependencies, default_args):
 
     run_agentic_bug_orchestrator(**default_args)
 
-    step9_call = None
+    step10_call = None
     for call_obj in mock_run.call_args_list:
-        if call_obj.kwargs.get('label') == 'step9':
-            step9_call = call_obj
+        if call_obj.kwargs.get('label') == 'step10':
+            step10_call = call_obj
             break
 
-    assert step9_call is not None
-    instruction = step9_call.kwargs['instruction']
+    assert step10_call is not None
+    instruction = step10_call.kwargs['instruction']
     # Both files should be in the instruction, comma-separated
     assert "tests/test_bug.py" in instruction
     assert "tests/conftest.py" in instruction
@@ -501,12 +501,12 @@ def test_files_to_stage_with_modified_files(mock_dependencies, default_args):
     Test that FILES_MODIFIED files are also included in files_to_stage.
 
     When appending to existing test files (FILES_MODIFIED), those files
-    should also be passed to Step 9 for staging.
+    should also be passed to Step 10 (PR) for staging.
     """
     mock_run, mock_load, _ = mock_dependencies
 
     def side_effect_load(name):
-        if "step9" in name:
+        if "step10" in name:
             return "Stage: {files_to_stage}"
         return "Generic prompt for {issue_number}"
 
@@ -523,12 +523,68 @@ def test_files_to_stage_with_modified_files(mock_dependencies, default_args):
 
     run_agentic_bug_orchestrator(**default_args)
 
-    step9_call = None
+    step10_call = None
     for call_obj in mock_run.call_args_list:
-        if call_obj.kwargs.get('label') == 'step9':
-            step9_call = call_obj
+        if call_obj.kwargs.get('label') == 'step10':
+            step10_call = call_obj
             break
 
-    assert step9_call is not None
-    instruction = step9_call.kwargs['instruction']
+    assert step10_call is not None
+    instruction = step10_call.kwargs['instruction']
     assert "tests/test_existing.py" in instruction
+
+
+def test_hard_stop_step_9_e2e_fail(mock_dependencies, default_args):
+    """
+    Test early exit at Step 9 if E2E test fails to catch the bug.
+
+    This verifies the hard stop condition for Step 9 (E2E Test):
+    If the E2E test doesn't correctly detect the bug, the workflow stops.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "gpt-4")
+        if label == 'step9':
+            # Step 9 E2E test fails to catch the bug
+            return (True, "E2E test ran but...\nE2E_FAIL: Test does not catch bug correctly", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at Step 9" in msg
+    assert "E2E test does not catch bug" in msg
+    # Should stop at step 9, not reach step 10
+    assert mock_run.call_count == 9
+
+
+def test_e2e_files_accumulated(mock_dependencies, default_args):
+    """
+    Test that E2E files from Step 9 are added to changed_files.
+
+    When Step 9 creates E2E test files (E2E_FILES_CREATED), those files
+    should be included in the changed_files list and passed to Step 10.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "Generated unit test\nFILES_CREATED: tests/test_unit.py", 0.1, "gpt-4")
+        if label == 'step9':
+            return (True, "Generated E2E test\nE2E_FILES_CREATED: tests/e2e/test_e2e_bug.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    # Both unit test and E2E test files should be in changed_files
+    assert "tests/test_unit.py" in files
+    assert "tests/e2e/test_e2e_bug.py" in files
