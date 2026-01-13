@@ -9,6 +9,7 @@ from .modify import split, change, update
 from .maintenance import sync, auto_deps, setup
 from .analysis import detect_change, conflicts, bug, crash, trace
 from .connect import connect
+from .auth import auth_group
 from .misc import preprocess
 from .report import report_core
 from .templates import templates_group
@@ -42,3 +43,4 @@ def register_commands(cli: click.Group) -> None:
     # Using add_command is cleaner if it works for the structure.
     cli.add_command(templates_group)
     cli.add_command(connect)
+    cli.add_command(auth_group)

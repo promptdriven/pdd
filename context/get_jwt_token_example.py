@@ -7,7 +7,14 @@ from pdd.get_jwt_token import get_jwt_token, AuthError, NetworkError, TokenError
 def _load_firebase_api_key(pdd_env: str) -> str:
     """Load the Firebase API key from the appropriate env file if not already set."""
     # If already in env, return it
-    env_key = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY")
+    if pdd_env == "staging":
+        env_key = (os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY_STAGING") or
+                   os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"))
+    elif pdd_env in ("prod", "production"):
+        env_key = (os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY_PROD") or
+                   os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"))
+    else:
+        env_key = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY")
     if env_key:
         return env_key
 
@@ -15,7 +22,7 @@ def _load_firebase_api_key(pdd_env: str) -> str:
     project_root = Path(__file__).resolve().parents[2]
     if pdd_env == "staging":
         candidate = project_root / "frontend" / ".env.staging"
-    elif pdd_env == "prod":
+    elif pdd_env in ("prod", "production"):
         candidate = project_root / "frontend" / ".env.production"
     else:
         candidate = project_root / ".env"
@@ -52,14 +59,7 @@ async def main():
     """
     print("Starting authentication process...")
 
-    # Clear JWT cache for staging to ensure fresh token with correct audience
-    # The cache at ~/.pdd/jwt_cache is NOT environment-aware and returns cached
-    # tokens regardless of the firebase_api_key parameter
-    if pdd_env == "staging":
-        cache_file = Path.home() / ".pdd" / "jwt_cache"
-        if cache_file.exists():
-            cache_file.unlink()
-            print("Cleared JWT cache for staging authentication")
+    # JWT cache validation is handled in get_jwt_token based on PDD_ENV.
 
     if not FIREBASE_API_KEY:
         print("Error: NEXT_PUBLIC_FIREBASE_API_KEY is not set and could not be loaded for this environment.")
