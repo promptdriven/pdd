@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import os
 import subprocess
@@ -50,45 +49,6 @@ class RateLimitError(AuthError):
 # JWT file cache path (Issue #273 - reduces keyring access to avoid password prompts)
 JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
 
-def _get_expected_jwt_audience() -> Optional[str]:
-    """
-    Determine the expected JWT audience based on PDD_ENV.
-
-    This keeps the JWT cache environment-aware when PDD_ENV is set
-    (e.g., staging vs prod) without changing the public API.
-    """
-    explicit_aud = os.environ.get("PDD_JWT_EXPECTED_AUD")
-    if explicit_aud:
-        return explicit_aud
-
-    env = (os.environ.get("PDD_ENV") or "").lower()
-    if not env or env == "local":
-        return None
-
-    project_id = os.environ.get("PDD_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
-    if project_id:
-        return project_id
-
-    if env in ("prod", "production"):
-        return "prompt-driven-development"
-    if env == "staging":
-        return os.environ.get("STAGING_PROJECT_ID") or "prompt-driven-development-stg"
-    return None
-
-
-def _get_jwt_audience(jwt: str) -> Optional[str]:
-    """Extract the aud claim without verifying the signature."""
-    try:
-        parts = jwt.split(".")
-        if len(parts) < 2:
-            return None
-        payload_part = parts[1] + "=" * (-len(parts[1]) % 4)
-        payload_bytes = base64.urlsafe_b64decode(payload_part.encode("utf-8"))
-        payload = json.loads(payload_bytes.decode("utf-8"))
-        return payload.get("aud") or payload.get("firebase", {}).get("aud")
-    except Exception:
-        return None
-
 
 def _get_cached_jwt() -> Optional[str]:
     """
@@ -104,17 +64,7 @@ def _get_cached_jwt() -> Optional[str]:
             cache = json.load(f)
         # Check expiration with 5 minute buffer
         if cache.get('expires_at', 0) > time.time() + 300:
-            jwt = cache.get('jwt')
-            expected_aud = _get_expected_jwt_audience()
-            if expected_aud:
-                actual_aud = _get_jwt_audience(jwt or "")
-                if actual_aud != expected_aud:
-                    try:
-                        JWT_CACHE_FILE.unlink()
-                    except OSError:
-                        pass
-                    return None
-            return jwt
+            return cache.get('jwt')
     except (json.JSONDecodeError, IOError, KeyError):
         # Cache corrupted, delete it
         try:
@@ -466,7 +416,12 @@ class FirebaseAuthenticator:
         """
         return bool(id_token)
 
-async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: str = "my-cli-app") -> str:
+async def get_jwt_token(
+    firebase_api_key: str,
+    github_client_id: str,
+    app_name: str = "my-cli-app",
+    no_browser: bool = False
+) -> str:
     """
     Get a Firebase ID token using GitHub's Device Flow authentication.
 
@@ -474,6 +429,7 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
         firebase_api_key: Firebase Web API key
         github_client_id: OAuth client ID for GitHub app
         app_name: Unique name for your CLI application
+        no_browser: If True, skip automatic browser opening (for remote/SSH sessions)
 
     Returns:
         str: A valid Firebase ID token
@@ -518,7 +474,18 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
     print(f"To authenticate, visit: {device_code_response['verification_uri']}")
     print(f"Enter code: {device_code_response['user_code']}")
     sys.stdout.flush()  # Ensure visibility in piped contexts
-    webbrowser.open(device_code_response['verification_uri'])  # Auto-open browser
+
+    # Open browser only if not explicitly disabled
+    if not no_browser:
+        try:
+            webbrowser.open(device_code_response['verification_uri'])
+            print("Opening browser for authentication...")
+        except Exception as e:
+            print(f"Note: Could not open browser: {e}")
+            print("Please open the URL manually in your browser.")
+    else:
+        print("Browser opening disabled. Please open the URL manually in your browser.")
+
     print("Waiting for authentication...")
     sys.stdout.flush()
 

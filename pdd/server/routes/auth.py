@@ -46,6 +46,12 @@ class LogoutResult(BaseModel):
     message: str
 
 
+class LoginRequest(BaseModel):
+    """Request model for starting login flow."""
+
+    no_browser: bool = False
+
+
 class LoginResponse(BaseModel):
     """Response model for starting login flow."""
 
@@ -174,13 +180,16 @@ async def _poll_for_auth(poll_id: str, device_code: str, interval: int, expires_
 
 
 @router.post("/login", response_model=LoginResponse)
-async def start_login(background_tasks: BackgroundTasks) -> LoginResponse:
+async def start_login(
+    background_tasks: BackgroundTasks,
+    request: LoginRequest = LoginRequest()
+) -> LoginResponse:
     """
     Start GitHub Device Flow authentication.
 
     Clears existing tokens and initiates a new GitHub Device Flow.
     Returns the user code and verification URL for the user to complete authentication.
-    Opens the browser automatically.
+    Opens the browser automatically unless no_browser is True.
     """
     # Check for required environment variables
     github_client_id = os.environ.get(GITHUB_CLIENT_ID_ENV)
@@ -216,9 +225,16 @@ async def start_login(background_tasks: BackgroundTasks) -> LoginResponse:
             "created_at": time.time(),
         }
 
-        # Open browser for user
+        # Open browser for user (unless disabled)
         verification_uri = device_code_response["verification_uri"]
-        webbrowser.open(verification_uri)
+
+        if not request.no_browser:
+            try:
+                webbrowser.open(verification_uri)
+            except Exception as e:
+                # Log error but don't fail - user can still open manually
+                import logging
+                logging.warning(f"Failed to open browser: {e}")
 
         # Start background polling task
         background_tasks.add_task(

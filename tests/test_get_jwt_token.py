@@ -32,7 +32,6 @@ async def test_get_jwt_token_with_valid_stored_token(
 
 
 @pytest.mark.asyncio
-@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
@@ -57,8 +56,7 @@ async def test_get_jwt_token_with_invalid_stored_token_reauth(
     mock_exchange_github,
     mock_store_refresh,
     mock_cache_read,
-    mock_cache_write,
-    mock_webbrowser,
+    mock_cache_write
 ):
     """
     If the refresh token is invalid or refresh fails, get_jwt_token should invoke the Device Flow.
@@ -72,7 +70,6 @@ async def test_get_jwt_token_with_invalid_stored_token_reauth(
 
 
 @pytest.mark.asyncio
-@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
@@ -93,8 +90,7 @@ async def test_get_jwt_token_no_stored_token_triggers_device_flow(
     mock_exchange_github,
     mock_store_refresh,
     mock_cache_read,
-    mock_cache_write,
-    mock_webbrowser,
+    mock_cache_write
 ):
     """
     If there is no stored refresh token, get_jwt_token should prompt the Device Flow and complete auth.
@@ -108,7 +104,6 @@ async def test_get_jwt_token_no_stored_token_triggers_device_flow(
 
 
 @pytest.mark.asyncio
-@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
 @patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
@@ -123,8 +118,7 @@ async def test_get_jwt_token_user_cancels_device_flow(
     mock_poll_for_token,
     mock_request_device_code,
     mock_get_stored_token,
-    mock_cache,
-    mock_webbrowser,
+    mock_cache
 ):
     """
     If the user cancels authorization at GitHub, get_jwt_token should raise a UserCancelledError.
@@ -137,7 +131,6 @@ async def test_get_jwt_token_user_cancels_device_flow(
 
 
 @pytest.mark.asyncio
-@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
 @patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
@@ -152,8 +145,7 @@ async def test_get_jwt_token_device_code_expired(
     mock_poll_for_token,
     mock_request_device_code,
     mock_get_stored_token,
-    mock_cache,
-    mock_webbrowser,
+    mock_cache
 ):
     """
     If the device code expires, get_jwt_token should raise an AuthError.
@@ -282,3 +274,87 @@ class TestJWTCaching:
             # Restore original JWT_CACHE_FILE to avoid affecting other tests
             if original_cache_file is not None:
                 jwt_module.JWT_CACHE_FILE = original_cache_file
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_with_no_browser_false(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser is opened when no_browser=False (default behavior).
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=False)
+    assert token == "id_token_abc"
+    # Verify browser.open was called
+    mock_browser_open.assert_called_once_with("https://github.com/login/device")
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_with_no_browser_true(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser is NOT opened when no_browser=True.
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=True)
+    assert token == "id_token_abc"
+    # Verify browser.open was NOT called
+    mock_browser_open.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open", side_effect=Exception("Browser open failed"))
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_browser_open_error_handled(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser opening errors are handled gracefully and auth still succeeds.
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=False)
+    assert token == "id_token_abc"
+    # Verify browser.open was called but error was caught
+    mock_browser_open.assert_called_once_with("https://github.com/login/device")

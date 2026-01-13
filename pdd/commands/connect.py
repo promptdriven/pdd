@@ -157,11 +157,20 @@ def connect(
 
     # 7. Open Browser
     if not no_browser:
+        # Import remote session detection
+        from ..core.remote_session import is_remote_session
+
+        is_remote, reason = is_remote_session()
+        if is_remote:
+            click.echo(click.style(f"Note: {reason}", fg="yellow"))
+            click.echo("Opening browser may not work in remote sessions. Use the URL above to connect manually.")
+
         click.echo("Opening browser...")
         try:
             webbrowser.open(target_url)
         except Exception as e:
             click.echo(click.style(f"Could not open browser: {e}", fg="yellow"))
+            click.echo(f"Please open {target_url} manually in your browser.")
 
     # 8. Run Server
     try:
