@@ -1,0 +1,66 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/sessions.py`.
+
+% Role & Scope
+  This module provides CLI commands for managing remote PDD sessions. It allows users
+  to list their active remote sessions across devices using `pdd sessions list`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **sessions command group**:
+     - Click group with name "sessions"
+     - Help text: "Manage remote PDD sessions."
+
+  2. **list subcommand** (`pdd sessions list`):
+     - Option: `--json` flag to output as JSON
+     - Authenticate via `CloudConfig.get_jwt_token()`
+     - Call `RemoteSessionManager.list_sessions(jwt_token)`
+     - Display sessions in a rich table by default:
+       - Columns: SESSION ID (truncated), PROJECT, CLOUD URL, STATUS, LAST SEEN
+       - Color status: green for "active", yellow for "stale"
+       - Cloud URL is the access link (e.g., https://pdd.dev/connect/{session_id})
+     - If `--json`, output as JSON array
+     - Show helpful message if no sessions found
+     - Handle auth errors gracefully
+
+  3. **info subcommand** (`pdd sessions info SESSION_ID`):
+     - Argument: session_id (required)
+     - Display detailed info about a specific session
+     - Show all metadata fields
+
+% Dependencies
+  <remote_session_example>
+  Example usage of RemoteSessionManager:
+  ```python
+  from pdd.remote_session import RemoteSessionManager, SessionInfo, RemoteSessionError
+  from pdd.core.cloud import CloudConfig
+
+  # List sessions
+  jwt_token = CloudConfig.get_jwt_token()
+  if jwt_token:
+      sessions = await RemoteSessionManager.list_sessions(jwt_token)
+      for session in sessions:
+          print(f"{session.session_id}: {session.cloud_url}")
+  ```
+  </remote_session_example>
+  <track_cost_example>
+  <include>context/track_cost_example.py</include>
+  </track_cost_example>
+
+  % Here are examples of how to use internal modules:
+  <pdd.commands.templates><include>context/commands/templates_example.py</include></pdd.commands.templates>
+  <pdd.commands.utility><include>context/commands/utility_example.py</include></pdd.commands.utility>
+
+% Technical Constraints
+  - Use `asyncio.run()` to call async methods from sync Click commands
+  - Use `rich.table.Table` for formatted output
+  - Use `rich.console.Console` for all printing
+  - Handle `RemoteSessionError` with user-friendly messages
+
+% Instructions
+  - Follow existing command patterns in `pdd/commands/`
+  - No `@track_cost` decorator (no LLM calls)
+  - Use `handle_error` for exceptions
+
+% Deliverables
+  - Code: `pdd/commands/sessions.py`

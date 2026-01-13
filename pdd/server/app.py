@@ -22,7 +22,7 @@ from .security import (
 )
 from .jobs import JobManager
 from .routes.websocket import ConnectionManager, create_websocket_routes
-from .routes import architecture, auth, files, commands, prompts
+from .routes import architecture, auth, files, commands, prompts, session
 from .routes import websocket as ws_routes
 
 # Initialize Rich console
@@ -230,6 +230,7 @@ def create_app(
     app.include_router(files.router)
     app.include_router(commands.router)
     app.include_router(prompts.router)
+    app.include_router(session.router)
 
     create_websocket_routes(app, _app_state.connection_manager, _app_state.job_manager)
 

@@ -32,6 +32,8 @@ __all__ = [
     "FileChangeMessage",
     "ServerStatus",
     "ServerConfig",
+    "RemoteSessionInfo",
+    "SessionListItem",
 ]
 
 
@@ -214,3 +216,26 @@ class ServerConfig(BaseModel):
     allow_remote: bool = Field(False, description="Allow remote connections")
     allowed_origins: Optional[List[str]] = Field(None, description="CORS allowed origins")
     log_level: str = Field("info", description="Logging level")
+
+
+# ============================================================================
+# Remote Session Models
+# ============================================================================
+
+class RemoteSessionInfo(BaseModel):
+    """Information about the current server's remote session registration."""
+    session_id: Optional[str] = Field(None, description="Session ID if registered")
+    cloud_url: Optional[str] = Field(None, description="Cloud access URL (e.g., https://pdd.dev/connect/{session_id})")
+    registered: bool = Field(False, description="Whether session is registered with cloud")
+    registered_at: Optional[datetime] = Field(None, description="When session was registered")
+
+
+class SessionListItem(BaseModel):
+    """Session item for list display."""
+    session_id: str = Field(..., description="Unique session identifier")
+    cloud_url: str = Field(..., description="Cloud access URL for remote access")
+    project_name: str = Field(..., description="Project directory name")
+    created_at: datetime = Field(..., description="When session was created")
+    last_heartbeat: datetime = Field(..., description="Last heartbeat timestamp")
+    status: Literal["active", "stale"] = Field(..., description="Session status")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")

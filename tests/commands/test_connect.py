@@ -41,21 +41,45 @@ from pdd.commands.connect import connect
 @pytest.fixture
 def mock_dependencies():
     """
-    Fixture to mock external dependencies: uvicorn, webbrowser, and create_app.
+    Fixture to mock external dependencies: uvicorn, webbrowser, create_app, and cloud.
     Returns a dictionary of mocks for verification.
     """
     with patch("pdd.commands.connect.uvicorn") as mock_uvicorn, \
          patch("pdd.commands.connect.webbrowser") as mock_webbrowser, \
          patch("pdd.commands.connect.create_app") as mock_create_app:
-        
+
         # Setup default mock behaviors
         mock_uvicorn.run.return_value = None
         mock_create_app.return_value = MagicMock(name="FastAPIApp")
-        
+
         yield {
             "uvicorn": mock_uvicorn,
             "webbrowser": mock_webbrowser,
             "create_app": mock_create_app
+        }
+
+
+@pytest.fixture
+def mock_dependencies_with_cloud():
+    """
+    Fixture with cloud authentication mocked.
+    Returns a dictionary of mocks for verification.
+    """
+    with patch("pdd.commands.connect.uvicorn") as mock_uvicorn, \
+         patch("pdd.commands.connect.webbrowser") as mock_webbrowser, \
+         patch("pdd.commands.connect.create_app") as mock_create_app, \
+         patch("pdd.core.cloud.CloudConfig.get_jwt_token") as mock_get_jwt:
+
+        # Setup default mock behaviors
+        mock_uvicorn.run.return_value = None
+        mock_create_app.return_value = MagicMock(name="FastAPIApp")
+        mock_get_jwt.return_value = None  # Not authenticated by default
+
+        yield {
+            "uvicorn": mock_uvicorn,
+            "webbrowser": mock_webbrowser,
+            "create_app": mock_create_app,
+            "get_jwt_token": mock_get_jwt
         }
 
 def test_connect_missing_uvicorn():
@@ -73,21 +97,35 @@ def test_connect_defaults(mock_dependencies):
     runner = CliRunner()
     with runner.isolated_filesystem():
         result = runner.invoke(connect)
-        
+
         assert result.exit_code == 0
         assert "Starting PDD server on http://127.0.0.1:9876" in result.output
-        
+
         # Verify create_app called with current directory
         mock_dependencies["create_app"].assert_called_once()
-        
+
         # Verify browser opened
         mock_dependencies["webbrowser"].open.assert_called_with("http://127.0.0.1:9876")
-        
+
         # Verify uvicorn run
         mock_dependencies["uvicorn"].run.assert_called_once()
         call_kwargs = mock_dependencies["uvicorn"].run.call_args[1]
         assert call_kwargs["host"] == "127.0.0.1"
         assert call_kwargs["port"] == 9876
+
+
+def test_connect_local_only_flag(mock_dependencies):
+    """Test --local-only flag skips cloud registration."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(connect, ["--local-only"])
+
+        assert result.exit_code == 0
+        assert "Running in local-only mode (--local-only flag set)" in result.output
+        assert "Starting PDD server on http://127.0.0.1:9876" in result.output
+
+        # Should still run the server
+        mock_dependencies["uvicorn"].run.assert_called_once()
 
 def test_connect_no_browser(mock_dependencies):
     """Test --no-browser flag."""
