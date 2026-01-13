@@ -101,7 +101,7 @@ def login():
         sys.exit(1)
         
     client_id = _get_client_id()
-    app_name = "PDD CLI"
+    app_name = "pdd-cli"
     
     async def run_login():
         try:
