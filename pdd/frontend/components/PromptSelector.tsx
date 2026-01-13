@@ -10,6 +10,7 @@ interface PromptSelectorProps {
   onRunCommand: (command: CommandType, prompt: PromptInfo, options?: Record<string, any>) => void;
   onEditPrompt: (prompt: PromptInfo) => void;
   onCreatePrompt?: (prompt: PromptInfo) => void;
+  onAddToQueue?: (prompt: PromptInfo) => void;
   selectedPrompt: PromptInfo | null;
   isExecuting: boolean;
 }
@@ -433,8 +434,9 @@ const PromptCard: React.FC<{
   onSelect: () => void;
   onRunCommand: (command: CommandType, options?: Record<string, any>) => void;
   onEditPrompt: () => void;
+  onAddToQueue?: () => void;
   isExecuting: boolean;
-}> = ({ prompt, isSelected, onSelect, onRunCommand, onEditPrompt, isExecuting }) => {
+}> = ({ prompt, isSelected, onSelect, onRunCommand, onEditPrompt, onAddToQueue, isExecuting }) => {
   const [modalCommand, setModalCommand] = useState<CommandConfig | null>(null);
 
   const languageColor = prompt.language
@@ -468,6 +470,11 @@ const PromptCard: React.FC<{
     onEditPrompt();
   };
 
+  const handleAddToQueueClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onAddToQueue?.();
+  };
+
   return (
     <>
       <div
@@ -490,6 +497,19 @@ const PromptCard: React.FC<{
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              {/* Add to Queue button */}
+              {onAddToQueue && (
+                <button
+                  onClick={handleAddToQueueClick}
+                  className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-1.5 transition-all duration-200 bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600 hover:text-white border border-emerald-600/30 hover:border-emerald-500/50"
+                  title="Add to task queue"
+                >
+                  <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  <span className="hidden sm:inline">Queue</span>
+                </button>
+              )}
               {/* Edit button to open full-screen PromptSpace */}
               <button
                 onClick={handleEditClick}
@@ -609,6 +629,7 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
   onRunCommand,
   onEditPrompt,
   onCreatePrompt,
+  onAddToQueue,
   selectedPrompt,
   isExecuting,
 }) => {
@@ -814,6 +835,7 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
               onSelect={() => onSelectPrompt(prompt)}
               onRunCommand={(cmd, options) => onRunCommand(cmd, prompt, options)}
               onEditPrompt={() => onEditPrompt(prompt)}
+              onAddToQueue={onAddToQueue ? () => onAddToQueue(prompt) : undefined}
               isExecuting={isExecuting}
             />
           ))}

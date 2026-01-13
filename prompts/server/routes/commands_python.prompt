@@ -25,6 +25,8 @@
      - POST /commands/run: Execute command as subprocess, block until done
        - Output goes directly to server terminal (inherited stdio)
        - Sets CI=1, PDD_FORCE=1, TERM=dumb for headless mode
+       - Uses Depends(get_project_root) to get project root
+       - Runs subprocess with cwd=project_root for correct .pddrc detection
        - 409 if a command is already running
      - POST /commands/cancel: Cancel current running subprocess
      - GET /commands/status: Check if command is running and its info

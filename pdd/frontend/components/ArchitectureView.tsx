@@ -1,9 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions } from '../api';
+import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions, ArchitectureValidationResult } from '../api';
 import DependencyViewer from './DependencyViewer';
 import FileBrowser from './FileBrowser';
 import GenerationProgressModal from './GenerationProgressModal';
 import PromptOrderModal from './PromptOrderModal';
+import GraphToolbar from './GraphToolbar';
+import ModuleEditModal from './ModuleEditModal';
+import AddModuleModal from './AddModuleModal';
+import { useArchitectureHistory } from '../hooks/useArchitectureHistory';
 import { GLOBAL_DEFAULTS } from '../constants';
 
 interface ArchitectureViewProps {
@@ -75,6 +79,42 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   // Existing prompts state - track which prompts already exist with their file info
   const [existingPrompts, setExistingPrompts] = useState<Set<string>>(new Set());
   const [promptsInfo, setPromptsInfo] = useState<PromptInfo[]>([]);
+
+  // Edit mode state
+  const [editMode, setEditMode] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedModule, setSelectedModule] = useState<ArchitectureModule | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [validationResult, setValidationResult] = useState<ArchitectureValidationResult | null>(null);
+  const [highlightedModules, setHighlightedModules] = useState<Set<string>>(new Set());
+
+  // Architecture history hook for undo/redo
+  const {
+    architecture: editableArchitecture,
+    hasUnsavedChanges,
+    addModule,
+    updateModule,
+    deleteModule,
+    addDependency,
+    removeDependency,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    setOriginal,
+    discardChanges,
+  } = useArchitectureHistory([]);
+
+  // Sync architecture with history hook
+  useEffect(() => {
+    if (architecture) {
+      setOriginal(architecture);
+    }
+  }, [architecture, setOriginal]);
+
+  // Display architecture: use editable version if in edit mode
+  const displayArchitecture = editMode ? editableArchitecture : architecture;
 
   // Load existing prompts
   const loadExistingPrompts = useCallback(async () => {
@@ -340,6 +380,197 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     // Refresh existing prompts after generation
     await loadExistingPrompts();
   }, [loadExistingPrompts]);
+
+  // ==================== Edit Mode Handlers ====================
+
+  // Toggle edit mode
+  const handleToggleEditMode = useCallback(() => {
+    if (editMode && hasUnsavedChanges) {
+      // Ask user to save or discard changes
+      const shouldDiscard = window.confirm('You have unsaved changes. Discard them?');
+      if (shouldDiscard) {
+        discardChanges();
+        setValidationResult(null);
+        setHighlightedModules(new Set());
+      } else {
+        return;
+      }
+    }
+    setEditMode(!editMode);
+  }, [editMode, hasUnsavedChanges, discardChanges]);
+
+  // Handle module edit (from node click)
+  const handleModuleEdit = useCallback((module: ArchitectureModule) => {
+    setSelectedModule(module);
+    setShowEditModal(true);
+  }, []);
+
+  // Handle module update from modal
+  const handleModuleUpdate = useCallback((updatedModule: ArchitectureModule) => {
+    if (selectedModule) {
+      updateModule(selectedModule.filename, updatedModule);
+    }
+    setShowEditModal(false);
+    setSelectedModule(null);
+  }, [selectedModule, updateModule]);
+
+  // Handle module delete
+  const handleModuleDelete = useCallback((filename: string) => {
+    deleteModule(filename);
+    setShowEditModal(false);
+    setSelectedModule(null);
+  }, [deleteModule]);
+
+  // Handle add module
+  const handleAddModule = useCallback((module: ArchitectureModule) => {
+    addModule(module);
+  }, [addModule]);
+
+  // Handle dependency add (from edge creation)
+  const handleDependencyAdd = useCallback((targetFilename: string, sourceFilename: string) => {
+    addDependency(targetFilename, sourceFilename);
+  }, [addDependency]);
+
+  // Handle dependency remove (from edge deletion)
+  const handleDependencyRemove = useCallback((targetFilename: string, sourceFilename: string) => {
+    removeDependency(targetFilename, sourceFilename);
+  }, [removeDependency]);
+
+  // Validate and save architecture
+  const handleSaveArchitecture = useCallback(async () => {
+    if (!editableArchitecture || editableArchitecture.length === 0) return;
+
+    setIsSaving(true);
+    setValidationResult(null);
+    setHighlightedModules(new Set());
+
+    try {
+      // Validate first
+      const validation = await api.validateArchitecture(editableArchitecture);
+      setValidationResult(validation);
+
+      if (!validation.valid) {
+        // Highlight modules with errors
+        const modulesToHighlight = new Set<string>();
+        for (const error of validation.errors) {
+          error.modules.forEach((m) => modulesToHighlight.add(m));
+        }
+        setHighlightedModules(modulesToHighlight);
+        setIsSaving(false);
+        return;
+      }
+
+      // Save to file
+      const result = await api.saveArchitecture(editableArchitecture);
+      if (result.success) {
+        // Update the base architecture state
+        setArchitecture(editableArchitecture);
+        setOriginal(editableArchitecture);
+        setEditMode(false);
+      } else {
+        alert('Failed to save: ' + (result.error || 'Unknown error'));
+      }
+    } catch (e: any) {
+      console.error('Failed to save architecture:', e);
+      alert('Failed to save: ' + e.message);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [editableArchitecture, setOriginal]);
+
+  // Discard changes
+  const handleDiscardChanges = useCallback(() => {
+    if (hasUnsavedChanges) {
+      const shouldDiscard = window.confirm('Are you sure you want to discard all changes?');
+      if (!shouldDiscard) return;
+    }
+    discardChanges();
+    setValidationResult(null);
+    setHighlightedModules(new Set());
+  }, [hasUnsavedChanges, discardChanges]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle shortcuts in edit mode
+      if (!editMode) return;
+
+      // Ctrl/Cmd + S to save
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (hasUnsavedChanges) {
+          handleSaveArchitecture();
+        }
+      }
+
+      // Ctrl/Cmd + Z to undo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        if (canUndo) {
+          undo();
+        }
+      }
+
+      // Ctrl/Cmd + Shift + Z to redo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && e.shiftKey) {
+        e.preventDefault();
+        if (canRedo) {
+          redo();
+        }
+      }
+
+      // Escape to exit edit mode
+      if (e.key === 'Escape') {
+        if (showEditModal) {
+          setShowEditModal(false);
+          setSelectedModule(null);
+        } else if (showAddModal) {
+          setShowAddModal(false);
+        } else if (hasUnsavedChanges) {
+          handleDiscardChanges();
+        } else {
+          setEditMode(false);
+        }
+      }
+
+      // N to add new module
+      if (e.key === 'n' && !e.ctrlKey && !e.metaKey && !showEditModal && !showAddModal) {
+        // Don't trigger if typing in an input
+        if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
+          return;
+        }
+        e.preventDefault();
+        setShowAddModal(true);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    editMode,
+    hasUnsavedChanges,
+    canUndo,
+    canRedo,
+    showEditModal,
+    showAddModal,
+    handleSaveArchitecture,
+    handleDiscardChanges,
+    undo,
+    redo,
+  ]);
+
+  // Warn before leaving with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (editMode && hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [editMode, hasUnsavedChanges]);
 
   if (loading) {
     return (
@@ -684,29 +915,73 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       </div>
 
       {/* Main Content - Architecture Graph */}
-      <div className="flex-1 min-w-0">
-        {mode === 'graph' && architecture ? (
-          <DependencyViewer
-            architecture={architecture}
-            prdContent={prdContent}
-            appName={appName}
-            onRegenerate={handleRegenerate}
-            onModuleClick={handleModuleClick}
-            onGeneratePrompts={handleGeneratePrompts}
-            isGeneratingPrompts={isGeneratingPrompts}
-            existingPrompts={existingPrompts}
-            promptsInfo={promptsInfo}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Graph Toolbar - only show in graph mode */}
+        {mode === 'graph' && displayArchitecture && (
+          <GraphToolbar
+            editMode={editMode}
+            hasUnsavedChanges={hasUnsavedChanges}
+            onToggleEditMode={handleToggleEditMode}
+            onAddModule={() => setShowAddModal(true)}
+            onSave={handleSaveArchitecture}
+            onDiscard={handleDiscardChanges}
+            onUndo={undo}
+            onRedo={redo}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            isSaving={isSaving}
           />
-        ) : (
-          <div className="glass rounded-xl border border-surface-700/50 h-full flex items-center justify-center">
-            <div className="text-center text-surface-400">
-              <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+        )}
+
+        {/* Validation Errors Banner */}
+        {validationResult && !validationResult.valid && (
+          <div className="bg-red-500/10 border-b border-red-500/30 px-4 py-2">
+            <div className="flex items-start gap-2">
+              <svg className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
               </svg>
-              <p className="text-sm">Write your PRD and click Generate to create the architecture</p>
+              <div className="flex-1">
+                <p className="text-sm text-red-400 font-medium">Cannot save: validation errors</p>
+                <ul className="text-xs text-red-300 mt-1 space-y-0.5">
+                  {validationResult.errors.map((err, i) => (
+                    <li key={i}>{err.message}</li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </div>
         )}
+
+        <div className="flex-1 min-h-0">
+          {mode === 'graph' && displayArchitecture ? (
+            <DependencyViewer
+              architecture={displayArchitecture}
+              prdContent={prdContent}
+              appName={appName}
+              onRegenerate={handleRegenerate}
+              onModuleClick={handleModuleClick}
+              onGeneratePrompts={handleGeneratePrompts}
+              isGeneratingPrompts={isGeneratingPrompts}
+              existingPrompts={existingPrompts}
+              promptsInfo={promptsInfo}
+              editMode={editMode}
+              onModuleEdit={handleModuleEdit}
+              onModuleDelete={handleModuleDelete}
+              onDependencyAdd={handleDependencyAdd}
+              onDependencyRemove={handleDependencyRemove}
+              highlightedModules={highlightedModules}
+            />
+          ) : (
+            <div className="glass rounded-xl border border-surface-700/50 h-full flex items-center justify-center">
+              <div className="text-center text-surface-400">
+                <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                </svg>
+                <p className="text-sm">Write your PRD and click Generate to create the architecture</p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* File Browser Modal */}
@@ -740,6 +1015,27 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           onCancel={isGeneratingPrompts ? handleCancelPromptGeneration : undefined}
         />
       )}
+
+      {/* Module Edit Modal */}
+      <ModuleEditModal
+        isOpen={showEditModal}
+        module={selectedModule}
+        allModules={editableArchitecture}
+        onSave={handleModuleUpdate}
+        onDelete={handleModuleDelete}
+        onClose={() => {
+          setShowEditModal(false);
+          setSelectedModule(null);
+        }}
+      />
+
+      {/* Add Module Modal */}
+      <AddModuleModal
+        isOpen={showAddModal}
+        existingModules={editableArchitecture}
+        onAdd={handleAddModule}
+        onClose={() => setShowAddModal(false)}
+      />
     </div>
   );
 };

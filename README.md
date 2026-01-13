@@ -462,6 +462,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
 - **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
 - **[`connect`](#17-connect)**: Launches a local REST server with a web frontend for interacting with PDD through a browser-based interface.
+- **[`auth`](#18-auth)**: Manages authentication with PDD Cloud, including login, logout, status, and token retrieval.
 
 ## Global Options
 
@@ -1990,6 +1991,55 @@ pdd connect --allow-remote --token "your-secret-token"
 ```
 
 **When to use**: Use `connect` when you prefer a graphical interface for working with PDD, when demonstrating PDD to others, or when integrating PDD with other tools that can communicate via REST APIs.
+
+### 18. auth
+
+Manages authentication with PDD Cloud. The `auth` command provides subcommands for signing in, signing out, checking status, and retrieving authentication tokens.
+
+```bash
+pdd [GLOBAL OPTIONS] auth SUBCOMMAND [OPTIONS]
+```
+
+#### Subcommands
+
+##### auth login
+
+Signs in to PDD Cloud. Opens a web browser to complete the authentication process with an ephemeral code.
+
+```bash
+pdd auth login
+```
+
+##### auth status
+
+Displays the active account and current authentication state. Exit code is 0 if authenticated, 1 otherwise.
+
+```bash
+pdd auth status
+```
+
+**Note:** If only a refresh token exists (no cached JWT), the status will show "Authenticated as: Unknown" since user info is extracted from the cached JWT. Run `pdd auth login` to refresh the token and display the full account information.
+
+##### auth logout
+
+Removes the stored authentication configuration for a PDD Cloud account locally.
+
+```bash
+pdd auth logout
+```
+
+##### auth token
+
+Outputs the authentication token for the current account. Useful for scripts or programmatic access to PDD Cloud.
+
+```bash
+pdd auth token [OPTIONS]
+```
+
+**Options:**
+- `--format [raw|json]`: Output format for the token. Use `raw` for just the token string (default), or `json` for structured output including token and expiration time.
+
+**When to use**: Use `auth` commands to manage your PDD Cloud authentication state. Use `auth login` to authenticate before using cloud features, `auth status` to verify your current session, and `auth token` when you need to pass credentials to scripts or other tools.
 
 ## Example Review Process
 

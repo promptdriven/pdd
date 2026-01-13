@@ -1,0 +1,89 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/architecture.py`.
+
+% Role & Scope
+  This module provides REST API endpoints for architecture.json validation operations.
+  It enables the web frontend to validate architecture changes before saving,
+  detecting circular dependencies, missing references, and other structural issues.
+
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+
+% Documentation References
+  - FastAPI Routers:
+    <web>https://fastapi.tiangolo.com/tutorial/bigger-applications/</web>
+  - Pydantic Models:
+    <web>https://docs.pydantic.dev/latest/concepts/models/</web>
+
+% Requirements
+  1. **POST /architecture/validate**:
+     - Body: ValidateArchitectureRequest with modules array
+     - Validates architecture for structural issues
+     - Returns: ValidationResult with valid flag, errors list, warnings list
+     - Does NOT modify any files
+
+  2. **Validation Checks**:
+     - Circular dependency detection using DFS algorithm
+     - Missing dependency detection (references to non-existent modules)
+     - Duplicate dependency warnings
+     - Orphan module warnings (no dependencies and not depended upon)
+     - Required field validation (filename, filepath, description)
+
+  3. **Circular Dependency Detection**:
+     - Build adjacency graph from module dependencies
+     - Use DFS with recursion stack to detect cycles
+     - Return list of cycles found (as arrays of module filenames)
+
+  4. **Error Types**:
+     - `circular_dependency`: Modules form a dependency cycle
+     - `missing_dependency`: Module depends on non-existent module
+     - `invalid_field`: Required field missing or invalid
+
+  5. **Warning Types**:
+     - `duplicate_dependency`: Module lists same dependency twice
+     - `orphan_module`: Module has no connections (may be intentional)
+
+% Models
+  ```python
+  class ArchitectureModule(BaseModel):
+      reason: str
+      description: str
+      dependencies: List[str]
+      priority: int
+      filename: str
+      filepath: str
+      tags: List[str] = Field(default_factory=list)
+      interface: Optional[Dict[str, Any]] = None
+
+  class ValidationError(BaseModel):
+      type: str  # circular_dependency, missing_dependency, invalid_field
+      message: str
+      modules: List[str]  # Affected module filenames
+
+  class ValidationWarning(BaseModel):
+      type: str  # duplicate_dependency, orphan_module
+      message: str
+      modules: List[str]
+
+  class ValidateArchitectureRequest(BaseModel):
+      modules: List[ArchitectureModule]
+
+  class ValidationResult(BaseModel):
+      valid: bool  # True if no errors (warnings OK)
+      errors: List[ValidationError]
+      warnings: List[ValidationWarning]
+  ```
+
+% Dependencies
+  <fastapi_example>
+  <server.main><include>context/fastapi_example.py</include></server.main>
+  </fastapi_example>
+
+% Instructions
+  - Create router with prefix="/api/v1/architecture", tags=["architecture"]
+  - Implement DFS-based cycle detection algorithm
+  - Return all cycles found, not just the first one
+  - Errors block save (valid=False), warnings are informational (valid=True)
+  - Keep validation logic pure (no file I/O)
+
+% Deliverables
+  - Code: `pdd/server/routes/architecture.py`
+  - Export: `architecture_router`

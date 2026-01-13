@@ -581,7 +581,10 @@ def _parse_error_details(exit_code: int) -> str:
 
 
 @router.post("/run", response_model=RunResult)
-async def run_command_in_terminal(request: CommandRequest):
+async def run_command_in_terminal(
+    request: CommandRequest,
+    project_root: Path = Depends(get_project_root),
+):
     """
     Execute a command in terminal mode as a subprocess.
 
@@ -625,12 +628,13 @@ async def run_command_in_terminal(request: CommandRequest):
         env['TERM'] = 'dumb'  # Disable fancy terminal features
 
         # Start subprocess - output goes directly to terminal (inherit stdio)
+        # Use project_root as cwd to ensure correct .pddrc and context detection
         process = subprocess.Popen(
             cmd_args,
             stdout=None,  # Inherit from parent (terminal)
             stderr=None,  # Inherit from parent (terminal)
             stdin=None,
-            cwd=os.getcwd(),
+            cwd=str(project_root),
             env=env,
         )
 

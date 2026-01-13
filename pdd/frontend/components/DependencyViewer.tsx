@@ -10,6 +10,9 @@ import ReactFlow, {
   NodeTypes,
   BackgroundVariant,
   Panel,
+  Connection,
+  ConnectionMode,
+  addEdge,
 } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
@@ -32,6 +35,13 @@ interface DependencyViewerProps {
   isGeneratingPrompts?: boolean;
   existingPrompts?: Set<string>;
   promptsInfo?: PromptInfo[];
+  // Edit mode props
+  editMode?: boolean;
+  onModuleEdit?: (module: ArchitectureModule) => void;
+  onModuleDelete?: (filename: string) => void;
+  onDependencyAdd?: (targetFilename: string, sourceFilename: string) => void;
+  onDependencyRemove?: (targetFilename: string, sourceFilename: string) => void;
+  highlightedModules?: Set<string>;  // For error highlighting
 }
 
 // Determine category based on tags
@@ -121,6 +131,12 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   isGeneratingPrompts = false,
   existingPrompts = new Set(),
   promptsInfo = [],
+  editMode = false,
+  onModuleEdit,
+  onModuleDelete,
+  onDependencyAdd,
+  onDependencyRemove,
+  highlightedModules = new Set(),
 }) => {
   const [isPrdVisible, setIsPrdVisible] = useState(false);
 
@@ -139,6 +155,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     const nodes: Node<ModuleNodeData>[] = architecture.map((m) => {
       const category = getCategory(m);
       const hasPrompt = existingPrompts.has(m.filename);
+      const isHighlighted = highlightedModules.has(m.filename);
       return {
         id: m.filename,
         type: 'moduleNode',
@@ -150,6 +167,10 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           hasPrompt,
           colors: getCategoryColors(category),
           onClick: onModuleClick,
+          editMode,
+          onEdit: onModuleEdit,
+          onDelete: onModuleDelete,
+          isHighlighted,
         },
       };
     });
@@ -164,12 +185,14 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           target: m.filename,
           style: { stroke: '#60a5fa', strokeWidth: 1.5 },
           animated: false,
+          selectable: editMode,
+          interactionWidth: 20, // Makes edge easier to click
         }))
     );
 
     const layouted = getLayoutedElements(nodes, edges, 'TB');
     return { initialNodes: layouted.nodes, initialEdges: layouted.edges };
-  }, [architecture, existingPrompts, promptInfoMap, onModuleClick]);
+  }, [architecture, existingPrompts, promptInfoMap, onModuleClick, editMode, onModuleEdit, onModuleDelete, highlightedModules]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -180,6 +203,53 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     setNodes(layouted.nodes);
     setEdges(layouted.edges);
   }, [nodes, edges, setNodes, setEdges]);
+
+  // Handle edge creation (dependency added)
+  const handleConnect = useCallback(
+    (connection: Connection) => {
+      if (!editMode || !connection.source || !connection.target) return;
+      // In our architecture: source = dependency (what is being used)
+      // target = the module that depends on source
+      // So we add source to target's dependencies
+      onDependencyAdd?.(connection.target, connection.source);
+      // Add edge visually
+      setEdges((eds) =>
+        addEdge(
+          {
+            ...connection,
+            id: `${connection.source}->${connection.target}`,
+            style: { stroke: '#60a5fa', strokeWidth: 1.5 },
+            animated: false,
+          },
+          eds
+        )
+      );
+    },
+    [editMode, onDependencyAdd, setEdges]
+  );
+
+  // Handle edge deletion (dependency removed)
+  const handleEdgesDelete = useCallback(
+    (deletedEdges: Edge[]) => {
+      if (!editMode) return;
+      for (const edge of deletedEdges) {
+        // edge.source = dependency, edge.target = dependent module
+        onDependencyRemove?.(edge.target, edge.source);
+      }
+    },
+    [editMode, onDependencyRemove]
+  );
+
+  // Handle node deletion (module removed)
+  const handleNodesDelete = useCallback(
+    (deletedNodes: Node[]) => {
+      if (!editMode) return;
+      for (const node of deletedNodes) {
+        onModuleDelete?.(node.id);
+      }
+    },
+    [editMode, onModuleDelete]
+  );
 
   // Update nodes when architecture changes
   React.useEffect(() => {
@@ -258,6 +328,9 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          onConnect={editMode ? handleConnect : undefined}
+          onEdgesDelete={editMode ? handleEdgesDelete : undefined}
+          onNodesDelete={editMode ? handleNodesDelete : undefined}
           nodeTypes={nodeTypes}
           fitView
           fitViewOptions={{ padding: 0.2 }}
@@ -266,7 +339,14 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           defaultEdgeOptions={{
             style: { stroke: '#60a5fa', strokeWidth: 1.5 },
             type: 'smoothstep',
+            interactionWidth: 20,
           }}
+          connectionMode={editMode ? ConnectionMode.Loose : ConnectionMode.Strict}
+          deleteKeyCode={editMode ? ['Backspace', 'Delete'] : null}
+          edgesUpdatable={editMode}
+          edgesFocusable={editMode}
+          elementsSelectable={editMode}
+          selectNodesOnDrag={false}
           proOptions={{ hideAttribution: true }}
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#374151" />
@@ -327,6 +407,13 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
                   </div>
                   <span className="text-xs text-surface-300">Code/Test/Example</span>
                 </div>
+                {editMode && (
+                  <div className="pt-1 border-t border-surface-700/50 mt-1">
+                    <p className="text-[10px] text-surface-400 leading-relaxed">
+                      <span className="text-orange-400">Edit mode:</span> Click edge to select, then Delete/Backspace to remove
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </Panel>
