@@ -6,11 +6,15 @@ import PromptSpace from './components/PromptSpace';
 import ArchitectureView from './components/ArchitectureView';
 import ProjectSettings from './components/ProjectSettings';
 import JobDashboard, { BatchOperation } from './components/JobDashboard';
+import TaskQueuePanel from './components/TaskQueuePanel';
+import AddToQueueModal from './components/AddToQueueModal';
 import AuthStatusIndicator from './components/AuthStatusIndicator';
 import ReauthModal from './components/ReauthModal';
-import { api, PromptInfo, RunResult } from './api';
+import ErrorBoundary from './components/ErrorBoundary';
+import { api, PromptInfo, RunResult, CommandRequest } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
 import { useJobs, JobInfo } from './hooks/useJobs';
+import { useTaskQueue } from './hooks/useTaskQueue';
 import { useToast } from './components/Toast';
 
 type View = 'architecture' | 'prompts' | 'bug' | 'settings';
@@ -50,8 +54,29 @@ const App: React.FC = () => {
   // Auth modal state
   const [showReauthModal, setShowReauthModal] = useState(false);
 
+  // Add to queue modal state
+  const [showAddToQueueModal, setShowAddToQueueModal] = useState(false);
+  const [addToQueuePrompt, setAddToQueuePrompt] = useState<PromptInfo | null>(null);
+
   // Toast notifications
   const { addToast } = useToast();
+
+  // Task queue for sequential execution
+  const taskQueue = useTaskQueue({
+    onTaskStart: (task) => {
+      addToast(`Starting task: ${task.displayCommand}`, 'info', 3000);
+    },
+    onTaskComplete: (task, success) => {
+      addToast(
+        `Task ${success ? 'completed' : 'failed'}: ${task.displayCommand}`,
+        success ? 'success' : 'error',
+        5000
+      );
+    },
+    onQueueComplete: () => {
+      addToast('Task queue completed', 'success', 3000);
+    },
+  });
 
   // Job management for multi-session support
   const handleJobComplete = useCallback((job: JobInfo, success: boolean) => {
@@ -60,7 +85,9 @@ const App: React.FC = () => {
       success ? 'success' : 'error',
       5000
     );
-  }, [addToast]);
+    // Notify task queue if this job was part of the queue
+    taskQueue.handleJobComplete(job.id, success);
+  }, [addToast, taskQueue]);
 
   const {
     activeJobs,
@@ -76,6 +103,50 @@ const App: React.FC = () => {
     addSpawnedJob,
     markSpawnedJobDone,
   } = useJobs({ onJobComplete: handleJobComplete });
+
+  // Create a spawnTerminal-based job runner for the task queue
+  // This matches how handleRunCommand works - spawns a new terminal window
+  const spawnTerminalJob = useCallback(async (
+    request: CommandRequest,
+    displayCommand: string
+  ): Promise<string | null> => {
+    try {
+      const result = await api.spawnTerminal(request);
+      if (result.success && result.job_id) {
+        // Add to job dashboard for tracking
+        addSpawnedJob(displayCommand, request.command, result.job_id);
+        return result.job_id;
+      } else {
+        console.error('Failed to spawn terminal:', result.message);
+        return null;
+      }
+    } catch (error) {
+      console.error('Failed to spawn terminal:', error);
+      return null;
+    }
+  }, [addSpawnedJob]);
+
+  // Connect the spawnTerminal job runner to the task queue
+  useEffect(() => {
+    taskQueue.setSubmitJob(spawnTerminalJob);
+  }, [taskQueue, spawnTerminalJob]);
+
+  // Handler to add task to queue
+  const handleAddToQueue = useCallback((
+    command: string,
+    prompt: PromptInfo | null,
+    request: CommandRequest,
+    displayCommand: string
+  ) => {
+    taskQueue.addTask(command, prompt, request, displayCommand);
+    addToast(`Added to queue: ${displayCommand}`, 'info', 3000);
+  }, [taskQueue, addToast]);
+
+  // Handler to open add to queue modal
+  const handleOpenAddToQueueModal = useCallback((prompt: PromptInfo) => {
+    setAddToQueuePrompt(prompt);
+    setShowAddToQueueModal(true);
+  }, []);
 
   // Check server connection on mount
   useEffect(() => {
@@ -467,6 +538,7 @@ const App: React.FC = () => {
   }
 
   return (
+    <ErrorBoundary>
     <div className="min-h-screen bg-surface-950">
       {/* Modern responsive header */}
       <header className="glass sticky top-0 z-40 border-b border-surface-700/50">
@@ -655,6 +727,7 @@ const App: React.FC = () => {
               onRunCommand={handleRunCommand}
               onEditPrompt={setEditingPrompt}
               onCreatePrompt={setEditingPrompt}
+              onAddToQueue={handleOpenAddToQueueModal}
               selectedPrompt={selectedPrompt}
               isExecuting={isExecuting}
             />
@@ -814,6 +887,37 @@ const App: React.FC = () => {
         onCancelBatchOperation={handleCancelBatchOperation}
       />
 
+      {/* Task Queue Panel - shows queued tasks for sequential execution */}
+      <TaskQueuePanel
+        tasks={taskQueue.tasks}
+        executionMode={taskQueue.executionMode}
+        isQueueRunning={taskQueue.isQueueRunning}
+        isPaused={taskQueue.isPaused}
+        progress={taskQueue.progress}
+        onSetExecutionMode={taskQueue.setExecutionMode}
+        onStartQueue={taskQueue.startQueue}
+        onPauseQueue={taskQueue.pauseQueue}
+        onResumeQueue={taskQueue.resumeQueue}
+        onRunNextTask={taskQueue.runNextTask}
+        onRemoveTask={taskQueue.removeTask}
+        onSkipTask={taskQueue.skipTask}
+        onRetryTask={taskQueue.retryTask}
+        onReorderTasks={taskQueue.reorderTasks}
+        onClearCompleted={taskQueue.clearCompleted}
+        onClearAll={taskQueue.clearQueue}
+      />
+
+      {/* Add to Queue Modal */}
+      <AddToQueueModal
+        isOpen={showAddToQueueModal}
+        prompt={addToQueuePrompt}
+        onAddToQueue={handleAddToQueue}
+        onClose={() => {
+          setShowAddToQueueModal(false);
+          setAddToQueuePrompt(null);
+        }}
+      />
+
       {/* Modern footer - responsive */}
       <footer className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-surface-700/50 px-4 sm:px-6 py-2.5 sm:py-3">
         <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 text-xs text-surface-500">
@@ -837,6 +941,7 @@ const App: React.FC = () => {
         <ReauthModal onClose={() => setShowReauthModal(false)} />
       )}
     </div>
+    </ErrorBoundary>
   );
 };
 
