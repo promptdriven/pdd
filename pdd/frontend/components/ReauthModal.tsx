@@ -16,6 +16,7 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [loginState, setLoginState] = useState<LoginState>({ phase: 'idle' });
   const [copied, setCopied] = useState(false);
+  const [noBrowser, setNoBrowser] = useState(false);
   const pollIntervalRef = useRef<number | null>(null);
 
   // Fetch initial auth status
@@ -89,8 +90,8 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
     setCopied(false);
 
     try {
-      // Frontend can always open browsers, so pass no_browser: false
-      const response: LoginResponse = await api.startLogin({ no_browser: false });
+      // Pass the user's browser preference
+      const response: LoginResponse = await api.startLogin({ no_browser: noBrowser });
 
       if (!response.success || !response.user_code || !response.verification_uri || !response.poll_id) {
         setLoginState({
@@ -191,9 +192,23 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
 
           {/* Login Flow States */}
           {loginState.phase === 'idle' && (
-            <p className="text-sm text-gray-300">
-              Click the button below to authenticate with GitHub. A browser window will open for you to authorize PDD.
-            </p>
+            <div className="space-y-3">
+              <p className="text-sm text-gray-300">
+                Click the button below to authenticate with GitHub.
+                {!noBrowser && ' A browser window will open for you to authorize PDD.'}
+              </p>
+
+              {/* Browser control checkbox */}
+              <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer hover:text-gray-300 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={noBrowser}
+                  onChange={(e) => setNoBrowser(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                />
+                <span>Don't open browser automatically (I'll open the link manually)</span>
+              </label>
+            </div>
           )}
 
           {loginState.phase === 'starting' && (
@@ -210,7 +225,9 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
             <div className="space-y-4">
               <div className="text-center space-y-2">
                 <p className="text-sm text-gray-300">
-                  A browser window has opened. Enter this code on GitHub:
+                  {noBrowser
+                    ? 'Open the link below in your browser and enter this code on GitHub:'
+                    : 'A browser window has opened. Enter this code on GitHub:'}
                 </p>
                 <button
                   onClick={handleCopyCode}
@@ -243,7 +260,7 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
               </div>
 
               <p className="text-xs text-center text-gray-500">
-                Go to{' '}
+                {noBrowser ? 'Visit: ' : 'If the browser didn\'t open, go to: '}
                 <a
                   href={loginState.verificationUri}
                   target="_blank"
@@ -252,7 +269,6 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
                 >
                   {loginState.verificationUri}
                 </a>
-                {' '}if the browser didn't open
               </p>
             </div>
           )}
