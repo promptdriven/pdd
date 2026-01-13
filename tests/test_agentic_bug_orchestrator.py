@@ -588,3 +588,205 @@ def test_e2e_files_accumulated(mock_dependencies, default_args):
     # Both unit test and E2E test files should be in changed_files
     assert "tests/test_unit.py" in files
     assert "tests/e2e/test_e2e_bug.py" in files
+
+
+# --- Resume Functionality Tests ---
+
+
+def test_state_save_after_each_step(mock_dependencies, default_args, tmp_path):
+    """
+    Test that state is saved after each step completes.
+    """
+    from pdd.agentic_bug_orchestrator import _get_state_file_path, _load_state
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Run only 2 steps then fail on step 3
+    call_count = [0]
+    def side_effect_run(*args, **kwargs):
+        call_count[0] += 1
+        label = kwargs.get('label', '')
+        if label == 'step3':
+            # Return "Needs More Info" to trigger hard stop
+            return (True, "Needs More Info", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Should have stopped at step 3
+    assert success is False
+    assert "Step 3" in msg
+
+    # State file should exist with last_completed_step = 2
+    # (step 3 failed so it shouldn't be marked completed)
+    # Actually, state is saved AFTER each step, and step 3 returned early
+    # So state should have step 2 as last completed
+    state = _load_state(tmp_path, default_args["issue_number"])
+    assert state is not None
+    assert state["last_completed_step"] == 2
+    assert "1" in state["step_outputs"]
+    assert "2" in state["step_outputs"]
+
+
+def test_resume_skips_completed_steps(mock_dependencies, default_args, tmp_path):
+    """
+    Test that resuming from step 5 skips steps 1-4.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_file_path
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Create state file with last_completed_step=4
+    state_dir = tmp_path / ".pdd" / "bug-state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / f"issue-{default_args['issue_number']}.json"
+
+    state = {
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 4,
+        "step_outputs": {
+            "1": "Step 1 output",
+            "2": "Step 2 output",
+            "3": "Step 3 output",
+            "4": "Step 4 output",
+        },
+        "total_cost": 0.4,
+        "model_used": "gpt-4",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    # Mock step 7 to return files
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+
+    # Should only call steps 5-10 (6 steps), not 1-4
+    assert mock_run.call_count == 6
+
+    # Verify the labels of called steps
+    called_labels = [call.kwargs['label'] for call in mock_run.call_args_list]
+    assert 'step1' not in called_labels
+    assert 'step2' not in called_labels
+    assert 'step3' not in called_labels
+    assert 'step4' not in called_labels
+    assert 'step5' in called_labels
+    assert 'step10' in called_labels
+
+
+def test_state_cleared_on_success(mock_dependencies, default_args, tmp_path):
+    """
+    Test that state file is deleted on successful completion.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_file_path
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Create initial state file
+    state_dir = tmp_path / ".pdd" / "bug-state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / f"issue-{default_args['issue_number']}.json"
+
+    state = {
+        "issue_number": default_args["issue_number"],
+        "last_completed_step": 0,
+        "step_outputs": {},
+        "total_cost": 0.0,
+        "model_used": "unknown",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    # Mock step 7 to return files
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+
+    # State file should be deleted on success
+    assert not state_file.exists()
+
+
+def test_resume_restores_context(mock_dependencies, default_args, tmp_path):
+    """
+    Test that resumed runs have access to previous step outputs in context.
+    """
+    import json
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Create state file with step outputs
+    state_dir = tmp_path / ".pdd" / "bug-state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / f"issue-{default_args['issue_number']}.json"
+
+    state = {
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 2,
+        "step_outputs": {
+            "1": "Step 1 found no duplicates",
+            "2": "Step 2 confirmed it's a bug",
+        },
+        "total_cost": 0.2,
+        "model_used": "gpt-4",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    # Track the formatted prompts to verify context
+    formatted_prompts = []
+
+    def side_effect_load(name):
+        # Return a template that includes previous step outputs
+        if "step3" in name:
+            return "Step 3: Previous outputs are {step1_output} and {step2_output}"
+        return "Generic prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    def side_effect_run(instruction, **kwargs):
+        formatted_prompts.append(instruction)
+        label = kwargs.get('label', '')
+        if label == 'step7':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Step 3 should have received the restored context from steps 1 and 2
+    step3_prompt = formatted_prompts[0]  # First call is step 3 (steps 1-2 skipped)
+    assert "Step 1 found no duplicates" in step3_prompt
+    assert "Step 2 confirmed it's a bug" in step3_prompt
