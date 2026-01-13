@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,6 +13,54 @@ from .load_prompt_template import load_prompt_template
 
 # Initialize console
 console = Console()
+
+# State management for resume functionality
+STATE_DIR = Path(".pdd/bug-state")
+
+
+def _json_serializer(obj):
+    """Handle Path objects in JSON serialization."""
+    if isinstance(obj, Path):
+        return str(obj)
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+
+def _get_state_file_path(cwd: Path, issue_number: int) -> Path:
+    """Return path to state file for issue."""
+    return cwd / STATE_DIR / f"issue-{issue_number}.json"
+
+
+def _load_state(cwd: Path, issue_number: int) -> Optional[Dict[str, Any]]:
+    """Load saved state for issue, or None if not found."""
+    path = _get_state_file_path(cwd, issue_number)
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Failed to load state: {e}[/yellow]")
+    return None
+
+
+def _save_state(cwd: Path, issue_number: int, state: Dict[str, Any]) -> None:
+    """Save state for issue to disk."""
+    path = _get_state_file_path(cwd, issue_number)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, default=_json_serializer)
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to save state: {e}[/yellow]")
+
+
+def _clear_state(cwd: Path, issue_number: int) -> None:
+    """Remove state file on successful completion."""
+    path = _get_state_file_path(cwd, issue_number)
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
     """Get the root directory of the git repository."""
@@ -82,9 +131,16 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode('utf-8')
 
-def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]:
+def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]:
     """
     Sets up an isolated git worktree for the issue fix.
+
+    Args:
+        cwd: Current working directory
+        issue_number: GitHub issue number
+        quiet: Suppress output
+        resume_existing: If True, keep existing branch with accumulated work
+
     Returns (worktree_path, error_message).
     """
     git_root = _get_git_root(cwd)
@@ -95,7 +151,7 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
     worktree_path = git_root / worktree_rel_path
     branch_name = f"fix/issue-{issue_number}"
 
-    # 1. Clean up existing worktree at path
+    # 1. Clean up existing worktree at path (always needed to create fresh worktree)
     if worktree_path.exists():
         if _worktree_exists(git_root, worktree_path):
             if not quiet:
@@ -109,23 +165,42 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
                 console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
             shutil.rmtree(worktree_path)
 
-    # 2. Clean up existing branch
-    if _branch_exists(git_root, branch_name):
-        if not quiet:
-            console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-        success, err = _delete_branch(git_root, branch_name)
-        if not success:
-            return None, f"Failed to delete existing branch: {err}"
+    # 2. Handle existing branch based on resume_existing
+    branch_exists = _branch_exists(git_root, branch_name)
 
-    # 3. Create new worktree and branch
+    if branch_exists:
+        if resume_existing:
+            # Keep existing branch with our accumulated work
+            if not quiet:
+                console.print(f"[blue]Resuming with existing branch: {branch_name}[/blue]")
+        else:
+            # Delete for fresh start
+            if not quiet:
+                console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
+            success, err = _delete_branch(git_root, branch_name)
+            if not success:
+                return None, f"Failed to delete existing branch: {err}"
+
+    # 3. Create worktree
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
-            cwd=git_root,
-            capture_output=True,
-            check=True
-        )
+
+        if branch_exists and resume_existing:
+            # Checkout existing branch into new worktree
+            subprocess.run(
+                ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True
+            )
+        else:
+            # Create new branch from HEAD
+            subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+                cwd=git_root,
+                capture_output=True,
+                check=True
+            )
         return worktree_path, None
     except subprocess.CalledProcessError as e:
         return None, f"Failed to create worktree: {e.stderr.decode('utf-8')}"
@@ -171,6 +246,44 @@ def run_agentic_bug_orchestrator(
     current_cwd = cwd
     worktree_path: Optional[Path] = None
 
+    # Resume: Load existing state if available
+    state = _load_state(cwd, issue_number)
+    step_outputs: Dict[str, str] = {}
+    last_completed_step = 0
+
+    if state:
+        if not quiet:
+            console.print(f"[yellow]Resuming from step {state.get('last_completed_step', 0) + 1}...[/yellow]")
+
+        total_cost = state.get("total_cost", 0.0)
+        last_model_used = state.get("model_used", "unknown")
+        step_outputs = state.get("step_outputs", {})
+        last_completed_step = state.get("last_completed_step", 0)
+        changed_files = state.get("changed_files", [])
+
+        # Restore worktree path
+        wt_path_str = state.get("worktree_path")
+        if wt_path_str:
+            worktree_path = Path(wt_path_str)
+            if worktree_path.exists():
+                current_cwd = worktree_path
+            else:
+                # Recreate worktree with existing branch
+                wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
+                if err:
+                    return False, f"Failed to recreate worktree on resume: {err}", total_cost, last_model_used, []
+                worktree_path = wt_path
+                current_cwd = worktree_path
+            context["worktree_path"] = str(worktree_path)
+
+        # Restore context from step outputs
+        for step_key, output in step_outputs.items():
+            context[f"step{step_key}_output"] = output
+
+        # Restore files_to_stage if available
+        if changed_files:
+            context["files_to_stage"] = ", ".join(changed_files)
+
     # Step Definitions
     steps = [
         (1, "duplicate", "Searching for duplicate issues"),
@@ -186,19 +299,25 @@ def run_agentic_bug_orchestrator(
     ]
 
     for step_num, name, description in steps:
-        
+
+        # Skip already completed steps (resume support)
+        if step_num <= last_completed_step:
+            continue
+
         # --- Pre-Step Logic: Worktree Creation ---
         if step_num == 7:
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet)
-            if not wt_path:
-                return False, f"Failed to create worktree: {err}", total_cost, last_model_used, changed_files
-            
-            worktree_path = wt_path
-            current_cwd = worktree_path
-            context["worktree_path"] = str(worktree_path)
-            
-            if not quiet:
-                console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
+            # Only create worktree if not already set (from resume)
+            if worktree_path is None:
+                wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
+                if not wt_path:
+                    return False, f"Failed to create worktree: {err}", total_cost, last_model_used, changed_files
+
+                worktree_path = wt_path
+                current_cwd = worktree_path
+                context["worktree_path"] = str(worktree_path)
+
+                if not quiet:
+                    console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
 
         # --- Step Execution ---
         if not quiet:
@@ -307,7 +426,23 @@ def run_agentic_bug_orchestrator(
             # Extract a brief result for display if possible, otherwise generic
             console.print(f"  → Step {step_num} complete.")
 
+        # Save state after each step (for resume support)
+        step_outputs[str(step_num)] = output
+        _save_state(cwd, issue_number, {
+            "issue_number": issue_number,
+            "issue_url": issue_url,
+            "last_completed_step": step_num,
+            "step_outputs": step_outputs,
+            "total_cost": total_cost,
+            "model_used": last_model_used,
+            "changed_files": changed_files,
+            "worktree_path": str(worktree_path) if worktree_path else None,
+        })
+
     # --- Final Summary ---
+    # Clear state file on successful completion
+    _clear_state(cwd, issue_number)
+
     final_msg = "Investigation complete"
     if not quiet:
         console.print(f"✅ {final_msg}")
