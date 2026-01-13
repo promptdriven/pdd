@@ -12,7 +12,7 @@ from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 Detailed Test Plan for agentic_bug_orchestrator
 
 1. Functional Requirements Testing:
-    - Verify the 11-step sequential execution (including step 5.5).
+    - Verify the 10-step sequential execution.
     - Verify context accumulation (step N output passed to step N+1).
     - Verify total cost accumulation across all steps.
     - Verify worktree creation before Step 7.
@@ -56,15 +56,15 @@ def mock_dependencies():
         yield mock_load, mock_run, mock_wt
 
 def test_orchestrator_full_success(mock_dependencies, tmp_path):
-    """Tests a successful 11-step run with context accumulation (includes step 5.5)."""
+    """Tests a successful 10-step run with context accumulation."""
     mock_load, mock_run, mock_wt = mock_dependencies
-
+    
     # Mock Step 7 to return files
     def side_effect(instruction, **kwargs):
         if "step7" in kwargs.get("label", ""):
             return (True, "FILES_CREATED: test_file.py", 0.5, "gpt-4")
         return (True, f"Output for {kwargs.get('label')}", 0.1, "gpt-4")
-
+    
     mock_run.side_effect = side_effect
 
     success, msg, cost, model, files = run_agentic_bug_orchestrator(
@@ -77,7 +77,7 @@ def test_orchestrator_full_success(mock_dependencies, tmp_path):
     assert "Investigation complete" in msg
     assert cost > 0
     assert files == ["test_file.py"]
-    assert mock_run.call_count == 11  # 11 steps including step 5.5
+    assert mock_run.call_count == 10
     assert mock_wt.called
 
 def test_hard_stop_step1_duplicate(mock_dependencies, tmp_path):
@@ -121,12 +121,12 @@ def test_hard_stop_step2_user_error(mock_dependencies, tmp_path):
 def test_hard_stop_step7_no_files(mock_dependencies, tmp_path):
     """Tests early exit if Step 7 fails to generate files."""
     mock_load, mock_run, _ = mock_dependencies
-
+    
     def side_effect(instruction, **kwargs):
         if "step7" in kwargs.get("label"):
             return (True, "I tried but found no files to create.", 0.1, "gpt-4")
         return (True, "Success", 0.1, "gpt-4")
-
+    
     mock_run.side_effect = side_effect
 
     success, msg, _, _, _ = run_agentic_bug_orchestrator(
@@ -137,12 +137,12 @@ def test_hard_stop_step7_no_files(mock_dependencies, tmp_path):
 
     assert success is False
     assert "Stopped at Step 7" in msg
-    assert mock_run.call_count == 8  # Steps 1,2,3,4,5,5.5,6,7
+    assert mock_run.call_count == 7
 
 def test_soft_failure_continuation(mock_dependencies, tmp_path):
     """Tests that the orchestrator continues on non-critical agent failures."""
     mock_load, mock_run, _ = mock_dependencies
-
+    
     # Step 4 fails (success=False) but doesn't match a hard stop pattern
     def side_effect(instruction, **kwargs):
         if "step4" in kwargs.get("label"):
@@ -150,7 +150,7 @@ def test_soft_failure_continuation(mock_dependencies, tmp_path):
         if "step7" in kwargs.get("label"):
             return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
         return (True, "Success", 0.1, "gpt-4")
-
+    
     mock_run.side_effect = side_effect
 
     success, msg, _, _, _ = run_agentic_bug_orchestrator(
@@ -160,12 +160,12 @@ def test_soft_failure_continuation(mock_dependencies, tmp_path):
     )
 
     assert success is True
-    assert mock_run.call_count == 11  # 11 steps including step 5.5
+    assert mock_run.call_count == 10
 
 def test_worktree_creation_failure(mock_dependencies, tmp_path):
     """Tests behavior when worktree setup fails."""
     mock_load, mock_run, mock_wt = mock_dependencies
-
+    
     mock_wt.return_value = (None, "Git error")
 
     success, msg, _, _, _ = run_agentic_bug_orchestrator(
@@ -176,34 +176,24 @@ def test_worktree_creation_failure(mock_dependencies, tmp_path):
 
     assert success is False
     assert "Failed to create worktree" in msg
-    # Should stop before Step 5.5 runs (steps 1,2,3,4,5 = 5 steps)
-    # Issue #352 moved worktree creation from before Step 7 to before Step 5.5
-    assert mock_run.call_count == 5
+    # Should stop before calling Step 7
+    assert mock_run.call_count == 6
 
 def test_prompt_formatting_error(mock_dependencies, tmp_path):
-    """Tests handling of malformed prompt templates.
-
-    Note: With the preprocessing fix, unknown placeholders like {non_existent_key}
-    are normally escaped and become literal text. To test KeyError handling,
-    we mock preprocess to return the template unchanged.
-    """
+    """Tests handling of malformed prompt templates."""
     mock_load, mock_run, _ = mock_dependencies
-
+    
     # Template expects a key that isn't in context
     mock_load.return_value = "Hello {non_existent_key}"
 
-    # Mock preprocess to return template unchanged so KeyError can occur
-    with patch("pdd.agentic_bug_orchestrator.preprocess") as mock_preprocess:
-        mock_preprocess.side_effect = lambda t, **kwargs: t  # Return unchanged
+    success, msg, _, _, _ = run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
 
-        success, msg, _, _, _ = run_agentic_bug_orchestrator(
-            issue_url="url", issue_content="content", repo_owner="owner",
-            repo_name="name", issue_number=123, issue_author="author",
-            issue_title="title", cwd=tmp_path, quiet=True
-        )
-
-        assert success is False
-        assert "Prompt formatting error" in msg
+    assert success is False
+    assert "Prompt formatting error" in msg
 
 def test_step_7_parsing_logic(mock_dependencies, tmp_path):
     """Verifies complex parsing of FILES_CREATED and FILES_MODIFIED."""

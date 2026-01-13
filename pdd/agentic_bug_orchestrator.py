@@ -145,7 +145,7 @@ def run_agentic_bug_orchestrator(
     quiet: bool = False
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 9-step agentic bug investigation workflow.
+    Orchestrates the 10-step agentic bug investigation workflow.
     
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
@@ -181,7 +181,8 @@ def run_agentic_bug_orchestrator(
         (6, "test_plan", "Designing test strategy"),
         (7, "generate", "Generating failing unit test"),
         (8, "verify", "Verifying test catches the bug"),
-        (9, "pr", "Creating draft PR"),
+        (9, "e2e_test", "Generating and running E2E tests"),
+        (10, "pr", "Creating draft PR"),
     ]
 
     for step_num, name, description in steps:
@@ -201,7 +202,7 @@ def run_agentic_bug_orchestrator(
 
         # --- Step Execution ---
         if not quiet:
-            console.print(f"[bold][Step {step_num}/9][/bold] {description}...")
+            console.print(f"[bold][Step {step_num}/10][/bold] {description}...")
 
         template_name = f"agentic_bug_step{step_num}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
@@ -266,7 +267,7 @@ def run_agentic_bug_orchestrator(
                     extracted_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
             
             changed_files = extracted_files
-            # Pass explicit file list to Step 9 for precise git staging
+            # Pass explicit file list to Step 9 and 10 for precise git staging
             context["files_to_stage"] = ", ".join(changed_files)
 
             if not changed_files:
@@ -279,6 +280,25 @@ def run_agentic_bug_orchestrator(
             msg = "Stopped at Step 8: Generated test does not fail correctly (verification failed)."
             if not quiet: console.print(f"⏹️  {msg}")
             return False, msg, total_cost, last_model_used, changed_files
+
+        # Step 9: E2E Test Failure & File Extraction
+        if step_num == 9:
+            if "E2E_FAIL: Test does not catch bug correctly" in output:
+                msg = "Stopped at Step 9: E2E test does not catch bug correctly."
+                if not quiet: console.print(f"⏹️  {msg}")
+                return False, msg, total_cost, last_model_used, changed_files
+            
+            # Parse output for E2E_FILES_CREATED to extend changed_files
+            e2e_files = []
+            for line in output.splitlines():
+                if line.startswith("E2E_FILES_CREATED:"):
+                    file_list = line.split(":", 1)[1].strip()
+                    e2e_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
+            
+            if e2e_files:
+                changed_files.extend(e2e_files)
+                # Update files_to_stage so Step 10 (PR) includes E2E files
+                context["files_to_stage"] = ", ".join(changed_files)
 
         # Soft Failure Logging (if not a hard stop)
         if not success and not quiet:
@@ -301,4 +321,3 @@ def run_agentic_bug_orchestrator(
 if __name__ == "__main__":
     # Example usage logic could go here if needed for testing
     pass
-
