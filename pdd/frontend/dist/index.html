@@ -137,8 +137,13 @@
         from { opacity: 0; transform: translateX(20px); }
         to { opacity: 1; transform: translateX(0); }
       }
+      @keyframes indeterminate {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(300%); }
+      }
 
       .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+      .animate-indeterminate { animation: indeterminate 1.5s ease-in-out infinite; }
       .animate-slide-up { animation: slideUp 0.3s ease-out; }
       .animate-slide-down { animation: slideDown 0.2s ease-out; }
       .animate-scale-in { animation: scaleIn 0.2s ease-out; }
@@ -268,6 +273,20 @@
       .markdown-body strong { color: #f1f5f9; font-weight: 600; }
       .markdown-body em { color: #cbd5e1; }
 
+      /* ReactFlow edge selection styles */
+      .react-flow__edge.selected .react-flow__edge-path {
+        stroke: #f97316 !important;
+        stroke-width: 3px !important;
+      }
+      .react-flow__edge:hover .react-flow__edge-path {
+        stroke: #60a5fa !important;
+        stroke-width: 2.5px !important;
+      }
+      .react-flow__edge.selected:hover .react-flow__edge-path {
+        stroke: #fb923c !important;
+        stroke-width: 3px !important;
+      }
+
       /* CodeMirror Autocomplete styles */
       .cm-tooltip {
         z-index: 1000 !important;
@@ -323,7 +342,7 @@
   }
 }
 </script>
-  <script type="module" crossorigin src="/assets/index-D0JI1GBR.js"></script>
+  <script type="module" crossorigin src="/assets/index-qXwiiiCs.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-B5DZHykP.css">
 </head>
   <body class="bg-surface-950 text-gray-200">

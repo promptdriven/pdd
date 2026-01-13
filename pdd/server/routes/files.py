@@ -319,16 +319,16 @@ def load_pddrc(project_root: Path) -> dict:
         return {}
 
 
-def match_context(prompt_path: str, pddrc: dict) -> dict:
+def match_context(prompt_path: str, pddrc: dict) -> tuple:
     """
-    Match a prompt path to a context in .pddrc and return its defaults.
+    Match a prompt path to a context in .pddrc and return context name and defaults.
 
     Args:
         prompt_path: Relative path to prompt file (e.g., "prompts/calculator_python.prompt")
         pddrc: Parsed .pddrc configuration
 
     Returns:
-        Dict with generate_output_path, test_output_path, example_output_path
+        Tuple of (context_name, defaults_dict)
     """
     import fnmatch
 
@@ -341,11 +341,11 @@ def match_context(prompt_path: str, pddrc: dict) -> dict:
 
         for pattern in paths:
             if fnmatch.fnmatch(prompt_path, pattern):
-                return defaults
+                return context_name, defaults
 
     # Return default context if exists, otherwise empty
     default_context = contexts.get("default", {})
-    return default_context.get("defaults", {})
+    return "default", default_context.get("defaults", {})
 
 
 def parse_prompt_stem(stem: str) -> tuple:
@@ -416,7 +416,7 @@ async def list_prompt_files(
         sync_basename, language = parse_prompt_stem(full_stem)  # e.g., ("calculator", "python")
 
         # Get context-specific paths from .pddrc
-        context_defaults = match_context(relative_path, pddrc)
+        context_name, context_defaults = match_context(relative_path, pddrc)
 
         # Extract subdirectory structure from prompt path
         # e.g., "prompts/server/click_executor_python.prompt" -> "server"
@@ -443,6 +443,7 @@ async def list_prompt_files(
             "prompt": relative_path,
             "sync_basename": sync_basename,  # For sync command: "calculator"
             "language": language,            # Detected language: "python"
+            "context": context_name,         # Matched .pddrc context name
         }
 
         # ===== CODE FILE DETECTION =====
