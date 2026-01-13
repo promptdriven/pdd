@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 8 of 9 in an agentic bug investigation workflow. Previous steps have generated a test to detect the bug.
+You are working on step 8 of 10 in an agentic bug investigation workflow. Previous steps have generated a test to detect the bug.
 
 % Inputs
 
@@ -107,7 +107,7 @@ Your comment should follow this format:
 4. Submit PR with fix and test
 
 ---
-*Proceeding to Step 9: Create Draft PR*
+*Proceeding to Step 9: E2E Tests*
 ```
 
 % Important

@@ -4,19 +4,20 @@
 Write the `pdd/agentic_bug_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 9-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+Orchestrator for the 10-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
 % Requirements
 1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
-3. Run 9 steps sequentially, each as a separate `run_agentic_task()` call
+3. Run 10 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
 6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
-7. Pass extracted files to Step 9 via `files_to_stage` context variable for explicit git staging
+7. For Step 9: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
+8. Pass extracted files to Step 9 (E2E) and Step 10 (PR) via `files_to_stage` context variable for explicit git staging
 
 % Step Execution
-For each step (1-9):
+For each step (1-10):
 1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
 2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
 3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=STEP_TIMEOUTS.get(step_num))`
@@ -36,7 +37,8 @@ For each step (1-9):
 | 6 | agentic_bug_step6_test_plan_LLM | Design test strategy |
 | 7 | agentic_bug_step7_generate_LLM | Generate failing unit test |
 | 8 | agentic_bug_step8_verify_LLM | Verify test catches the bug |
-| 9 | agentic_bug_step9_pr_LLM | Create draft PR and link to issue |
+| 9 | agentic_bug_step9_e2e_test_LLM | Generate and run E2E tests |
+| 10 | agentic_bug_step10_pr_LLM | Create draft PR and link to issue |
 
 % Context Accumulation
 - Step 1 receives: issue_content
@@ -46,12 +48,14 @@ For each step (1-9):
 - ... and so on
 - Step 8 receives: issue_content, step1_output through step7_output
 - Step 9 receives: issue_content, step1_output through step8_output, worktree_path, files_to_stage
+- Step 10 receives: issue_content, step1_output through step9_output, worktree_path, files_to_stage
 
 % Files to Stage
-After Step 7 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Step 9:
+After Step 7 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Steps 9 and 10:
 - `context["files_to_stage"] = ", ".join(changed_files)`
-- This ensures Step 9 knows exactly which files to `git add` (prevents staging unrelated files)
-- Step 9 prompt uses `{files_to_stage}` to display the explicit list of files to stage
+- After Step 9 parses E2E_FILES_CREATED, extend changed_files and update files_to_stage
+- This ensures Step 9 (E2E) and Step 10 (PR) know exactly which files to include
+- Step 10 prompt uses `{files_to_stage}` to display the explicit list of files to stage
 
 % Early Exit Conditions (Hard Stops)
 
@@ -64,6 +68,7 @@ The orchestrator must parse step output to detect stop conditions:
 | 3 | Needs more info from author | Output contains "Needs More Info" |
 | 7 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
 | 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
+| 9 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
 
 **Hard stop behavior:**
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
@@ -91,8 +96,8 @@ Before Step 7, create an isolated git worktree for test generation and PR creati
 2. In orchestrator loop, before Step 7:
    - Call `_setup_worktree(cwd, issue_number, quiet)`
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
-   - Switch working directory to worktree path for Steps 7-9
-   - Add `worktree_path` to context dict (for Step 9 prompt formatting)
+   - Switch working directory to worktree path for Steps 7-10
+   - Add `worktree_path` to context dict (for Step 10 prompt formatting)
    - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
 
 3. Additional helper functions:
@@ -113,7 +118,7 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 2. **Step progress** (before each step):
    ```
-   [Step N/9] {step_description}...
+   [Step N/10] {step_description}...
    ```
 
 3. **Agentic output** (during each step):
