@@ -259,7 +259,7 @@ async def test_z3_generated_dag_is_valid():
     for i in range(N):
         deps = []
         for j in range(N):
-            if model.evaluate(edges[i][j]):
+            if z3.is_true(model.evaluate(edges[i][j])):
                 deps.append(nodes[j])
         
         modules.append(create_module(nodes[i], deps))
@@ -302,7 +302,7 @@ async def test_z3_generated_cycle_is_invalid():
     for i in range(N):
         deps = []
         for j in range(N):
-            if model.evaluate(edges[i][j]):
+            if z3.is_true(model.evaluate(edges[i][j])):
                 deps.append(nodes[j])
         modules.append(create_module(nodes[i], deps))
         
