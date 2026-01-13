@@ -43,7 +43,20 @@
        - result: match_score (0-100), summary, missing, extra, suggestions
        - cost, model used
 
-  5. **Pydantic Models**:
+  5. **POST /diff-analysis**:
+     - Body: DiffAnalysisRequest with prompt_content, code_content, strength, mode
+     - mode: "quick" (capped strength 0.25) or "detailed" (full analysis)
+     - Uses llm_invoke for detailed diff analysis between prompt and code
+     - Returns DiffAnalysisResponse with:
+       - result: DiffAnalysisResult with overallScore, summary, sections, lineMappings, stats
+       - sections: list of DiffSection with id, promptRange, codeRanges, status, matchConfidence, semanticLabel
+       - lineMappings: list of LineMapping with promptLine, codeLines, matchType
+       - stats: DiffStats with totalRequirements, matchedRequirements, missingRequirements, extraCodeSections, coveragePercent
+       - cached flag indicating if result was from cache
+     - Implements in-memory caching with 10-minute TTL based on content hash
+     - Cache key generated from prompt_content + code_content + mode
+
+  6. **Pydantic Models**:
      - CostEstimateResponse: input_cost, model, tokens, cost_per_million, currency
      - TokenMetricsResponse: token_count, context_limit, context_usage_percent, cost_estimate
      - PromptAnalyzeRequest: path, model, preprocess, content
@@ -57,20 +70,28 @@
      - MatchCheckRequest: prompt_content, code_content, strength
      - MatchCheckResult: match_score, summary, missing, extra, suggestions
      - MatchCheckResponse: result, cost, model
+     - PromptRange: startLine, endLine, text (for diff analysis line ranges)
+     - CodeRange: startLine, endLine, text (for diff analysis code ranges)
+     - DiffSection: id, promptRange, codeRanges, status, matchConfidence, semanticLabel, notes
+     - LineMapping: promptLine, codeLines, matchType (exact/semantic/partial/none)
+     - DiffStats: totalRequirements, matchedRequirements, missingRequirements, extraCodeSections, coveragePercent
+     - DiffAnalysisResult: overallScore, summary, sections, lineMappings, stats, missing, extra, suggestions
+     - DiffAnalysisRequest: prompt_content, code_content, strength, mode
+     - DiffAnalysisResponse: result, cost, model, analysisMode, cached
 
-  6. **Token metrics**:
+  7. **Token metrics**:
      - Use get_token_metrics from pdd.server.token_counter
      - Pricing CSV at project_root/.pdd/llm_model.csv if exists
      - Convert returned objects to response models
 
-  7. **Error handling**:
+  8. **Error handling**:
      - 403 for path validation failures (SecurityError)
      - 404 for non-existent files
      - 400 for directories or files too large or non-text files
      - Preprocessing errors captured in response, not thrown
-     - 500 for internal errors (sync status, model loading, match checking)
+     - 500 for internal errors (sync status, model loading, match checking, diff analysis)
 
-  8. **Security**:
+  9. **Security**:
      - All paths validated through PathValidator dependency
      - Change to project_root during preprocessing (for relative includes)
 

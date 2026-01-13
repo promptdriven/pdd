@@ -20,6 +20,7 @@ import ModelSelector from './ModelSelector';
 import { ModelInfo } from '../api';
 import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
 import { findIncludeAtCursor, IncludeTagInfo, parseIncludeManyPaths } from '../lib/includeAnalyzer';
+import PromptCodeDiffModal from './PromptCodeDiffModal';
 
 // Helper to get language extension based on file path
 function getLanguageExtension(filePath: string) {
@@ -484,6 +485,9 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [matchResult, setMatchResult] = useState<MatchCheckResponse | null>(null);
   const [matchStrength, setMatchStrength] = useState(0.5);
   const [isCheckingMatch, setIsCheckingMatch] = useState(false);
+
+  // Diff analysis modal state
+  const [showDiffModal, setShowDiffModal] = useState(false);
   const [matchError, setMatchError] = useState<string | null>(null);
 
   // Update preview content when toggling preview on or when view mode changes
@@ -1338,6 +1342,22 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                   )}
                   <span className="hidden sm:inline">Match</span>
                 </button>
+                {/* Diff Analysis button */}
+                <button
+                  onClick={() => setShowDiffModal(true)}
+                  disabled={!prompt.code}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
+                    !prompt.code
+                      ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-purple-600/50 to-blue-600/50 text-purple-200 hover:from-purple-500 hover:to-blue-500 hover:text-white'
+                  }`}
+                  title={!prompt.code ? 'No code file available' : 'View detailed diff analysis'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                  </svg>
+                  <span className="hidden sm:inline">Diff</span>
+                </button>
                 {/* Preview toggle button */}
                 <button
                   onClick={() => setShowPreview(!showPreview)}
@@ -1687,6 +1707,20 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
           </div>
         </div>
       )}
+
+      {/* Diff Analysis Modal */}
+      <PromptCodeDiffModal
+        isOpen={showDiffModal}
+        onClose={() => setShowDiffModal(false)}
+        promptContent={
+          editorViewRef.current
+            ? editorViewRef.current.state.doc.toString()
+            : editedContentRef.current || content || ''
+        }
+        codeContent={codeContent || ''}
+        promptPath={prompt?.prompt}
+        codePath={prompt?.code}
+      />
     </div>
   );
 };

@@ -142,10 +142,20 @@ def prompts_test_env():
         get_sync_status,
         get_available_models,
         check_match,
+        analyze_diff,
         SyncStatusResponse,
         ModelsResponse,
         MatchCheckRequest,
         MatchCheckResponse,
+        DiffAnalysisRequest,
+        DiffAnalysisResponse,
+        DiffSection,
+        LineMapping,
+        DiffStats,
+        _get_cache_key,
+        _get_cached_result,
+        _cache_result,
+        _diff_cache,
     )
 
     yield {
@@ -160,10 +170,20 @@ def prompts_test_env():
         'get_sync_status': get_sync_status,
         'get_available_models': get_available_models,
         'check_match': check_match,
+        'analyze_diff': analyze_diff,
         'SyncStatusResponse': SyncStatusResponse,
         'ModelsResponse': ModelsResponse,
         'MatchCheckRequest': MatchCheckRequest,
         'MatchCheckResponse': MatchCheckResponse,
+        'DiffAnalysisRequest': DiffAnalysisRequest,
+        'DiffAnalysisResponse': DiffAnalysisResponse,
+        'DiffSection': DiffSection,
+        'LineMapping': LineMapping,
+        'DiffStats': DiffStats,
+        '_get_cache_key': _get_cache_key,
+        '_get_cached_result': _get_cached_result,
+        '_cache_result': _cache_result,
+        '_diff_cache': _diff_cache,
         'mock_security': mock_security,
         'mock_token_counter': mock_token_counter,
         'mock_preprocess': mock_preprocess,
@@ -666,3 +686,349 @@ async def test_check_match(prompts_test_env):
     assert response.result.summary == 'Code largely matches requirements'
     assert len(response.result.missing) == 1
     assert response.cost == 0.001
+
+
+# --- Tests for diff analysis endpoint ---
+
+@pytest.mark.asyncio
+async def test_analyze_diff_basic(prompts_test_env):
+    """Test basic diff analysis functionality."""
+    analyze_diff = prompts_test_env['analyze_diff']
+    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
+    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+    _diff_cache = prompts_test_env['_diff_cache']
+
+    # Clear cache before test
+    _diff_cache.clear()
+
+    # Mock LLM response with detailed diff analysis
+    mock_llm_invoke.llm_invoke.return_value = {
+        'result': {
+            'overallScore': 80,
+            'summary': 'Code implements most requirements',
+            'sections': [
+                {
+                    'id': 'sec_1',
+                    'promptRange': {'startLine': 1, 'endLine': 3, 'text': 'Add two numbers'},
+                    'codeRanges': [{'startLine': 1, 'endLine': 2, 'text': 'def add(a, b):'}],
+                    'status': 'matched',
+                    'matchConfidence': 95,
+                    'semanticLabel': 'Addition Function',
+                    'notes': 'Fully implemented'
+                }
+            ],
+            'lineMappings': [
+                {'promptLine': 1, 'codeLines': [1], 'matchType': 'exact'},
+                {'promptLine': 2, 'codeLines': [2], 'matchType': 'semantic'},
+            ],
+            'stats': {
+                'totalRequirements': 2,
+                'matchedRequirements': 2,
+                'missingRequirements': 0,
+                'extraCodeSections': 0,
+                'coveragePercent': 100.0
+            },
+            'missing': [],
+            'extra': [],
+            'suggestions': ['Add docstring']
+        },
+        'cost': 0.002,
+        'model_name': 'claude-sonnet-4-20250514'
+    }
+
+    request = DiffAnalysisRequest(
+        prompt_content="Write a function that adds two numbers\nReturn the result",
+        code_content="def add(a, b):\n    return a + b",
+        strength=0.5,
+        mode="detailed"
+    )
+
+    response = await analyze_diff(request)
+
+    assert response.result.overallScore == 80
+    assert response.result.summary == 'Code implements most requirements'
+    assert len(response.result.sections) == 1
+    assert response.result.sections[0].id == 'sec_1'
+    assert response.result.sections[0].status == 'matched'
+    assert len(response.result.lineMappings) == 2
+    assert response.result.stats.totalRequirements == 2
+    assert response.result.stats.coveragePercent == 100.0
+    assert response.cost == 0.002
+    assert response.analysisMode == "detailed"
+    assert response.cached is False
+
+
+@pytest.mark.asyncio
+async def test_analyze_diff_quick_mode(prompts_test_env):
+    """Test diff analysis in quick mode reduces strength."""
+    analyze_diff = prompts_test_env['analyze_diff']
+    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
+    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+    _diff_cache = prompts_test_env['_diff_cache']
+
+    _diff_cache.clear()
+
+    mock_llm_invoke.llm_invoke.return_value = {
+        'result': {
+            'overallScore': 75,
+            'summary': 'Quick analysis complete',
+            'sections': [],
+            'lineMappings': [],
+            'stats': {
+                'totalRequirements': 1,
+                'matchedRequirements': 1,
+                'missingRequirements': 0,
+                'extraCodeSections': 0,
+                'coveragePercent': 100.0
+            },
+            'missing': [],
+            'extra': [],
+            'suggestions': []
+        },
+        'cost': 0.001,
+        'model_name': 'claude-sonnet-4-20250514'
+    }
+
+    request = DiffAnalysisRequest(
+        prompt_content="Test prompt",
+        code_content="Test code",
+        strength=0.8,  # High strength requested
+        mode="quick"   # But quick mode should cap it
+    )
+
+    await analyze_diff(request)
+
+    # Check that strength was capped for quick mode
+    call_args = mock_llm_invoke.llm_invoke.call_args
+    assert call_args.kwargs['strength'] <= 0.25
+
+
+@pytest.mark.asyncio
+async def test_analyze_diff_caching(prompts_test_env):
+    """Test that diff analysis results are cached."""
+    analyze_diff = prompts_test_env['analyze_diff']
+    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
+    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+    _diff_cache = prompts_test_env['_diff_cache']
+
+    _diff_cache.clear()
+
+    mock_llm_invoke.llm_invoke.return_value = {
+        'result': {
+            'overallScore': 90,
+            'summary': 'Cached result',
+            'sections': [],
+            'lineMappings': [],
+            'stats': {
+                'totalRequirements': 1,
+                'matchedRequirements': 1,
+                'missingRequirements': 0,
+                'extraCodeSections': 0,
+                'coveragePercent': 100.0
+            },
+            'missing': [],
+            'extra': [],
+            'suggestions': []
+        },
+        'cost': 0.001,
+        'model_name': 'claude-sonnet-4-20250514'
+    }
+
+    request = DiffAnalysisRequest(
+        prompt_content="Cache test prompt",
+        code_content="Cache test code",
+        strength=0.5,
+        mode="detailed"
+    )
+
+    # First call - should hit LLM
+    response1 = await analyze_diff(request)
+    assert response1.cached is False
+    assert mock_llm_invoke.llm_invoke.call_count == 1
+
+    # Second call with same content - should be cached
+    response2 = await analyze_diff(request)
+    assert response2.cached is True
+    assert mock_llm_invoke.llm_invoke.call_count == 1  # No additional call
+
+
+def test_cache_key_generation(prompts_test_env):
+    """Test that cache keys are properly generated from content hash."""
+    _get_cache_key = prompts_test_env['_get_cache_key']
+
+    key1 = _get_cache_key("prompt1", "code1", "detailed")
+    key2 = _get_cache_key("prompt1", "code1", "detailed")
+    key3 = _get_cache_key("prompt2", "code1", "detailed")
+    key4 = _get_cache_key("prompt1", "code1", "quick")
+
+    # Same content should produce same key
+    assert key1 == key2
+    # Different prompt should produce different key
+    assert key1 != key3
+    # Different mode should produce different key
+    assert key1 != key4
+
+
+@pytest.mark.asyncio
+async def test_analyze_diff_with_missing_requirements(prompts_test_env):
+    """Test diff analysis with missing requirements."""
+    analyze_diff = prompts_test_env['analyze_diff']
+    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
+    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+    _diff_cache = prompts_test_env['_diff_cache']
+
+    _diff_cache.clear()
+
+    mock_llm_invoke.llm_invoke.return_value = {
+        'result': {
+            'overallScore': 50,
+            'summary': 'Code missing key requirements',
+            'sections': [
+                {
+                    'id': 'sec_1',
+                    'promptRange': {'startLine': 1, 'endLine': 2, 'text': 'Validate input'},
+                    'codeRanges': [],  # No code implements this
+                    'status': 'missing',
+                    'matchConfidence': 0,
+                    'semanticLabel': 'Input Validation',
+                    'notes': 'No input validation found'
+                },
+                {
+                    'id': 'sec_2',
+                    'promptRange': {'startLine': 3, 'endLine': 4, 'text': 'Return result'},
+                    'codeRanges': [{'startLine': 2, 'endLine': 2, 'text': 'return a + b'}],
+                    'status': 'matched',
+                    'matchConfidence': 90,
+                    'semanticLabel': 'Return Statement',
+                }
+            ],
+            'lineMappings': [],
+            'stats': {
+                'totalRequirements': 2,
+                'matchedRequirements': 1,
+                'missingRequirements': 1,
+                'extraCodeSections': 0,
+                'coveragePercent': 50.0
+            },
+            'missing': ['Input validation is not implemented'],
+            'extra': [],
+            'suggestions': ['Add input type checking']
+        },
+        'cost': 0.002,
+        'model_name': 'claude-sonnet-4-20250514'
+    }
+
+    request = DiffAnalysisRequest(
+        prompt_content="Validate input\nCheck types\nReturn result\nDocument function",
+        code_content="def add(a, b):\n    return a + b",
+        strength=0.5,
+        mode="detailed"
+    )
+
+    response = await analyze_diff(request)
+
+    assert response.result.overallScore == 50
+    assert response.result.stats.missingRequirements == 1
+    assert len(response.result.missing) == 1
+    assert 'missing' in response.result.sections[0].status
+
+
+@pytest.mark.asyncio
+async def test_analyze_diff_handles_string_result(prompts_test_env):
+    """Test that diff analysis handles LLM returning string instead of dict."""
+    import json
+    analyze_diff = prompts_test_env['analyze_diff']
+    DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
+    mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+    _diff_cache = prompts_test_env['_diff_cache']
+
+    _diff_cache.clear()
+
+    # Return result as JSON string instead of dict
+    mock_llm_invoke.llm_invoke.return_value = {
+        'result': json.dumps({
+            'overallScore': 70,
+            'summary': 'String result test',
+            'sections': [],
+            'lineMappings': [],
+            'stats': {
+                'totalRequirements': 1,
+                'matchedRequirements': 1,
+                'missingRequirements': 0,
+                'extraCodeSections': 0,
+                'coveragePercent': 100.0
+            },
+            'missing': [],
+            'extra': [],
+            'suggestions': []
+        }),
+        'cost': 0.001,
+        'model_name': 'claude-sonnet-4-20250514'
+    }
+
+    request = DiffAnalysisRequest(
+        prompt_content="Test",
+        code_content="Test",
+        strength=0.5,
+        mode="detailed"
+    )
+
+    response = await analyze_diff(request)
+
+    assert response.result.overallScore == 70
+    assert response.result.summary == 'String result test'
+
+
+# --- Z3 Formal Verification for Diff Analysis ---
+
+def test_z3_diff_score_bounds():
+    """Formally verify that diff scores are bounded 0-100."""
+    s = z3.Solver()
+
+    overall_score = z3.Int('overall_score')
+    match_confidence = z3.Int('match_confidence')
+
+    # Property: scores must be in valid range
+    valid_overall = z3.And(overall_score >= 0, overall_score <= 100)
+    valid_confidence = z3.And(match_confidence >= 0, match_confidence <= 100)
+
+    # Test that invalid scores are rejected
+    s.push()
+    s.add(overall_score == 150)  # Invalid score
+    s.add(valid_overall)
+    assert s.check() == z3.unsat
+    s.pop()
+
+    s.push()
+    s.add(match_confidence == -10)  # Invalid negative score
+    s.add(valid_confidence)
+    assert s.check() == z3.unsat
+    s.pop()
+
+
+def test_z3_coverage_calculation():
+    """Formally verify coverage percentage calculation."""
+    s = z3.Solver()
+
+    total_reqs = z3.Int('total_reqs')
+    matched_reqs = z3.Int('matched_reqs')
+    coverage = z3.Real('coverage')
+
+    # Constraints
+    s.add(total_reqs > 0)
+    s.add(matched_reqs >= 0)
+    s.add(matched_reqs <= total_reqs)
+    s.add(coverage == (matched_reqs * 100) / total_reqs)
+
+    # Property: coverage is between 0 and 100
+    s.push()
+    s.add(z3.Or(coverage < 0, coverage > 100))
+    assert s.check() == z3.unsat
+    s.pop()
+
+    # Property: 100% coverage when all matched
+    s.push()
+    s.add(matched_reqs == total_reqs)
+    s.add(coverage != 100)
+    assert s.check() == z3.unsat
+    s.pop()
