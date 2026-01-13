@@ -12,7 +12,7 @@ from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 Detailed Test Plan for agentic_bug_orchestrator
 
 1. Functional Requirements Testing:
-    - Verify the 9-step sequential execution.
+    - Verify the 10-step sequential execution.
     - Verify context accumulation (step N output passed to step N+1).
     - Verify total cost accumulation across all steps.
     - Verify worktree creation before Step 7.
@@ -56,7 +56,7 @@ def mock_dependencies():
         yield mock_load, mock_run, mock_wt
 
 def test_orchestrator_full_success(mock_dependencies, tmp_path):
-    """Tests a successful 9-step run with context accumulation."""
+    """Tests a successful 10-step run with context accumulation."""
     mock_load, mock_run, mock_wt = mock_dependencies
     
     # Mock Step 7 to return files
@@ -77,7 +77,7 @@ def test_orchestrator_full_success(mock_dependencies, tmp_path):
     assert "Investigation complete" in msg
     assert cost > 0
     assert files == ["test_file.py"]
-    assert mock_run.call_count == 9
+    assert mock_run.call_count == 10
     assert mock_wt.called
 
 def test_hard_stop_step1_duplicate(mock_dependencies, tmp_path):
@@ -160,7 +160,7 @@ def test_soft_failure_continuation(mock_dependencies, tmp_path):
     )
 
     assert success is True
-    assert mock_run.call_count == 9
+    assert mock_run.call_count == 10
 
 def test_worktree_creation_failure(mock_dependencies, tmp_path):
     """Tests behavior when worktree setup fails."""
