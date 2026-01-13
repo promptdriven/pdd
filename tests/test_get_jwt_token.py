@@ -32,6 +32,7 @@ async def test_get_jwt_token_with_valid_stored_token(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
@@ -56,7 +57,8 @@ async def test_get_jwt_token_with_invalid_stored_token_reauth(
     mock_exchange_github,
     mock_store_refresh,
     mock_cache_read,
-    mock_cache_write
+    mock_cache_write,
+    mock_webbrowser,
 ):
     """
     If the refresh token is invalid or refresh fails, get_jwt_token should invoke the Device Flow.
@@ -70,6 +72,7 @@ async def test_get_jwt_token_with_invalid_stored_token_reauth(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
@@ -90,7 +93,8 @@ async def test_get_jwt_token_no_stored_token_triggers_device_flow(
     mock_exchange_github,
     mock_store_refresh,
     mock_cache_read,
-    mock_cache_write
+    mock_cache_write,
+    mock_webbrowser,
 ):
     """
     If there is no stored refresh token, get_jwt_token should prompt the Device Flow and complete auth.
@@ -104,6 +108,7 @@ async def test_get_jwt_token_no_stored_token_triggers_device_flow(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
 @patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
@@ -118,7 +123,8 @@ async def test_get_jwt_token_user_cancels_device_flow(
     mock_poll_for_token,
     mock_request_device_code,
     mock_get_stored_token,
-    mock_cache
+    mock_cache,
+    mock_webbrowser,
 ):
     """
     If the user cancels authorization at GitHub, get_jwt_token should raise a UserCancelledError.
@@ -131,6 +137,7 @@ async def test_get_jwt_token_user_cancels_device_flow(
 
 
 @pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
 @patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
 @patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
@@ -145,7 +152,8 @@ async def test_get_jwt_token_device_code_expired(
     mock_poll_for_token,
     mock_request_device_code,
     mock_get_stored_token,
-    mock_cache
+    mock_cache,
+    mock_webbrowser,
 ):
     """
     If the device code expires, get_jwt_token should raise an AuthError.

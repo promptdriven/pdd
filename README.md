@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.110-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.111-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.110
+Current version: 0.0.111
 
 To check your installed version, run:
 ```
@@ -462,6 +462,7 @@ Here is a brief overview of the main commands provided by PDD. Click the command
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
 - **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
 - **[`connect`](#17-connect)**: Launches a local REST server with a web frontend for interacting with PDD through a browser-based interface.
+- **[`auth`](#18-auth)**: Manages authentication with PDD Cloud, including login, logout, status, and token retrieval.
 
 ## Global Options
 
@@ -1850,17 +1851,21 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 2. **Documentation check** - Review repo documentation to determine if this is a bug or user error. Posts comment with findings.
 
-3. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
+3. **Triage** - Assess if enough information is provided to proceed. Posts comment requesting more info if needed.
 
-4. **Root cause analysis** - Run experiments to identify the root cause. Posts comment explaining the root cause.
+4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
 
-5. **Test plan** - Design a plan for creating tests to detect the problem. Posts comment with the test plan.
+5. **Root cause analysis** - Run experiments to identify the root cause. Posts comment explaining the root cause.
 
-6. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
+6. **Test plan** - Design a plan for creating tests to detect the problem. Posts comment with the test plan.
 
-7. **Verify detection** - Confirm the test successfully detects the bug. Posts comment confirming verification.
+7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
 
-8. **Create draft PR** - Create a draft pull request with the failing test and link it to the issue. Posts comment with PR link.
+8. **Verify detection** - Confirm the unit test successfully detects the bug. Posts comment confirming verification.
+
+9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Posts comment with E2E test results.
+
+10. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
 
 Arguments:
 - `ISSUE_URL`: GitHub issue URL (e.g., https://github.com/owner/repo/issues/123)
@@ -1990,6 +1995,55 @@ pdd connect --allow-remote --token "your-secret-token"
 ```
 
 **When to use**: Use `connect` when you prefer a graphical interface for working with PDD, when demonstrating PDD to others, or when integrating PDD with other tools that can communicate via REST APIs.
+
+### 18. auth
+
+Manages authentication with PDD Cloud. The `auth` command provides subcommands for signing in, signing out, checking status, and retrieving authentication tokens.
+
+```bash
+pdd [GLOBAL OPTIONS] auth SUBCOMMAND [OPTIONS]
+```
+
+#### Subcommands
+
+##### auth login
+
+Signs in to PDD Cloud. Opens a web browser to complete the authentication process with an ephemeral code.
+
+```bash
+pdd auth login
+```
+
+##### auth status
+
+Displays the active account and current authentication state. Exit code is 0 if authenticated, 1 otherwise.
+
+```bash
+pdd auth status
+```
+
+**Note:** If only a refresh token exists (no cached JWT), the status will show "Authenticated as: Unknown" since user info is extracted from the cached JWT. Run `pdd auth login` to refresh the token and display the full account information.
+
+##### auth logout
+
+Removes the stored authentication configuration for a PDD Cloud account locally.
+
+```bash
+pdd auth logout
+```
+
+##### auth token
+
+Outputs the authentication token for the current account. Useful for scripts or programmatic access to PDD Cloud.
+
+```bash
+pdd auth token [OPTIONS]
+```
+
+**Options:**
+- `--format [raw|json]`: Output format for the token. Use `raw` for just the token string (default), or `json` for structured output including token and expiration time.
+
+**When to use**: Use `auth` commands to manage your PDD Cloud authentication state. Use `auth login` to authenticate before using cloud features, `auth status` to verify your current session, and `auth token` when you need to pass credentials to scripts or other tools.
 
 ## Example Review Process
 
