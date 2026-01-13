@@ -133,12 +133,12 @@ def test_login_success(runner, mock_dependencies, monkeypatch):
 
 def test_login_missing_api_key(runner, mock_dependencies, mock_env_vars):
     """Test login fails when API key is missing."""
-    # Ensure no env vars or files exist (handled by fixtures)
-    
-    result = runner.invoke(auth_group, ["login"])
-    
-    assert result.exit_code == 1
-    assert "NEXT_PUBLIC_FIREBASE_API_KEY not found" in result.output
+    # Use isolated_filesystem to avoid reading .env files from the project root
+    with runner.isolated_filesystem():
+        result = runner.invoke(auth_group, ["login"])
+
+        assert result.exit_code == 1
+        assert "NEXT_PUBLIC_FIREBASE_API_KEY not found" in result.output
 
 def test_login_user_cancelled(runner, mock_dependencies, monkeypatch):
     """Test login handles user cancellation."""
