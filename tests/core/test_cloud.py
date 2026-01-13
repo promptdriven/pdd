@@ -70,9 +70,12 @@ def clean_env():
         PDD_JWT_TOKEN_ENV,
         FIREBASE_API_KEY_ENV,
         GITHUB_CLIENT_ID_ENV,
+        "PDD_ENV",
         "PDD_FORCE_LOCAL",
         "K_SERVICE",
         "FUNCTIONS_EMULATOR",
+        "FIREBASE_AUTH_EMULATOR_HOST",
+        "FIREBASE_EMULATOR_HUB",
     ]
     for key in keys_to_clear:
         if key in os.environ:
@@ -297,6 +300,33 @@ def test_get_jwt_token_from_env(clean_env):
         # Should return immediately without calling auth flow
         token = CloudConfig.get_jwt_token()
         assert token == test_token
+
+def test_get_jwt_token_defaults_env_to_prod(clean_env):
+    """Default PDD_ENV to prod when unset in typical CLI usage."""
+    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.test.token"}, clear=True):
+        token = CloudConfig.get_jwt_token()
+        assert token == "ey.test.token"
+        assert os.environ.get("PDD_ENV") == "prod"
+
+def test_get_jwt_token_defaults_env_to_local_for_emulator(clean_env):
+    """Default PDD_ENV to local when emulator is in use."""
+    with patch.dict(os.environ, {
+        PDD_JWT_TOKEN_ENV: "ey.test.token",
+        "FUNCTIONS_EMULATOR": "true",
+    }, clear=True):
+        token = CloudConfig.get_jwt_token()
+        assert token == "ey.test.token"
+        assert os.environ.get("PDD_ENV") == "local"
+
+def test_get_jwt_token_defaults_env_to_staging_for_cloud_url(clean_env):
+    """Default PDD_ENV to staging when PDD_CLOUD_URL targets staging."""
+    with patch.dict(os.environ, {
+        PDD_JWT_TOKEN_ENV: "ey.test.token",
+        PDD_CLOUD_URL_ENV: "https://us-central1-prompt-driven-development-stg.cloudfunctions.net",
+    }, clear=True):
+        token = CloudConfig.get_jwt_token()
+        assert token == "ey.test.token"
+        assert os.environ.get("PDD_ENV") == "staging"
 
 @patch("pdd.core.cloud.device_flow_get_token")
 def test_get_jwt_token_missing_keys(mock_device_flow, clean_env):
