@@ -1,0 +1,181 @@
+% You are an expert software engineer investigating a bug report. Your task is to generate and run end-to-end (E2E) tests that verify the bug at a system level.
+
+% Context
+
+You are working on step 9 of 10 in an agentic bug investigation workflow. Previous steps have:
+- Identified the root cause (Step 5)
+- Generated a failing unit test (Step 7)
+- Verified the unit test correctly catches the bug (Step 8)
+
+Now you need to create E2E tests that verify the bug at a higher level of integration.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+<step8_output>
+{step8_output}
+</step8_output>
+
+% Worktree Information
+
+You are operating in an isolated git worktree at: {worktree_path}
+The unit test file(s) created in Step 7 are: {files_to_stage}
+
+% E2E Test Strategy
+
+E2E tests differ from unit tests:
+- **Unit tests** mock dependencies and test individual functions in isolation
+- **E2E tests** exercise the full system path that a user or API consumer would take
+
+% Your Task
+
+1. **Analyze the bug's user-facing impact**
+   - How does this bug manifest to end users or API consumers?
+   - What user action or API call triggers the bug?
+   - What is the expected vs actual behavior from the user's perspective?
+
+2. **Identify the E2E test approach**
+   - Determine what type of E2E test is appropriate:
+     - **CLI tests**: If the bug affects command-line behavior (use subprocess or Click's CliRunner)
+     - **API tests**: If the bug affects an API endpoint (use requests or test client)
+     - **Integration tests**: If the bug affects data flow between components
+   - Look for existing E2E test patterns in the repository:
+     - Check `tests/` for files with `e2e`, `integration`, or `functional` in the name
+     - Look for tests using `CliRunner`, `TestClient`, or subprocess calls
+
+3. **Generate the E2E test**
+   - Create a test that exercises the full code path from user input to output
+   - Do NOT mock the buggy component - the E2E test should hit the real code
+   - The test should fail on the current buggy code
+   - Include clear assertions about expected behavior
+   - Follow the repository's existing E2E test patterns if they exist
+
+4. **Write and run the E2E test file**
+   - Place the E2E test in an appropriate location (e.g., `tests/e2e/` or alongside existing E2E tests)
+   - Use a descriptive filename like `test_e2e_issue_{issue_number}.py` or match existing naming conventions
+   - Run the test to verify it fails for the right reason (the bug, not setup issues)
+
+% Critical: E2E Test Requirements
+
+The E2E test MUST:
+- Exercise the real code path (minimal mocking)
+- Fail on the current buggy code
+- Pass once the bug is fixed
+- Be deterministic and not flaky
+- Complete within a reasonable timeout (< 60 seconds)
+
+The E2E test should NOT:
+- Mock the component that contains the bug
+- Test edge cases already covered by unit tests
+- Require external services that aren't available in CI
+
+% Test Execution
+
+After writing the E2E test, run it to verify:
+1. The test executes without setup errors (imports work, fixtures load)
+2. The test fails because of the bug (not because of test bugs)
+3. The failure message clearly indicates the bug
+
+If the test doesn't fail or fails for the wrong reason:
+- Debug and fix the test
+- Re-run until it correctly catches the bug
+- Output `E2E_FAIL: Test does not catch bug correctly` if you cannot make the test work
+
+% Output
+
+After generating and running the test, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 9: E2E Test
+
+### E2E Test File
+`{{e2e_test_file_path}}`
+
+### Test Type
+[CLI / API / Integration]
+
+### What This Test Verifies
+[Brief explanation of the user-facing behavior being tested]
+
+### Test Code
+```python
+{{generated_e2e_test_code}}
+```
+
+### Test Execution Result
+```
+{{test_output}}
+```
+
+### E2E Test Status
+**[PASS: E2E test correctly detects the bug | FAIL: E2E test does not work as expected]**
+
+---
+*Proceeding to Step 10: Create Draft PR*
+```
+
+% Machine-Readable Output
+
+After writing files, output this line exactly (for automated tracking):
+```
+E2E_FILES_CREATED: <comma-separated list of file paths you created>
+```
+Example: `E2E_FILES_CREATED: tests/e2e/test_e2e_issue_123.py`
+
+If you modified existing files instead of creating new ones:
+```
+E2E_FILES_MODIFIED: <comma-separated list of file paths you modified>
+```
+
+% Important
+
+- The E2E test MUST fail on the current (buggy) code
+- The test should pass once the bug is fixed
+- Focus on the user-facing behavior, not internal implementation
+- Run the test and include the actual output in your comment
+- Always post your findings as a GitHub comment before completing
+- If the test cannot be made to work, output `E2E_FAIL: Test does not catch bug correctly`
+- If no E2E test is applicable (e.g., the bug is purely internal with no user-facing impact), output `E2E_SKIP: No E2E test applicable for this bug type` and explain why
