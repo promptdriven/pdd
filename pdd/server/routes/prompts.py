@@ -119,6 +119,78 @@ class MatchCheckResponse(BaseModel):
     model: str = Field(..., description="Model used for evaluation")
 
 
+# Diff Analysis Models (for detailed prompt-code diff visualization)
+
+class PromptRange(BaseModel):
+    """Line range in the prompt content."""
+    startLine: int = Field(..., description="Starting line number (1-indexed)")
+    endLine: int = Field(..., description="Ending line number (1-indexed)")
+    text: str = Field(..., description="Text excerpt from this range")
+
+
+class CodeRange(BaseModel):
+    """Line range in the code content."""
+    startLine: int = Field(..., description="Starting line number (1-indexed)")
+    endLine: int = Field(..., description="Ending line number (1-indexed)")
+    text: str = Field(..., description="Text excerpt from this range")
+
+
+class DiffSection(BaseModel):
+    """A section representing a semantic unit (requirement/feature) and its mapping."""
+    id: str = Field(..., description="Unique identifier for this section")
+    promptRange: PromptRange = Field(..., description="Line range in the prompt")
+    codeRanges: list[CodeRange] = Field(default_factory=list, description="Corresponding code ranges (can be multiple or empty)")
+    status: str = Field(..., description="Match status: matched, partial, missing, or extra")
+    matchConfidence: int = Field(..., description="Confidence score 0-100")
+    semanticLabel: str = Field(..., description="Semantic label (e.g., 'Error Handling', 'API Endpoint')")
+    notes: Optional[str] = Field(None, description="Explanation of the match/mismatch")
+
+
+class LineMapping(BaseModel):
+    """Fine-grained line-level mapping between prompt and code."""
+    promptLine: int = Field(..., description="Line number in prompt (1-indexed)")
+    codeLines: list[int] = Field(default_factory=list, description="Corresponding line numbers in code")
+    matchType: str = Field(..., description="Match type: exact, semantic, partial, or none")
+
+
+class DiffStats(BaseModel):
+    """Aggregated statistics for the diff analysis."""
+    totalRequirements: int = Field(..., description="Total number of requirements identified")
+    matchedRequirements: int = Field(..., description="Number of fully matched requirements")
+    missingRequirements: int = Field(..., description="Number of missing requirements")
+    extraCodeSections: int = Field(..., description="Number of extra code sections not in prompt")
+    coveragePercent: float = Field(..., description="Overall coverage percentage")
+
+
+class DiffAnalysisResult(BaseModel):
+    """Detailed diff analysis result."""
+    overallScore: int = Field(..., description="Overall match score 0-100")
+    summary: str = Field(..., description="Summary of the analysis")
+    sections: list[DiffSection] = Field(default_factory=list, description="Semantic sections with mappings")
+    lineMappings: list[LineMapping] = Field(default_factory=list, description="Line-level mappings")
+    stats: DiffStats = Field(..., description="Aggregated statistics")
+    missing: list[str] = Field(default_factory=list, description="Missing requirements (text)")
+    extra: list[str] = Field(default_factory=list, description="Extra code features (text)")
+    suggestions: list[str] = Field(default_factory=list, description="Improvement suggestions")
+
+
+class DiffAnalysisRequest(BaseModel):
+    """Request for detailed prompt-code diff analysis."""
+    prompt_content: str = Field(..., description="Prompt/requirements content")
+    code_content: str = Field(..., description="Code content to analyze")
+    strength: float = Field(0.5, description="Model strength (0-1)")
+    mode: str = Field("detailed", description="Analysis mode: 'quick' or 'detailed'")
+
+
+class DiffAnalysisResponse(BaseModel):
+    """Response from diff analysis endpoint."""
+    result: DiffAnalysisResult = Field(..., description="Detailed diff analysis result")
+    cost: float = Field(..., description="LLM invocation cost in USD")
+    model: str = Field(..., description="Model used for analysis")
+    analysisMode: str = Field(..., description="Analysis mode used")
+    cached: bool = Field(False, description="Whether result was from cache")
+
+
 # Router setup
 router = APIRouter(prefix="/api/v1/prompts", tags=["prompts"])
 
@@ -480,3 +552,297 @@ Evaluate the code against the prompt requirements and respond with a JSON object
     except Exception as e:
         console.print(f"[red]Error checking match: {e}[/red]")
         raise HTTPException(status_code=500, detail=f"Error checking match: {str(e)}")
+
+
+# Simple in-memory cache for diff analysis results
+_diff_cache: dict[str, tuple[DiffAnalysisResponse, float]] = {}
+_CACHE_TTL_SECONDS = 600  # 10 minutes
+
+
+def _get_cache_key(prompt_content: str, code_content: str, mode: str) -> str:
+    """Generate cache key from content hash."""
+    import hashlib
+    content = f"{prompt_content}|||{code_content}|||{mode}"
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _get_cached_result(key: str) -> Optional[DiffAnalysisResponse]:
+    """Get cached result if not expired."""
+    import time
+    if key in _diff_cache:
+        result, timestamp = _diff_cache[key]
+        if time.time() - timestamp < _CACHE_TTL_SECONDS:
+            # Return cached result with cached flag set
+            return DiffAnalysisResponse(
+                result=result.result,
+                cost=result.cost,
+                model=result.model,
+                analysisMode=result.analysisMode,
+                cached=True,
+            )
+        else:
+            del _diff_cache[key]
+    return None
+
+
+def _cache_result(key: str, result: DiffAnalysisResponse) -> None:
+    """Cache a result."""
+    import time
+    _diff_cache[key] = (result, time.time())
+
+
+@router.post("/diff-analysis", response_model=DiffAnalysisResponse)
+async def analyze_diff(request: DiffAnalysisRequest):
+    """
+    Perform detailed diff analysis between prompt requirements and code.
+
+    Returns semantic sections with line-level mappings, showing how each
+    requirement in the prompt corresponds to code implementation.
+
+    Supports two modes:
+    - 'quick': Faster, lower-cost analysis with basic section mapping
+    - 'detailed': Full line-level mapping with higher accuracy
+
+    Results are cached for 10 minutes based on content hash.
+    """
+    try:
+        from pdd.llm_invoke import llm_invoke
+        import json
+
+        # Check cache first
+        cache_key = _get_cache_key(
+            request.prompt_content,
+            request.code_content,
+            request.mode,
+        )
+        cached = _get_cached_result(cache_key)
+        if cached:
+            return cached
+
+        # Adjust strength based on mode
+        strength = request.strength
+        if request.mode == "quick":
+            strength = min(strength, 0.25)
+
+        # Build the LLM prompt for diff analysis
+        diff_prompt = """You are an expert code analyst. Analyze how well the following code implements the requirements in the prompt.
+
+PROMPT/REQUIREMENTS (with line numbers):
+```
+{prompt_numbered}
+```
+
+CODE (with line numbers):
+```
+{code_numbered}
+```
+
+Perform a detailed analysis and respond with a JSON object containing:
+
+1. "overallScore": integer 0-100, overall match quality
+2. "summary": 1-2 sentence summary
+3. "sections": array of semantic sections, each with:
+   - "id": unique string like "sec_1", "sec_2"
+   - "promptRange": {{"startLine": int, "endLine": int, "text": "excerpt"}}
+   - "codeRanges": array of {{"startLine": int, "endLine": int, "text": "excerpt"}} (can be empty if missing)
+   - "status": one of "matched", "partial", "missing", "extra"
+   - "matchConfidence": 0-100
+   - "semanticLabel": descriptive label like "Error Handling", "Input Validation"
+   - "notes": optional explanation
+4. "lineMappings": array of line-level mappings:
+   - "promptLine": int
+   - "codeLines": array of ints (corresponding code lines, can be empty)
+   - "matchType": one of "exact", "semantic", "partial", "none"
+5. "stats": {{
+   "totalRequirements": int,
+   "matchedRequirements": int,
+   "missingRequirements": int,
+   "extraCodeSections": int,
+   "coveragePercent": float
+}}
+6. "missing": array of strings describing missing requirements
+7. "extra": array of strings describing extra code features
+8. "suggestions": array of improvement suggestions
+
+For sections:
+- Parse the prompt into logical requirement sections
+- Find corresponding code implementations
+- Mark as "missing" if no code implements the requirement
+- Mark as "extra" for code sections not in the prompt
+- Mark as "partial" if implementation is incomplete
+
+For lineMappings:
+- Map each prompt line to relevant code lines
+- Use "exact" for direct implementations
+- Use "semantic" for conceptual matches
+- Use "none" for unmatched lines"""
+
+        # Add line numbers to content
+        prompt_lines = request.prompt_content.split('\n')
+        code_lines = request.code_content.split('\n')
+
+        prompt_numbered = '\n'.join(
+            f"{i+1}: {line}" for i, line in enumerate(prompt_lines)
+        )
+        code_numbered = '\n'.join(
+            f"{i+1}: {line}" for i, line in enumerate(code_lines)
+        )
+
+        # Define the output schema for structured output
+        output_schema = {
+            "type": "object",
+            "properties": {
+                "overallScore": {"type": "integer", "minimum": 0, "maximum": 100},
+                "summary": {"type": "string"},
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "promptRange": {
+                                "type": "object",
+                                "properties": {
+                                    "startLine": {"type": "integer"},
+                                    "endLine": {"type": "integer"},
+                                    "text": {"type": "string"}
+                                },
+                                "required": ["startLine", "endLine", "text"]
+                            },
+                            "codeRanges": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "startLine": {"type": "integer"},
+                                        "endLine": {"type": "integer"},
+                                        "text": {"type": "string"}
+                                    },
+                                    "required": ["startLine", "endLine", "text"]
+                                }
+                            },
+                            "status": {"type": "string", "enum": ["matched", "partial", "missing", "extra"]},
+                            "matchConfidence": {"type": "integer", "minimum": 0, "maximum": 100},
+                            "semanticLabel": {"type": "string"},
+                            "notes": {"type": "string"}
+                        },
+                        "required": ["id", "promptRange", "status", "matchConfidence", "semanticLabel"]
+                    }
+                },
+                "lineMappings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "promptLine": {"type": "integer"},
+                            "codeLines": {"type": "array", "items": {"type": "integer"}},
+                            "matchType": {"type": "string", "enum": ["exact", "semantic", "partial", "none"]}
+                        },
+                        "required": ["promptLine", "codeLines", "matchType"]
+                    }
+                },
+                "stats": {
+                    "type": "object",
+                    "properties": {
+                        "totalRequirements": {"type": "integer"},
+                        "matchedRequirements": {"type": "integer"},
+                        "missingRequirements": {"type": "integer"},
+                        "extraCodeSections": {"type": "integer"},
+                        "coveragePercent": {"type": "number"}
+                    },
+                    "required": ["totalRequirements", "matchedRequirements", "missingRequirements", "extraCodeSections", "coveragePercent"]
+                },
+                "missing": {"type": "array", "items": {"type": "string"}},
+                "extra": {"type": "array", "items": {"type": "string"}},
+                "suggestions": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["overallScore", "summary", "sections", "stats"]
+        }
+
+        result = llm_invoke(
+            prompt=diff_prompt,
+            input_json={
+                "prompt_numbered": prompt_numbered,
+                "code_numbered": code_numbered,
+            },
+            strength=strength,
+            temperature=0.1,
+            output_schema=output_schema,
+        )
+
+        # Parse result
+        llm_result = result.get('result', {})
+        if isinstance(llm_result, str):
+            llm_result = json.loads(llm_result)
+
+        # Build sections
+        sections = []
+        for sec in llm_result.get('sections', []):
+            prompt_range = sec.get('promptRange', {})
+            code_ranges = [
+                CodeRange(
+                    startLine=cr.get('startLine', 1),
+                    endLine=cr.get('endLine', 1),
+                    text=cr.get('text', ''),
+                )
+                for cr in sec.get('codeRanges', [])
+            ]
+            sections.append(DiffSection(
+                id=sec.get('id', ''),
+                promptRange=PromptRange(
+                    startLine=prompt_range.get('startLine', 1),
+                    endLine=prompt_range.get('endLine', 1),
+                    text=prompt_range.get('text', ''),
+                ),
+                codeRanges=code_ranges,
+                status=sec.get('status', 'missing'),
+                matchConfidence=sec.get('matchConfidence', 0),
+                semanticLabel=sec.get('semanticLabel', ''),
+                notes=sec.get('notes'),
+            ))
+
+        # Build line mappings
+        line_mappings = []
+        for lm in llm_result.get('lineMappings', []):
+            line_mappings.append(LineMapping(
+                promptLine=lm.get('promptLine', 1),
+                codeLines=lm.get('codeLines', []),
+                matchType=lm.get('matchType', 'none'),
+            ))
+
+        # Build stats
+        stats_data = llm_result.get('stats', {})
+        stats = DiffStats(
+            totalRequirements=stats_data.get('totalRequirements', 0),
+            matchedRequirements=stats_data.get('matchedRequirements', 0),
+            missingRequirements=stats_data.get('missingRequirements', 0),
+            extraCodeSections=stats_data.get('extraCodeSections', 0),
+            coveragePercent=stats_data.get('coveragePercent', 0.0),
+        )
+
+        # Build response
+        response = DiffAnalysisResponse(
+            result=DiffAnalysisResult(
+                overallScore=llm_result.get('overallScore', 0),
+                summary=llm_result.get('summary', ''),
+                sections=sections,
+                lineMappings=line_mappings,
+                stats=stats,
+                missing=llm_result.get('missing', []),
+                extra=llm_result.get('extra', []),
+                suggestions=llm_result.get('suggestions', []),
+            ),
+            cost=result.get('cost', 0.0),
+            model=result.get('model_name', 'unknown'),
+            analysisMode=request.mode,
+            cached=False,
+        )
+
+        # Cache the result
+        _cache_result(cache_key, response)
+
+        return response
+
+    except Exception as e:
+        console.print(f"[red]Error analyzing diff: {e}[/red]")
+        raise HTTPException(status_code=500, detail=f"Error analyzing diff: {str(e)}")
