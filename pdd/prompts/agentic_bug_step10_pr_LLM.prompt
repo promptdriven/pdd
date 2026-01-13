@@ -1,19 +1,8 @@
-<pdd-reason>Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.</pdd-reason>
-<pdd-interface>
-{
-  "type": "command",
-  "command": {
-    "name": "agentic_bug_step10",
-    "description": "Generate draft PR with failing tests and link to GitHub issue"
-  }
-}
-</pdd-interface>
-
 % You are an expert software engineer investigating a bug report. Your task is to create a draft pull request with the failing tests and link it to the issue.
 
 % Context
 
-You are working on step 10 of 11 (final step) in an agentic bug investigation workflow. Previous steps have generated and verified both unit tests and E2E tests that detect the bug.
+You are working on step 10 of 10 (final step) in an agentic bug investigation workflow. Previous steps have generated and verified both unit tests and E2E tests that detect the bug.
 
 % Inputs
 
@@ -47,10 +36,6 @@ You are working on step 10 of 11 (final step) in an agentic bug investigation wo
 {step5_output}
 </step5_output>
 
-<step5_5_output>
-{step5_5_output}
-</step5_5_output>
-
 <step6_output>
 {step6_output}
 </step6_output>
@@ -82,15 +67,13 @@ Do NOT create a new branch - just stage, commit, and push.
 
 1. **Prepare the commit**
    - You are already on branch `fix/issue-{issue_number}` in an isolated worktree
-   - **CRITICAL: Stage ONLY the files listed in `files_to_stage` above**
-   - This includes test files from Steps 7 and 9, AND any prompt files fixed in Step 5.5
+   - **CRITICAL: Stage ONLY the test file(s) created in Steps 7 and 9**
    - Get the exact file paths from:
-     - Step 5.5's `PROMPT_FIXED:` output (prompt files)
      - Step 7's `FILES_CREATED:` or `FILES_MODIFIED:` output (unit tests)
      - Step 9's `E2E_FILES_CREATED:` or `E2E_FILES_MODIFIED:` output (E2E tests)
    - Stage each file individually: `git add <exact_file_path>`
    - **DO NOT use `git add .` or `git add -A`** - these will stage unrelated files and pollute the PR
-   - Verify only the intended files are staged: `git status --short`
+   - Verify only the intended files are staged: `git status --short` (should show only the test file(s))
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
@@ -102,8 +85,14 @@ Do NOT create a new branch - just stage, commit, and push.
    - Comment on the issue with PR link and next steps for the fix
 
 4. **Include PDD fix command**
-   - Include the agentic `pdd fix` command using the GitHub issue URL
-   - The agentic fix command automatically detects prompt files, code files, and test files from the issue context
+   - Extract code file path from Step 5's `**Location:**` field (strip the `:line_number` suffix)
+   - Use test file path from Step 7's `FILES_CREATED:` or test file section
+   - Search repo for matching prompt file: `find . -name "*.prompt" -type f`
+   - Derive module name from code file (e.g., `pdd/foo.py` -> `foo`)
+   - Use verification program: `context/{{module_name}}_example.py`
+   - Use error log path: `fix-issue-{issue_number}.log` for the fix command output
+   - Include a ready-to-run `pdd fix` command in your GitHub comment
+   - If no prompt file or verification program exists, include a note that they must be created first
 
 % PR Creation Command
 
@@ -116,13 +105,9 @@ Adds failing tests that detect the bug reported in #{issue_number}.
 - Unit test: `{{unit_test_file_path}}`
 - E2E test: `{{e2e_test_file_path}}` (if applicable)
 
-## Prompt Files
-- Prompt file fixed in Step 5.5: `{{prompt_file_path}}` (if applicable)
-
 ## What This PR Contains
 - Failing unit test that reproduces the reported bug
 - Failing E2E test that verifies the bug at integration level (if applicable)
-- Prompt file fixes from Step 5.5 (if applicable)
 - Tests are verified to fail on current code and will pass once the bug is fixed
 
 ## Root Cause
@@ -165,7 +150,6 @@ Your comment should follow this format:
 ### What's Included
 - Failing unit test at `{{unit_test_file_path}}`
 - Failing E2E test at `{{e2e_test_file_path}}` (if applicable)
-- Prompt file fix from Step 5.5: `{{prompt_file_path}}` (if applicable)
 - Commits: {{commit_count}}
 
 ### Next Steps for Maintainers
@@ -180,10 +164,9 @@ Your comment should follow this format:
 To auto-fix this bug using PDD:
 
 ```bash
-pdd fix {issue_url}
+cd {{worktree_path}}
+pdd --force fix --loop --max-attempts 5 --verification-program context/{{module_name}}_example.py {{prompt_file}} {{code_file_path}} {{test_file_path}} fix-issue-{{issue_number}}.log
 ```
-
-> **Tip:** Use `--protect-tests` if the tests are known to be correct, or `--max-cycles N` to limit fix attempts.
 
 ---
 *Investigation complete. A draft PR with failing tests has been created and linked to this issue.*
