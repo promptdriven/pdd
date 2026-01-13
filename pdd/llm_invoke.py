@@ -1904,6 +1904,8 @@ def llm_invoke(
                                 "strict": True
                             }
                         }
+                        # Add additionalProperties: false for strict mode (required by OpenAI)
+                        response_format["json_schema"]["schema"]["additionalProperties"] = False
                     else: # output_schema is set
                         if verbose:
                             logger.info(f"[INFO] Requesting structured output (JSON Schema) for {model_name_litellm}")
@@ -1920,7 +1922,9 @@ def llm_invoke(
                                 "strict": False
                             }
                         }
-                    
+                        # Add additionalProperties: false for strict mode (required by OpenAI)
+                        response_format["json_schema"]["schema"]["additionalProperties"] = False
+
                     litellm_kwargs["response_format"] = response_format
 
                     # LM Studio requires "json_schema" format, not "json_object"
