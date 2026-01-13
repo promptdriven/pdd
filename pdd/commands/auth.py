@@ -91,26 +91,41 @@ def auth_group():
 
 
 @auth_group.command("login")
-def login():
+@click.option(
+    "--browser/--no-browser",
+    default=None,
+    help="Control browser opening (auto-detect if not specified)"
+)
+def login(browser: Optional[bool]):
     """Authenticate with PDD Cloud via GitHub."""
-    
+
     api_key = _load_firebase_api_key()
     if not api_key:
         console.print("[red]Error: NEXT_PUBLIC_FIREBASE_API_KEY not found.[/red]")
         console.print("Please set it in your environment or .env file.")
         sys.exit(1)
-        
+
     client_id = _get_client_id()
     app_name = "PDD CLI"
-    
+
     async def run_login():
         try:
-            # Note: The underlying get_jwt_token handles the device flow interaction.
-            # If it supports a no_browser flag in the future, it should be passed here.
+            # Import remote session detection
+            from ..core.remote_session import should_skip_browser
+
+            # Determine if browser should be skipped
+            skip_browser, reason = should_skip_browser(explicit_flag=browser)
+
+            if skip_browser:
+                console.print(f"[yellow]Note: {reason}[/yellow]")
+                console.print("[yellow]Please open the authentication URL manually in a browser.[/yellow]")
+
+            # Pass no_browser parameter to get_jwt_token
             token = await get_jwt_token(
                 firebase_api_key=api_key,
                 github_client_id=client_id,
-                app_name=app_name
+                app_name=app_name,
+                no_browser=skip_browser
             )
             
             if not token:

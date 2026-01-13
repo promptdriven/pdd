@@ -89,7 +89,8 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
     setCopied(false);
 
     try {
-      const response: LoginResponse = await api.startLogin();
+      // Frontend can always open browsers, so pass no_browser: false
+      const response: LoginResponse = await api.startLogin({ no_browser: false });
 
       if (!response.success || !response.user_code || !response.verification_uri || !response.poll_id) {
         setLoginState({

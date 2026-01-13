@@ -425,9 +425,10 @@ class PDDApiClient {
     });
   }
 
-  async startLogin(): Promise<LoginResponse> {
+  async startLogin(options?: { no_browser?: boolean }): Promise<LoginResponse> {
     return this.request<LoginResponse>('/api/v1/auth/login', {
       method: 'POST',
+      body: JSON.stringify(options || {}),
     });
   }
 

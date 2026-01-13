@@ -416,7 +416,12 @@ class FirebaseAuthenticator:
         """
         return bool(id_token)
 
-async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: str = "my-cli-app") -> str:
+async def get_jwt_token(
+    firebase_api_key: str,
+    github_client_id: str,
+    app_name: str = "my-cli-app",
+    no_browser: bool = False
+) -> str:
     """
     Get a Firebase ID token using GitHub's Device Flow authentication.
 
@@ -424,6 +429,7 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
         firebase_api_key: Firebase Web API key
         github_client_id: OAuth client ID for GitHub app
         app_name: Unique name for your CLI application
+        no_browser: If True, skip automatic browser opening (for remote/SSH sessions)
 
     Returns:
         str: A valid Firebase ID token
@@ -468,7 +474,18 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
     print(f"To authenticate, visit: {device_code_response['verification_uri']}")
     print(f"Enter code: {device_code_response['user_code']}")
     sys.stdout.flush()  # Ensure visibility in piped contexts
-    webbrowser.open(device_code_response['verification_uri'])  # Auto-open browser
+
+    # Open browser only if not explicitly disabled
+    if not no_browser:
+        try:
+            webbrowser.open(device_code_response['verification_uri'])
+            print("Opening browser for authentication...")
+        except Exception as e:
+            print(f"Note: Could not open browser: {e}")
+            print("Please open the URL manually in your browser.")
+    else:
+        print("Browser opening disabled. Please open the URL manually in your browser.")
+
     print("Waiting for authentication...")
     sys.stdout.flush()
 
