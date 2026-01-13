@@ -64,126 +64,32 @@ E2E tests differ from unit tests:
 - **Unit tests** mock dependencies and test individual functions in isolation
 - **E2E tests** exercise the full system path that a user or API consumer would take
 
-% CRITICAL: Discover E2E Test Environment First
-
-Before writing any E2E test, you MUST understand the existing test infrastructure. First, identify the primary language of the repository, then search for language-appropriate configuration files.
-
-1. **Identify Repository Language**
-   - Check file extensions: `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.rb`, `.cs`, etc.
-   - Read `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `pom.xml`, `Gemfile` for dependencies
-
-2. **Test Configuration Files (by language)**
-
-   **Python:**
-   - `pytest.ini`, `pyproject.toml`, `setup.cfg` - test runner settings
-   - `conftest.py` files (especially in `tests/`, `tests/e2e/`, `tests/integration/`) - shared fixtures
-   - `tox.ini`, `noxfile.py` - test environment definitions
-
-   **JavaScript/TypeScript:**
-   - `jest.config.js`, `jest.config.ts` - Jest configuration
-   - `vitest.config.js`, `vitest.config.ts` - Vitest configuration
-   - `cypress.config.js`, `playwright.config.ts` - E2E framework configs
-   - `__tests__/`, `*.test.js`, `*.spec.ts` patterns
-
-   **Go:**
-   - `go.mod` - module definition
-   - `*_test.go` files - test files with TestXxx functions
-   - `testdata/` directories - test fixtures
-
-   **Rust:**
-   - `Cargo.toml` - dependencies and test settings
-   - `tests/` directory - integration tests
-   - `#[cfg(test)]` modules for unit tests
-
-   **Java:**
-   - `pom.xml`, `build.gradle` - Maven/Gradle configs
-   - `src/test/java/` - test sources
-   - JUnit, TestNG configurations
-
-   **Ruby:**
-   - `Gemfile` - dependencies (rspec, minitest, capybara)
-   - `spec/`, `test/` directories
-   - `spec_helper.rb`, `rails_helper.rb` - RSpec setup
-
-3. **Environment Variables**
-   - `.env`, `.env.example`, `.env.test`, `.env.local` - required environment variables
-   - `README.md`, `CONTRIBUTING.md` - setup documentation
-   - `.github/workflows/*.yml`, `.gitlab-ci.yml`, `Makefile` - CI configs show how tests are run
-   - Search for env var access patterns in existing tests:
-     - Python: `os.environ`, `os.getenv`, `dotenv`
-     - JavaScript: `process.env`, `dotenv`
-     - Go: `os.Getenv`
-     - Rust: `std::env::var`
-     - Java: `System.getenv`
-
-4. **Authentication & Credentials**
-   - `*credentials*.json`, `*auth*.json`, `*service_account*.json` patterns
-   - Test fixtures that set up auth (look for setup/beforeAll/beforeEach functions)
-   - Mock auth utilities or test user credentials
-   - Environment variables for API keys, tokens, secrets
-
-5. **Database & External Services**
-   - Docker Compose files (`docker-compose*.yml`) for test services
-   - Database fixtures, migration scripts for test DBs
-   - Mock servers or test doubles for external APIs
-   - Emulator configurations (Firebase, GCP, AWS LocalStack, etc.)
-
-6. **Existing E2E Test Patterns**
-   - Find files with `e2e`, `integration`, `functional`, `acceptance` in name
-   - Study their imports, fixtures, setup/teardown patterns
-   - Note how they handle auth, env vars, and external services
-   - Copy their test structure and patterns exactly
-
-**If you cannot find sufficient E2E infrastructure:**
-- Check if E2E tests require manual setup steps documented elsewhere
-- Output `E2E_SKIP: E2E infrastructure not found - manual setup required` with details
-- Suggest what infrastructure would be needed in your GitHub comment
-
 % Your Task
 
-1. **Discover the E2E test environment** (REQUIRED FIRST STEP)
-   - Search for and read the configuration files listed above
-   - Identify required environment variables and how to set them
-   - Find existing E2E test fixtures and patterns to reuse
-   - Understand authentication requirements and test credentials
-   - If critical infrastructure is missing, output `E2E_SKIP` with explanation
-
-2. **Analyze the bug's user-facing impact**
+1. **Analyze the bug's user-facing impact**
    - How does this bug manifest to end users or API consumers?
    - What user action or API call triggers the bug?
    - What is the expected vs actual behavior from the user's perspective?
 
-3. **Identify the E2E test approach**
+2. **Identify the E2E test approach**
    - Determine what type of E2E test is appropriate:
-     - **CLI tests**: If the bug affects command-line behavior
-       - Python: subprocess, Click's CliRunner
-       - JavaScript: execa, child_process
-       - Go: os/exec, testing with command args
-       - Rust: std::process::Command, assert_cmd crate
-     - **API tests**: If the bug affects an API endpoint
-       - Python: requests, httpx, FastAPI TestClient
-       - JavaScript: supertest, axios, fetch
-       - Go: net/http/httptest
-       - Rust: reqwest, actix-web test utilities
-     - **Browser/UI tests**: If the bug affects web UI
-       - Playwright, Cypress, Selenium (cross-language)
-       - Puppeteer (JavaScript)
+     - **CLI tests**: If the bug affects command-line behavior (use subprocess or Click's CliRunner)
+     - **API tests**: If the bug affects an API endpoint (use requests or test client)
      - **Integration tests**: If the bug affects data flow between components
-   - Reuse existing E2E test patterns, fixtures, and utilities from the repository
-   - Use the same test runner and framework as existing E2E tests
+   - Look for existing E2E test patterns in the repository:
+     - Check `tests/` for files with `e2e`, `integration`, or `functional` in the name
+     - Look for tests using `CliRunner`, `TestClient`, or subprocess calls
 
-4. **Generate the E2E test**
+3. **Generate the E2E test**
    - Create a test that exercises the full code path from user input to output
-   - Import and use existing fixtures for auth, database, environment setup
    - Do NOT mock the buggy component - the E2E test should hit the real code
    - The test should fail on the current buggy code
    - Include clear assertions about expected behavior
-   - Follow the repository's existing E2E test patterns exactly
+   - Follow the repository's existing E2E test patterns if they exist
 
-5. **Write and run the E2E test file**
-   - Place the E2E test in the same location as existing E2E tests
-   - Use the same naming conventions as existing E2E tests
-   - Ensure required environment variables are set before running
+4. **Write and run the E2E test file**
+   - Place the E2E test in an appropriate location (e.g., `tests/e2e/` or alongside existing E2E tests)
+   - Use a descriptive filename like `test_e2e_issue_{issue_number}.py` or match existing naming conventions
    - Run the test to verify it fails for the right reason (the bug, not setup issues)
 
 % Critical: E2E Test Requirements
@@ -225,26 +131,17 @@ Your comment should follow this format:
 ```markdown
 ## Step 9: E2E Test
 
-### Environment Discovery
-- **Repository language:** [Python / JavaScript / TypeScript / Go / Rust / Java / Ruby / etc.]
-- **Test framework:** [pytest / Jest / Vitest / Playwright / go test / cargo test / JUnit / RSpec / etc.]
-- **Existing E2E tests found:** [Yes/No - list files if found]
-- **Test configuration:** [config file name and location]
-- **Fixtures/helpers used:** [List shared test utilities discovered]
-- **Environment variables required:** [List any env vars needed]
-- **Auth/credentials:** [How auth is handled - fixtures, env vars, mock]
-
 ### E2E Test File
 `{{e2e_test_file_path}}`
 
 ### Test Type
-[CLI / API / Browser / Integration]
+[CLI / API / Integration]
 
 ### What This Test Verifies
 [Brief explanation of the user-facing behavior being tested]
 
 ### Test Code
-```{{language}}
+```python
 {{generated_e2e_test_code}}
 ```
 
@@ -266,12 +163,7 @@ After writing files, output this line exactly (for automated tracking):
 ```
 E2E_FILES_CREATED: <comma-separated list of file paths you created>
 ```
-Examples by language:
-- Python: `E2E_FILES_CREATED: tests/e2e/test_e2e_issue_123.py`
-- JavaScript: `E2E_FILES_CREATED: tests/e2e/issue-123.e2e.test.js`
-- TypeScript: `E2E_FILES_CREATED: tests/e2e/issue-123.e2e.spec.ts`
-- Go: `E2E_FILES_CREATED: tests/e2e/issue_123_test.go`
-- Rust: `E2E_FILES_CREATED: tests/e2e_issue_123.rs`
+Example: `E2E_FILES_CREATED: tests/e2e/test_e2e_issue_123.py`
 
 If you modified existing files instead of creating new ones:
 ```
