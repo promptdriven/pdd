@@ -61,6 +61,31 @@ class CloudConfig:
     """Centralized cloud configuration for all PDD commands."""
 
     @staticmethod
+    def _ensure_default_env() -> None:
+        """Default PDD_ENV for CLI usage when unset."""
+        if os.environ.get("PDD_ENV"):
+            return
+
+        # Local/emulator signals should keep PDD_ENV local.
+        if (os.environ.get("FUNCTIONS_EMULATOR") or
+                os.environ.get("FIREBASE_AUTH_EMULATOR_HOST") or
+                os.environ.get("FIREBASE_EMULATOR_HUB")):
+            os.environ["PDD_ENV"] = "local"
+            return
+
+        cloud_url = (os.environ.get(PDD_CLOUD_URL_ENV) or "").lower()
+        if cloud_url:
+            if any(host in cloud_url for host in ("localhost", "127.0.0.1", "0.0.0.0")):
+                os.environ["PDD_ENV"] = "local"
+                return
+            if "prompt-driven-development-stg" in cloud_url or "staging" in cloud_url:
+                os.environ["PDD_ENV"] = "staging"
+                return
+
+        # Default to production for typical CLI usage.
+        os.environ["PDD_ENV"] = "prod"
+
+    @staticmethod
     def get_base_url() -> str:
         """Get cloud base URL, allowing override via PDD_CLOUD_URL.
 
@@ -116,6 +141,9 @@ class CloudConfig:
         Note:
             Callers should handle None return by falling back to local execution.
         """
+        # Default env to prod for typical CLI usage (unless emulator/custom URL says otherwise).
+        CloudConfig._ensure_default_env()
+
         # Check for pre-injected token (testing/CI)
         injected_token = os.environ.get(PDD_JWT_TOKEN_ENV)
         if injected_token:
