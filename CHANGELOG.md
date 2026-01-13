@@ -1,3 +1,23 @@
+## v0.0.111 (2026-01-12)
+
+### Feat
+
+- Add bidirectional diff analysis for prompt-code comparison
+- Add Task Queue panel and Architecture graph editing for PDD Connect
+- Add prompt-code diff visualization feature for PDD Connect
+- Add pdd auth CLI command for PDD Cloud authentication
+
+### Fix
+
+- Address copilot review comments
+- Use local LLM for server match/diff endpoints
+- resolve auth status error message and keyring service name mismatch
+- pass context to pdd sync from pdd connect frontend
+
+### Refactor
+
+- Extract diff analysis LLM prompt to separate file
+
 ## v0.0.110 (2026-01-11)
 
 ### Feat
