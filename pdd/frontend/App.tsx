@@ -543,7 +543,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-surface-950">
       {/* Modern responsive header */}
       <header className="glass sticky top-0 z-40 border-b border-surface-700/50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12">
           <div className="flex items-center justify-between h-16">
             {/* Logo - responsive sizing */}
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
@@ -686,7 +686,7 @@ const App: React.FC = () => {
       )}
 
       {/* Main content - responsive padding and max-width */}
-      <main className={`mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 pb-16 sm:pb-20 ${view === 'architecture' ? 'max-w-none' : 'max-w-7xl'}`}>
+      <main className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-4 sm:py-6 pb-16 sm:pb-20">
         {!serverConnected && (
           <div className="mb-4 sm:mb-6 p-3 sm:p-4 glass-light rounded-xl border border-yellow-500/20 animate-fade-in">
             <div className="flex items-start gap-3">
@@ -738,7 +738,7 @@ const App: React.FC = () => {
             <ProjectSettings />
           </div>
         ) : (
-          <div className="max-w-4xl mx-auto animate-fade-in">
+          <div className="max-w-6xl mx-auto animate-fade-in">
             {/* Header */}
             <div className="mb-6 text-center sm:text-left">
               <h2 className="text-xl sm:text-2xl font-semibold text-white mb-2 flex items-center justify-center sm:justify-start gap-2">
@@ -921,7 +921,7 @@ const App: React.FC = () => {
 
       {/* Modern footer - responsive */}
       <footer className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-surface-700/50 px-4 sm:px-6 py-2.5 sm:py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 text-xs text-surface-500">
+        <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 flex items-center justify-center gap-2 text-xs text-surface-500">
           <span className="w-4 h-4 rounded bg-surface-800/80 flex items-center justify-center p-0.5">
             <svg viewBox="0 0 1024 1024" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
               <g stroke="#00e3ff" strokeWidth="70" strokeLinecap="round" strokeLinejoin="round" fill="none">
