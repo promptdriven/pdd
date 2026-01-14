@@ -20,6 +20,9 @@ from pdd.architecture_sync import (
     ARCHITECTURE_JSON_PATH,
     sync_all_prompts_to_architecture,
     update_architecture_from_prompt,
+    get_architecture_entry_for_prompt,
+    generate_tags_from_architecture,
+    has_pdd_tags,
 )
 
 
@@ -85,6 +88,22 @@ class SyncResult(BaseModel):
     results: List[Dict[str, Any]]
     validation: ValidationResult
     errors: List[str] = Field(default_factory=list)
+
+
+class GenerateTagsRequest(BaseModel):
+    """Request body for generate-tags-for-prompt operation."""
+
+    prompt_filename: str  # e.g., "llm_invoke_python.prompt"
+
+
+class GenerateTagsResult(BaseModel):
+    """Result of generate-tags-for-prompt operation."""
+
+    success: bool
+    tags: Optional[str] = None  # Generated XML tags or None if not found
+    has_existing_tags: bool = False  # True if prompt already has PDD tags
+    architecture_entry: Optional[Dict[str, Any]] = None  # The full architecture entry
+    error: Optional[str] = None
 
 
 def _detect_circular_dependencies(modules: List[ArchitectureModule]) -> List[List[str]]:
@@ -363,4 +382,70 @@ async def sync_from_prompts(request: SyncRequest) -> SyncResult:
             results=[],
             validation=ValidationResult(valid=True, errors=[], warnings=[]),
             errors=[f"Unexpected error: {str(e)}"]
+        )
+
+
+@router.post("/generate-tags-for-prompt", response_model=GenerateTagsResult)
+async def generate_tags_for_prompt(request: GenerateTagsRequest) -> GenerateTagsResult:
+    """
+    Generate PDD metadata tags for a prompt from architecture.json.
+
+    This is the reverse direction of sync-from-prompts: it reads the architecture.json
+    entry for a prompt and generates XML tags (<pdd-reason>, <pdd-interface>,
+    <pdd-dependency>) that can be injected into the prompt file.
+
+    Request body:
+        {
+            "prompt_filename": "llm_invoke_python.prompt"
+        }
+
+    Returns:
+        {
+            "success": bool,
+            "tags": "<pdd-reason>...</pdd-reason>\\n<pdd-interface>...</pdd-interface>\\n...",
+            "has_existing_tags": false,  // True if prompt already has PDD tags
+            "architecture_entry": {...},  // The full architecture entry (for preview)
+            "error": "Error message if failed"
+        }
+    """
+    try:
+        # Get architecture entry for this prompt
+        entry = get_architecture_entry_for_prompt(request.prompt_filename)
+
+        if entry is None:
+            return GenerateTagsResult(
+                success=False,
+                tags=None,
+                has_existing_tags=False,
+                architecture_entry=None,
+                error=f"No architecture entry found for '{request.prompt_filename}'"
+            )
+
+        # Check if the prompt file already has PDD tags
+        prompts_dir = Path.cwd() / "prompts"
+        prompt_path = prompts_dir / request.prompt_filename
+        existing_tags = False
+
+        if prompt_path.exists():
+            prompt_content = prompt_path.read_text(encoding='utf-8')
+            existing_tags = has_pdd_tags(prompt_content)
+
+        # Generate tags from architecture entry
+        tags = generate_tags_from_architecture(entry)
+
+        return GenerateTagsResult(
+            success=True,
+            tags=tags if tags else None,
+            has_existing_tags=existing_tags,
+            architecture_entry=entry,
+            error=None
+        )
+
+    except Exception as e:
+        return GenerateTagsResult(
+            success=False,
+            tags=None,
+            has_existing_tags=False,
+            architecture_entry=None,
+            error=f"Error generating tags: {str(e)}"
         )
