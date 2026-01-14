@@ -1,0 +1,9 @@
+contexts:
+  default:
+    paths:
+      - "**"
+    defaults:
+      generate_output_path: src/
+      test_output_path: tests/
+      example_output_path: examples/
+      default_language: python
