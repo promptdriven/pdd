@@ -1,121 +1,61 @@
-import sys
-import os
-import pytest
-from z3 import Solver, String, StringVal, Length
-
-# Add the src directory to the path so we can import the module
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-
-# Assuming hello is defined in a module named hello in the src directory
-# from hello import hello
-
-def hello():
-    """Simple function that prints 'hello' to stdout."""
-    print("hello")
-
-def test_hello_output(capsys):
-    """
-    Verify that the hello function prints 'hello' to stdout.
-    """
-    # Call the function under test
-    hello()
-    
-    # Capture the output
-    captured = capsys.readouterr()
-    
-    # Assert the output matches the requirement (including the newline added by print)
-    assert captured.out == "hello\n"
-
-def test_hello_z3_verification():
-    """
-    A formal verification-style test using Z3 to verify properties of the expected output string.
-    While we cannot directly verify the side-effect of 'print' inside Z3, we can verify
-    properties of the string literal that the function is specified to produce.
-    """
-    s = Solver()
-    
-    # Define the expected output string as a Z3 string variable
-    expected_output = String('expected_output')
-    
-    # Constraint: The output must be exactly "hello"
-    s.add(expected_output == StringVal("hello"))
-    
-    # Check satisfiability
-    assert str(s.check()) == 'sat'
-    
-    # Get the model
-    m = s.model()
-    result_str = m[expected_output].as_string()
-    assert result_str == "hello"
-    
-    # Verify the length property formally
-    # We prove that if the string is "hello", its length must be 5
-    s_prove = Solver()
-    output_str = StringVal("hello")
-    # We want to prove Length(output_str) == 5.
-    # To prove P, we check if Not(P) is unsatisfiable.
-    s_prove.add(Length(output_str) != 5)
-    
-    # If unsat, it means Length is indeed 5
-    assert str(s_prove.check()) == 'unsat'
+# TEST PLAN
+# -----------------------------------------------------------------------------
+# 1. Unit Tests:
+#    The function `hello()` is a simple side-effect function that prints to stdout.
+#    Since it has no return value and no complex logic, unit tests capturing stdout
+#    are the most appropriate way to verify its correctness.
+#
+#    Test Cases:
+#    - Verify that calling `hello()` prints exactly "hello\n" to stdout.
+#    - Verify that the function returns None (implicit return).
+#
+# 2. Z3 Formal Verification:
+#    Z3 is typically used for verifying logical constraints, mathematical properties,
+#    or state transitions. The `hello` function is purely imperative (I/O) with no
+#    internal logic, branching, or mathematical computation.
+#    Therefore, Z3 is not applicable or useful for this specific function.
+#    We will include a placeholder test to acknowledge this analysis.
+# -----------------------------------------------------------------------------
 
 import sys
 import os
 import pytest
-from z3 import Solver, String, StringVal, Length
+from io import StringIO
 
-# Add the src directory to the path so we can import the module
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+# Add the directory containing the module to the Python path to ensure imports work correctly
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Assuming hello is defined in a module named hello in the src directory
-# from hello import hello
-
-def hello():
-    """Simple function that prints 'hello' to stdout."""
-    print("hello")
+from hello import hello
 
 def test_hello_output(capsys):
     """
-    Verify that the hello function prints 'hello' to stdout.
+    Verifies that the hello function prints 'hello' to the standard output.
+    Using capsys fixture from pytest to capture stdout.
     """
-    # Call the function under test
+    # Act
     hello()
     
-    # Capture the output
+    # Assert
     captured = capsys.readouterr()
-    
-    # Assert the output matches the requirement (including the newline added by print)
     assert captured.out == "hello\n"
+    assert captured.err == ""
 
-def test_hello_z3_verification():
+def test_hello_return_value():
     """
-    A formal verification-style test using Z3 to verify properties of the expected output string.
-    While we cannot directly verify the side-effect of 'print' inside Z3, we can verify
-    properties of the string literal that the function is specified to produce.
+    Verifies that the hello function returns None.
     """
-    s = Solver()
+    # Act
+    result = hello()
     
-    # Define the expected output string as a Z3 string variable
-    expected_output = String('expected_output')
+    # Assert
+    assert result is None
+
+def test_z3_verification_not_applicable():
+    """
+    Formal verification using Z3 is not applicable for this function.
     
-    # Constraint: The output must be exactly "hello"
-    s.add(expected_output == StringVal("hello"))
-    
-    # Check satisfiability
-    assert str(s.check()) == 'sat'
-    
-    # Get the model
-    m = s.model()
-    result_str = m[expected_output].as_string()
-    assert result_str == "hello"
-    
-    # Verify the length property formally
-    # We prove that if the string is "hello", its length must be 5
-    s_prove = Solver()
-    output_str = StringVal("hello")
-    # We want to prove Length(output_str) == 5.
-    # To prove P, we check if Not(P) is unsatisfiable.
-    s_prove.add(Length(output_str) != 5)
-    
-    # If unsat, it means Length is indeed 5
-    assert str(s_prove.check()) == 'unsat'
+    Reasoning:
+    The function `hello()` performs a side effect (I/O) and contains no 
+    mathematical logic, constraints, or state transitions that Z3 is designed to solve.
+    """
+    pass

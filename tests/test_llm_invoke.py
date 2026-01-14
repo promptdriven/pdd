@@ -366,7 +366,10 @@ def test_llm_invoke_output_pydantic_supported(mock_load_models, mock_set_llm_cac
                 assert response_format['type'] == 'json_schema'
                 json_schema = response_format['json_schema']
                 assert json_schema['strict'] == True
-                assert json_schema['schema'] == SampleOutputModel.model_json_schema()
+                # Schema should include additionalProperties: false (required by OpenAI)
+                expected_schema = SampleOutputModel.model_json_schema()
+                expected_schema['additionalProperties'] = False
+                assert json_schema['schema'] == expected_schema
 
 def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_set_llm_cache):
     model_key_name = "GOOGLE_API_KEY"
@@ -395,7 +398,10 @@ def test_llm_invoke_output_pydantic_unsupported_parses(mock_load_models, mock_se
                 assert response_format['type'] == 'json_schema'
                 json_schema = response_format['json_schema']
                 assert json_schema['strict'] == True
-                assert json_schema['schema'] == SampleOutputModel.model_json_schema()
+                # Schema should include additionalProperties: false (required by OpenAI)
+                expected_schema = SampleOutputModel.model_json_schema()
+                expected_schema['additionalProperties'] = False
+                assert json_schema['schema'] == expected_schema
 
 def test_llm_invoke_output_pydantic_unsupported_fails_parse(mock_load_models, mock_set_llm_cache):
     """Test that when ALL models fail Pydantic validation, RuntimeError is raised.
@@ -2258,3 +2264,60 @@ def test_llm_invoke_time_none_does_not_crash(mock_load_models, mock_set_llm_cach
 
             assert response is not None
             assert response['result'] == "Mocked response"
+
+
+# ==============================================================================
+# Issue #295: OpenAI strict mode requires additionalProperties: false
+# ==============================================================================
+
+def test_openai_strict_mode_schema_includes_additional_properties_false(mock_load_models, mock_set_llm_cache):
+    """Verify that structured output schema includes additionalProperties: false for OpenAI strict mode.
+
+    Issue #295: When using output_pydantic with OpenAI models, the JSON schema sent to the API
+    must include `additionalProperties: false` at the top level for strict mode to work.
+
+    Bug: The standard completion path (llm_invoke.py:1899-1906) passes the raw Pydantic schema
+    via model_json_schema() without adding `additionalProperties: false`. OpenAI's strict mode
+    requires this field, causing the error:
+        "Invalid schema for response_format 'ExtractedCode': In context=(),
+         'additionalProperties' is required to be supplied and to be false."
+
+    The fix was already applied to the Responses API path (llm_invoke.py:2107-2108) but not
+    to the standard completion path.
+
+    This test mocks litellm.completion and verifies the schema passed includes
+    additionalProperties: false.
+    """
+    model_key_name = "OPENAI_API_KEY"
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            expected_result = SampleOutputModel(field1="value1", field2=123)
+            mock_response = create_mock_litellm_response(expected_result, model_name='gpt-5-nano')
+            mock_completion.return_value = mock_response
+            mock_cost = 0.00015
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 5}):
+                response = llm_invoke(
+                    prompt="Provide data.", input_json={"query": "Provide data."},
+                    strength=0.5,
+                    temperature=0.7, verbose=False,
+                    output_pydantic=SampleOutputModel
+                )
+
+                # Verify the call was made
+                mock_completion.assert_called_once()
+                call_kwargs = mock_completion.call_args.kwargs
+
+                # Verify response_format structure
+                response_format = call_kwargs.get('response_format')
+                assert response_format is not None, "response_format should be set for structured output"
+                assert response_format.get('type') == 'json_schema', \
+                    f"Expected type='json_schema', got '{response_format.get('type')}'"
+
+                json_schema = response_format.get('json_schema', {})
+                assert json_schema.get('strict') == True, "strict should be True for schema enforcement"
+
+                # THE KEY ASSERTION: additionalProperties must be False for OpenAI strict mode
+                schema = json_schema.get('schema', {})
+                assert schema.get('additionalProperties') == False, \
+                    "Schema must include 'additionalProperties': false for OpenAI strict mode. " \
+                    "Without this, OpenAI returns: 'additionalProperties' is required to be supplied and to be false."
