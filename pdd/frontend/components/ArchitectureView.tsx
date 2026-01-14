@@ -1206,6 +1206,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           isOpen={showOrderModal}
           modules={architecture}
           existingPrompts={existingPrompts}
+          globalOptions={globalOptions}
+          onGlobalOptionsChange={setGlobalOptions}
           onClose={() => setShowOrderModal(false)}
           onConfirm={handleConfirmGeneratePrompts}
         />
