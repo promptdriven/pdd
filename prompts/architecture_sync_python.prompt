@@ -1,0 +1,115 @@
+<pdd-reason>Provides bidirectional sync between architecture.json and prompt files using PDD metadata tags.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "parse_prompt_tags",
+        "signature": "(prompt_content: str) -> Dict[str, Any]",
+        "returns": "Dict with keys: reason, interface, dependencies, has_dependency_tags"
+      },
+      {
+        "name": "update_architecture_from_prompt",
+        "signature": "(prompt_filename: str, prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+        "returns": "Dict with keys: success, updated, changes, error, warnings"
+      },
+      {
+        "name": "sync_all_prompts_to_architecture",
+        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+        "returns": "Dict with keys: success, updated_count, skipped_count, results, errors"
+      },
+      {
+        "name": "validate_dependencies",
+        "signature": "(dependencies: List[str], prompts_dir: Path) -> Dict[str, Any]",
+        "returns": "Dict with keys: valid, missing, duplicates"
+      },
+      {
+        "name": "validate_interface_structure",
+        "signature": "(interface: Dict[str, Any]) -> Dict[str, Any]",
+        "returns": "Dict with keys: valid, errors"
+      },
+      {
+        "name": "get_architecture_entry_for_prompt",
+        "signature": "(prompt_filename: str, architecture_path: Path) -> Optional[Dict[str, Any]]",
+        "returns": "Architecture entry dict or None"
+      },
+      {
+        "name": "has_pdd_tags",
+        "signature": "(prompt_content: str) -> bool",
+        "returns": "True if prompt contains PDD metadata tags"
+      },
+      {
+        "name": "generate_tags_from_architecture",
+        "signature": "(arch_entry: Dict[str, Any]) -> str",
+        "returns": "XML tags string ready to prepend to prompt"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write the `architecture_sync` module that provides bidirectional synchronization between architecture.json and prompt files using PDD metadata tags.
+
+<include>./context/python_preamble.prompt</include>
+
+% Role & Scope
+This module handles the synchronization of architecture metadata between `architecture.json` and prompt files using XML-style PDD metadata tags (`<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`). Prompts are the source of truth; architecture.json is derived from prompts.
+
+% Requirements
+1. Parse PDD metadata tags from prompt content using lxml with lenient recovery
+2. Extract `<pdd-reason>` (single line description), `<pdd-interface>` (JSON), `<pdd-dependency>` (multiple allowed)
+3. Update architecture.json entries from prompt file tags (only update fields with tags present)
+4. Support dry_run mode to preview changes without writing
+5. Track `has_dependency_tags` flag to distinguish "no tags" from "tags removed" (clearing dependencies)
+6. Validate dependencies (check file existence, detect duplicates)
+7. Validate interface structure (type must be module/cli/command/frontend with appropriate nested keys)
+8. Generate XML tags string from architecture entry for reverse direction (architecture.json -> prompt)
+9. Use Path.cwd() for default paths to work with user's project directory, not package installation
+10. Handle malformed XML/JSON gracefully without crashing (lenient validation)
+
+% Dependencies
+Uses lxml.etree for XML parsing with recovery mode.
+Uses json module for interface parsing and serialization.
+Uses pathlib.Path for file operations.
+
+% Constants
+- ARCHITECTURE_JSON_PATH: Path.cwd() / "architecture.json" (user's project directory)
+- PROMPTS_DIR: Path.cwd() / "prompts" (user's prompts directory)
+
+% Instructions
+1. Implement `parse_prompt_tags()`:
+   - Wrap content in `<root>` tag for XML parsing
+   - Use `etree.XMLParser(recover=True)` for lenient parsing
+   - Extract reason as stripped text
+   - Parse interface JSON with json.loads(), store parse errors in `interface_parse_error`
+   - Track `has_dependency_tags` based on presence of dependency elements or tag in content
+
+2. Implement `update_architecture_from_prompt()`:
+   - Load prompt file and extract tags
+   - Find matching module in architecture.json by filename
+   - Update only fields with tags present (lenient)
+   - Clear dependencies if prompt has ANY PDD tags but no dependency tags
+   - Track changes for diff display
+   - Include interface_parse_error in warnings
+
+3. Implement `sync_all_prompts_to_architecture()`:
+   - Iterate through all modules in architecture.json
+   - Call update_architecture_from_prompt for each
+   - Aggregate statistics and errors
+
+4. Implement validation functions:
+   - validate_dependencies: check file existence, detect duplicates
+   - validate_interface_structure: check type field, nested keys
+
+5. Implement helper functions for reverse direction:
+   - get_architecture_entry_for_prompt: lookup by filename
+   - has_pdd_tags: simple string containment check
+   - generate_tags_from_architecture: build XML string with proper formatting
+
+% Deliverables
+- Single file: pdd/architecture_sync.py
+- All functions documented with docstrings
+- Type hints for all function signatures
+- Comprehensive error handling (never crash on malformed input)

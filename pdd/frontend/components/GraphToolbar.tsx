@@ -13,6 +13,7 @@ interface GraphToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   isSaving?: boolean;
+  onSyncFromPrompts?: () => void;  // New prop for sync button
 }
 
 const GraphToolbar: React.FC<GraphToolbarProps> = ({
@@ -27,9 +28,28 @@ const GraphToolbar: React.FC<GraphToolbarProps> = ({
   canUndo,
   canRedo,
   isSaving = false,
+  onSyncFromPrompts,
 }) => {
   return (
     <div className="flex items-center gap-2 px-3 py-2 bg-surface-800/80 border-b border-surface-700/50">
+      {/* Sync from Prompts Button (only in view mode) */}
+      {!editMode && onSyncFromPrompts && (
+        <>
+          <Tooltip content="Sync architecture.json from prompt metadata tags">
+            <button
+              onClick={onSyncFromPrompts}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 text-white hover:bg-purple-500 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              <span>Sync from Prompts</span>
+            </button>
+          </Tooltip>
+          <div className="w-px h-6 bg-surface-700" />
+        </>
+      )}
+
       {/* Edit Mode Toggle */}
       <Tooltip content={editMode ? 'Exit edit mode' : 'Enter edit mode'}>
         <button
