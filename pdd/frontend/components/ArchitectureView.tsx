@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions, ArchitectureValidationResult } from '../api';
+import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions, ArchitectureValidationResult, ArchitectureSyncResult } from '../api';
 import DependencyViewer from './DependencyViewer';
 import FileBrowser from './FileBrowser';
 import GenerationProgressModal from './GenerationProgressModal';
@@ -7,6 +7,7 @@ import PromptOrderModal from './PromptOrderModal';
 import GraphToolbar from './GraphToolbar';
 import ModuleEditModal from './ModuleEditModal';
 import AddModuleModal from './AddModuleModal';
+import SyncFromPromptModal from './SyncFromPromptModal';
 import { useArchitectureHistory } from '../hooks/useArchitectureHistory';
 import { GLOBAL_DEFAULTS } from '../constants';
 
@@ -91,6 +92,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
   // Mobile detection state
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Sync from prompts state
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<ArchitectureSyncResult | null>(null);
 
   // Architecture history hook for undo/redo
   const {
@@ -390,6 +396,49 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     // Refresh existing prompts after generation
     await loadExistingPrompts();
   }, [loadExistingPrompts]);
+
+  // ==================== Sync from Prompts Handlers ====================
+
+  // Open sync modal
+  const handleOpenSyncModal = useCallback(() => {
+    setSyncResult(null);
+    setShowSyncModal(true);
+  }, []);
+
+  // Perform sync from prompts
+  const handleSync = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      const result = await api.syncArchitectureFromPrompts({ dry_run: false });
+      setSyncResult(result);
+
+      // If sync succeeded and validation passed, reload architecture
+      if (result.success && result.validation.valid) {
+        const modules = await api.getArchitecture();
+        setArchitecture(modules);
+        // Refresh existing prompts
+        await loadExistingPrompts();
+      }
+    } catch (e: any) {
+      console.error('Sync failed:', e);
+      setSyncResult({
+        success: false,
+        updated_count: 0,
+        skipped_count: 0,
+        results: [],
+        validation: { valid: true, errors: [], warnings: [] },
+        errors: [e.message || 'Unexpected error during sync'],
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [loadExistingPrompts]);
+
+  // Close sync modal
+  const handleCloseSyncModal = useCallback(() => {
+    setShowSyncModal(false);
+    setSyncResult(null);
+  }, []);
 
   // ==================== Edit Mode Handlers ====================
 
@@ -940,6 +989,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
             canUndo={canUndo}
             canRedo={canRedo}
             isSaving={isSaving}
+            onSyncFromPrompts={handleOpenSyncModal}
           />
         )}
 
@@ -1106,6 +1156,15 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         existingModules={editableArchitecture}
         onAdd={handleAddModule}
         onClose={() => setShowAddModal(false)}
+      />
+
+      {/* Sync from Prompts Modal */}
+      <SyncFromPromptModal
+        isOpen={showSyncModal}
+        isSyncing={isSyncing}
+        result={syncResult}
+        onSync={handleSync}
+        onClose={handleCloseSyncModal}
       />
     </div>
   );

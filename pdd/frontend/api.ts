@@ -309,6 +309,33 @@ export interface ArchitectureValidationResult {
   warnings: ArchitectureValidationWarning[];
 }
 
+// Architecture sync types
+export interface ArchitectureSyncRequest {
+  filenames?: string[] | null;  // null = sync all prompts
+  dry_run?: boolean;
+}
+
+export interface ArchitectureSyncModuleResult {
+  filename: string;
+  success: boolean;
+  updated: boolean;
+  changes: {
+    reason?: { old: string; new: string };
+    interface?: { old: any; new: any };
+    dependencies?: { old: string[]; new: string[] };
+  };
+  error?: string;
+}
+
+export interface ArchitectureSyncResult {
+  success: boolean;
+  updated_count: number;
+  skipped_count: number;
+  results: ArchitectureSyncModuleResult[];
+  validation: ArchitectureValidationResult;
+  errors: string[];
+}
+
 // Auth types
 export interface AuthStatus {
   authenticated: boolean;
@@ -665,6 +692,21 @@ class PDDApiClient {
     return this.request<ArchitectureValidationResult>('/api/v1/architecture/validate', {
       method: 'POST',
       body: JSON.stringify({ modules }),
+    });
+  }
+
+  /**
+   * Sync architecture.json from prompt file metadata tags.
+   * Reads <pdd-reason>, <pdd-interface>, <pdd-dependency> tags from prompts
+   * and updates the corresponding architecture.json entries.
+   *
+   * @param request - Sync request with optional filenames and dry_run flag
+   * @returns Sync result with updated modules and validation status
+   */
+  async syncArchitectureFromPrompts(request: ArchitectureSyncRequest = {}): Promise<ArchitectureSyncResult> {
+    return this.request<ArchitectureSyncResult>('/api/v1/architecture/sync-from-prompts', {
+      method: 'POST',
+      body: JSON.stringify(request),
     });
   }
 
