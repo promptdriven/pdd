@@ -23,7 +23,7 @@ import Tooltip from './Tooltip';
 import ModuleNode, { ModuleNodeData } from './ModuleNode';
 
 const NODE_WIDTH = 200;
-const NODE_HEIGHT = 70;
+const NODE_HEIGHT = 85;
 
 interface DependencyViewerProps {
   architecture: ArchitectureModule[];
@@ -41,6 +41,7 @@ interface DependencyViewerProps {
   onModuleDelete?: (filename: string) => void;
   onDependencyAdd?: (targetFilename: string, sourceFilename: string) => void;
   onDependencyRemove?: (targetFilename: string, sourceFilename: string) => void;
+  onPositionsChange?: (positions: Map<string, { x: number; y: number }>) => void;
   highlightedModules?: Set<string>;  // For error highlighting
 }
 
@@ -136,9 +137,15 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   onModuleDelete,
   onDependencyAdd,
   onDependencyRemove,
+  onPositionsChange,
   highlightedModules = new Set(),
 }) => {
   const [isPrdVisible, setIsPrdVisible] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    edge: Edge;
+  } | null>(null);
 
   // Create a lookup map from module filename to PromptInfo for file tracking
   const promptInfoMap = useMemo(() => {
@@ -152,6 +159,9 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
 
   // Convert architecture to React Flow nodes and edges
   const { initialNodes, initialEdges } = useMemo(() => {
+    // Check if any modules have saved positions
+    const hasSavedPositions = architecture.some((m) => m.position);
+
     const nodes: Node<ModuleNodeData>[] = architecture.map((m) => {
       const category = getCategory(m);
       const hasPrompt = existingPrompts.has(m.filename);
@@ -159,7 +169,8 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       return {
         id: m.filename,
         type: 'moduleNode',
-        position: { x: 0, y: 0 }, // Will be set by Dagre
+        // Use saved position if available, otherwise will be set by Dagre
+        position: m.position || { x: 0, y: 0 },
         data: {
           label: m.filename.replace(/_[A-Za-z]+\.prompt$/, '').replace(/\.prompt$/, ''),
           module: m,
@@ -183,15 +194,29 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           id: `${dep}->${m.filename}`,
           source: dep,
           target: m.filename,
-          style: { stroke: '#60a5fa', strokeWidth: 1.5 },
+          type: 'smoothstep',
+          style: { stroke: '#60a5fa', strokeWidth: 2 },
+          markerEnd: {
+            type: 'arrowclosed' as const,
+            color: '#60a5fa',
+            width: 20,
+            height: 20,
+          },
           animated: false,
           selectable: editMode,
+          focusable: editMode,
+          deletable: editMode,
           interactionWidth: 20, // Makes edge easier to click
         }))
     );
 
-    const layouted = getLayoutedElements(nodes, edges, 'TB');
-    return { initialNodes: layouted.nodes, initialEdges: layouted.edges };
+    // Only apply Dagre layout if no saved positions exist
+    if (!hasSavedPositions) {
+      const layouted = getLayoutedElements(nodes, edges, 'TB');
+      return { initialNodes: layouted.nodes, initialEdges: layouted.edges };
+    }
+
+    return { initialNodes: nodes, initialEdges: edges };
   }, [architecture, existingPrompts, promptInfoMap, onModuleClick, editMode, onModuleEdit, onModuleDelete, highlightedModules]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
@@ -218,7 +243,14 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           {
             ...connection,
             id: `${connection.source}->${connection.target}`,
-            style: { stroke: '#60a5fa', strokeWidth: 1.5 },
+            type: 'smoothstep',
+            style: { stroke: '#60a5fa', strokeWidth: 2 },
+            markerEnd: {
+              type: 'arrowclosed' as const,
+              color: '#60a5fa',
+              width: 20,
+              height: 20,
+            },
             animated: false,
           },
           eds
@@ -240,6 +272,62 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     [editMode, onDependencyRemove]
   );
 
+  // Handle edge click to ensure proper selection
+  const handleEdgeClick = useCallback(
+    (_event: React.MouseEvent, edge: Edge) => {
+      if (!editMode) return;
+      // Close context menu if open
+      setContextMenu(null);
+      // Explicitly set the clicked edge as selected with different styling
+      setEdges((eds) =>
+        eds.map((e) => ({
+          ...e,
+          selected: e.id === edge.id,
+          style: {
+            ...e.style,
+            stroke: e.id === edge.id ? '#ef4444' : '#60a5fa', // Red when selected
+            strokeWidth: e.id === edge.id ? 3 : 2,
+          },
+          markerEnd: e.markerEnd ? {
+            ...e.markerEnd,
+            color: e.id === edge.id ? '#ef4444' : '#60a5fa',
+          } : undefined,
+        }))
+      );
+    },
+    [editMode, setEdges]
+  );
+
+  // Handle edge right-click (context menu)
+  const handleEdgeContextMenu = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      if (!editMode) return;
+      event.preventDefault();
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        edge,
+      });
+    },
+    [editMode]
+  );
+
+  // Handle deleting edge from context menu
+  const handleDeleteEdgeFromMenu = useCallback(() => {
+    if (!contextMenu) return;
+    const edge = contextMenu.edge;
+    // Remove from data
+    onDependencyRemove?.(edge.target, edge.source);
+    // Remove from visual edges
+    setEdges((eds) => eds.filter((e) => e.id !== edge.id));
+    setContextMenu(null);
+  }, [contextMenu, onDependencyRemove, setEdges]);
+
+  // Close context menu when clicking elsewhere
+  const handlePaneClick = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
   // Handle node deletion (module removed)
   const handleNodesDelete = useCallback(
     (deletedNodes: Node[]) => {
@@ -251,11 +339,48 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     [editMode, onModuleDelete]
   );
 
-  // Update nodes when architecture changes
+  // Handle node drag end to save ALL positions (so they're all captured for saving)
+  const handleNodeDragStop = useCallback(
+    (_event: React.MouseEvent, _node: Node, allNodes: Node[]) => {
+      if (!editMode) return;
+      // Send all node positions to parent
+      const positions = new Map<string, { x: number; y: number }>();
+      allNodes.forEach((n) => {
+        positions.set(n.id, { x: n.position.x, y: n.position.y });
+      });
+      onPositionsChange?.(positions);
+    },
+    [editMode, onPositionsChange]
+  );
+
+  // Track previous architecture to detect structural changes (not just position changes)
+  const prevArchitectureRef = React.useRef<ArchitectureModule[]>(architecture);
+
+  // Helper to check if architecture structure changed (ignoring positions)
+  const getStructuralFingerprint = useCallback((modules: ArchitectureModule[]) => {
+    return modules.map(m => ({
+      filename: m.filename,
+      dependencies: [...m.dependencies].sort().join(','),
+    })).sort((a, b) => a.filename.localeCompare(b.filename))
+      .map(m => `${m.filename}:${m.dependencies}`).join('|');
+  }, []);
+
+  // Update nodes/edges when architecture STRUCTURE changes (not just positions)
   React.useEffect(() => {
-    setNodes(initialNodes);
-    setEdges(initialEdges);
-  }, [initialNodes, initialEdges, setNodes, setEdges]);
+    const prevFingerprint = getStructuralFingerprint(prevArchitectureRef.current);
+    const currentFingerprint = getStructuralFingerprint(architecture);
+    const structureChanged = prevFingerprint !== currentFingerprint;
+
+    prevArchitectureRef.current = architecture;
+
+    // Only sync if:
+    // 1) Structure changed (modules added/removed, dependencies changed)
+    // 2) Not in edit mode (initial load or exiting edit mode)
+    if (structureChanged || !editMode) {
+      setNodes(initialNodes);
+      setEdges(initialEdges);
+    }
+  }, [initialNodes, initialEdges, setNodes, setEdges, editMode, architecture, getStructuralFingerprint]);
 
   return (
     <div className="glass rounded-xl border border-surface-700/50 overflow-hidden h-full flex flex-col">
@@ -329,6 +454,10 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={editMode ? handleConnect : undefined}
+          onEdgeClick={editMode ? handleEdgeClick : undefined}
+          onEdgeContextMenu={editMode ? handleEdgeContextMenu : undefined}
+          onPaneClick={handlePaneClick}
+          onNodeDragStop={editMode ? handleNodeDragStop : undefined}
           onEdgesDelete={editMode ? handleEdgesDelete : undefined}
           onNodesDelete={editMode ? handleNodesDelete : undefined}
           nodeTypes={nodeTypes}
@@ -337,8 +466,14 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           minZoom={0.1}
           maxZoom={2}
           defaultEdgeOptions={{
-            style: { stroke: '#60a5fa', strokeWidth: 1.5 },
+            style: { stroke: '#60a5fa', strokeWidth: 2 },
             type: 'smoothstep',
+            markerEnd: {
+              type: 'arrowclosed',
+              color: '#60a5fa',
+              width: 20,
+              height: 20,
+            },
             interactionWidth: 20,
           }}
           connectionMode={editMode ? ConnectionMode.Loose : ConnectionMode.Strict}
@@ -407,10 +542,23 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
                   </div>
                   <span className="text-xs text-surface-300">Code/Test/Example</span>
                 </div>
+                <div className="flex items-center gap-2 pt-1 border-t border-surface-700/50 mt-1">
+                  <div className="flex items-center">
+                    <svg className="w-6 h-3" viewBox="0 0 24 12">
+                      <defs>
+                        <marker id="arrow-legend" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                          <path d="M0,0 L0,6 L9,3 z" fill="#60a5fa" />
+                        </marker>
+                      </defs>
+                      <line x1="0" y1="6" x2="20" y2="6" stroke="#60a5fa" strokeWidth="2" markerEnd="url(#arrow-legend)" />
+                    </svg>
+                  </div>
+                  <span className="text-xs text-surface-300">Arrow shows dependency direction</span>
+                </div>
                 {editMode && (
                   <div className="pt-1 border-t border-surface-700/50 mt-1">
                     <p className="text-[10px] text-surface-400 leading-relaxed">
-                      <span className="text-orange-400">Edit mode:</span> Click edge to select, then Delete/Backspace to remove
+                      <span className="text-orange-400">Edit mode:</span> Right-click edge to delete, or click + Delete/Backspace
                     </p>
                   </div>
                 )}
@@ -419,6 +567,33 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           </Panel>
         </ReactFlow>
       </div>
+
+      {/* Edge Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl py-1 min-w-[150px]"
+          style={{
+            top: contextMenu.y,
+            left: contextMenu.x,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={handleDeleteEdgeFromMenu}
+            className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-surface-700 transition-colors flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            Delete Edge
+          </button>
+          <div className="px-4 py-2 text-xs text-surface-500 border-t border-surface-700">
+            <div className="font-mono">
+              {contextMenu.edge.source} → {contextMenu.edge.target}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
