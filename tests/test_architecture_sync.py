@@ -117,34 +117,6 @@ def test_parse_tags_invalid_json_in_interface():
     assert result['dependencies'] == []
 
 
-def test_parse_tags_double_brace_escaped_json():
-    """Test parsing interface with double-brace escaping (used in LLM prompts for Python .format())."""
-    content = """
-    <pdd-reason>Fixes validation errors in architecture.json</pdd-reason>
-    <pdd-interface>
-    {{
-      "type": "module",
-      "module": {{
-        "functions": [
-          {{"name": "fix_architecture", "signature": "(current_architecture: str, step7_output: str)", "returns": "str"}}
-        ]
-      }}
-    }}
-    </pdd-interface>
-    <pdd-dependency>agentic_arch_step7_validate_LLM.prompt</pdd-dependency>
-    """
-
-    result = parse_prompt_tags(content)
-
-    # Should successfully parse double-brace escaped JSON
-    assert result['reason'] == 'Fixes validation errors in architecture.json'
-    assert result['interface'] is not None
-    assert result['interface']['type'] == 'module'
-    assert result['interface']['module']['functions'][0]['name'] == 'fix_architecture'
-    assert result['dependencies'] == ['agentic_arch_step7_validate_LLM.prompt']
-    assert result.get('interface_parse_error') is None
-
-
 def test_parse_tags_empty_content():
     """Test parsing empty content."""
     result = parse_prompt_tags("")

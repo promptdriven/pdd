@@ -85,18 +85,12 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
         # Extract <pdd-interface> (parse as JSON)
         interface_elem = root.find('.//pdd-interface')
         if interface_elem is not None and interface_elem.text:
-            interface_text = interface_elem.text.strip()
             try:
-                # Try parsing as-is first (valid JSON with single braces)
+                interface_text = interface_elem.text.strip()
                 result['interface'] = json.loads(interface_text)
-            except json.JSONDecodeError:
-                # Try unescaping double braces (used in LLM prompts for Python .format())
-                try:
-                    unescaped = interface_text.replace('{{', '{').replace('}}', '}')
-                    result['interface'] = json.loads(unescaped)
-                except json.JSONDecodeError as e:
-                    # Invalid JSON even after unescaping, skip interface field (lenient)
-                    result['interface_parse_error'] = f"Invalid JSON in <pdd-interface>: {str(e)}"
+            except json.JSONDecodeError as e:
+                # Invalid JSON, skip interface field (lenient) but store warning
+                result['interface_parse_error'] = f"Invalid JSON in <pdd-interface>: {str(e)}"
 
         # Extract <pdd-dependency> tags (multiple allowed)
         dep_elems = root.findall('.//pdd-dependency')
