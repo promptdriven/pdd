@@ -1,3 +1,10 @@
+## v0.0.113 (2026-01-13)
+
+### Feat
+
+- **frontend**: Add full-width layout for large screens
+- **frontend**: Add mobile responsive design with device-aware UI
+
 ## v0.0.112 (2026-01-13)
 
 ### Feat
