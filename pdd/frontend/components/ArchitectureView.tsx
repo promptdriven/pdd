@@ -9,7 +9,8 @@ import ModuleEditModal from './ModuleEditModal';
 import AddModuleModal from './AddModuleModal';
 import SyncFromPromptModal from './SyncFromPromptModal';
 import { useArchitectureHistory } from '../hooks/useArchitectureHistory';
-import { GLOBAL_DEFAULTS } from '../constants';
+import { GLOBAL_DEFAULTS, GLOBAL_OPTIONS } from '../constants';
+import { GlobalOption, CommandOption } from '../types';
 
 interface ArchitectureViewProps {
   serverConnected: boolean;
@@ -22,6 +23,98 @@ interface ArchitectureViewProps {
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
+
+// Helper to format option names for display
+function formatOptionName(name: string): string {
+  return name
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// Individual option input component - matches PromptSpace styling
+const OptionInput: React.FC<{
+  option: CommandOption | GlobalOption;
+  value: any;
+  onChange: (value: any) => void;
+  compact?: boolean;
+}> = ({ option, value, onChange, compact = false }) => {
+  const inputId = `arch-option-${option.name}`;
+
+  if (option.type === 'checkbox') {
+    return (
+      <label htmlFor={inputId} className={`flex items-start gap-3 ${compact ? 'p-2' : 'p-3'} rounded-xl bg-surface-800/30 hover:bg-surface-800/50 transition-colors cursor-pointer group`}>
+        <input
+          type="checkbox"
+          id={inputId}
+          checked={!!value}
+          onChange={(e) => onChange(e.target.checked)}
+          className="w-4 h-4 mt-0.5 rounded bg-surface-700 border-surface-600 text-accent-500 focus:ring-accent-500 focus:ring-offset-surface-800"
+        />
+        <div className="flex-1 min-w-0">
+          <div className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-white group-hover:text-accent-300 transition-colors`}>{formatOptionName(option.name)}</div>
+          <div className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400 mt-0.5`}>{option.description}</div>
+        </div>
+      </label>
+    );
+  }
+
+  if (option.type === 'range') {
+    const min = option.min ?? 0;
+    const max = option.max ?? 1;
+    const step = option.step ?? 0.1;
+    const displayValue = value ?? option.defaultValue ?? min;
+
+    return (
+      <div className={compact ? 'space-y-1.5' : 'space-y-2'}>
+        <div className="flex items-center justify-between">
+          <label htmlFor={inputId} className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-white`}>
+            {formatOptionName(option.name)}
+          </label>
+          <span className={`${compact ? 'text-xs' : 'text-sm'} font-mono text-accent-400 bg-accent-500/10 px-2 py-0.5 rounded-lg`}>
+            {typeof displayValue === 'number' ? displayValue.toFixed(2) : displayValue}
+          </span>
+        </div>
+        <p className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400`}>{option.description}</p>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-surface-500 w-6 text-right">{min}</span>
+          <input
+            type="range"
+            id={inputId}
+            min={min}
+            max={max}
+            step={step}
+            value={displayValue}
+            onChange={(e) => onChange(parseFloat(e.target.value))}
+            className="flex-1 h-2 bg-surface-700 rounded-full appearance-none cursor-pointer accent-accent-500
+              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-500
+              [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:shadow-accent-500/30
+              [&::-webkit-slider-thumb]:hover:bg-accent-400 [&::-webkit-slider-thumb]:transition-colors"
+          />
+          <span className="text-[10px] text-surface-500 w-6">{max}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <label htmlFor={inputId} className={`block ${compact ? 'text-xs' : 'text-sm'} font-medium text-white mb-1.5`}>
+        {formatOptionName(option.name)}
+      </label>
+      <p className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400 mb-2`}>{option.description}</p>
+      <input
+        type={option.type === 'number' ? 'number' : 'text'}
+        id={inputId}
+        value={value || ''}
+        onChange={(e) => onChange(option.type === 'number' ? (e.target.value ? Number(e.target.value) : '') : e.target.value)}
+        placeholder={option.placeholder}
+        className="w-full px-3 py-2.5 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all"
+      />
+    </div>
+  );
+};
 
 const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   serverConnected,
@@ -67,8 +160,12 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [globalOptions, setGlobalOptions] = useState<GenerationGlobalOptions>({
     strength: GLOBAL_DEFAULTS.strength,
+    temperature: GLOBAL_DEFAULTS.temperature,
+    time: GLOBAL_DEFAULTS.time,
     verbose: GLOBAL_DEFAULTS.verbose,
+    quiet: GLOBAL_DEFAULTS.quiet,
     force: GLOBAL_DEFAULTS.force,
+    local: GLOBAL_DEFAULTS.local,
   });
 
   // Cancel ref for batch generation
@@ -839,62 +936,50 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                   onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
                   className="w-full p-2 flex items-center justify-between text-left hover:bg-surface-800/30 transition-colors"
                 >
-                  <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Model Options</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Advanced Options</span>
+                    {(globalOptions.strength !== GLOBAL_DEFAULTS.strength ||
+                      globalOptions.temperature !== GLOBAL_DEFAULTS.temperature ||
+                      globalOptions.time !== GLOBAL_DEFAULTS.time ||
+                      globalOptions.local ||
+                      globalOptions.verbose ||
+                      globalOptions.quiet ||
+                      globalOptions.force) && (
+                      <span className="w-2 h-2 rounded-full bg-accent-500 animate-pulse" title="Custom settings applied" />
+                    )}
+                  </div>
                   <svg className={`w-4 h-4 text-surface-400 transition-transform ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
                 {showAdvancedOptions && (
-                  <div className="border-t border-surface-700/30 p-3 space-y-4">
-                    {/* Strength slider */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-medium text-surface-300">Strength</label>
-                        <span className="text-xs font-mono text-accent-400 bg-accent-500/10 px-2 py-0.5 rounded">
-                          {(globalOptions.strength ?? GLOBAL_DEFAULTS.strength).toFixed(2)}
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={globalOptions.strength ?? GLOBAL_DEFAULTS.strength}
-                        onChange={(e) => setGlobalOptions(prev => ({ ...prev, strength: parseFloat(e.target.value) }))}
-                        className="w-full h-2 bg-surface-700 rounded-full appearance-none cursor-pointer accent-accent-500"
-                      />
-                      <p className="text-[10px] text-surface-500">&lt;0.5 cheaper, 0.5 base, &gt;0.5 stronger</p>
+                  <div className="border-t border-surface-700/30 p-3 space-y-3">
+                    {/* Model Settings Group */}
+                    <div className="space-y-3 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
+                      <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Model Settings</div>
+                      {GLOBAL_OPTIONS.filter(opt => ['strength', 'temperature', 'time'].includes(opt.name)).map(opt => (
+                        <OptionInput
+                          key={opt.name}
+                          option={opt}
+                          value={globalOptions[opt.name as keyof GenerationGlobalOptions]}
+                          onChange={(val) => setGlobalOptions(prev => ({ ...prev, [opt.name]: val }))}
+                          compact
+                        />
+                      ))}
                     </div>
 
-                    {/* Checkbox options */}
-                    <div className="space-y-2">
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input
-                          type="checkbox"
-                          checked={globalOptions.local ?? false}
-                          onChange={(e) => setGlobalOptions(prev => ({ ...prev, local: e.target.checked }))}
-                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
+                    {/* Execution Options Group */}
+                    <div className="space-y-1 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
+                      <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-2">Execution Options</div>
+                      {GLOBAL_OPTIONS.filter(opt => ['local', 'verbose', 'quiet', 'force'].includes(opt.name)).map(opt => (
+                        <OptionInput
+                          key={opt.name}
+                          option={opt}
+                          value={globalOptions[opt.name as keyof GenerationGlobalOptions]}
+                          onChange={(val) => setGlobalOptions(prev => ({ ...prev, [opt.name]: val }))}
+                          compact
                         />
-                        <span className="text-xs text-surface-300 group-hover:text-white">Run locally (not cloud)</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input
-                          type="checkbox"
-                          checked={globalOptions.verbose ?? false}
-                          onChange={(e) => setGlobalOptions(prev => ({ ...prev, verbose: e.target.checked }))}
-                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
-                        />
-                        <span className="text-xs text-surface-300 group-hover:text-white">Verbose output</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input
-                          type="checkbox"
-                          checked={globalOptions.force ?? false}
-                          onChange={(e) => setGlobalOptions(prev => ({ ...prev, force: e.target.checked }))}
-                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
-                        />
-                        <span className="text-xs text-surface-300 group-hover:text-white">Force (skip prompts)</span>
-                      </label>
+                      ))}
                     </div>
                   </div>
                 )}
