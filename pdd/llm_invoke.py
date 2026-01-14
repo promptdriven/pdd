@@ -145,6 +145,24 @@ class InsufficientCreditsError(Exception):
 
 # --- Cloud Execution Helpers ---
 
+def _ensure_all_properties_required(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure ALL properties are in the required array (OpenAI strict mode requirement).
+
+    OpenAI's strict mode requires that all properties in a JSON schema are listed
+    in the 'required' array. Pydantic's model_json_schema() only includes fields
+    without default values in 'required', which causes OpenAI to reject the schema.
+
+    Args:
+        schema: A JSON schema dictionary
+
+    Returns:
+        The schema with all properties added to 'required'
+    """
+    if 'properties' in schema:
+        schema['required'] = list(schema['properties'].keys())
+    return schema
+
+
 def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
     """Convert a Pydantic model class to JSON Schema for cloud transport.
 
@@ -155,6 +173,8 @@ def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
         JSON Schema dictionary that can be serialized and sent to cloud
     """
     schema = pydantic_class.model_json_schema()
+    # Ensure all properties are in required array (OpenAI strict mode requirement)
+    _ensure_all_properties_required(schema)
     # Include class name for debugging/logging purposes
     schema['__pydantic_class_name__'] = pydantic_class.__name__
     return schema
@@ -1896,16 +1916,19 @@ def llm_invoke(
                             logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
                         # Use json_schema with strict=True to enforce ALL required fields are present
                         # This prevents LLMs from omitting required fields when they think they're not needed
+                        schema = output_pydantic.model_json_schema()
+                        # Ensure all properties are in required array (OpenAI strict mode requirement)
+                        _ensure_all_properties_required(schema)
+                        # Add additionalProperties: false for strict mode (required by OpenAI)
+                        schema["additionalProperties"] = False
                         response_format = {
                             "type": "json_schema",
                             "json_schema": {
                                 "name": output_pydantic.__name__,
-                                "schema": output_pydantic.model_json_schema(),
+                                "schema": schema,
                                 "strict": True
                             }
                         }
-                        # Add additionalProperties: false for strict mode (required by OpenAI)
-                        response_format["json_schema"]["schema"]["additionalProperties"] = False
                     else: # output_schema is set
                         if verbose:
                             logger.info(f"[INFO] Requesting structured output (JSON Schema) for {model_name_litellm}")
@@ -2108,6 +2131,8 @@ def llm_invoke(
                                     schema = output_schema
                                     name = "response"
 
+                                # Ensure all properties are in required array (OpenAI strict mode requirement)
+                                _ensure_all_properties_required(schema)
                                 # Add additionalProperties: false for strict mode (required by OpenAI)
                                 schema['additionalProperties'] = False
 
