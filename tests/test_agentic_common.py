@@ -625,8 +625,17 @@ def test_step_timeouts_dictionary_exists():
         f"for verify fix plan operations"
     )
 
+    # Verify medium complexity steps have ~400 seconds
+    medium_steps = [2, 3]  # Docs Check and Triage
+    for step in medium_steps:
+        assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
+        assert STEP_TIMEOUTS[step] >= 340.0, (
+            f"Step {step} timeout ({STEP_TIMEOUTS[step]}) should be >= 340 seconds "
+            f"for medium complexity operations"
+        )
+
     # Verify simple steps have standard timeout (240 seconds)
-    simple_steps = [1, 2, 3, 10]
+    simple_steps = [1, 10]  # Duplicate Check and Create PR
     for step in simple_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
         assert STEP_TIMEOUTS[step] == 240.0, (
