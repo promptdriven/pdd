@@ -38,19 +38,26 @@ from pdd.preprocess_main import preprocess_main
     help="List of keys to exclude from curly bracket doubling. Specify multiple with repeated --exclude."
 )
 @click.option(
+    "--pdd-tags",
+    is_flag=True,
+    default=False,
+    help="Inject PDD metadata tags from architecture.json before preprocessing."
+)
+@click.option(
     "--verbose",
     is_flag=True,
     default=False,
     help="Enable verbose logging for XML tagging if '--xml' is used."
 )
 @click.pass_context
-def cli(ctx, prompt_file: Path, output: str, xml: bool, recursive: bool, double: bool, exclude: list, verbose: bool):
+def cli(ctx, prompt_file: Path, output: str, xml: bool, recursive: bool, double: bool, exclude: list, pdd_tags: bool, verbose: bool):
     """
     Example CLI command demonstrating usage of 'preprocess_main'.
-    
+
     This command reads the prompt file specified by --prompt-file, optionally applies XML tagging,
     and writes the resulting preprocessed prompt to --output. Curly brackets can be doubled with --double,
-    and certain keys can be excluded via --exclude.
+    and certain keys can be excluded via --exclude. PDD metadata tags can be injected from
+    architecture.json using --pdd-tags.
     """
     try:
         # Prepare the ctx.obj dictionary for preprocess_main usage
@@ -69,6 +76,7 @@ def cli(ctx, prompt_file: Path, output: str, xml: bool, recursive: bool, double:
             recursive=recursive,
             double=double,
             exclude=list(exclude),
+            pdd_tags=pdd_tags,
         )
 
         # Display final results
