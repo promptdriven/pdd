@@ -43,7 +43,7 @@ You are working on step 5 of 9 in an agentic e2e fix workflow. You need to ident
 2. **Map files to dev units**
    - List all prompts in the `prompts/` directory: `ls prompts/*_python.prompt`
    - For each involved source file, find its corresponding prompt
-   - A dev unit name is derived from the prompt file: `{{name}}_python.prompt` -> `{{name}}`
+   - A dev unit name is derived from the prompt file: `{name}_python.prompt` -> `{name}`
 
 3. **List dev units to fix**
    - Create a prioritized list of dev units that need fixing
@@ -63,21 +63,21 @@ Your comment should follow this format:
 ```markdown
 ## Step 5: Identify Dev Units (Cycle {cycle_number})
 
-**Status:** {{N}} Dev Units Identified
+**Status:** {N} Dev Units Identified
 
 ### Stack Trace Analysis
 | Source File | Dev Unit | Error Type |
 |-------------|----------|------------|
-| `pdd/{{file}}.py` | `{{dev_unit}}` | {{error_type}} |
+| `pdd/{file}.py` | `{dev_unit}` | {error_type} |
 
 ### Dev Units to Fix
-1. `{{dev_unit_1}}` - {{reason}}
-2. `{{dev_unit_2}}` - {{reason}}
+1. `{dev_unit_1}` - {reason}
+2. `{dev_unit_2}` - {reason}
 
 ### Previously Fixed (This Session)
-- `{{dev_unit}}` - Cycle {{N}}
+- `{dev_unit}` - Cycle {N}
 
-DEV_UNITS_IDENTIFIED: {{comma_separated_list}}
+DEV_UNITS_IDENTIFIED: {comma_separated_list}
 
 ---
 *Proceeding to Step 6: Create Unit Tests*

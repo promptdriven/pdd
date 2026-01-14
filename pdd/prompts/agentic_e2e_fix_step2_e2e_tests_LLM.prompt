@@ -29,7 +29,7 @@ You are working on step 2 of 9 in an agentic e2e fix workflow. This step checks 
    - Also check for patterns like `tests/e2e/`, `tests/integration/`, or `test_e2e_*.py`
 
 2. **Run the e2e tests**
-   - Execute pytest with the e2e test files you identified above (e.g., `pytest tests/e2e/test_foo.py -v`)
+   - Execute: `pytest {e2e_test_files} -v` to run identified tests
    - Capture the full output including any failures
    - Note specific error messages and stack traces
 
@@ -54,11 +54,11 @@ Your comment should follow this format:
 **Status:** ALL_TESTS_PASS
 
 ### E2E Tests Run
-- `{{test_file}}::{{test_function}}` ✓
+- `{test_file}::{test_function}` ✓
 - ...
 
 ### Summary
-All {{N}} e2e tests pass. Bug fix complete!
+All {N} e2e tests pass. Bug fix complete!
 
 ---
 *Workflow complete - all tests passing*
@@ -68,16 +68,16 @@ All {{N}} e2e tests pass. Bug fix complete!
 ```markdown
 ## Step 2: E2E Test Check (Cycle {cycle_number})
 
-**Status:** {{N}} Tests Failing
+**Status:** {N} Tests Failing
 
 ### E2E Tests Run
-- `{{test_file}}::{{test_function}}` ✓
-- `{{test_file}}::{{test_function}}` ✗
+- `{test_file}::{test_function}` ✓
+- `{test_file}::{test_function}` ✗
 
 ### Failures
-#### `{{test_name}}`
+#### `{test_name}`
 ```
-{{error_message_and_stack_trace}}
+{error_message_and_stack_trace}
 ```
 
 ---

@@ -1,12 +1,8 @@
-% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run pdd fix sequentially on dev units identified during e2e failure analysis.
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run pdd fix sequentially on failing dev units.
 
 % Context
 
-You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `pdd fix` on each dev unit identified in Step 5 to fix the bugs causing e2e test failures.
-
-**Important distinction from Step 1:**
-- Step 1: Fixes dev units associated with unit tests **explicitly listed in the GitHub issue** (from `pdd bug`)
-- Step 8 (this step): Fixes dev units **identified during e2e failure analysis** in Steps 3-5 (may be different or additional dev units discovered through stack trace analysis)
+You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `pdd fix` on each failing dev unit to fix the bugs.
 
 % Inputs
 
@@ -56,10 +52,7 @@ You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `
 
 1. **Run pdd fix for each failing dev unit**
    - For each dev unit from Step 5 (DEV_UNITS_IDENTIFIED):
-   - Execute pdd fix in manual mode:
-     ```bash
-     pdd fix --manual --loop {protect_tests_flag} prompts/{{dev_unit}}_python.prompt pdd/{{dev_unit}}.py tests/test_{{dev_unit}}.py
-     ```
+   - Execute: `pdd fix {dev_unit_name}`
    - Wait for completion before starting next
    - Capture output from each run
 
@@ -70,7 +63,7 @@ You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `
 
 3. **Run unit tests to verify fixes**
    - After all pdd fix runs complete
-   - Run: `pytest tests/test_{{dev_unit}}.py -v` for each
+   - Run: `pytest tests/test_{dev_unit}.py -v` for each
    - Report pass/fail status
 
 % Output
@@ -86,24 +79,24 @@ Your comment should follow this format:
 ```markdown
 ## Step 8: Run pdd fix (Cycle {cycle_number})
 
-**Status:** {{N}}/{{M}} Dev Units Fixed
+**Status:** {N}/{M} Dev Units Fixed
 
 ### pdd fix Results
 | Dev Unit | pdd fix Status | Tests After |
 |----------|----------------|-------------|
-| `{{name}}` | Success | {{N}}/{{M}} pass |
-| `{{name}}` | Failed | {{error}} |
+| `{name}` | Success | {N}/{M} pass |
+| `{name}` | Failed | {error} |
 
 ### Files Changed
-{{list_of_modified_files}}
+{list_of_modified_files}
 
 ### Summary
-- Dev units fixed: {{list}}
-- Dev units still failing: {{list}}
-- Total pdd fix runs: {{N}}
-- Total cost: ${{cost:.4f}}
+- Dev units fixed: {list}
+- Dev units still failing: {list}
+- Total pdd fix runs: {N}
+- Total cost: ${cost:.4f}
 
-FILES_MODIFIED: {{comma_separated_list_of_code_files}}
+FILES_MODIFIED: {comma_separated_list_of_code_files}
 
 ---
 *Proceeding to Step 9: Final Verification*

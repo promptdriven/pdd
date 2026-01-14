@@ -43,8 +43,8 @@ You are working on step 6 of 9 in an agentic e2e fix workflow. You need to creat
 % Your Task
 
 1. **For each identified dev unit:**
-   - Read the module's source code: `pdd/{{dev_unit}}.py`
-   - Read the module's prompt: `prompts/{{dev_unit}}_python.prompt`
+   - Read the module's source code: `pdd/{dev_unit}.py`
+   - Read the module's prompt: `prompts/{dev_unit}_python.prompt`
    - Understand the expected behavior from the prompt
 
 2. **Design unit tests that detect the bug**
@@ -53,7 +53,7 @@ You are working on step 6 of 9 in an agentic e2e fix workflow. You need to creat
    - Tests should PASS once the bug is fixed
 
 3. **Write or append to test files**
-   - Check if `tests/test_{{dev_unit}}.py` exists
+   - Check if `tests/test_{dev_unit}.py` exists
    - If exists: append new test functions
    - If not: create new test file
 
@@ -75,24 +75,24 @@ Your comment should follow this format:
 ```markdown
 ## Step 6: Create Unit Tests (Cycle {cycle_number})
 
-**Status:** {{N}} Tests Created/Updated
+**Status:** {N} Tests Created/Updated
 
 ### Tests Created
 
-#### `tests/test_{{dev_unit}}.py`
+#### `tests/test_{dev_unit}.py`
 ```python
-{{test_code}}
+{test_code}
 ```
 
-**What this tests:** {{explanation}}
+**What this tests:** {explanation}
 
 ### Summary
 | Dev Unit | Test File | Tests Added |
 |----------|-----------|-------------|
-| `{{name}}` | `tests/test_{{name}}.py` | {{N}} |
+| `{name}` | `tests/test_{name}.py` | {N} |
 
-FILES_CREATED: {{comma_separated_new_files}}
-FILES_MODIFIED: {{comma_separated_modified_files}}
+FILES_CREATED: {comma_separated_new_files}
+FILES_MODIFIED: {comma_separated_modified_files}
 
 ---
 *Proceeding to Step 7: Verify Tests Detect Bugs*

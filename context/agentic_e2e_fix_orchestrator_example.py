@@ -43,11 +43,6 @@ def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: boo
     """
     Mock implementation of run_agentic_task.
     Simulates the output of an LLM agent for each step of the e2e fix workflow.
-
-    Returns:
-        Tuple[bool, str, float, str]: (success, output, cost, provider)
-        Note: The real run_agentic_task returns a 4-tuple. File tracking is done
-        by parsing FILES_CREATED/FILES_MODIFIED lines from the output string.
     """
     # Extract step number from label (e.g., "step1", "step2", etc.)
     step_num = label.replace("step", "")
@@ -56,6 +51,7 @@ def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: boo
     success = True
     cost = 0.20  # Simulated cost per step
     provider = "anthropic-mock"
+    files = []
     output = ""
 
     if step_num == "1":
@@ -69,26 +65,24 @@ def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: boo
     elif step_num == "3":
         output = "Root cause analysis:\n- test_checkout_flow: CODE_BUG - payment_processor.py missing currency validation\n- test_subscription_renewal: TEST_BUG - incorrect expected value in assertion"
     elif step_num == "4":
-        output = "Fixed e2e test: test_subscription_renewal - corrected expected billing amount from $9.99 to $10.99.\nFILES_MODIFIED: tests/e2e/test_subscription.py"
+        output = "Fixed e2e test: test_subscription_renewal - corrected expected billing amount from $9.99 to $10.99."
+        files = ["tests/e2e/test_subscription.py"]
     elif step_num == "5":
-        output = "Dev units involved in failures:\n- payment_processor (primary)\n- currency_converter (secondary)\nDEV_UNITS_IDENTIFIED: payment_processor, currency_converter"
+        output = "Dev units involved in failures:\n- payment_processor (primary)\n- currency_converter (secondary)\nDEV_UNITS: payment_processor, currency_converter"
     elif step_num == "6":
         output = "Created unit tests for identified dev units:\n- tests/test_payment_processor_bug.py: test_validate_currency_code\n- tests/test_currency_converter_bug.py: test_convert_zero_amount\nFILES_CREATED: tests/test_payment_processor_bug.py, tests/test_currency_converter_bug.py"
+        files = ["tests/test_payment_processor_bug.py", "tests/test_currency_converter_bug.py"]
     elif step_num == "7":
         output = "Verification complete:\n- test_validate_currency_code: FAILS as expected (bug detected)\n- test_convert_zero_amount: FAILS as expected (bug detected)\nUnit tests successfully detect the bugs."
     elif step_num == "8":
         output = "Running pdd fix on failing dev units:\n- payment_processor: FIXED (1 attempt)\n- currency_converter: FIXED (2 attempts)\nFILES_MODIFIED: pdd/payment_processor.py, pdd/currency_converter.py"
+        files = ["pdd/payment_processor.py", "pdd/currency_converter.py"]
     elif step_num == "9":
-        # Second cycle: all tests pass
-        if "cycle2" in instruction.lower():
-            output = "Final verification:\n- Unit tests: 4/4 passing\n- E2e tests: 2/2 passing\n\n**Status:** ALL_TESTS_PASS\n\nAll bugs fixed successfully."
-        else:
-            output = "Final verification:\n- Unit tests: 4/4 passing\n- E2e tests: 1/2 passing (1 still failing)\n\n**Status:** CONTINUE_CYCLE\n\nProceeding to next cycle."
+        output = "Final verification:\n- Unit tests: 4/4 passing\n- E2e tests: 2/2 passing\nCycle complete. Recommending re-run of step 1 to confirm all tests pass."
     else:
         output = "Unknown step executed."
 
-    # Return 4-tuple matching real run_agentic_task signature
-    return success, output, cost, provider
+    return success, output, cost, provider, files
 
 
 def main():
