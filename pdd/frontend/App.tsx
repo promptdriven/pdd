@@ -11,6 +11,7 @@ import AddToQueueModal from './components/AddToQueueModal';
 import AuthStatusIndicator from './components/AuthStatusIndicator';
 import ReauthModal from './components/ReauthModal';
 import ErrorBoundary from './components/ErrorBoundary';
+import DeviceIndicator from './components/DeviceIndicator';
 import { api, PromptInfo, RunResult, CommandRequest } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
 import { useJobs, JobInfo } from './hooks/useJobs';
@@ -569,10 +570,10 @@ const App: React.FC = () => {
             </div>
 
             {/* View switcher - centered on larger screens */}
-            <div className="flex gap-1 sm:gap-2 bg-surface-800/50 p-1 rounded-xl">
+            <div className="flex gap-1 sm:gap-2 bg-surface-800/50 p-1 rounded-xl max-w-[280px] xs:max-w-none overflow-x-auto scrollbar-hide">
               <button
                 onClick={() => setView('architecture')}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                   view === 'architecture'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
@@ -582,7 +583,7 @@ const App: React.FC = () => {
               </button>
               <button
                 onClick={() => setView('prompts')}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                   view === 'prompts'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
@@ -592,7 +593,7 @@ const App: React.FC = () => {
               </button>
               <button
                 onClick={() => setView('bug')}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                   view === 'bug'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
@@ -602,7 +603,7 @@ const App: React.FC = () => {
               </button>
               <button
                 onClick={() => setView('settings')}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                   view === 'settings'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
@@ -685,7 +686,7 @@ const App: React.FC = () => {
       )}
 
       {/* Main content - responsive padding and max-width */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 pb-20 sm:pb-24">
+      <main className={`mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 pb-16 sm:pb-20 ${view === 'architecture' ? 'max-w-none' : 'max-w-7xl'}`}>
         {!serverConnected && (
           <div className="mb-4 sm:mb-6 p-3 sm:p-4 glass-light rounded-xl border border-yellow-500/20 animate-fade-in">
             <div className="flex items-start gap-3">
@@ -749,7 +750,7 @@ const App: React.FC = () => {
               </p>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-2">
               {/* Left column: Input and action */}
               <div className="space-y-4">
                 {/* Main input card */}
@@ -940,6 +941,9 @@ const App: React.FC = () => {
       {showReauthModal && (
         <ReauthModal onClose={() => setShowReauthModal(false)} />
       )}
+
+      {/* Device indicator for responsive testing (dev only) */}
+      <DeviceIndicator />
     </div>
     </ErrorBoundary>
   );
