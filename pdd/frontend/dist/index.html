@@ -330,6 +330,31 @@
       .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail {
         color: rgba(255, 255, 255, 0.8) !important;
       }
+
+      /* Mobile responsive utilities */
+      /* Hide scrollbars utility */
+      .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+      }
+
+      /* Safe area insets for notched devices */
+      .safe-top {
+        padding-top: env(safe-area-inset-top);
+      }
+      .safe-bottom {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+
+      /* Prevent iOS zoom on input focus */
+      @media screen and (max-width: 640px) {
+        input, textarea, select {
+          font-size: 16px !important;
+        }
+      }
     </style>
 
   <script type="importmap">
@@ -342,7 +367,7 @@
   }
 }
 </script>
-  <script type="module" crossorigin src="/assets/index-qXwiiiCs.js"></script>
+  <script type="module" crossorigin src="/assets/index-enqWCBYk.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-B5DZHykP.css">
 </head>
   <body class="bg-surface-950 text-gray-200">

@@ -89,6 +89,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [validationResult, setValidationResult] = useState<ArchitectureValidationResult | null>(null);
   const [highlightedModules, setHighlightedModules] = useState<Set<string>>(new Set());
 
+  // Mobile detection state
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
   // Architecture history hook for undo/redo
   const {
     architecture: editableArchitecture,
@@ -112,6 +115,13 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       setOriginal(architecture);
     }
   }, [architecture, setOriginal]);
+
+  // Mobile detection useEffect
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Display architecture: use editable version if in edit mode
   const displayArchitecture = editMode ? editableArchitecture : architecture;
@@ -954,23 +964,84 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
         <div className="flex-1 min-h-0">
           {mode === 'graph' && displayArchitecture ? (
-            <DependencyViewer
-              architecture={displayArchitecture}
-              prdContent={prdContent}
-              appName={appName}
-              onRegenerate={handleRegenerate}
-              onModuleClick={handleModuleClick}
-              onGeneratePrompts={handleGeneratePrompts}
-              isGeneratingPrompts={isGeneratingPrompts}
-              existingPrompts={existingPrompts}
-              promptsInfo={promptsInfo}
-              editMode={editMode}
-              onModuleEdit={handleModuleEdit}
-              onModuleDelete={handleModuleDelete}
-              onDependencyAdd={handleDependencyAdd}
-              onDependencyRemove={handleDependencyRemove}
-              highlightedModules={highlightedModules}
-            />
+            isMobile ? (
+              // Mobile fallback - simplified list view
+              <div className="glass rounded-xl border border-surface-700/50 h-full overflow-y-auto p-4">
+                <div className="text-center mb-6">
+                  <svg className="w-12 h-12 mx-auto mb-3 text-surface-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  <h3 className="text-white font-semibold mb-2">Architecture Graph</h3>
+                  <p className="text-sm text-surface-400 mb-4">
+                    The interactive architecture graph is best viewed on desktop devices (screen width &gt; 768px)
+                  </p>
+                  <div className="flex items-center justify-center gap-2 text-xs text-surface-500">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Module list shown below</span>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {displayArchitecture.map((module) => (
+                    <div
+                      key={module.filename}
+                      className="bg-surface-800/50 p-4 rounded-lg border border-surface-700/30 hover:border-surface-600/50 transition-colors"
+                      onClick={() => handleModuleClick(module)}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <div className="font-medium text-white text-sm flex-1">{module.filename}</div>
+                        {existingPrompts.has(`${module.filename.replace('.py', '')}.prompt`) && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-500/10 text-green-400 border border-green-500/20 flex-shrink-0">
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                            Prompt exists
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-surface-400 line-clamp-2 mb-3">{module.description}</p>
+                      {module.dependencies && module.dependencies.length > 0 && (
+                        <div className="flex items-center gap-1.5 text-xs text-surface-500">
+                          <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                          </svg>
+                          <span className="truncate">Depends on: {module.dependencies.join(', ')}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {!editMode && (
+                  <button
+                    onClick={() => handleGeneratePrompts()}
+                    disabled={isGeneratingPrompts}
+                    className="mt-6 w-full px-4 py-3 bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white rounded-xl font-medium transition-all duration-200 shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isGeneratingPrompts ? 'Generating Prompts...' : 'Generate All Prompts'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              // Desktop - full interactive graph
+              <DependencyViewer
+                architecture={displayArchitecture}
+                prdContent={prdContent}
+                appName={appName}
+                onRegenerate={handleRegenerate}
+                onModuleClick={handleModuleClick}
+                onGeneratePrompts={handleGeneratePrompts}
+                isGeneratingPrompts={isGeneratingPrompts}
+                existingPrompts={existingPrompts}
+                promptsInfo={promptsInfo}
+                editMode={editMode}
+                onModuleEdit={handleModuleEdit}
+                onModuleDelete={handleModuleDelete}
+                onDependencyAdd={handleDependencyAdd}
+                onDependencyRemove={handleDependencyRemove}
+                highlightedModules={highlightedModules}
+              />
+            )
           ) : (
             <div className="glass rounded-xl border border-surface-700/50 h-full flex items-center justify-center">
               <div className="text-center text-surface-400">
