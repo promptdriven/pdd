@@ -12,6 +12,7 @@
         - 'recursive' - A boolean to recursively preprocess includes. Default is False.
         - 'double' - A boolean to enable double-curly-brace doubling. Default is False.
         - 'exclude' - An optional list of strings indicating keys to exclude from curly brace doubling.
+        - 'pdd_tags' - A boolean. If True, inject PDD metadata tags (<pdd-reason>, <pdd-interface>, <pdd-dependency>) from architecture.json before preprocessing. Default is False.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`):
             - `str`: The preprocessed prompt.
@@ -36,6 +37,11 @@
       <xml_tagger_example>
       <include>context/xml_tagger_example.py</include>
       </xml_tagger_example>
+
+      - Here is an example of how to use the `architecture_sync` module functions for PDD tags injection:
+      <architecture_sync_example>
+      <include>context/architecture_sync_example.py</include>
+      </architecture_sync_example>
    </internal_example_modules>
 </examples>
 
@@ -44,6 +50,15 @@
     1. Use `construct_paths` to determine input and output file paths:
         - Call `construct_paths` with `input_file_paths={"prompt_file": prompt_file}`, `command="preprocess"`, `command_options={"output": output}`, and pass through `force`/`quiet` from `ctx.obj`, plus `context_override=ctx.obj.get('context')` so a global `--context` is honored.
     2. Load the content of the `prompt_file` from `input_strings["prompt_file"]`.
+    2b. If `pdd_tags` is True:
+        a. Get the prompt filename from the path using `Path(prompt_file).name`.
+        b. Look up the architecture entry using `get_architecture_entry_for_prompt(prompt_filename)`.
+        c. If entry exists and the prompt does NOT already have PDD tags (check with `has_pdd_tags()`):
+           - Generate tags using `generate_tags_from_architecture(arch_entry)`.
+           - Prepend tags to prompt content: `prompt = tags + '\n\n' + prompt`.
+           - Print success message if not quiet mode.
+        d. If prompt already has PDD tags, print a warning and skip injection.
+        e. If no architecture entry found, print a warning and skip injection.
     3. If `xml` is True:
         a. Retrieve global options from `ctx.obj`:
             - `strength = ctx.obj.get("strength", DEFAULT_STRENGTH)`

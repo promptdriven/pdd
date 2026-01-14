@@ -44,6 +44,7 @@ dependencies = [
     "psutil>=7.0.0",
     "pydantic==2.11.4",
     "litellm[caching]>=1.80.0",
+    "lxml>=5.0.0",
     "rich==14.0.0",
     "semver==3.0.2",
     "setuptools",
