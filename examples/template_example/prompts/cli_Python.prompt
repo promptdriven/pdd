@@ -1,0 +1,76 @@
+I will create a production-grade code-generation prompt for the Python CLI module (src/edit_file_tool/cli.py) that implements the `edit-file` command, handling argument parsing, invoking the core async editing function, printing user-friendly results including LLM cost, and mapping CLI flags to the library API while following the project’s architecture and interfaces.
+
+Key difficulties for a CLI here include: (1) async invocation from a sync entry point (mitigate by using asyncio.run with safe event-loop handling), (2) consistent, predictable exit codes and stderr/stdout separation (mitigate by strict error handling and printing errors to stderr), (3) validation of file path, cache mode, and max iterations (mitigate by argparse type/choices and preflight checks), and (4) avoiding leaking secrets and controlling verbose logging (mitigate by never printing API keys, and ensuring verbose output is opt-in).
+
+Role and responsibility: This CLI module is the user-facing command-line entry point for the edit-file-tool interface layer. It parses command-line arguments for file editing requests, validates inputs, maps CLI options to the core async `edit_file` API, runs the edit operation, and reports success/failure along with LLM cost information in a clear, script-friendly way.
+
+Requirements
+1. Implement a `main(argv: Optional[List[str]] = None) -> int` function that serves as the console script entry point (`edit-file`) and returns a process exit code (0 success, non-zero failure).
+2. Provide command-line parsing for: positional `file_path` and positional `edit_instructions`, plus flags `--verbose` (bool), `--model` (str, default `claude-3-7-sonnet-20250219`), and `--cache` (choices `auto|always|never`, default `auto`).
+3. Validate that `file_path` exists and is a file before invoking the LLM; on validation failure, print a clear message to stderr and return a non-zero exit code without traceback.
+4. Invoke the core async function `edit_file(...)` from `edit_file_tool.core` using asyncio in a robust way suitable for CLI usage on Python 3.9+.
+5. Map `--cache` values to the library’s `use_cache` parameter correctly: `auto` -> "auto", `always` -> True, `never` -> False.
+6. Display output consistent with the PRD examples: always print `LLM cost: $X.XXXX` after attempting an edit (even on failure if a cost is available), and then print either `File edited successfully!` or `Error: <message>`.
+7. Support `--verbose` to enable additional diagnostic output (without leaking secrets). At minimum, verbose should print chosen model and cache mode; if core prints additional details, the CLI should not suppress them.
+8. Ensure proper stdout/stderr usage: success messages and cost to stdout; errors to stderr; keep messages stable and easy to parse.
+9. Handle common runtime errors gracefully (missing ANTHROPIC_API_KEY, network/API errors propagated by core, permission errors writing file) by catching exceptions, printing a user-friendly error, and returning non-zero exit code.
+10. Be lightweight with dependencies: use only standard library for CLI parsing (argparse) and asyncio; do not introduce third-party CLI frameworks.
+11. Follow module design conventions: if executed as a script (`python -m edit_file_tool.cli`), it should call main and exit with returned code.
+12. Include docstrings and type hints for public functions; keep code formatting and naming clean and consistent.
+13. All inputs must be in plaintext
+
+Dependencies
+<core_async_module>
+  [File not found: context/core_async_module_example.py]
+</core_async_module>
+<cost_tracker_utility>
+  [File not found: context/cost_tracker_utility_example.py]
+</cost_tracker_utility>
+<cache_manager_utility>
+  [File not found: context/cache_manager_utility_example.py]
+</cache_manager_utility>
+Prompt Dependencies:
+- core_async_module_Python.prompt (src/edit_file_tool/core.py) provides `edit_file(...)` async API used by CLI
+- cost_tracker_utility_Python.prompt (src/edit_file_tool/cost_tracker_utility.py) cost computation is surfaced via core return value; CLI must display cost consistently
+- cache_manager_utility_Python.prompt (src/edit_file_tool/cache_manager_utility.py) cache semantics reflected via CLI `--cache` mapping
+
+Instructions
+- Create `src/edit_file_tool/cli.py` implementing:
+  - `build_parser() -> argparse.ArgumentParser` that defines the CLI interface:
+    - program name: `edit-file`
+    - positional args:
+      - `file_path`: path to target file
+      - `edit_instructions`: natural language instruction string (ensure it captures spaces when quoted by shell; argparse normal behavior is fine)
+    - options:
+      - `--verbose` / `-v`: action="store_true"
+      - `--model`: default "claude-3-7-sonnet-20250219"
+      - `--cache`: choices ["auto","always","never"], default "auto"
+      - (Do not add new flags not present in architecture; if you choose to add `--max-iterations`, only do so if you clearly gate it behind a conservative default and keep it optional—otherwise omit.)
+  - `_map_cache_mode(cache_flag: str) -> Union[str, bool]` that returns "auto" / True / False.
+  - `async def _run_edit(args) -> Tuple[bool, Optional[str], float]` that calls `edit_file(file_path=..., edit_instructions=..., model=..., verbose=..., use_cache=..., max_iterations=10)` and returns its tuple.
+  - `main(argv: Optional[List[str]] = None) -> int`:
+    - parse args
+    - validate file existence and is-file using `pathlib.Path`
+    - if `args.verbose`, print a small preamble (to stdout) such as `Model: ...` and `Cache: ...`
+    - run the async function using `asyncio.run(...)`
+    - print `LLM cost: $...` formatted to 4 decimals (use `f"{cost:.4f}"`; ensure cost is float even if None—treat missing as 0.0)
+    - if success True: print `File edited successfully!` and return 0
+    - else: print `Error: ...` to stderr and return 1
+    - wrap runtime in try/except to catch:
+      - `KeyboardInterrupt`: print `Error: Interrupted` to stderr, return 130
+      - `Exception` fallback: print `Error: <exception message>` to stderr (no stack trace by default), return 1
+- Do not implement editing logic here; all editing must be delegated to `edit_file_tool.core.edit_file`.
+- Ensure the module is import-safe (no side effects at import time beyond definitions).
+- Add `if __name__ == "__main__": raise SystemExit(main())`.
+- Testing notes (write code to be testable, but do not create tests unless requested):
+  - `main(argv=...)` should be easy to call from unit tests.
+  - Use deterministic output strings as specified.
+  - Avoid reading environment variables directly in CLI (core likely does); CLI should only surface related errors.
+
+Deliverable
+- A complete Python module at `src/edit_file_tool/cli.py` implementing the `edit-file` CLI entry point with `main()` as specified.
+- The module must integrate with packaging entry point `edit_file_tool.cli:main` and be runnable both as `edit-file ...` and `python -m edit_file_tool.cli ...`.
+
+Implementation assumptions (explicit)
+- `edit_file_tool.core` exposes `async def edit_file(file_path: str, edit_instructions: str, model: str = ..., verbose: bool = False, use_cache: Union[str,bool] = "auto", max_iterations: int = 10) -> Tuple[bool, str, float]` exactly (or compatibly) as described in the architecture.
+- Core is responsible for interacting with the Anthropic API, applying caching/think-tool behavior, editing the file, and returning cost; the CLI only formats and displays results without duplicating core logic.
