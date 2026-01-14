@@ -22,7 +22,7 @@ export interface ModuleNodeData {
   isHighlighted?: boolean;  // For error highlighting (e.g., circular dependencies)
 }
 
-const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected }) => {
+const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos, yPos }) => {
   const { label, module, promptInfo, hasPrompt, colors, onClick, editMode, onEdit, isHighlighted } = data;
   const hasCode = !!promptInfo?.code;
   const hasTest = !!promptInfo?.test;
@@ -79,7 +79,7 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected }) => 
             ${selected ? 'ring-2 ring-accent-500' : ''}
             ${isHighlighted ? 'ring-2 ring-red-500 animate-pulse' : ''}
           `}
-          style={{ width: 200, minHeight: 70 }}
+          style={{ width: 200, minHeight: 85 }}
         >
           {/* Edit button overlay - only visible in edit mode on hover */}
           {editMode && (
@@ -128,6 +128,9 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected }) => 
           )}
 
           <p className="font-medium text-sm text-white truncate w-full">{label}</p>
+          <p className="text-[10px] text-surface-400 truncate w-full font-mono" title={`Position: (${Math.round(xPos)}, ${Math.round(yPos)})`}>
+            x: {Math.round(xPos)}, y: {Math.round(yPos)}
+          </p>
           <p className={`text-xs ${colors.text} truncate w-full`}>
             {module.interface?.type || 'module'}
           </p>
