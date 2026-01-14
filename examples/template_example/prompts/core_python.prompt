@@ -1,0 +1,284 @@
+You are implementing the core async module (src/edit_file_tool/core.py) for the edit-file-tool backend/library layer. This module orchestrates end-to-end "edit a file via Claude" workflows: reading the target file, deciding whether to use prompt caching, calling the Anthropic Claude API with the text_editor_20250124 tool (and optional think capability), iterating conversationally up to a maximum number of iterations, applying edits via tool calls, and returning a stable API contract (success flag, error message, total USD cost).
+
+**PRODUCTION MODULE - REAL IMPLEMENTATION REQUIRED**
+
+This module will be imported by cli.py and __init__.py and used immediately in production with real API keys to edit real files. It MUST call the real Anthropic API via think_tool_capability.invoke_with_thinking(), execute text_editor_20250124 tool operations on actual files, and track real API costs. No stubs, placeholders, simulations, or hardcoded returns. If you return (False, "not implemented", 0.0), the entire application is broken and unusable.
+
+Requirements
+1. **EXACT FUNCTION SIGNATURE (from architecture.json line 116):**
+   ```python
+   async def edit_file(
+       file_path: str,
+       edit_instructions: str,  # <-- MUST be "edit_instructions", NOT "instructions"
+       model: str = 'claude-haiku-4-5@20251001',
+       verbose: bool = False,
+       use_cache: Union[str, bool] = 'auto',
+       max_iterations: int = 10
+   ) -> Tuple[bool, str, float]:
+   ```
+2. Use Claude's text_editor_20250124 tool to perform file operations (view, str_replace, insert, undo_edit). Support multi-step edits via iterative conversation with max_iterations limit.
+3. Integrate prompt caching: call cache_manager_utility.should_use_cache(file_path, file_size, use_cache). When enabled, apply cache_control={"type": "ephemeral"} to file content block (NOT {"scope": "ephemeral"}).
+4. Integrate cost tracking: accumulate total USD cost via costs returned from think_tool_capability.invoke_with_thinking(). DO NOT recalculate with cost_tracker_utility (causes double-counting).
+5. Call think_tool_capability.invoke_with_thinking(messages, tools, model) for API invocations. It returns (response_dict, cost_float) and MUST be awaited.
+6. Error handling: return (False, error_message, cost) for expected failures (file not found, API errors, tool failures, iteration exhaustion). Only raise for programmer errors.
+7. Validation: validate file_path exists and is a file, edit_instructions is non-empty, max_iterations ≥ 1. Use exact error formats:
+   - "file_path must be non-empty"
+   - "edit_instructions must be non-empty"
+   - "max_iterations must be at least 1"
+   - "file_path does not exist"
+   - "file_path is not a file"
+8. Logging: when verbose=True, emit progress logs (iteration number, caching status, cost breakdown). Use logging module, not print.
+9. Performance: read file once, use caching when beneficial, keep messages concise.
+10. Security: only edit files via text_editor tool. Treat edit_instructions as untrusted input.
+11. Termination: return success when model provides final response without tool_use. Fail gracefully on max_iterations exhaustion.
+12. Compatibility: Python 3.9+, use typing annotations, importable from src layout.
+
+Dependencies
+This module depends on fully implemented utilities:
+- `from edit_file_tool import cache_manager_utility` - provides `should_use_cache(file_path, file_size, use_cache) -> bool`
+- `from edit_file_tool import think_tool_capability` - provides `async def invoke_with_thinking(messages, tools, model) -> Tuple[dict, float]`
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % Example of how to determine if prompt caching should be used:
+    <edit_file_tool.cache_manager_utility><include>src/examples/cache_manager_utility_example.py</include></edit_file_tool.cache_manager_utility>
+
+    % Example of how to invoke the Anthropic API with thinking and tool capabilities:
+    <edit_file_tool.think_tool_capability><include>src/examples/think_tool_capability_example.py</include></edit_file_tool.think_tool_capability>
+</internal_example_modules>
+
+**CRITICAL: invoke_with_thinking is async and MUST be awaited:**
+```python
+# CORRECT - with await keyword:
+response, iteration_cost = await think_tool_capability.invoke_with_thinking(messages, tools, model)
+total_cost += iteration_cost  # Add cost ONCE per iteration
+
+# WRONG - missing await (causes "CoroutineType is not iterable" error):
+response, cost = think_tool_capability.invoke_with_thinking(messages, tools, model)
+
+# WRONG - double-counting cost:
+response, call_cost = await think_tool_capability.invoke_with_thinking(messages, tools, model)
+total_cost += call_cost
+total_cost += cost_tracker_utility.calculate_cost(...)  # DO NOT recalculate
+```
+
+Required Implementation Pattern
+```python
+async def edit_file(
+    file_path: str,
+    edit_instructions: str,
+    model: str = "claude-haiku-4-5@20251001",
+    verbose: bool = False,
+    use_cache: Union[str, bool] = "auto",
+    max_iterations: int = 10
+) -> Tuple[bool, str, float]:
+    # 1. Validate inputs
+    error = _validate_inputs(file_path, edit_instructions, max_iterations)
+    if error:
+        return (False, error, 0.0)
+
+    # 2. Read file and determine caching
+    file_content = Path(file_path).read_text()
+    file_size = os.path.getsize(file_path)
+    use_caching = cache_manager_utility.should_use_cache(file_path, file_size, use_cache)
+
+    # 3. Build messages with cache_control if enabled
+    messages = _build_initial_messages(file_path, file_content, edit_instructions, use_caching)
+    # cache_control format: {"type": "ephemeral"} on file content block
+
+    # 4. Build tools schema
+    tools = _build_tools_schema()  # Must include text_editor_20250124
+
+    # 5. MAIN ITERATION LOOP
+    total_cost = 0.0
+    for iteration in range(max_iterations):
+        # MUST call real API with await
+        response, iteration_cost = await think_tool_capability.invoke_with_thinking(messages, tools, model)
+        total_cost += iteration_cost  # Add cost ONCE
+
+        # Optional verbose logging (DO NOT recalculate cost)
+        if verbose:
+            usage = response.get("usage", {})
+            logger.info(f"Iteration {iteration+1}: cost=${iteration_cost:.6f}")
+
+        # Process response
+        content_blocks = response.get("content", [])
+        tool_uses = [block for block in content_blocks if block.get("type") == "tool_use"]
+
+        if not tool_uses:
+            return (True, "", total_cost)
+
+        # Append assistant message with tool_calls (required by OpenAI/LiteLLM format)
+        messages.append({
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": tu["id"],
+                    "type": "function",
+                    "function": {"name": tu["name"], "arguments": json.dumps(tu["input"])}
+                }
+                for tu in tool_uses if tu.get("name") == "text_editor_20250124"
+            ]
+        })
+
+        # Execute tool operations on actual files and append results in OpenAI format
+        for tool_use in tool_uses:
+            if tool_use.get("name") == "text_editor_20250124":
+                result = _execute_text_editor(tool_use["input"])
+                # CRITICAL: Use OpenAI format (role: "tool"), NOT Anthropic format (role: "user" with type: "tool_result")
+                messages.append({"role": "tool", "tool_call_id": tool_use["id"], "name": tool_use["name"], "content": result})
+
+    return (False, f"Max iterations ({max_iterations}) reached without completing the edit.", total_cost)
+```
+
+Implementation Steps
+1. Import dependencies, validate inputs (file exists, instructions non-empty, max_iterations ≥ 1)
+2. Read file with Path(file_path).read_text(encoding="utf-8"), get file_size with os.path.getsize()
+3. Call cache_manager_utility.should_use_cache() to determine caching
+4. Build initial messages:
+   - First message contains instructions and file content
+   - If caching enabled, add cache_control={"type": "ephemeral"} to file content block
+   - Keep instructions uncached (dynamic content)
+5. Build tools schema for text_editor_20250124:
+   ```python
+   {
+       "name": "text_editor_20250124",
+       "description": "A text editor tool to view, create, and edit files",
+       "input_schema": {
+           "type": "object",
+           "properties": {
+               "command": {"type": "string", "enum": ["view", "create", "str_replace", "insert", "undo_edit"]},
+               "path": {"type": "string"},
+               # Additional properties per command
+           },
+           "required": ["command", "path"]
+       }
+   }
+   ```
+6. Iteration loop:
+   - Call await invoke_with_thinking(messages, tools, model) → returns (response_dict, cost_float)
+   - Add cost to total_cost ONCE per iteration
+   - Extract token counts from response.get("usage", {}) for logging only (DO NOT recalculate cost)
+   - Check response.get("content", []) for tool_use blocks
+   - If tool_use present:
+     a. Append assistant message with tool_calls in OpenAI format
+     b. Execute text_editor operations
+     c. Append tool results using OpenAI format: {"role": "tool", "tool_call_id": ..., "name": ..., "content": ...}
+     d. Continue to next iteration
+   - If no tool_use: return (True, "", total_cost)
+7. After loop exhaustion: return (False, "Max iterations...", total_cost)
+
+Helper Functions
+- _validate_inputs(file_path, edit_instructions, max_iterations) -> Optional[str] - returns error message or None
+- _build_initial_messages(file_path, file_content, edit_instructions, caching_enabled) -> List[dict]
+- _build_tools_schema() -> List[dict] - returns text_editor_20250124 tool definition
+- _execute_text_editor(tool_input: Dict) -> str - executes view/create/str_replace/insert/undo_edit on actual files
+
+Tool Execution Details
+The _execute_text_editor function MUST perform real file operations:
+- view: read file, return content
+- create: write new file
+- str_replace: read file, replace text, write file
+- insert: read file, insert at position, write file
+- undo_edit: handle undo (can return "unsupported" if complex)
+
+Response Structure
+API responses from invoke_with_thinking have this structure:
+```
+{
+    "content": [
+        {"type": "text", "text": "..."},
+        {"type": "tool_use", "id": "...", "name": "text_editor_20250124", "input": {...}}
+    ],
+    "stop_reason": "tool_use" or "end_turn",
+    "usage": {
+        "input_tokens": 123,
+        "output_tokens": 45,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+    }
+}
+```
+
+**CRITICAL: LiteLLM Message Format Requirements**
+Since this module uses litellm (via think_tool_capability), ALL messages must use OpenAI format, NOT Anthropic native format:
+
+Tool Results - CORRECT (OpenAI format for LiteLLM):
+```python
+# First append assistant message with tool_calls
+messages.append({
+    "role": "assistant",
+    "tool_calls": [{"id": tool_id, "type": "function", "function": {"name": tool_name, "arguments": json.dumps(args)}}]
+})
+# Then append tool result
+messages.append({"role": "tool", "tool_call_id": tool_id, "name": tool_name, "content": result_string})
+```
+
+Tool Results - WRONG (Anthropic native format - causes LiteLLM validation error):
+```python
+# DO NOT USE - This will cause "Invalid user message" error with LiteLLM
+messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": result}]})
+```
+
+Forbidden Patterns - DO NOT:
+- Return hardcoded tuples without calling invoke_with_thinking()
+- Use asyncio.sleep() or fake API responses
+- Omit await keyword on invoke_with_thinking() call
+- Recalculate cost with cost_tracker_utility after invoke_with_thinking() (double-counting)
+- Use cache_control={"scope": "ephemeral"} (wrong format, use {"type": "ephemeral"})
+- Use Anthropic native format for tool results (causes LiteLLM validation failure)
+
+Verification Checklist
+Your implementation MUST have ALL of these:
+- ✅ Calls `await think_tool_capability.invoke_with_thinking()` inside iteration loop
+- ✅ Processes response["content"] blocks from API
+- ✅ Executes text_editor_20250124 operations on actual files (reads/writes disk)
+- ✅ Accumulates cost from invoke_with_thinking return value ONLY (once per iteration)
+- ✅ Uses cache_control format: {"type": "ephemeral"}
+- ✅ Returns tuple with real cost values (not 0.0 unless no API calls made)
+- ✅ Uses OpenAI format for tool results: {"role": "tool", "tool_call_id": ..., "name": ..., "content": ...}
+- ✅ Appends assistant message with tool_calls before tool result messages
+- ❌ NO comments mentioning "stub", "placeholder", "TODO", or "not implemented"
+- ❌ NO hardcoded returns without real API calls
+- ❌ NO missing await keywords
+- ❌ NO double-counting of costs
+- ❌ NO Anthropic-native tool_result format (causes LiteLLM validation errors)
+
+Context & Documentation
+Official Anthropic documentation for correct implementation:
+
+<web>https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching</web>
+<web>https://docs.anthropic.com/en/docs/tool-use</web>
+<web>https://docs.anthropic.com/en/api/messages</web>
+
+Example/Program Requirements for PDD Compatibility
+When generating the example program (examples/program*.py), include API key validation to support graceful testing:
+
+```python
+import os
+import sys
+
+async def main():
+    # Check for API key before attempting any operations
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("=" * 60)
+        print("ANTHROPIC_API_KEY environment variable not set.")
+        print("This example requires an Anthropic API key to run.")
+        print()
+        print("To run this example, set your API key:")
+        print("  export ANTHROPIC_API_KEY='your-api-key-here'")
+        print()
+        print("Get your key at: https://console.anthropic.com/")
+        print("=" * 60)
+        sys.exit(0)  # Exit gracefully (not an error)
+
+    # Proceed with actual edit_file demonstration...
+    sample_file = project_root / "examples" / "sample_target.txt"
+    # ... rest of example code ...
+```
+
+This pattern ensures:
+- The example code runs without crashing during validation workflows
+- Users receive clear, helpful guidance when API keys are missing
+- Production code (core.py) still makes real API calls as required
+- Testing and validation complete successfully without requiring external API access
