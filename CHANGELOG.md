@@ -1,22 +1,47 @@
+## v0.0.113 (2026-01-13)
+
+### Feat
+
+- **frontend**: Add full-width layout for large screens
+- **frontend**: Add mobile responsive design with device-aware UI
+
+## v0.0.112 (2026-01-13)
+
+### Feat
+
+- **Resume Support for `pdd bug`:** Agentic bug orchestrator now persists state to `.pdd/bug-state/` after each step completion, enabling automatic resume of interrupted workflows. Restored state includes step outputs, cost tracking, changed files, and worktree path. Worktree recreation preserves existing branch with accumulated work.
+
+### Fix
+
+- **OpenAI Strict Mode Schema Compliance:** Fixed JSON schema generation to meet OpenAI's strict mode requirements. New `_ensure_all_properties_required()` helper ensures all properties are in the `required` array (Pydantic only includes fields without defaults). Added `additionalProperties: false` to all structured output schemas. Fixes schema rejection errors when using OpenAI models with strict mode enabled.
+
 ## v0.0.111 (2026-01-12)
 
 ### Feat
 
-- Add bidirectional diff analysis for prompt-code comparison
-- Add Task Queue panel and Architecture graph editing for PDD Connect
-- Add prompt-code diff visualization feature for PDD Connect
-- Add pdd auth CLI command for PDD Cloud authentication
+- **PDD Auth CLI Command:** New `pdd auth` command group with subcommands: `login` (GitHub device flow), `status` (authentication state), `logout` (clear tokens), and `token` (output JWT with --format raw|json). Includes 241-line implementation in `pdd/commands/auth.py` with keyring integration, comprehensive tests (17 tests), and README documentation. Added __init__.py files to test directories to fix pytest module name collision.
+
+- **Prompt-Code Diff Visualization:** New LLM-powered diff analysis feature for PDD Connect that semantically compares prompt requirements against code implementation. Includes POST `/api/v1/prompts/diff-analysis` endpoint with "quick" and "detailed" modes, 10-minute in-memory caching, and structured JSON output (DiffSection, LineMapping, DiffStats models). Frontend `PromptCodeDiffModal` component features side-by-side view with section navigator, line highlighting sync, color-coded status (matched/partial/missing/extra), and summary statistics. Added 8 comprehensive tests including Z3 formal verification for score bounds and coverage calculations.
+
+- **Bidirectional Diff Analysis:** Enhanced diff visualization with dual-direction coverage: Prompt→Code (how much of prompt is implemented) and Code→Prompt (how much of code is documented). Updated API models with `promptToCodeCoverage`, `codeToPromptCoverage`, `totalCodeFeatures`, `documentedFeatures`, and `undocumentedFeatures`. Frontend includes direction toggle buttons and displays both directional scores. Diff analysis prompt extracted to separate `prompts/prompt_code_diff_LLM.prompt` file following PDD conventions.
+
+- **Task Queue Panel & Architecture Editing:** Comprehensive frontend enhancements for PDD Connect including TaskQueuePanel for job queuing UI with TaskQueueItem, TaskQueueControls, AddToQueueModal components. New useTaskQueue hook manages queue state using spawnTerminal for consistent command execution. Architecture editing features: GraphToolbar with edit/add/delete/undo/redo controls, ModuleEditModal for property editing, AddModuleModal for module creation, useArchitectureHistory hook for undo/redo support. Backend architecture.py routes for persisting changes. ErrorBoundary component for robust error handling. Total: 3,676 lines added across 23 files.
+
+- **E2E Test Generator (Step 9):** New language-agnostic `agentic_bug_step9_e2e_test_LLM.prompt` (289 lines) for automated end-to-end test generation. Supports multi-language test discovery (Python/JavaScript/TypeScript/Go/Rust/Java/Ruby), environment variable patterns per language, and CLI/API/Browser/Integration test approaches with language-specific tools. Includes E2E_FILES_CREATED output marker for file tracking and E2E_FAIL hard stop condition for test validation. Step 10 renamed from step9 to step10 (PR creation). Updated orchestrator to support 10-step workflow with improved test isolation (monkeypatch, tmp_path) and proper async handling in test suite.
 
 ### Fix
 
-- Address copilot review comments
-- Use local LLM for server match/diff endpoints
-- resolve auth status error message and keyring service name mismatch
-- pass context to pdd sync from pdd connect frontend
+- **Auth Environment Handling:** Fixed JWT token environment awareness to prevent prod/staging/local token mixing. CLI auth now defaults to prod when `PDD_ENV` unset while respecting emulator signals and `PDD_CLOUD_URL` overrides (localhost→local, -stg/staging→staging). JWT cache clearing for staging support and keyring service name consistency. Auth status now returns exit code 0 when only refresh token exists (normal state after token expiry).
+
+- **Server LLM Execution:** Match/diff analysis endpoints now use local LLM execution (`use_cloud=False`) to avoid async context issues with cloud authentication in FastAPI server environment.
+
+- **PDD Connect Context Passing:** Fixed missing context parameter in `pdd sync` calls from frontend, ensuring proper project context propagation. Updated files.py route documentation to reflect context field.
+
+- **Test Suite Stability:** Resolved test pollution from direct `os.environ` manipulation by enforcing monkeypatch usage. Updated test mocks for bidirectional diff stats field names. Fixed async test handling in agentic orchestrator tests with proper fixture isolation.
 
 ### Refactor
 
-- Extract diff analysis LLM prompt to separate file
+- Extracted bidirectional diff analysis LLM prompt from inline string to separate `prompts/prompt_code_diff_LLM.prompt` template file following established PDD convention for _LLM.prompt files. Improved maintainability and reusability of diff analysis prompts.
 
 ## v0.0.110 (2026-01-11)
 
