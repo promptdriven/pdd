@@ -187,7 +187,7 @@ def connect(
                     cloud_url = asyncio.run(session_manager.register(
                         session_name=session_name,
                     ))
-                    asyncio.run(session_manager.start_heartbeat())
+                    # Heartbeat will be started by the app's lifespan manager
                     set_active_session_manager(session_manager)
 
                     click.echo(click.style(
