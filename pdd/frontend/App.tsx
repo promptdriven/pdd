@@ -11,7 +11,9 @@ import AddToQueueModal from './components/AddToQueueModal';
 import AuthStatusIndicator from './components/AuthStatusIndicator';
 import ReauthModal from './components/ReauthModal';
 import ErrorBoundary from './components/ErrorBoundary';
-import { api, PromptInfo, RunResult, CommandRequest } from './api';
+import RemoteSessionSelector from './components/RemoteSessionSelector';
+import ExecutionModeToggle from './components/ExecutionModeToggle';
+import { api, PromptInfo, RunResult, CommandRequest, RemoteSessionInfo } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
 import { useJobs, JobInfo } from './hooks/useJobs';
 import { useTaskQueue } from './hooks/useTaskQueue';
@@ -60,6 +62,12 @@ const App: React.FC = () => {
 
   // Toast notifications
   const { addToast } = useToast();
+
+  // Remote session state
+  const [executionMode, setExecutionMode] = useState<'local' | 'remote'>('local');
+  const [remoteSessions, setRemoteSessions] = useState<RemoteSessionInfo[]>([]);
+  const [selectedRemoteSession, setSelectedRemoteSession] = useState<string | null>(null);
+  const [remoteCommandPolling, setRemoteCommandPolling] = useState<Map<string, number>>(new Map());
 
   // Task queue for sequential execution
   const taskQueue = useTaskQueue({
@@ -194,6 +202,108 @@ const App: React.FC = () => {
       });
     }
   }, [serverConnected, pendingPromptPath]);
+
+  // Fetch remote sessions on mount and refresh every 30 seconds
+  useEffect(() => {
+    if (!serverConnected) return;
+
+    const fetchRemoteSessions = async () => {
+      try {
+        const sessions = await api.listRemoteSessions();
+        setRemoteSessions(sessions);
+      } catch (err) {
+        console.error('Failed to fetch remote sessions:', err);
+        // Don't show error toast - user might not be authenticated yet
+      }
+    };
+
+    // Initial fetch
+    fetchRemoteSessions();
+
+    // Refresh every 30s
+    const interval = setInterval(fetchRemoteSessions, 30000);
+
+    return () => clearInterval(interval);
+  }, [serverConnected]);
+
+  // Poll remote command status every 5 seconds
+  const startRemoteCommandPolling = useCallback((commandId: string, sessionId: string) => {
+    let attempts = 0;
+    const maxAttempts = 120; // 10 minutes max (5s intervals)
+
+    const pollInterval = window.setInterval(async () => {
+      attempts++;
+
+      try {
+        const status = await api.getRemoteCommandStatus(sessionId, commandId);
+
+        if (!status) {
+          // Command not found - might have been cleaned up
+          console.warn(`Remote command ${commandId} not found`);
+          return;
+        }
+
+        // Update job status in dashboard
+        updateSpawnedJobStatus(commandId, {
+          status: status.status === 'completed' ? 'completed' :
+                  status.status === 'failed' ? 'failed' : 'running',
+          exit_code: status.response?.exit_code,
+          stdout: status.response?.stdout,
+          stderr: status.response?.stderr,
+        });
+
+        // Check for completion
+        if (status.status === 'completed' || status.status === 'failed') {
+          window.clearInterval(pollInterval);
+          setRemoteCommandPolling(prev => {
+            const next = new Map(prev);
+            next.delete(commandId);
+            return next;
+          });
+
+          // Show completion notification
+          addToast(
+            status.status === 'completed'
+              ? `Remote command completed successfully`
+              : `Remote command failed: ${status.response?.message || 'Unknown error'}`,
+            status.status === 'completed' ? 'success' : 'error',
+            5000
+          );
+        } else if (attempts >= maxAttempts) {
+          // Timeout
+          window.clearInterval(pollInterval);
+          setRemoteCommandPolling(prev => {
+            const next = new Map(prev);
+            next.delete(commandId);
+            return next;
+          });
+
+          updateSpawnedJobStatus(commandId, {
+            status: 'failed',
+            stderr: 'Command timed out after 10 minutes',
+          });
+
+          addToast('Remote command timed out', 'error', 5000);
+        }
+      } catch (error) {
+        console.error('Remote polling error:', error);
+        // Continue polling - might be a temporary network issue
+      }
+    }, 5000); // Poll every 5s
+
+    setRemoteCommandPolling(prev => {
+      const next = new Map(prev);
+      next.set(commandId, pollInterval);
+      return next;
+    });
+  }, [addToast]);
+
+  // Cleanup polling intervals on unmount
+  useEffect(() => {
+    return () => {
+      remoteCommandPolling.forEach(interval => window.clearInterval(interval));
+    };
+  }, [remoteCommandPolling]);
 
   const handleRunCommand = async (command: CommandType, prompt: PromptInfo, commandOptions?: Record<string, any>) => {
     if (!serverConnected) {
@@ -368,21 +478,54 @@ const App: React.FC = () => {
         }
       }
 
-      // Spawn command in a new terminal window for complete isolation
-      const result = await api.spawnTerminal({
-        command: config.backendName,
-        args,
-        options,
-      });
+      // Check if we're in remote mode
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Submit command to remote session via cloud
+        try {
+          const { commandId } = await api.submitRemoteCommand({
+            sessionId: selectedRemoteSession,
+            type: config.backendName,
+            payload: { args, options },
+          });
 
-      if (result.success) {
-        // Add to job dashboard for tracking with server-provided job_id
-        addSpawnedJob(fullDisplayCommand, config.backendName, result.job_id);
-        setExecutionStatus('success');
-        addToast(`Opened terminal: ${fullDisplayCommand}`, 'success', 3000);
+          // Add to job dashboard as a remote job
+          addSpawnedJob(
+            `[Remote] ${fullDisplayCommand}`,
+            config.backendName,
+            commandId,
+            { remote: true, sessionId: selectedRemoteSession }
+          );
+
+          // Start polling for command status
+          startRemoteCommandPolling(commandId, selectedRemoteSession);
+
+          setExecutionStatus('success');
+          addToast(`Command submitted to remote session`, 'success', 3000);
+        } catch (error) {
+          setExecutionStatus('failed');
+          addToast(
+            `Failed to submit remote command: ${error instanceof Error ? error.message : String(error)}`,
+            'error',
+            5000
+          );
+        }
       } else {
-        setExecutionStatus('failed');
-        addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+        // Local execution: Spawn command in a new terminal window for complete isolation
+        const result = await api.spawnTerminal({
+          command: config.backendName,
+          args,
+          options,
+        });
+
+        if (result.success) {
+          // Add to job dashboard for tracking with server-provided job_id
+          addSpawnedJob(fullDisplayCommand, config.backendName, result.job_id);
+          setExecutionStatus('success');
+          addToast(`Opened terminal: ${fullDisplayCommand}`, 'success', 3000);
+        } else {
+          setExecutionStatus('failed');
+          addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+        }
       }
 
       // Clear the status bar after a short delay
@@ -610,6 +753,21 @@ const App: React.FC = () => {
               >
                 <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1" />Settings
               </button>
+            </div>
+
+            {/* Remote session controls - responsive */}
+            <div className="hidden lg:flex items-center gap-3 px-4 py-2 bg-surface-800/30 rounded-xl border border-surface-700/50">
+              <RemoteSessionSelector
+                sessions={remoteSessions}
+                selectedSessionId={selectedRemoteSession}
+                onSelectSession={setSelectedRemoteSession}
+                disabled={!serverConnected}
+              />
+              <ExecutionModeToggle
+                mode={executionMode}
+                onModeChange={setExecutionMode}
+                disabled={!selectedRemoteSession && executionMode === 'remote'}
+              />
             </div>
 
             {/* Server status - responsive */}

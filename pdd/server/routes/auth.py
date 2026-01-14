@@ -19,6 +19,7 @@ from pdd.auth_service import (
     has_refresh_token as _has_refresh_token,
     clear_jwt_cache as _clear_jwt_cache,
     clear_refresh_token as _clear_refresh_token,
+    get_cached_jwt as _get_cached_jwt,
 )
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -88,6 +89,24 @@ async def get_auth_status() -> AuthStatus:
         return AuthStatus(authenticated=True, cached=False, expires_at=None)
 
     return AuthStatus(authenticated=False, cached=False, expires_at=None)
+
+
+class JWTTokenResponse(BaseModel):
+    """Response model for JWT token."""
+
+    jwt: Optional[str] = None
+
+
+@router.get("/jwt-token", response_model=JWTTokenResponse)
+async def get_jwt_token() -> JWTTokenResponse:
+    """
+    Get the current JWT token from cache.
+
+    Returns the cached JWT token if valid, otherwise returns null.
+    Used by the frontend to authenticate with cloud services.
+    """
+    token = _get_cached_jwt()
+    return JWTTokenResponse(jwt=token)
 
 
 @router.post("/logout", response_model=LogoutResult)
