@@ -1,5 +1,13 @@
 ## v0.0.112 (2026-01-13)
 
+### Feat
+
+- **Resume Support for `pdd bug`:** Agentic bug orchestrator now persists state to `.pdd/bug-state/` after each step completion, enabling automatic resume of interrupted workflows. Restored state includes step outputs, cost tracking, changed files, and worktree path. Worktree recreation preserves existing branch with accumulated work.
+
+### Fix
+
+- **OpenAI Strict Mode Schema Compliance:** Fixed JSON schema generation to meet OpenAI's strict mode requirements. New `_ensure_all_properties_required()` helper ensures all properties are in the `required` array (Pydantic only includes fields without defaults). Added `additionalProperties: false` to all structured output schemas. Fixes schema rejection errors when using OpenAI models with strict mode enabled.
+
 ## v0.0.111 (2026-01-12)
 
 ### Feat
