@@ -314,6 +314,41 @@ export interface ArchitectureValidationResult {
   warnings: ArchitectureValidationWarning[];
 }
 
+// Architecture sync types
+export interface ArchitectureSyncRequest {
+  filenames?: string[] | null;  // null = sync all prompts
+  dry_run?: boolean;
+}
+
+export interface ArchitectureSyncModuleResult {
+  filename: string;
+  success: boolean;
+  updated: boolean;
+  changes: {
+    reason?: { old: string; new: string };
+    interface?: { old: any; new: any };
+    dependencies?: { old: string[]; new: string[] };
+  };
+  error?: string;
+}
+
+export interface ArchitectureSyncResult {
+  success: boolean;
+  updated_count: number;
+  skipped_count: number;
+  results: ArchitectureSyncModuleResult[];
+  validation: ArchitectureValidationResult;
+  errors: string[];
+}
+
+export interface GenerateTagsResult {
+  success: boolean;
+  tags: string | null;  // Generated XML tags or null if not found
+  has_existing_tags: boolean;  // True if prompt already has PDD tags
+  architecture_entry: Record<string, any> | null;  // The full architecture entry
+  error: string | null;
+}
+
 // Auth types
 export interface AuthStatus {
   authenticated: boolean;
@@ -670,6 +705,35 @@ class PDDApiClient {
     return this.request<ArchitectureValidationResult>('/api/v1/architecture/validate', {
       method: 'POST',
       body: JSON.stringify({ modules }),
+    });
+  }
+
+  /**
+   * Sync architecture.json from prompt file metadata tags.
+   * Reads <pdd-reason>, <pdd-interface>, <pdd-dependency> tags from prompts
+   * and updates the corresponding architecture.json entries.
+   *
+   * @param request - Sync request with optional filenames and dry_run flag
+   * @returns Sync result with updated modules and validation status
+   */
+  async syncArchitectureFromPrompts(request: ArchitectureSyncRequest = {}): Promise<ArchitectureSyncResult> {
+    return this.request<ArchitectureSyncResult>('/api/v1/architecture/sync-from-prompts', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Generate PDD metadata tags for a prompt from architecture.json.
+   * This is the reverse direction: architecture.json -> prompt tags.
+   *
+   * @param promptFilename - The prompt filename (e.g., "llm_invoke_python.prompt")
+   * @returns Generated tags and architecture entry info
+   */
+  async generateTagsForPrompt(promptFilename: string): Promise<GenerateTagsResult> {
+    return this.request<GenerateTagsResult>('/api/v1/architecture/generate-tags-for-prompt', {
+      method: 'POST',
+      body: JSON.stringify({ prompt_filename: promptFilename }),
     });
   }
 

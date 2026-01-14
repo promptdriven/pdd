@@ -22,6 +22,11 @@ from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
 from .core.cloud import CloudConfig
 from .python_env_detector import detect_host_python_executable
+from .architecture_sync import (
+    get_architecture_entry_for_prompt,
+    has_pdd_tags,
+    generate_tags_from_architecture,
+)
 
 # Cloud request timeout
 CLOUD_REQUEST_TIMEOUT = 400  # seconds
@@ -1065,7 +1070,30 @@ def code_generator_main(
             if output_path:
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
-                p_output.write_text(generated_code_content, encoding="utf-8")
+
+                # Inject architecture metadata tags for .prompt files (reverse sync)
+                final_content = generated_code_content
+                if p_output.suffix == '.prompt':
+                    try:
+                        # Check if this prompt has an architecture entry
+                        arch_entry = get_architecture_entry_for_prompt(p_output.name)
+
+                        # Only inject tags if:
+                        # 1. Architecture entry exists
+                        # 2. Content doesn't already have PDD tags (preserve manual edits)
+                        if arch_entry and not has_pdd_tags(generated_code_content):
+                            tags = generate_tags_from_architecture(arch_entry)
+                            if tags:
+                                # Prepend tags to the generated content
+                                final_content = tags + '\n\n' + generated_code_content
+                                if verbose:
+                                    console.print("[info]Injected architecture metadata tags from architecture.json[/info]")
+                    except Exception as e:
+                        # Don't fail generation if tag injection fails
+                        if verbose:
+                            console.print(f"[yellow]Warning: Could not inject architecture tags: {e}[/yellow]")
+
+                p_output.write_text(final_content, encoding="utf-8")
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
                 # Safety net: ensure architecture HTML is generated post-write if applicable

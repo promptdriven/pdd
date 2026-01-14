@@ -490,6 +490,11 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [showDiffModal, setShowDiffModal] = useState(false);
   const [matchError, setMatchError] = useState<string | null>(null);
 
+  // Sync from architecture state
+  const [isSyncingFromArch, setIsSyncingFromArch] = useState(false);
+  const [syncFromArchError, setSyncFromArchError] = useState<string | null>(null);
+  const [syncFromArchSuccess, setSyncFromArchSuccess] = useState(false);
+
   // Update preview content when toggling preview on or when view mode changes
   useEffect(() => {
     if (showPreview) {
@@ -881,6 +886,71 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     onBack();
   };
 
+  // Sync PDD tags from architecture.json into the prompt
+  const handleSyncFromArchitecture = async () => {
+    if (!editorViewRef.current) return;
+
+    setIsSyncingFromArch(true);
+    setSyncFromArchError(null);
+    setSyncFromArchSuccess(false);
+
+    try {
+      // Get the prompt filename from the path
+      const promptFilename = prompt.prompt.split('/').pop() || prompt.prompt;
+
+      // Call the API to generate tags
+      const result = await api.generateTagsForPrompt(promptFilename);
+
+      if (!result.success) {
+        setSyncFromArchError(result.error || 'Failed to generate tags');
+        return;
+      }
+
+      if (!result.tags) {
+        setSyncFromArchError('No architecture entry found for this prompt');
+        return;
+      }
+
+      if (result.has_existing_tags) {
+        // Prompt already has tags - ask user if they want to replace
+        if (!window.confirm('This prompt already has PDD tags. Replace them with tags from architecture.json?')) {
+          return;
+        }
+        // Remove existing tags before inserting new ones
+        const currentContent = editorViewRef.current.state.doc.toString();
+        // Remove existing pdd tags (simple regex approach)
+        const cleanedContent = currentContent
+          .replace(/<pdd-reason>[\s\S]*?<\/pdd-reason>\s*/g, '')
+          .replace(/<pdd-interface>[\s\S]*?<\/pdd-interface>\s*/g, '')
+          .replace(/<pdd-dependency>[\s\S]*?<\/pdd-dependency>\s*/g, '')
+          .trimStart();
+
+        // Insert new tags at the beginning
+        const newContent = result.tags + '\n\n' + cleanedContent;
+        editorViewRef.current.dispatch({
+          changes: { from: 0, to: editorViewRef.current.state.doc.length, insert: newContent },
+        });
+      } else {
+        // No existing tags - insert at the beginning
+        const currentContent = editorViewRef.current.state.doc.toString();
+        const newContent = result.tags + '\n\n' + currentContent;
+        editorViewRef.current.dispatch({
+          changes: { from: 0, to: editorViewRef.current.state.doc.length, insert: newContent },
+        });
+      }
+
+      // Update state
+      editedContentRef.current = editorViewRef.current.state.doc.toString();
+      setHasChanges(editedContentRef.current !== originalContentRef.current);
+      setSyncFromArchSuccess(true);
+      setTimeout(() => setSyncFromArchSuccess(false), 3000);
+    } catch (e: any) {
+      setSyncFromArchError(e.message || 'Failed to sync from architecture');
+    } finally {
+      setIsSyncingFromArch(false);
+    }
+  };
+
   // Analyze include tag at cursor (triggered by Cmd+. or button click)
   const analyzeIncludeAtCursor = async () => {
     if (!editorViewRef.current) return;
@@ -1035,6 +1105,44 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
               </svg>
             </span>
           )}
+          {syncFromArchSuccess && (
+            <span className="text-emerald-400 text-xs sm:text-sm flex items-center gap-1.5 px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+              <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="hidden sm:inline">Tags injected</span>
+            </span>
+          )}
+          {syncFromArchError && (
+            <span className="text-red-400 text-xs flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10 border border-red-500/20" title={syncFromArchError}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </span>
+          )}
+          {/* Sync from Architecture button */}
+          <button
+            onClick={handleSyncFromArchitecture}
+            disabled={isSyncingFromArch || viewMode === 'processed'}
+            className={`px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm rounded-lg flex items-center gap-1.5 transition-all duration-200 ${
+              !isSyncingFromArch && viewMode === 'raw'
+                ? 'bg-surface-700/50 text-surface-300 hover:text-white hover:bg-surface-600 border border-surface-600'
+                : 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+            }`}
+            title="Inject PDD tags from architecture.json"
+          >
+            {isSyncingFromArch ? (
+              <svg className="animate-spin h-3.5 w-3.5 sm:h-4 sm:w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            )}
+            <span className="hidden sm:inline">{isSyncingFromArch ? 'Syncing...' : 'Sync from JSON'}</span>
+          </button>
           <button
             onClick={handleSave}
             disabled={!hasChanges || saving || viewMode === 'processed'}

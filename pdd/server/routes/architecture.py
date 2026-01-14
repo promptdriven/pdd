@@ -1,16 +1,29 @@
 """
-REST API endpoints for architecture.json validation operations.
+REST API endpoints for architecture.json validation and sync operations.
 
-Provides endpoints for validating architecture changes before saving,
-detecting circular dependencies, missing references, and other structural issues.
+Provides endpoints for:
+- Validating architecture changes before saving
+- Detecting circular dependencies, missing references, and structural issues
+- Syncing architecture.json from prompt file metadata tags
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from pdd.architecture_sync import (
+    ARCHITECTURE_JSON_PATH,
+    sync_all_prompts_to_architecture,
+    update_architecture_from_prompt,
+    get_architecture_entry_for_prompt,
+    generate_tags_from_architecture,
+    has_pdd_tags,
+)
 
 
 router = APIRouter(prefix="/api/v1/architecture", tags=["architecture"])
@@ -57,6 +70,40 @@ class ValidationResult(BaseModel):
     valid: bool  # True if no errors (warnings are OK)
     errors: List[ValidationError]
     warnings: List[ValidationWarning]
+
+
+class SyncRequest(BaseModel):
+    """Request body for sync-from-prompts operation."""
+
+    filenames: Optional[List[str]] = None  # None = sync all prompts
+    dry_run: bool = False
+
+
+class SyncResult(BaseModel):
+    """Result of sync-from-prompts operation."""
+
+    success: bool
+    updated_count: int
+    skipped_count: int = 0
+    results: List[Dict[str, Any]]
+    validation: ValidationResult
+    errors: List[str] = Field(default_factory=list)
+
+
+class GenerateTagsRequest(BaseModel):
+    """Request body for generate-tags-for-prompt operation."""
+
+    prompt_filename: str  # e.g., "llm_invoke_python.prompt"
+
+
+class GenerateTagsResult(BaseModel):
+    """Result of generate-tags-for-prompt operation."""
+
+    success: bool
+    tags: Optional[str] = None  # Generated XML tags or None if not found
+    has_existing_tags: bool = False  # True if prompt already has PDD tags
+    architecture_entry: Optional[Dict[str, Any]] = None  # The full architecture entry
+    error: Optional[str] = None
 
 
 def _detect_circular_dependencies(modules: List[ArchitectureModule]) -> List[List[str]]:
@@ -229,3 +276,176 @@ async def validate_architecture(request: ValidateArchitectureRequest) -> Validat
     Errors block saving (valid=False), warnings are informational (valid=True).
     """
     return _validate_architecture(request.modules)
+
+
+@router.post("/sync-from-prompts", response_model=SyncResult)
+async def sync_from_prompts(request: SyncRequest) -> SyncResult:
+    """
+    Sync architecture.json from prompt file metadata tags.
+
+    This endpoint reads PDD metadata tags (<pdd-reason>, <pdd-interface>,
+    <pdd-dependency>) from prompt files and updates the corresponding entries
+    in architecture.json.
+
+    Prompts are the source of truth - tags in prompts override architecture.json.
+    Validation is lenient - missing tags are OK, only updates fields with tags.
+
+    Request body:
+        {
+            "filenames": ["llm_invoke_python.prompt", ...] | null,
+            "dry_run": false
+        }
+
+    If filenames is null, syncs ALL prompt files.
+    If dry_run is true, validates changes without writing.
+
+    Returns:
+        {
+            "success": bool,  // True if no errors and validation passed
+            "updated_count": int,  // Number of modules updated
+            "skipped_count": int,  // Number of modules skipped (no prompt file)
+            "results": [
+                {
+                    "filename": "...",
+                    "success": bool,
+                    "updated": bool,
+                    "changes": {"reason": {"old": ..., "new": ...}, ...}
+                },
+                ...
+            ],
+            "validation": {
+                "valid": bool,
+                "errors": [...],  // Circular deps, missing deps, etc.
+                "warnings": [...]  // Duplicates, orphans, etc.
+            },
+            "errors": [str, ...]  // Sync operation errors
+        }
+    """
+    try:
+        # Perform sync operation
+        if request.filenames is None:
+            # Sync all prompts
+            sync_result = sync_all_prompts_to_architecture(dry_run=request.dry_run)
+        else:
+            # Sync specific prompts
+            results = []
+            updated_count = 0
+            errors_list = []
+
+            for filename in request.filenames:
+                result = update_architecture_from_prompt(filename, dry_run=request.dry_run)
+                results.append({
+                    'filename': filename,
+                    'success': result['success'],
+                    'updated': result['updated'],
+                    'changes': result['changes'],
+                    'error': result.get('error')
+                })
+
+                if result['success'] and result['updated']:
+                    updated_count += 1
+                elif not result['success']:
+                    errors_list.append(f"{filename}: {result['error']}")
+
+            sync_result = {
+                'success': len(errors_list) == 0,
+                'updated_count': updated_count,
+                'skipped_count': 0,
+                'results': results,
+                'errors': errors_list
+            }
+
+        # Load updated architecture and validate
+        arch_path = Path(ARCHITECTURE_JSON_PATH)
+        arch_data = json.loads(arch_path.read_text(encoding='utf-8'))
+        modules = [ArchitectureModule(**mod) for mod in arch_data]
+        validation_result = _validate_architecture(modules)
+
+        # Overall success: sync succeeded AND validation passed
+        overall_success = sync_result['success'] and validation_result.valid
+
+        return SyncResult(
+            success=overall_success,
+            updated_count=sync_result['updated_count'],
+            skipped_count=sync_result.get('skipped_count', 0),
+            results=sync_result['results'],
+            validation=validation_result,
+            errors=sync_result.get('errors', [])
+        )
+
+    except Exception as e:
+        # Return error result
+        return SyncResult(
+            success=False,
+            updated_count=0,
+            skipped_count=0,
+            results=[],
+            validation=ValidationResult(valid=True, errors=[], warnings=[]),
+            errors=[f"Unexpected error: {str(e)}"]
+        )
+
+
+@router.post("/generate-tags-for-prompt", response_model=GenerateTagsResult)
+async def generate_tags_for_prompt(request: GenerateTagsRequest) -> GenerateTagsResult:
+    """
+    Generate PDD metadata tags for a prompt from architecture.json.
+
+    This is the reverse direction of sync-from-prompts: it reads the architecture.json
+    entry for a prompt and generates XML tags (<pdd-reason>, <pdd-interface>,
+    <pdd-dependency>) that can be injected into the prompt file.
+
+    Request body:
+        {
+            "prompt_filename": "llm_invoke_python.prompt"
+        }
+
+    Returns:
+        {
+            "success": bool,
+            "tags": "<pdd-reason>...</pdd-reason>\\n<pdd-interface>...</pdd-interface>\\n...",
+            "has_existing_tags": false,  // True if prompt already has PDD tags
+            "architecture_entry": {...},  // The full architecture entry (for preview)
+            "error": "Error message if failed"
+        }
+    """
+    try:
+        # Get architecture entry for this prompt
+        entry = get_architecture_entry_for_prompt(request.prompt_filename)
+
+        if entry is None:
+            return GenerateTagsResult(
+                success=False,
+                tags=None,
+                has_existing_tags=False,
+                architecture_entry=None,
+                error=f"No architecture entry found for '{request.prompt_filename}'"
+            )
+
+        # Check if the prompt file already has PDD tags
+        prompts_dir = Path.cwd() / "prompts"
+        prompt_path = prompts_dir / request.prompt_filename
+        existing_tags = False
+
+        if prompt_path.exists():
+            prompt_content = prompt_path.read_text(encoding='utf-8')
+            existing_tags = has_pdd_tags(prompt_content)
+
+        # Generate tags from architecture entry
+        tags = generate_tags_from_architecture(entry)
+
+        return GenerateTagsResult(
+            success=True,
+            tags=tags if tags else None,
+            has_existing_tags=existing_tags,
+            architecture_entry=entry,
+            error=None
+        )
+
+    except Exception as e:
+        return GenerateTagsResult(
+            success=False,
+            tags=None,
+            has_existing_tags=False,
+            architecture_entry=None,
+            error=f"Error generating tags: {str(e)}"
+        )
