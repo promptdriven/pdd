@@ -76,6 +76,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   // Sidebar collapsed state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // Section transition state for smooth view switching
+  const [isSectionTransitioning, setIsSectionTransitioning] = useState(false);
+
   // Existing prompts state - track which prompts already exist with their file info
   const [existingPrompts, setExistingPrompts] = useState<Set<string>>(new Set());
   const [promptsInfo, setPromptsInfo] = useState<PromptInfo[]>([]);
@@ -101,6 +104,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     deleteModule,
     addDependency,
     removeDependency,
+    updatePositions,
     undo,
     redo,
     canUndo,
@@ -446,6 +450,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     removeDependency(targetFilename, sourceFilename);
   }, [removeDependency]);
 
+  // Handle positions change (from node drag - updates all positions at once)
+  const handlePositionsChange = useCallback((positions: Map<string, { x: number; y: number }>) => {
+    updatePositions(positions);
+  }, [updatePositions]);
+
   // Validate and save architecture
   const handleSaveArchitecture = useCallback(async () => {
     if (!editableArchitecture || editableArchitecture.length === 0) return;
@@ -732,6 +741,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                   </div>
                 )}
                 <textarea
+                  key={prdPath || 'prd-manual'}
                   value={prdContent}
                   onChange={(e) => {
                     setPrdContent(e.target.value);
@@ -745,16 +755,24 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
               {/* Tech Stack Section (Collapsible) */}
               <div className="border-t border-surface-700/50">
                 <button
-                  onClick={() => setShowTechStack(!showTechStack)}
+                  onClick={() => {
+                    if (isSectionTransitioning) return;
+                    setIsSectionTransitioning(true);
+                    // Small delay for smooth transition
+                    requestAnimationFrame(() => {
+                      setShowTechStack(!showTechStack);
+                      setTimeout(() => setIsSectionTransitioning(false), 150);
+                    });
+                  }}
                   className="w-full p-2 flex items-center justify-between text-left hover:bg-surface-800/30 transition-colors"
                 >
                   <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Tech Stack (optional)</span>
-                  <svg className={`w-4 h-4 text-surface-400 transition-transform ${showTechStack ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className={`w-4 h-4 text-surface-400 transition-transform duration-200 ${showTechStack ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
                 {showTechStack && (
-                  <div className="border-t border-surface-700/30">
+                  <div className={`border-t border-surface-700/30 transition-opacity duration-150 ${isSectionTransitioning ? 'opacity-50' : 'opacity-100'}`}>
                     <div className="p-2 flex items-center justify-end">
                       <button
                         onClick={() => setShowFileBrowser('techStack')}
@@ -772,6 +790,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                       </div>
                     )}
                     <textarea
+                      key={techStackPath || 'tech-manual'}
                       value={techStackContent}
                       onChange={(e) => {
                         setTechStackContent(e.target.value);
@@ -787,16 +806,23 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
               {/* Advanced Options (Collapsible) */}
               <div className="border-t border-surface-700/50">
                 <button
-                  onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                  onClick={() => {
+                    if (isSectionTransitioning) return;
+                    setIsSectionTransitioning(true);
+                    requestAnimationFrame(() => {
+                      setShowAdvancedOptions(!showAdvancedOptions);
+                      setTimeout(() => setIsSectionTransitioning(false), 150);
+                    });
+                  }}
                   className="w-full p-2 flex items-center justify-between text-left hover:bg-surface-800/30 transition-colors"
                 >
                   <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Model Options</span>
-                  <svg className={`w-4 h-4 text-surface-400 transition-transform ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className={`w-4 h-4 text-surface-400 transition-transform duration-200 ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
                 {showAdvancedOptions && (
-                  <div className="border-t border-surface-700/30 p-3 space-y-4">
+                  <div className={`border-t border-surface-700/30 p-3 space-y-4 transition-opacity duration-150 ${isSectionTransitioning ? 'opacity-50' : 'opacity-100'}`}>
                     {/* Strength slider */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
@@ -1039,6 +1065,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 onModuleDelete={handleModuleDelete}
                 onDependencyAdd={handleDependencyAdd}
                 onDependencyRemove={handleDependencyRemove}
+                onPositionsChange={handlePositionsChange}
                 highlightedModules={highlightedModules}
               />
             )

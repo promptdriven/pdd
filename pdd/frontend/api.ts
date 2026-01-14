@@ -283,6 +283,11 @@ export interface ArchitectureModule {
     type: string;
     [key: string]: any;
   };
+  // Graph position (optional, saved when user drags nodes)
+  position?: {
+    x: number;
+    y: number;
+  };
 }
 
 export interface ArchitectureCheckResult {
