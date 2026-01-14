@@ -11,6 +11,7 @@ import AddToQueueModal from './components/AddToQueueModal';
 import AuthStatusIndicator from './components/AuthStatusIndicator';
 import ReauthModal from './components/ReauthModal';
 import ErrorBoundary from './components/ErrorBoundary';
+import DeviceIndicator from './components/DeviceIndicator';
 import { api, PromptInfo, RunResult, CommandRequest } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
 import { useJobs, JobInfo } from './hooks/useJobs';
@@ -542,7 +543,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-surface-950">
       {/* Modern responsive header */}
       <header className="glass sticky top-0 z-40 border-b border-surface-700/50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12">
           <div className="flex items-center justify-between h-16">
             {/* Logo - responsive sizing */}
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
@@ -569,10 +570,10 @@ const App: React.FC = () => {
             </div>
 
             {/* View switcher - centered on larger screens */}
-            <div className="flex gap-1 sm:gap-2 bg-surface-800/50 p-1 rounded-xl">
+            <div className="flex gap-1 sm:gap-2 bg-surface-800/50 p-1 rounded-xl max-w-[280px] xs:max-w-none overflow-x-auto scrollbar-hide">
               <button
                 onClick={() => setView('architecture')}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                   view === 'architecture'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
@@ -582,7 +583,7 @@ const App: React.FC = () => {
               </button>
               <button
                 onClick={() => setView('prompts')}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                   view === 'prompts'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
@@ -592,7 +593,7 @@ const App: React.FC = () => {
               </button>
               <button
                 onClick={() => setView('bug')}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                   view === 'bug'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
@@ -602,7 +603,7 @@ const App: React.FC = () => {
               </button>
               <button
                 onClick={() => setView('settings')}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                   view === 'settings'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
@@ -685,7 +686,7 @@ const App: React.FC = () => {
       )}
 
       {/* Main content - responsive padding and max-width */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 pb-20 sm:pb-24">
+      <main className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-4 sm:py-6 pb-16 sm:pb-20">
         {!serverConnected && (
           <div className="mb-4 sm:mb-6 p-3 sm:p-4 glass-light rounded-xl border border-yellow-500/20 animate-fade-in">
             <div className="flex items-start gap-3">
@@ -737,7 +738,7 @@ const App: React.FC = () => {
             <ProjectSettings />
           </div>
         ) : (
-          <div className="max-w-4xl mx-auto animate-fade-in">
+          <div className="max-w-6xl mx-auto animate-fade-in">
             {/* Header */}
             <div className="mb-6 text-center sm:text-left">
               <h2 className="text-xl sm:text-2xl font-semibold text-white mb-2 flex items-center justify-center sm:justify-start gap-2">
@@ -749,7 +750,7 @@ const App: React.FC = () => {
               </p>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-2">
               {/* Left column: Input and action */}
               <div className="space-y-4">
                 {/* Main input card */}
@@ -920,7 +921,7 @@ const App: React.FC = () => {
 
       {/* Modern footer - responsive */}
       <footer className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-surface-700/50 px-4 sm:px-6 py-2.5 sm:py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 text-xs text-surface-500">
+        <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 flex items-center justify-center gap-2 text-xs text-surface-500">
           <span className="w-4 h-4 rounded bg-surface-800/80 flex items-center justify-center p-0.5">
             <svg viewBox="0 0 1024 1024" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
               <g stroke="#00e3ff" strokeWidth="70" strokeLinecap="round" strokeLinejoin="round" fill="none">
@@ -940,6 +941,9 @@ const App: React.FC = () => {
       {showReauthModal && (
         <ReauthModal onClose={() => setShowReauthModal(false)} />
       )}
+
+      {/* Device indicator for responsive testing (dev only) */}
+      <DeviceIndicator />
     </div>
     </ErrorBoundary>
   );
