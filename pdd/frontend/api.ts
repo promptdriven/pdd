@@ -336,6 +336,14 @@ export interface ArchitectureSyncResult {
   errors: string[];
 }
 
+export interface GenerateTagsResult {
+  success: boolean;
+  tags: string | null;  // Generated XML tags or null if not found
+  has_existing_tags: boolean;  // True if prompt already has PDD tags
+  architecture_entry: Record<string, any> | null;  // The full architecture entry
+  error: string | null;
+}
+
 // Auth types
 export interface AuthStatus {
   authenticated: boolean;
@@ -707,6 +715,20 @@ class PDDApiClient {
     return this.request<ArchitectureSyncResult>('/api/v1/architecture/sync-from-prompts', {
       method: 'POST',
       body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Generate PDD metadata tags for a prompt from architecture.json.
+   * This is the reverse direction: architecture.json -> prompt tags.
+   *
+   * @param promptFilename - The prompt filename (e.g., "llm_invoke_python.prompt")
+   * @returns Generated tags and architecture entry info
+   */
+  async generateTagsForPrompt(promptFilename: string): Promise<GenerateTagsResult> {
+    return this.request<GenerateTagsResult>('/api/v1/architecture/generate-tags-for-prompt', {
+      method: 'POST',
+      body: JSON.stringify({ prompt_filename: promptFilename }),
     });
   }
 
