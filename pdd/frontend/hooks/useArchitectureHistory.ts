@@ -23,6 +23,9 @@ interface UseArchitectureHistoryReturn {
   addDependency: (targetFilename: string, sourceFilename: string) => void;
   removeDependency: (targetFilename: string, sourceFilename: string) => void;
 
+  // Position operations
+  updatePositions: (positions: Map<string, { x: number; y: number }>) => void;
+
   // History operations
   undo: () => void;
   redo: () => void;
@@ -141,6 +144,21 @@ export function useArchitectureHistory(
     [state.present, pushState]
   );
 
+  // Position operations - update all positions at once without creating undo history
+  const updatePositions = useCallback(
+    (positions: Map<string, { x: number; y: number }>) => {
+      // Update all positions directly without pushing to history (too many small changes)
+      setState((prev) => ({
+        ...prev,
+        present: prev.present.map((m) => {
+          const pos = positions.get(m.filename);
+          return pos ? { ...m, position: pos } : m;
+        }),
+      }));
+    },
+    []
+  );
+
   // History operations
   const undo = useCallback(() => {
     setState((prev) => {
@@ -198,6 +216,7 @@ export function useArchitectureHistory(
     deleteModule,
     addDependency,
     removeDependency,
+    updatePositions,
     undo,
     redo,
     canUndo: state.past.length > 0,

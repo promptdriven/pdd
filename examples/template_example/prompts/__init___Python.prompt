@@ -1,0 +1,77 @@
+The init module (src/edit_file_tool/__init__.py) is the package boundary for the edit_file_tool library. Its responsibility is to present a clean, stable public API by exposing the primary async editing function (edit_file) and the editor tool class (EditTool20250124), while also providing package metadata (e.g., __version__) and keeping import side effects minimal.
+
+Requirements
+1. Expose a minimal, well-defined public API for library users via top-level imports: edit_file and EditTool20250124 must be importable from edit_file_tool (e.g., `from edit_file_tool import edit_file, EditTool20250124`).
+2. Provide package metadata attributes: at minimum __all__, __version__, and __title__/__package_name__ (choose a consistent set), without breaking if package metadata is unavailable at runtime.
+3. Avoid heavy import-time side effects: do not read files, do not call network services, and do not instantiate clients at import time; keep imports lightweight and deterministic.
+4. Ensure import robustness: if optional dependencies are missing (e.g., anthropic), failures should occur when using functionality (calling edit_file / instantiating the tool) rather than when importing the package, where feasible in pure Python.
+5. Keep contracts aligned with the architecture: edit_file signature must match the core async module contract; EditTool20250124 must be re-exported if implemented/available in the package.
+6. Maintain forward compatibility: re-exports should be stable; if internal module names change, __init__.py should remain the single stable entry surface.
+7. Provide clear typing friendliness: include type hints where helpful; define __all__ to aid IDE auto-complete and static analysis.
+8. Logging and security: do not configure global logging handlers; do not read environment variables or API keys here; no secrets should be accessed in this file.
+9. Performance: imports should be O(1) and fast; avoid importing large transitive trees eagerly if not required (consider lazy imports only if needed, but prefer simplicity).
+10. Testing: module must be importable in a clean environment; add notes for tests to verify top-level imports and metadata behavior.
+
+Dependencies
+<core_async_module>
+  [File not found: context/core_async_module_example.py]
+</core_async_module>
+Prompt Dependencies:
+- core_async_module_Python.prompt (src/edit_file_tool/core.py) — provides the edit_file async API (and possibly EditTool20250124 depending on implementation)
+
+Instructions
+- Implement src/edit_file_tool/__init__.py as a small, production-quality package initializer consistent with a src-layout package.
+- Re-export the primary async function:
+  - `from .core import edit_file`
+  - Ensure the import path matches the architecture filepath src/edit_file_tool/core.py.
+  - If the edit_file import fails (ImportError), provide a fallback placeholder:
+    ```python
+    try:
+        from .core import edit_file
+    except ImportError:
+        def edit_file(*args, **kwargs):
+            raise RuntimeError("edit_file_tool.core could not be imported")
+    ```
+  - The fallback must:
+    - Accept any arguments (`*args, **kwargs`) so it can be called without raising TypeError
+    - Raise `RuntimeError` (not ImportError) with exact message: "edit_file_tool.core could not be imported"
+    - Be a regular function (not async) for simplicity
+- Re-export the editor tool class `EditTool20250124`:
+  - Attempt to import from `.core` (or its actual location if different).
+  - If the import fails (ImportError), set EditTool20250124 = None explicitly:
+    ```python
+    try:
+        from .core import EditTool20250124
+    except ImportError:
+        EditTool20250124 = None
+    ```
+  - This ensures the attribute always exists on the module (allowing hasattr() checks) and provides graceful fallback for code that checks `if EditTool20250124 is not None`.
+  - Do NOT invent a fake class or raise errors at import time.
+- Define `__all__` exactly as: ["edit_file", "EditTool20250124", "__version__", "__title__"].
+- IMPORTANT: `__all__` must be static and always include EditTool20250124, regardless of whether the import succeeded. The attribute will be None if unavailable.
+- Implement `__version__` using importlib.metadata:
+  - Use `import importlib.metadata as importlib_metadata` (py3.9 compatible) or `from importlib import metadata as importlib_metadata`.
+  - Set `__version__ = importlib_metadata.version("edit-file-tool")` (or the distribution name used in packaging); wrap in try/except importlib_metadata.PackageNotFoundError and fallback to "0.0.0".
+  - Do not crash import if metadata is absent (editable installs during dev, tests, etc.).
+- Add a short module docstring describing the public API and pointing users to CLI entrypoint (without importing cli).
+- Do not add runtime logic, file I/O, or environment variable access.
+- Keep formatting PEP8-compliant; no external dependencies.
+
+
+Deliverable
+- A single Python module at src/edit_file_tool/__init__.py implementing the public package API surface.
+- Public entry points available to consumers: `edit_file_tool.edit_file`, `edit_file_tool.EditTool20250124`, and `edit_file_tool.__version__`, with __all__ defined accordingly.
+
+CRITICAL: Import Path for __init__.py Modules
+- This file is `__init__.py`, which means it IS the package itself, not a submodule.
+- External code (examples, tests, users) must import DIRECTLY from the package name:
+  - CORRECT: `from edit_file_tool import edit_file, EditTool20250124`
+  - CORRECT: `import edit_file_tool; edit_file_tool.edit_file(...)`
+  - WRONG: `from edit_file_tool.init import ...` (there is no `init` submodule)
+  - WRONG: `from edit_file_tool.__init__ import ...` (anti-pattern)
+- When generating example code for this module, always use `from edit_file_tool import ...` syntax.
+- This differs from submodules like `core.py` where you would use `from edit_file_tool.core import ...`.
+
+Implementation assumptions (explicit)
+- The distribution/package name used by importlib.metadata is "edit-file-tool" (if different, adjust to match pyproject.toml once available; preserve fallback behavior).
+- EditTool20250124 exists somewhere in the package (likely exposed by core or a sibling module); if its exact location is unknown at generation time, prefer importing from .core and keep the file minimal without inventing new modules.
