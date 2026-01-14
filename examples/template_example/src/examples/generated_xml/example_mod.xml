@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Module>
+    <Name>Example Mod</Name>
+    <Id>example.mod</Id>
+    <Version>1.0.0</Version>
+    <Author>Example Dev</Author>
+    <Description>Demonstrates how to use the shared XML helpers.</Description>
+    <SubModules>
+        <Difficulty>Hard</Difficulty>
+        <ReleaseCandidate>true</ReleaseCandidate>
+    </SubModules>
+</Module>
