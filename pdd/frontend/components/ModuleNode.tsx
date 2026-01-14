@@ -128,9 +128,14 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
           )}
 
           <p className="font-medium text-sm text-white truncate w-full">{label}</p>
-          <p className="text-[10px] text-surface-400 truncate w-full font-mono" title={`Position: (${Math.round(xPos)}, ${Math.round(yPos)})`}>
-            x: {Math.round(xPos)}, y: {Math.round(yPos)}
-          </p>
+          {process.env.NODE_ENV === 'development' && (
+            <p
+              className="text-[10px] text-surface-400 truncate w-full font-mono"
+              title={`Position: (${Math.round(xPos)}, ${Math.round(yPos)})`}
+            >
+              x: {Math.round(xPos)}, y: {Math.round(yPos)}
+            </p>
+          )}
           <p className={`text-xs ${colors.text} truncate w-full`}>
             {module.interface?.type || 'module'}
           </p>
