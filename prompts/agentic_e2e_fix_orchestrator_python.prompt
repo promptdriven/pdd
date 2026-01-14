@@ -1,0 +1,173 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_e2e_fix_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separate agentic task, iterates through an outer loop until all tests pass, and supports state persistence for resumption. This workflow fixes bugs identified by `pdd bug` by running unit tests, e2e tests, and `pdd fix` sequentially on failing dev units.
+
+% Requirements
+1. Function: `run_agentic_e2e_fix_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run an outer loop (max `max_cycles` iterations) that executes steps 1-9 until all tests pass
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps and cycles
+6. Track per-dev-unit state within the issue-level state file
+7. Parse agent output for `FILES_CREATED:` and `FILES_MODIFIED:` lines to track changed files
+8. Apply `timeout_adder` to each step's base timeout from `E2E_FIX_STEP_TIMEOUTS`
+
+% Step Execution
+For each step (1-9):
+1. Load the step prompt template via `load_prompt_template(f"agentic_e2e_fix_step{n}_{name}_LLM")`
+2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, step1_output, etc.
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num) + timeout_adder)`
+4. Store the output for use by subsequent steps
+5. Save state to file after step completes
+6. Accumulate cost: `total_cost += step_cost`
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_e2e_fix_step1_unit_tests_LLM | Run unit tests created by issue, run pdd fix on failures |
+| 2 | agentic_e2e_fix_step2_e2e_tests_LLM | Run e2e tests, check if all pass (exit condition) |
+| 3 | agentic_e2e_fix_step3_root_cause_LLM | Root cause failures (code vs test vs both) |
+| 4 | agentic_e2e_fix_step4_fix_e2e_tests_LLM | Fix e2e tests if they are the problem |
+| 5 | agentic_e2e_fix_step5_identify_devunits_LLM | Identify dev units involved in failures |
+| 6 | agentic_e2e_fix_step6_create_unit_tests_LLM | Create/append unit tests for involved dev units |
+| 7 | agentic_e2e_fix_step7_verify_tests_LLM | Verify unit tests detect the bugs |
+| 8 | agentic_e2e_fix_step8_run_pdd_fix_LLM | Run pdd fix sequentially on failing dev units |
+| 9 | agentic_e2e_fix_step9_verify_all_LLM | Final verification, control outer loop |
+
+% Outer Loop Logic
+```python
+cycle = 0
+while cycle < max_cycles:
+    cycle += 1
+
+    # Step 1: Run unit tests, pdd fix failures
+    step1_output = run_step_1()
+
+    # Step 2: Run e2e tests
+    step2_output = run_step_2()
+    if "ALL_TESTS_PASS" in step2_output:
+        break  # Success! Exit outer loop
+
+    # Steps 3-8: Fix cycle
+    step3_output = run_step_3()  # Root cause
+    step4_output = run_step_4()  # Fix e2e tests if needed
+    step5_output = run_step_5()  # Identify dev units
+    step6_output = run_step_6()  # Create unit tests
+    step7_output = run_step_7()  # Verify tests
+    step8_output = run_step_8()  # Run pdd fix
+
+    # Step 9: Final verification
+    step9_output = run_step_9()
+
+    # Save cycle state
+    save_state(cycle, step_outputs)
+
+if cycle >= max_cycles:
+    return (False, f"Max cycles ({max_cycles}) reached without all tests passing", ...)
+```
+
+% Context Accumulation
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output, step2_output, step3_output
+- Step 5 receives: issue_content, step1_output through step4_output
+- Step 6 receives: issue_content, step1_output through step5_output, dev_units_identified
+- Step 7 receives: issue_content, step1_output through step6_output
+- Step 8 receives: issue_content, step1_output through step7_output, failing_dev_units
+- Step 9 receives: issue_content, step1_output through step8_output, cycle_number, max_cycles
+
+% State Persistence
+1. **State file location**: `.pdd/e2e-fix-state/issue-{issue_number}.json`
+
+2. **State file structure**:
+   ```json
+   {
+     "issue_url": "https://github.com/owner/repo/issues/123",
+     "issue_number": 123,
+     "current_cycle": 2,
+     "last_completed_step": 5,
+     "step_outputs": {
+       "1": "Step 1 output...",
+       "2": "Step 2 output...",
+       ...
+     },
+     "dev_unit_states": {
+       "module_a": {"fixed": false, "fix_attempts": 2},
+       "module_b": {"fixed": true, "fix_attempts": 1}
+     },
+     "total_cost": 0.0567,
+     "model_used": "anthropic",
+     "changed_files": ["tests/test_a.py", "pdd/module_a.py"]
+   }
+   ```
+
+3. **Helper functions**:
+   - `_get_state_file_path(cwd: Path, issue_number: int) -> Path`
+   - `_load_state(cwd: Path, issue_number: int) -> Optional[Dict]`
+   - `_save_state(cwd: Path, issue_number: int, state: Dict) -> None`
+   - `_clear_state(cwd: Path, issue_number: int) -> None`
+
+4. **Resume logic**:
+   - If `resume=True` and state exists: Continue from saved cycle and step
+   - If `resume=False`: Start fresh, clear any existing state
+   - On successful completion: Clear state file
+   - On max cycles reached: State remains for inspection
+
+% Console Output
+1. **Header** (at start):
+   ```
+   Fixing e2e tests for issue #{issue_number}: "{issue_title}"
+   ```
+
+2. **Cycle progress**:
+   ```
+   [Cycle 2/5] Starting fix cycle...
+   ```
+
+3. **Step progress** (before each step):
+   ```
+   [Step N/9] {step_description}...
+   ```
+
+4. **Step result** (after each step):
+   ```
+     -> {brief_result}
+   ```
+
+5. **Cycle result**:
+   ```
+   Cycle 2 complete: 3 tests still failing
+   ```
+
+6. **Final summary** (at end):
+   ```
+   E2E fix complete
+      Total cost: ${total_cost:.4f}
+      Cycles used: {N}/{max_cycles}
+      Files changed: {comma_separated_list}
+      Dev units fixed: {list}
+
+   OR
+
+   E2E fix incomplete (max cycles reached)
+      Total cost: ${total_cost:.4f}
+      Remaining failures: {list}
+   ```
+
+% Error Handling
+- Return `(False, "Stopped at cycle N step M: {reason}", cost, model, changed_files)` on fatal error
+- Log warning and continue if `run_agentic_task()` returns non-fatal failure
+- On state file read/write errors, log warning and continue without persistence
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `E2E_FIX_STEP_TIMEOUTS`
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+
+% Deliverables
+- Code: `pdd/agentic_e2e_fix_orchestrator.py`

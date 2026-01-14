@@ -74,6 +74,11 @@ Export workflow-specific timeout dictionaries:
 
 `STEP_TIMEOUTS: Dict[int, float]` - Alias for `BUG_STEP_TIMEOUTS` (backward compatibility)
 
+`E2E_FIX_STEP_TIMEOUTS: Dict[int, float]` - For 9-step agentic e2e fix workflow:
+- Simple steps (2, 9): 240 seconds (check completion, final verification)
+- Medium steps (1, 3, 4, 5): 340 seconds (run unit tests, root cause, fix e2e tests, identify dev units)
+- Complex steps (6, 7, 8): 600 seconds (create/append unit tests, verify tests detect bugs, run pdd fix sequentially)
+
 % False Positive Detection (Issue #261)
 Export `MIN_VALID_OUTPUT_LENGTH: int = 50`
 

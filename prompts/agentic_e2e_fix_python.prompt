@@ -1,0 +1,40 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_e2e_fix.py` module.
+
+% Role & Scope
+CLI entry point for the agentic e2e fix workflow. Fetches a GitHub issue (typically created by `pdd bug`), extracts content including unit tests and e2e tests, then invokes the orchestrator to run the 9-step iterative fix process. Supports timeout configuration and resumption.
+
+% Requirements
+1. Function: `run_agentic_e2e_fix(issue_url: str, *, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
+3. Parse GitHub issue URL to extract: owner, repo, issue_number
+4. Supported URL formats:
+   - `https://github.com/{owner}/{repo}/issues/{number}`
+   - `https://www.github.com/{owner}/{repo}/issues/{number}`
+   - `github.com/{owner}/{repo}/issues/{number}`
+5. Fetch issue content via `gh api repos/{owner}/{repo}/issues/{number}` (requires `gh` CLI)
+6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
+7. Fetch comments via `gh api {comments_url}` to get full context (contains test file paths from `pdd bug`)
+8. Call orchestrator: `run_agentic_e2e_fix_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, timeout_adder=timeout_adder, max_cycles=max_cycles, resume=resume, ...)`
+9. Return aggregated results from orchestrator
+
+% CLI Options
+- `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0)
+- `--max-cycles INT`: Maximum outer loop cycles before giving up (default: 5)
+- `--resume/--no-resume`: Resume from saved state if available (default: --resume)
+- `--verbose`: Show detailed agentic output
+- `--quiet`: Suppress all output except errors
+
+% Dependencies
+<pdd.agentic_e2e_fix_orchestrator><include>context/agentic_e2e_fix_orchestrator_example.py</include></pdd.agentic_e2e_fix_orchestrator>
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+
+% Error Handling
+- Return `(False, "gh CLI not found", 0.0, "", [])` if `gh` command not available
+- Return `(False, "Invalid GitHub URL", 0.0, "", [])` if URL parsing fails
+- Return `(False, "Issue not found: {error}", 0.0, "", [])` if `gh api` fails
+
+% Deliverables
+- Code: `pdd/agentic_e2e_fix.py`
