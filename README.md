@@ -1588,6 +1588,8 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 
 State is automatically persisted, allowing you to resume interrupted workflows. Use `--no-resume` to start fresh.
 
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd fix` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
+
 **Example:**
 ```bash
 # Fix tests from a GitHub issue (agentic mode)
@@ -1598,6 +1600,9 @@ pdd fix --timeout-adder 30 --max-cycles 10 https://github.com/myorg/myrepo/issue
 
 # Start fresh (ignore saved state)
 pdd fix --no-resume https://github.com/myorg/myrepo/issues/42
+
+# Disable GitHub state persistence (local-only)
+pdd fix --no-github-state https://github.com/myorg/myrepo/issues/42
 ```
 
 **Prerequisites:**
@@ -1659,6 +1664,8 @@ The 12-step workflow:
 12. **Create PR**: Create a pull request linking to the issue
 
 **Workflow Resumption**: Steps 4 and 7 may pause the workflow to ask clarifying or architectural questions. When this happens, answer the questions in the GitHub issue and run `pdd change` again. The workflow will resume from where it left off, skipping already-completed steps to save tokens.
+
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 
 **Review Loop**: Steps 10-11 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
@@ -1930,6 +1937,10 @@ Options:
 - `--manual`: Use legacy mode with explicit file arguments (PROMPT_FILE, CODE_FILE, PROGRAM_FILE, CURRENT_OUTPUT, DESIRED_OUTPUT)
 - `--output LOCATION`: Specify where to save the generated unit test. Default: `test_<module>_bug.py`
 - `--language LANG`: Specify the programming language for the unit test (default is "Python").
+- `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
 Example:
 ```bash
