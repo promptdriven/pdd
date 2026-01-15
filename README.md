@@ -1535,19 +1535,19 @@ This feature only takes effect when `--loop` is set.
 
 When the `--loop` flag is set, agentic fallback is enabled by default:
 ```bash
-pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+pdd [GLOBAL OPTIONS] fix --manual --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 ```
 
 Or you may want to enable it explicitly
 
 ```bash
-pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+pdd [GLOBAL OPTIONS] fix --manual --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 ```
 
 To disable this feature while using `--loop`, add `--no-agentic-fallback` to turn it off.
 
 ```bash
-pdd [GLOBAL OPTIONS] fix --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+pdd [GLOBAL OPTIONS] fix --manual --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 ```
 
 **Prerequisites:**
@@ -1609,16 +1609,6 @@ This feature works seamlessly with issues processed by `pdd bug`. The typical wo
 1. Use `pdd bug <issue_url>` to analyze a bug and generate failing unit tests
 2. Use `pdd fix <issue_url>` to iteratively fix the failing tests across all affected dev units
 
-Example (save to different location):
-```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
-```
-
-Example using the `--git` option:
-```
-pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place using git history
-```
 ### 7. split
 
 Split large complex prompt files into smaller, more manageable prompt files.
