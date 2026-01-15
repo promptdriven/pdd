@@ -22,24 +22,8 @@
      - registered_at: Optional[datetime] - When session was registered
 
 % Dependencies
-  <remote_session_example>
-  Example usage:
-  ```python
-  from pdd.remote_session import get_active_session_manager
-
-  # Get active session manager (if any)
-  manager = get_active_session_manager()
-  if manager and manager.session_id:
-      return RemoteSessionInfo(
-          session_id=manager.session_id,
-          cloud_url=manager.cloud_url,
-          registered=True,
-          registered_at=datetime.now(timezone.utc),  # or store actual time
-      )
-  else:
-      return RemoteSessionInfo(registered=False)
-  ```
-  </remote_session_example>
+  <remote_session_example><include>context/remote_session_example.py</include></remote_session_example>
+  <session_example><include>context/server/routes/session_example.py</include></session_example>
 
 % Instructions
   - Create router with prefix="/api/v1/session", tags=["session"]
