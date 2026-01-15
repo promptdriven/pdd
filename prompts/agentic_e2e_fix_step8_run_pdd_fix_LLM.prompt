@@ -1,8 +1,12 @@
-% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run pdd fix sequentially on failing dev units.
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run pdd fix sequentially on dev units identified during e2e failure analysis.
 
 % Context
 
-You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `pdd fix` on each failing dev unit to fix the bugs.
+You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `pdd fix` on each dev unit identified in Step 5 to fix the bugs causing e2e test failures.
+
+**Important distinction from Step 1:**
+- Step 1: Fixes dev units associated with unit tests **explicitly listed in the GitHub issue** (from `pdd bug`)
+- Step 8 (this step): Fixes dev units **identified during e2e failure analysis** in Steps 3-5 (may be different or additional dev units discovered through stack trace analysis)
 
 % Inputs
 

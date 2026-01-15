@@ -7,7 +7,7 @@ Write the `pdd/agentic_e2e_fix.py` module.
 CLI entry point for the agentic e2e fix workflow. Fetches a GitHub issue (typically created by `pdd bug`), extracts content including unit tests and e2e tests, then invokes the orchestrator to run the 9-step iterative fix process. Supports timeout configuration and resumption.
 
 % Requirements
-1. Function: `run_agentic_e2e_fix(issue_url: str, *, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_e2e_fix(issue_url: str, *, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, force: bool = False, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number
 4. Supported URL formats:
@@ -30,23 +30,32 @@ The workflow must work whether run on the same machine as `pdd bug` or a differe
    - Verify candidate is a valid git worktree before returning
    - Return first valid path found, or `None`
 
-2. Helper: `_find_working_directory(issue_number: int, issue_comments: str, quiet: bool) -> Tuple[Path, Optional[str]]`
+2. Helper: `_find_working_directory(issue_number: int, issue_comments: str, quiet: bool, force: bool = False) -> Tuple[Path, Optional[str], bool]`
    - First try `_find_worktree_for_issue()` (same machine scenario)
    - If no worktree: parse issue comments to extract branch name from `pdd bug` output
    - Compare current git branch against expected branch
-   - Return `(working_directory, optional_warning_message)`
+   - Return `(working_directory, optional_warning_message, should_abort)`
+   - If branch mismatch and not force: set `should_abort=True`
    - Warning should suggest: `git fetch origin && git checkout {expected_branch}`
    - Fallback to `Path.cwd()` if no worktree found
 
-3. Print status (unless quiet):
+3. **Branch mismatch handling**:
+   - If `should_abort=True` (branch mismatch detected):
+     - Print warning with suggested command
+     - Print: `"[red]Aborting to prevent working in wrong directory. Use --force to override.[/red]"`
+     - Return `(False, "Branch mismatch - use --force to override", 0.0, "", [])`
+   - This prevents accidentally modifying the wrong codebase
+
+4. Print status (unless quiet):
    - Worktree found: `"[blue]Using worktree: {path}[/blue]"`
-   - Branch mismatch: `"[yellow]Warning: Expected branch '{expected}' but on '{current}'[/yellow]"`
+   - Branch mismatch (with --force): `"[yellow]Warning: Expected branch '{expected}' but on '{current}' (--force specified)[/yellow]"`
    - No worktree: `"[yellow]No worktree found for issue #{N}, using current directory[/yellow]"`
 
 % CLI Options
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0)
 - `--max-cycles INT`: Maximum outer loop cycles before giving up (default: 5)
 - `--resume/--no-resume`: Resume from saved state if available (default: --resume)
+- `--force`: Override branch mismatch safety check and proceed anyway (default: False)
 - `--verbose`: Show detailed agentic output
 - `--quiet`: Suppress all output except errors
 

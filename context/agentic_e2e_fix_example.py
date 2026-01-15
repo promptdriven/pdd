@@ -33,6 +33,7 @@ def main():
         timeout_adder=30.0,      # Add 30 seconds to each step's timeout
         max_cycles=5,            # Maximum outer loop cycles
         resume=True,             # Resume from saved state if available
+        force=False,             # Abort if branch mismatch detected (safety check)
         verbose=True,            # Show detailed output
         quiet=False              # Don't suppress output
     )
