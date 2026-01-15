@@ -144,7 +144,7 @@ class DiffSection(BaseModel):
     status: str = Field(..., description="Match status: matched, partial, missing, or extra")
     matchConfidence: int = Field(..., description="Confidence score 0-100")
     semanticLabel: str = Field(..., description="Semantic label (e.g., 'Error Handling', 'API Endpoint')")
-    notes: Optional[str] = Field(None, description="Explanation of the match/mismatch")
+    notes: str = Field(..., description="Required explanation of WHY this status exists")
 
 
 class LineMapping(BaseModel):
@@ -680,9 +680,9 @@ async def analyze_diff(request: DiffAnalysisRequest):
                 "status": {"type": "string", "enum": ["matched", "partial", "missing", "extra"]},
                 "matchConfidence": {"type": "integer", "minimum": 0, "maximum": 100},
                 "semanticLabel": {"type": "string"},
-                "notes": {"type": "string"}
+                "notes": {"type": "string", "description": "Required explanation of WHY this status exists"}
             },
-            "required": ["id", "promptRange", "status", "matchConfidence", "semanticLabel"]
+            "required": ["id", "promptRange", "status", "matchConfidence", "semanticLabel", "notes"]
         }
 
         output_schema = {
