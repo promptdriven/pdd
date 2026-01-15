@@ -1,82 +1,46 @@
-"""
-Fix command.
-"""
-import click
-from typing import Dict, List, Optional, Tuple, Any
+from __future__ import annotations
 
+import sys
+import click
+from typing import Optional, Tuple, Any
+from rich.console import Console
+
+# Relative imports for internal modules
 from ..fix_main import fix_main
+from ..agentic_e2e_fix import run_agentic_e2e_fix
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 
-@click.command("fix")
-@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
-@click.argument("unit_test_files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
-@click.argument("error_file", type=click.Path(dir_okay=False))  # Allow non-existent for loop mode
-@click.option(
-    "--output-test",
-    type=click.Path(writable=True),
-    default=None,
-    help="Specify where to save the fixed unit test file (file or directory).",
-)
-@click.option(
-    "--output-code",
-    type=click.Path(writable=True),
-    default=None,
-    help="Specify where to save the fixed code file (file or directory).",
-)
-@click.option(
-    "--output-results",
-    type=click.Path(writable=True),
-    default=None,
-    help="Specify where to save the results log (file or directory).",
-)
-@click.option(
-    "--loop",
-    is_flag=True,
-    default=False,
-    help="Enable iterative fixing process."
-)
-@click.option(
-    "--verification-program",
-    type=click.Path(exists=True, dir_okay=False),
-    default=None,
-    help="Path to a Python program that verifies the fix.",
-)
-@click.option(
-    "--max-attempts",
-    type=int,
-    default=3,
-    show_default=True,
-    help="Maximum number of fix attempts.",
-)
-@click.option(
-    "--budget",
-    type=float,
-    default=5.0,
-    show_default=True,
-    help="Maximum cost allowed for the fixing process.",
-)
-@click.option(
-    "--auto-submit",
-    is_flag=True,
-    default=False,
-    help="Automatically submit the example if all unit tests pass.",
-)
-@click.option(
-    "--agentic-fallback/--no-agentic-fallback",
-    is_flag=True,
-    default=True,
-    help="Enable agentic fallback if the primary fix mechanism fails.",
-)
+console = Console()
+
+@click.command(name="fix")
+@click.argument("args", nargs=-1)
+@click.option("--manual", is_flag=True, help="Use manual mode with explicit file arguments.")
+@click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds to add to each step's timeout (Agentic mode).")
+@click.option("--max-cycles", type=int, default=5, help="Maximum number of outer loop cycles (Agentic mode).")
+@click.option("--resume/--no-resume", default=True, help="Resume from saved state if available (Agentic mode).")
+@click.option("--force", is_flag=True, help="Override branch mismatch safety check (Agentic mode).")
+@click.option("--no-github-state", is_flag=True, help="Disable GitHub issue comment-based state persistence (Agentic mode).")
+@click.option("--output-test", type=click.Path(), help="Specify where to save the fixed unit test file.")
+@click.option("--output-code", type=click.Path(), help="Specify where to save the fixed code file.")
+@click.option("--output-results", type=click.Path(), help="Specify where to save the results log.")
+@click.option("--loop", is_flag=True, help="Enable iterative fixing process.")
+@click.option("--verification-program", type=click.Path(), help="Path to verification program (required for --loop).")
+@click.option("--max-attempts", type=int, default=3, help="Maximum number of fix attempts.")
+@click.option("--budget", type=float, default=5.0, help="Maximum cost allowed for the fixing process.")
+@click.option("--auto-submit", is_flag=True, help="Automatically submit example if tests pass.")
+@click.option("--agentic-fallback/--no-agentic-fallback", default=True, help="Enable agentic fallback in loop mode.")
 @click.pass_context
 @track_cost
 def fix(
     ctx: click.Context,
-    prompt_file: str,
-    code_file: str,
-    unit_test_files: Tuple[str, ...],
-    error_file: str,
+    args: Tuple[str, ...],
+    manual: bool,
+    timeout_adder: float,
+    max_cycles: int,
+    resume: bool,
+    force: bool,
+    no_github_state: bool,
     output_test: Optional[str],
     output_code: Optional[str],
     output_results: Optional[str],
@@ -86,55 +50,114 @@ def fix(
     budget: float,
     auto_submit: bool,
     agentic_fallback: bool,
-) -> Optional[Tuple[Dict[str, Any], float, str]]:
-    """Fix code based on a prompt and unit test errors.
+) -> Optional[Tuple[Any, float, str]]:
+    """
+    Fix errors in code and unit tests.
 
-    Accepts one or more UNIT_TEST_FILES. Each test file is processed separately,
-    allowing the AI to run and fix tests individually rather than as a concatenated blob.
+    Supports two modes:
+    1. Agentic E2E Fix: pdd fix <GITHUB_ISSUE_URL>
+    2. Manual Mode: pdd fix --manual PROMPT_FILE CODE_FILE UNIT_TEST_FILE... ERROR_FILE
     """
     try:
-        all_results: List[Dict[str, Any]] = []
-        total_cost = 0.0
-        model_name = ""
+        if not args:
+            raise click.UsageError("Missing arguments. See 'pdd fix --help'.")
 
-        # Process each unit test file separately
-        for unit_test_file in unit_test_files:
-            success, fixed_unit_test, fixed_code, attempts, cost, model = fix_main(
-                ctx=ctx,
-                prompt_file=prompt_file,
-                code_file=code_file,
-                unit_test_file=unit_test_file,
-                error_file=error_file,
-                output_test=output_test,
-                output_code=output_code,
-                output_results=output_results,
-                loop=loop,
-                verification_program=verification_program,
-                max_attempts=max_attempts,
-                budget=budget,
-                auto_submit=auto_submit,
-                agentic_fallback=agentic_fallback,
+        # Determine mode based on first argument
+        # If it looks like a URL and --manual is not set, use Agentic mode
+        is_url = args[0].startswith("http") or "github.com" in args[0]
+        
+        # --- Agentic E2E Fix Mode ---
+        if is_url and not manual:
+            if len(args) > 1:
+                console.print("[yellow]Warning: Extra arguments ignored in Agentic E2E Fix mode.[/yellow]")
+            
+            issue_url = args[0]
+            verbose = ctx.obj.get("verbose", False)
+            quiet = ctx.obj.get("quiet", False)
+            
+            # Call the agentic fix workflow
+            success, message, cost, model, _ = run_agentic_e2e_fix(
+                issue_url=issue_url,
+                timeout_adder=timeout_adder,
+                max_cycles=max_cycles,
+                resume=resume,
+                force=force,
+                verbose=verbose,
+                quiet=quiet,
+                use_github_state=not no_github_state
             )
-            all_results.append({
-                "success": success,
-                "fixed_unit_test": fixed_unit_test,
-                "fixed_code": fixed_code,
-                "attempts": attempts,
-                "unit_test_file": unit_test_file,
-            })
-            total_cost += cost
-            model_name = model
+            
+            if not success:
+                console.print(f"[bold red]Agentic fix failed:[/bold red] {message}")
+            else:
+                console.print(f"[bold green]Agentic fix completed:[/bold green] {message}")
+                
+            return message, cost, model
 
-        # Aggregate results
-        overall_success = all(r["success"] for r in all_results)
-        result = {
-            "success": overall_success,
-            "results": all_results,
-            "total_attempts": sum(r["attempts"] for r in all_results),
-        }
-        return result, total_cost, model_name
+        # --- Manual Mode ---
+        else:
+            # Validate arguments for manual mode
+            # Expected structure: PROMPT_FILE CODE_FILE UNIT_TEST_FILE [UNIT_TEST_FILE...] ERROR_FILE
+            if len(args) < 4:
+                raise click.UsageError(
+                    "Manual mode requires at least 4 arguments: PROMPT_FILE CODE_FILE UNIT_TEST_FILE... ERROR_FILE"
+                )
+
+            prompt_file = args[0]
+            code_file = args[1]
+            error_file = args[-1]
+            # All arguments between code file and error file are treated as unit test files
+            unit_test_files = args[2:-1]
+
+            total_cost = 0.0
+            last_model = "unknown"
+            all_success = True
+            results_summary = []
+
+            # Process each unit test file
+            for i, test_file in enumerate(unit_test_files):
+                if len(unit_test_files) > 1:
+                    console.print(f"[bold blue]Processing test file {i+1}/{len(unit_test_files)}: {test_file}[/bold blue]")
+
+                # Call the core fix logic
+                # Note: If multiple test files are processed, output_test will overwrite 
+                # the same location if specified, as per documentation warning.
+                success, _, _, _, cost, model = fix_main(
+                    ctx=ctx,
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    unit_test_file=test_file,
+                    error_file=error_file,
+                    output_test=output_test,
+                    output_code=output_code,
+                    output_results=output_results,
+                    loop=loop,
+                    verification_program=verification_program,
+                    max_attempts=max_attempts,
+                    budget=budget,
+                    auto_submit=auto_submit,
+                    agentic_fallback=agentic_fallback,
+                    strength=None,  # Use context defaults inside fix_main
+                    temperature=None # Use context defaults inside fix_main
+                )
+                
+                total_cost += cost
+                last_model = model
+                if not success:
+                    all_success = False
+                
+                status = "Fixed" if success else "Failed"
+                results_summary.append(f"{test_file}: {status}")
+
+            # Construct return message
+            summary_str = "\n".join(results_summary)
+            if all_success:
+                return f"All files processed successfully.\n{summary_str}", total_cost, last_model
+            else:
+                return f"Some files failed to fix.\n{summary_str}", total_cost, last_model
+
     except click.Abort:
         raise
-    except Exception as exception:
-        handle_error(exception, "fix", ctx.obj.get("quiet", False))
-        ctx.exit(1)
+    except Exception as e:
+        handle_error(e)
+        return None

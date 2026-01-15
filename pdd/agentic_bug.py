@@ -177,6 +177,7 @@ def run_agentic_bug(
     verbose: bool = False,
     quiet: bool = False,
     timeout_adder: float = 0.0,
+    use_github_state: bool = True,
     # Legacy/Manual mode arguments (handled via *args in a real CLI, but here explicit for type safety if called directly)
     manual_args: Optional[Tuple[str, str, str, str, str]] = None
 ) -> Tuple[bool, str, float, str, List[str]]:
@@ -192,6 +193,8 @@ def run_agentic_bug(
         issue_url: The GitHub issue URL to investigate.
         verbose: Enable verbose logging.
         quiet: Suppress informational logging.
+        timeout_adder: Additional time to add to step timeouts.
+        use_github_state: Whether to use GitHub state (comments, PRs) during orchestration.
         manual_args: Optional tuple of (prompt_file, code_file, program_file, current_out, desired_out)
                      to trigger legacy manual mode.
 
@@ -305,7 +308,8 @@ def run_agentic_bug(
             cwd=cwd,
             verbose=verbose,
             quiet=quiet,
-            timeout_adder=timeout_adder
+            timeout_adder=timeout_adder,
+            use_github_state=use_github_state
         )
         return success, message, cost, model, changed_files
 

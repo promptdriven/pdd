@@ -8,7 +8,12 @@ from typing import List, Tuple, Optional, Dict, Any
 
 from rich.console import Console
 
-from .agentic_common import run_agentic_task
+from .agentic_common import (
+    run_agentic_task,
+    load_workflow_state,
+    save_workflow_state,
+    clear_workflow_state
+)
 from .load_prompt_template import load_prompt_template
 
 # Initialize console
@@ -29,53 +34,11 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
     10: 240.0,  # Create PR
 }
 
-# State management for resume functionality
-STATE_DIR = Path(".pdd/bug-state")
 
+def _get_state_dir(cwd: Path) -> Path:
+    """Return path to state directory relative to git root."""
+    return Path(".pdd/bug-state")
 
-def _json_serializer(obj):
-    """Handle Path objects in JSON serialization."""
-    if isinstance(obj, Path):
-        return str(obj)
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-
-
-def _get_state_file_path(cwd: Path, issue_number: int) -> Path:
-    """Return path to state file for issue."""
-    return cwd / STATE_DIR / f"issue-{issue_number}.json"
-
-
-def _load_state(cwd: Path, issue_number: int) -> Optional[Dict[str, Any]]:
-    """Load saved state for issue, or None if not found."""
-    path = _get_state_file_path(cwd, issue_number)
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            console.print(f"[yellow]Warning: Failed to load state: {e}[/yellow]")
-    return None
-
-
-def _save_state(cwd: Path, issue_number: int, state: Dict[str, Any]) -> None:
-    """Save state for issue to disk."""
-    path = _get_state_file_path(cwd, issue_number)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, default=_json_serializer)
-    except Exception as e:
-        console.print(f"[yellow]Warning: Failed to save state: {e}[/yellow]")
-
-
-def _clear_state(cwd: Path, issue_number: int) -> None:
-    """Remove state file on successful completion."""
-    path = _get_state_file_path(cwd, issue_number)
-    try:
-        if path.exists():
-            path.unlink()
-    except Exception:
-        pass
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
     """Get the root directory of the git repository."""
@@ -90,6 +53,7 @@ def _get_git_root(cwd: Path) -> Optional[Path]:
         return Path(result.stdout.strip())
     except subprocess.CalledProcessError:
         return None
+
 
 def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
     """Check if a path is a registered git worktree."""
@@ -107,6 +71,7 @@ def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
     except subprocess.CalledProcessError:
         return False
 
+
 def _branch_exists(cwd: Path, branch: str) -> bool:
     """Check if a local git branch exists."""
     try:
@@ -119,6 +84,7 @@ def _branch_exists(cwd: Path, branch: str) -> bool:
         return True
     except subprocess.CalledProcessError:
         return False
+
 
 def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
     """Remove a git worktree."""
@@ -133,6 +99,7 @@ def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode('utf-8')
 
+
 def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
     """Force delete a git branch."""
     try:
@@ -145,6 +112,7 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return True, ""
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode('utf-8')
+
 
 def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]:
     """
@@ -233,7 +201,8 @@ def run_agentic_bug_orchestrator(
     cwd: Path,
     verbose: bool = False,
     quiet: bool = False,
-    timeout_adder: float = 0.0
+    timeout_adder: float = 0.0,
+    use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 10-step agentic bug investigation workflow.
@@ -261,21 +230,33 @@ def run_agentic_bug_orchestrator(
     changed_files: List[str] = []
     current_cwd = cwd
     worktree_path: Optional[Path] = None
+    github_comment_id: Optional[int] = None
 
     # Resume: Load existing state if available
-    state = _load_state(cwd, issue_number)
+    state_dir = _get_state_dir(cwd)
+    state = load_workflow_state(
+        cwd=cwd,
+        issue_number=issue_number,
+        workflow_type="bug",
+        state_dir=state_dir,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        use_github_state=use_github_state
+    )
+
     step_outputs: Dict[str, str] = {}
     last_completed_step = 0
 
     if state:
+        last_completed_step = state.get("last_completed_step", 0)
         if not quiet:
-            console.print(f"[yellow]Resuming from step {state.get('last_completed_step', 0) + 1}...[/yellow]")
+            console.print(f"[yellow]Resuming from step {last_completed_step + 1} (steps 1-{last_completed_step} cached)[/yellow]")
 
         total_cost = state.get("total_cost", 0.0)
         last_model_used = state.get("model_used", "unknown")
         step_outputs = state.get("step_outputs", {})
-        last_completed_step = state.get("last_completed_step", 0)
         changed_files = state.get("changed_files", [])
+        github_comment_id = state.get("github_comment_id")
 
         # Restore worktree path
         wt_path_str = state.get("worktree_path")
@@ -444,7 +425,9 @@ def run_agentic_bug_orchestrator(
 
         # Save state after each step (for resume support)
         step_outputs[str(step_num)] = output
-        _save_state(cwd, issue_number, {
+        
+        new_state = {
+            "workflow": "bug",
             "issue_number": issue_number,
             "issue_url": issue_url,
             "last_completed_step": step_num,
@@ -453,11 +436,34 @@ def run_agentic_bug_orchestrator(
             "model_used": last_model_used,
             "changed_files": changed_files,
             "worktree_path": str(worktree_path) if worktree_path else None,
-        })
+            "github_comment_id": github_comment_id
+        }
+        
+        # Save to GitHub (primary) and local (cache)
+        # The function returns the comment ID (new or updated) to track for future updates
+        github_comment_id = save_workflow_state(
+            cwd=cwd,
+            issue_number=issue_number,
+            workflow_type="bug",
+            state=new_state,
+            state_dir=state_dir,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            use_github_state=use_github_state,
+            github_comment_id=github_comment_id
+        )
 
     # --- Final Summary ---
     # Clear state file on successful completion
-    _clear_state(cwd, issue_number)
+    clear_workflow_state(
+        cwd=cwd,
+        issue_number=issue_number,
+        workflow_type="bug",
+        state_dir=state_dir,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        use_github_state=use_github_state
+    )
 
     final_msg = "Investigation complete"
     if not quiet:

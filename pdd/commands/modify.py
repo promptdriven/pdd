@@ -63,6 +63,7 @@ def split(
 @click.option("--output", help="Output path.")
 @click.option("--csv", is_flag=True, help="Use CSV input for batch processing.")
 @click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds to add to each step's timeout (agentic mode only).")
+@click.option("--no-github-state", is_flag=True, default=False, help="Disable GitHub state persistence (agentic mode only).")
 @click.pass_context
 @track_cost
 def change(
@@ -73,6 +74,7 @@ def change(
     output: Optional[str],
     csv: bool,
     timeout_adder: float,
+    no_github_state: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Modify an input prompt file based on a change prompt or issue.
@@ -156,7 +158,8 @@ def change(
                 issue_url=issue_url,
                 verbose=verbose,
                 quiet=quiet,
-                timeout_adder=timeout_adder
+                timeout_adder=timeout_adder,
+                use_github_state=not no_github_state
             )
 
             # Display results using click.echo as requested
