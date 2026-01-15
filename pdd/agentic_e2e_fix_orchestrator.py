@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import os
-import subprocess
 import sys
 import time
 import json
@@ -17,11 +15,8 @@ from .agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
-    validate_cached_state,
-    DEFAULT_MAX_RETRIES,
 )
 from .load_prompt_template import load_prompt_template
-from .preprocess import preprocess
 
 # Constants
 STEP_NAMES = {
@@ -150,174 +145,6 @@ def _check_staleness(state: Dict[str, Any], cwd: Path) -> None:
     if stale:
         console.print("[yellow]Warning: Codebase may have changed since last run. Consider --no-resume for fresh start.[/yellow]")
 
-
-def _get_modified_and_untracked(cwd: Path) -> Set[str]:
-    """Returns set of modified tracked files plus untracked files."""
-    files: Set[str] = set()
-
-    # Get modified tracked files
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        files.update(f for f in result.stdout.strip().split("\n") if f)
-
-    # Get untracked files
-    result = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        files.update(f for f in result.stdout.strip().split("\n") if f)
-
-    return files
-
-
-def _get_file_hashes(cwd: Path) -> Dict[str, Optional[str]]:
-    """
-    Returns {filepath: md5_hash} for all modified and untracked files.
-
-    If a file is deleted or unreadable, stores None for that file.
-    """
-    hashes: Dict[str, Optional[str]] = {}
-    for filepath in _get_modified_and_untracked(cwd):
-        path = cwd / filepath
-        if path.exists() and path.is_file():
-            try:
-                hashes[filepath] = hashlib.md5(path.read_bytes()).hexdigest()
-            except (IOError, OSError):
-                hashes[filepath] = None
-        else:
-            hashes[filepath] = None  # Deleted or not a file
-    return hashes
-
-
-def _detect_changed_files(cwd: Path, initial_file_hashes: Dict[str, Optional[str]]) -> List[str]:
-    """Detects files actually changed during the workflow using hash comparison.
-
-    Compares current file hashes against the snapshot taken before the workflow
-    started to find files that were created or modified on disk, regardless of
-    whether the LLM output included FILES_MODIFIED/FILES_CREATED markers.
-    """
-    current_hashes = _get_file_hashes(cwd)
-    changed: List[str] = []
-    for filepath, current_hash in current_hashes.items():
-        if filepath not in initial_file_hashes:
-            changed.append(filepath)
-        elif initial_file_hashes[filepath] != current_hash:
-            changed.append(filepath)
-    return changed
-
-
-def _has_unpushed_commits(cwd: Path) -> bool:
-    """Check if there are commits ahead of the remote tracking branch."""
-    result = subprocess.run(
-        ["git", "rev-list", "--count", "@{u}..HEAD"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        count = int(result.stdout.strip() or "0")
-        return count > 0
-    return False
-
-
-def _commit_and_push(
-    cwd: Path,
-    issue_number: int,
-    issue_title: str,
-    initial_file_hashes: Dict[str, Optional[str]],
-    quiet: bool = False
-) -> Tuple[bool, str]:
-    """
-    Commits only files that changed during the workflow and pushes.
-
-    Uses hash comparison to detect actual content changes, avoiding
-    staging pre-existing modified/untracked files.
-
-    The PR was already created by `pdd bug`, so pushing
-    automatically updates it.
-
-    Args:
-        cwd: Working directory
-        issue_number: GitHub issue number
-        issue_title: Issue title for commit message
-        initial_file_hashes: File hashes from before workflow started
-        quiet: Suppress output
-
-    Returns:
-        (success, message)
-    """
-    # Get current file hashes
-    current_hashes = _get_file_hashes(cwd)
-
-    # Find files that changed during workflow
-    files_to_commit: List[str] = []
-    for filepath, current_hash in current_hashes.items():
-        if filepath not in initial_file_hashes:
-            # New file created during workflow
-            files_to_commit.append(filepath)
-        elif initial_file_hashes[filepath] != current_hash:
-            # Content changed during workflow
-            files_to_commit.append(filepath)
-
-    if not files_to_commit:
-        # Check if there are unpushed commits to push
-        if _has_unpushed_commits(cwd):
-            push_result = subprocess.run(
-                ["git", "push"],
-                cwd=cwd,
-                capture_output=True,
-                text=True
-            )
-            if push_result.returncode == 0:
-                return True, "Pushed existing commits"
-            else:
-                return False, f"Push failed: {push_result.stderr}"
-        return True, "No changes to commit"
-
-    # Stage only workflow-changed files
-    for filepath in files_to_commit:
-        stage_result = subprocess.run(
-            ["git", "add", filepath],
-            cwd=cwd,
-            capture_output=True,
-            text=True
-        )
-        if stage_result.returncode != 0:
-            return False, f"Failed to stage {filepath}: {stage_result.stderr}"
-
-    # Commit with message referencing issue
-    commit_msg = f"fix: {issue_title}\n\nFixes #{issue_number}"
-    commit_result = subprocess.run(
-        ["git", "commit", "-m", commit_msg],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if commit_result.returncode != 0:
-        return False, f"Failed to commit: {commit_result.stderr}"
-
-    # Push to remote (branch already exists from pdd bug)
-    push_result = subprocess.run(
-        ["git", "push"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-
-    if push_result.returncode == 0:
-        return True, f"Committed and pushed {len(files_to_commit)} file(s)"
-    else:
-        return False, f"Push failed: {push_result.stderr}"
-
-
 def run_agentic_e2e_fix_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -333,8 +160,7 @@ def run_agentic_e2e_fix_orchestrator(
     resume: bool = True,
     verbose: bool = False,
     quiet: bool = False,
-    use_github_state: bool = True,
-    protect_tests: bool = False
+    use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrator for the 9-step agentic e2e fix workflow.
@@ -371,15 +197,9 @@ def run_agentic_e2e_fix_orchestrator(
             changed_files = loaded_state.get("changed_files", [])
             dev_unit_states = loaded_state.get("dev_unit_states", {})
             github_comment_id = gh_id
-
-            # Issue #467: Validate cached state — correct last_completed_step
-            # if any cached step outputs have "FAILED:" prefix.
-            last_completed_step = validate_cached_state(
-                last_completed_step, step_outputs, quiet=quiet
-            )
-
+            
             _check_staleness(loaded_state, cwd)
-
+            
             # If we finished a cycle but didn't exit, prepare for next cycle
             if last_completed_step >= 9:
                 current_cycle += 1
@@ -392,9 +212,6 @@ def run_agentic_e2e_fix_orchestrator(
         clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
 
     console.print(f"Fixing e2e tests for issue #{issue_number}: \"{issue_title}\"")
-
-    # Snapshot file state before workflow (for hash-based commit detection)
-    initial_file_hashes = _get_file_hashes(cwd)
 
     success = False
     final_message = ""
@@ -432,8 +249,6 @@ def run_agentic_e2e_fix_orchestrator(
                     "cycle_number": current_cycle,
                     "max_cycles": max_cycles,
                     "issue_content": issue_content,
-                    "protect_tests": "true" if protect_tests else "false",
-                    "protect_tests_flag": "--protect-tests" if protect_tests else "",
                 }
                 
                 # Add previous step outputs
@@ -453,38 +268,26 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 9:
                     context["next_cycle"] = current_cycle + 1
 
-                # Preprocess to escape curly braces in included content
-                exclude_keys = list(context.keys())
-                prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
                 formatted_prompt = prompt_template.format(**context)
 
                 # 3. Run Task
                 base_timeout = E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0)
                 timeout = base_timeout + timeout_adder
-
+                
                 step_success, step_output, step_cost, step_model = run_agentic_task(
                     instruction=formatted_prompt,
                     cwd=cwd,
                     verbose=verbose,
                     quiet=quiet,
                     timeout=timeout,
-                    label=f"cycle{current_cycle}_step{step_num}",
-                    max_retries=DEFAULT_MAX_RETRIES,
+                    label=f"cycle{current_cycle}_step{step_num}"
                 )
 
                 # 4. Store Output & Accumulate
-                # Only mark step completed if it succeeded; failed steps get "FAILED:" prefix
-                # and last_completed_step stays at previous step (ensures resume re-runs failed step)
-                if step_success:
-                    step_outputs[str(step_num)] = step_output
-                    last_completed_step = step_num
-                else:
-                    step_outputs[str(step_num)] = f"FAILED: {step_output}"
-                    # Don't update last_completed_step - keep it at previous value
-
+                step_outputs[str(step_num)] = step_output
                 total_cost += step_cost
                 model_used = step_model if step_model else model_used
-
+                
                 # Parse changed files
                 new_files = _parse_changed_files(step_output)
                 for f in new_files:
@@ -498,45 +301,36 @@ def run_agentic_e2e_fix_orchestrator(
                     dev_unit_states = _update_dev_unit_states(step_output, dev_unit_states, dev_units_str)
 
                 # Print brief result
-                if step_success:
-                    console.print(f"  -> Step {step_num} complete. Cost: ${step_cost:.4f}")
-                else:
-                    console.print(f"  -> Step {step_num} [red]failed[/red]. Cost: ${step_cost:.4f}")
+                console.print(f"  -> Step {step_num} complete. Cost: ${step_cost:.4f}")
 
                 # 5. Save State
+                last_completed_step = step_num
                 state_data = {
                     "workflow": workflow_name,
                     "issue_url": issue_url,
                     "issue_number": issue_number,
                     "current_cycle": current_cycle,
                     "last_completed_step": last_completed_step,
-                    "step_outputs": step_outputs.copy(),  # Copy to avoid shared reference
-                    "dev_unit_states": dev_unit_states.copy(),  # Copy to avoid shared reference
+                    "step_outputs": step_outputs,
+                    "dev_unit_states": dev_unit_states,
                     "total_cost": total_cost,
                     "model_used": model_used,
-                    "changed_files": changed_files.copy(),  # Copy to avoid shared reference
+                    "changed_files": changed_files,
                     "last_saved_at": datetime.now().isoformat(),
                     "github_comment_id": github_comment_id
                 }
                 
-                new_gh_id = save_workflow_state(
+                saved_path, new_gh_id = save_workflow_state(
                     cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
                 )
                 if new_gh_id:
                     github_comment_id = new_gh_id
 
-                # Check Early Exit (Step 2): ALL_TESTS_PASS
+                # Check Early Exit (Step 2)
                 if step_num == 2 and "ALL_TESTS_PASS" in step_output:
                     console.print("[green]ALL_TESTS_PASS detected in Step 2. Exiting loop.[/green]")
                     success = True
                     final_message = "All tests passed during e2e check."
-                    break
-
-                # Check Early Exit (Step 3): NOT_A_BUG
-                if step_num == 3 and "NOT_A_BUG" in step_output:
-                    console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
-                    success = False
-                    final_message = "Issue determined to be not a bug."
                     break
 
                 # Check Loop Control (Step 9)
@@ -551,12 +345,7 @@ def run_agentic_e2e_fix_orchestrator(
                     elif "CONTINUE_CYCLE" not in step_output:
                         console.print("[yellow]Warning: No loop control token found in Step 9. Defaulting to CONTINUE_CYCLE.[/yellow]")
 
-            # Check if we should exit the outer loop
             if success:
-                break
-            
-            # Check if NOT_A_BUG was detected (exit outer loop too)
-            if step_num == 3 and "NOT_A_BUG" in step_outputs.get("3", ""):
                 break
             
             # Prepare for next cycle
@@ -576,46 +365,19 @@ def run_agentic_e2e_fix_orchestrator(
 
         if success:
             clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
-
-            # Detect actual file changes via hash comparison (not LLM output parsing)
-            # This fixes issue #355: summary showing empty "Files changed" despite
-            # real modifications, especially on early exit at Step 2.
-            actual_changed_files = _detect_changed_files(cwd, initial_file_hashes)
-            if actual_changed_files:
-                changed_files = actual_changed_files
-
             console.print("\n[bold green]E2E fix complete[/bold green]")
             console.print(f"   Total cost: ${total_cost:.4f}")
             console.print(f"   Cycles used: {current_cycle if current_cycle <= max_cycles else max_cycles}/{max_cycles}")
             console.print(f"   Files changed: {', '.join(changed_files)}")
             fixed_units = [u for u, s in dev_unit_states.items() if s.get("fixed")]
             console.print(f"   Dev units fixed: {', '.join(fixed_units)}")
-
-            # Commit and push changes to update the existing PR
-            commit_success, commit_message = _commit_and_push(
-                cwd=cwd,
-                issue_number=issue_number,
-                issue_title=issue_title,
-                initial_file_hashes=initial_file_hashes,
-                quiet=quiet
-            )
-            if commit_success:
-                console.print(f"   [green]{commit_message}[/green]")
-            else:
-                console.print(f"   [yellow]Warning: {commit_message}[/yellow]")
-
             return True, final_message, total_cost, model_used, changed_files
         else:
-            if not final_message:
-                final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
-            if "not a bug" in final_message.lower():
-                console.print(f"\n[bold yellow]E2E fix stopped: not a bug[/bold yellow]")
-            else:
-                console.print(f"\n[bold red]E2E fix incomplete[/bold red]")
+            final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
+            console.print("\n[bold red]E2E fix incomplete (max cycles reached)[/bold red]")
             console.print(f"   Total cost: ${total_cost:.4f}")
             remaining = [u for u, s in dev_unit_states.items() if not s.get("fixed")]
-            if remaining:
-                console.print(f"   Remaining failures: {', '.join(remaining)}")
+            console.print(f"   Remaining failures: {', '.join(remaining)}")
             return False, final_message, total_cost, model_used, changed_files
 
     except KeyboardInterrupt:
