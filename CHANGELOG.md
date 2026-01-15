@@ -1,3 +1,20 @@
+## v0.0.114 (2026-01-14)
+
+### Feat
+
+- Add early validation for empty and whitespace-only code files in fix_verification_errors_loop
+- **frontend**: Add Sync from JSON button to PromptSpace
+- **frontend**: Add advanced options modal to prompt generation
+- **frontend**: Add full advanced options to architecture page
+- Add bidirectional architecture.json ↔ prompt sync using PDD metadata tags
+- **frontend**: Add edge deletion and arrows to architecture graph
+
+### Fix
+
+- add lxml dependency to pyproject.toml
+- Add lxml to requirements.txt
+- **frontend**: Hide debug position coordinates in production
+
 ## v0.0.113 (2026-01-13)
 
 ### Feat
