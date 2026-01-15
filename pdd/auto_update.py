@@ -5,6 +5,7 @@ PyPI for a newer version, prompt the user, and perform an upgrade using the
 appropriate installer with sensible fallbacks.
 """
 import importlib.metadata
+import os
 import shutil
 import subprocess
 import sys
@@ -174,6 +175,12 @@ def auto_update(package_name: str = "pdd-cli", latest_version: Optional[str] = N
     Returns:
         None. All feedback is provided via ``print`` statements.
     """
+    # Skip update check in CI mode, headless mode, or when stdin is not a TTY
+    if (os.environ.get('CI') == '1' or
+        os.environ.get('PDD_SKIP_UPDATE_CHECK') == '1' or
+        not sys.stdin.isatty()):
+        return
+
     # pylint: disable=broad-except
     try:
         current_version = importlib.metadata.version(package_name)
