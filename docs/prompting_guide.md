@@ -224,6 +224,177 @@ Use these tags sparingly. When you must use them, prefer stable commands with bo
 
 ---
 
+## Architecture Metadata Tags
+
+PDD prompts can include optional XML metadata tags that sync with `architecture.json`. These tags enable bidirectional sync between prompt files and the architecture visualization, keeping your project's architecture documentation automatically up-to-date.
+
+### Tag Format
+
+Place architecture metadata tags at the **top of your prompt file** (after any `<include>` directives but before the main content):
+
+```xml
+<pdd-reason>Brief description of module's purpose (60-120 chars)</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "function_name", "signature": "(...)", "returns": "Type"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>dependency_prompt_1.prompt</pdd-dependency>
+<pdd-dependency>dependency_prompt_2.prompt</pdd-dependency>
+```
+
+### Tag Reference
+
+**`<pdd-reason>`**
+- **Purpose**: One-line description of why this module exists
+- **Maps to**: `architecture.json["reason"]`
+- **Format**: Single line string (recommended 60-120 characters)
+- **Example**: `<pdd-reason>Provides unified LLM invocation across all PDD operations.</pdd-reason>`
+
+**`<pdd-interface>`**
+- **Purpose**: JSON describing the module's public API (functions, commands, pages)
+- **Maps to**: `architecture.json["interface"]`
+- **Format**: Valid JSON matching one of four interface types (see below)
+- **Example**:
+  ```xml
+  <pdd-interface>
+  {
+    "type": "module",
+    "module": {
+      "functions": [
+        {"name": "llm_invoke", "signature": "(prompt, strength, ...)", "returns": "Dict"}
+      ]
+    }
+  }
+  </pdd-interface>
+  ```
+
+**`<pdd-dependency>`**
+- **Purpose**: References other prompt files this module depends on
+- **Maps to**: `architecture.json["dependencies"]` array
+- **Format**: Prompt filename (e.g., `llm_invoke_python.prompt`)
+- **Multiple tags**: Use one `<pdd-dependency>` tag per dependency
+- **Example**:
+  ```xml
+  <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+  <pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+  ```
+
+### Interface Types
+
+The `<pdd-interface>` tag supports four interface types, matching the architecture.json schema:
+
+**Module Interface** (Python modules with functions):
+```json
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "func_name", "signature": "(arg1, arg2)", "returns": "Type"}
+    ]
+  }
+}
+```
+
+**CLI Interface** (Command-line interfaces):
+```json
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "cmd_name", "description": "What it does"}
+    ]
+  }
+}
+```
+
+**Command Interface** (PDD commands):
+```json
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "cmd_name", "description": "What it does"}
+    ]
+  }
+}
+```
+
+**Frontend Interface** (UI pages):
+```json
+{
+  "type": "frontend",
+  "frontend": {
+    "pages": [
+      {"name": "page_name", "route": "/path"}
+    ]
+  }
+}
+```
+
+### Sync Workflow
+
+1. **Add/edit tags** in your prompt files using the format above
+2. **Click "Sync from Prompt"** in the PDD Connect Architecture page (or call the API endpoint)
+3. **Tags automatically update** `architecture.json` with your changes
+4. **Architecture visualization** reflects the updated dependencies and interfaces
+
+Prompts are the **source of truth** - tags in prompt files override what's in `architecture.json`. This aligns with PDD's core philosophy that prompts, not code or documentation, are authoritative.
+
+### Validation
+
+Validation is **lenient**:
+- Missing tags are OK - only fields with tags get updated
+- Malformed XML/JSON is skipped without blocking sync
+- Circular dependencies are detected and prevent invalid updates
+- Missing dependency files generate warnings but don't block sync
+
+### Best Practices
+
+**Keep `<pdd-reason>` concise** (60-120 chars)
+- Good: "Provides unified LLM invocation across all PDD operations."
+- Too long: "This module exists because we needed a way to call different LLM providers through a unified interface that supports both streaming and non-streaming modes while also handling rate limiting and retry logic..."
+
+**Use prompt filenames for dependencies**, not module names
+- Correct: `<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>`
+- Wrong: `<pdd-dependency>pdd.llm_invoke</pdd-dependency>`
+- Wrong: `<pdd-dependency>context/example.py</pdd-dependency>`
+
+**Validate interface JSON before committing**
+- Use a JSON validator to check syntax
+- Ensure `type` field matches one of: `module`, `cli`, `command`, `frontend`
+- Include required nested keys (`functions`, `commands`, or `pages`)
+
+**Run "Sync All" after bulk prompt updates**
+- If you've edited multiple prompts, sync all at once
+- Review the validation results for circular dependencies
+- Fix any warnings before committing changes
+
+### Relationship to Other Tags
+
+**`<pdd-dependency>` vs `<include>`**:
+- `<pdd-dependency>`: Declares architectural dependency (updates `architecture.json`)
+- `<include>`: Injects content into prompt for LLM context (does NOT affect architecture)
+- Use both when appropriate - they serve different purposes
+
+**`<pdd-*>` tags vs `<pdd>` comments**:
+- `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`: Metadata tags (processed by sync tool)
+- `<pdd>...</pdd>`: Human-only comments (removed by preprocessor, never reach LLM)
+- Both are valid PDD directives with different purposes
+
+### Example: Complete Prompt with Metadata Tags
+
+See `docs/examples/prompt_with_metadata.prompt` for a full example showing all three metadata tags in context.
+
+---
+
 ## Advanced Tips
 
 ### Shared Preamble for Consistency

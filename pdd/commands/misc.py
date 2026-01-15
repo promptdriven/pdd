@@ -39,6 +39,12 @@ from ..core.errors import handle_error
     default=None,
     help="List of keys to exclude from curly bracket doubling.",
 )
+@click.option(
+    "--pdd-tags",
+    is_flag=True,
+    default=False,
+    help="Inject PDD metadata tags (<pdd-reason>, <pdd-interface>, <pdd-dependency>) from architecture.json.",
+)
 @click.pass_context
 # No @track_cost as preprocessing is local, but return dummy tuple for callback
 def preprocess(
@@ -49,6 +55,7 @@ def preprocess(
     recursive: bool,
     double: bool,
     exclude: Optional[Tuple[str, ...]],
+    pdd_tags: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """Preprocess a prompt file to prepare it for LLM use."""
     try:
@@ -62,6 +69,7 @@ def preprocess(
             recursive=recursive,
             double=double,
             exclude=list(exclude) if exclude else [],
+            pdd_tags=pdd_tags,
         )
         
         # Handle the result from preprocess_main
