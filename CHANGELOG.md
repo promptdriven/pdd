@@ -1,5 +1,10 @@
 ## v0.0.116 (2026-01-15)
 
+### Feat
+
+- **Remote Bug Command Execution:** `pdd bug` now supports remote execution via PDD Connect. Includes stale session validation with confirmation dialog before submitting to offline sessions. Remote jobs tracked in JobDashboard with `[Remote]` prefix.
+
+
 ## v0.0.115 (2026-01-14)
 
 ### Feat
