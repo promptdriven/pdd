@@ -7,7 +7,7 @@ Write the `pdd/agentic_e2e_fix_orchestrator.py` module.
 Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separate agentic task, iterates through an outer loop until all tests pass, and supports state persistence for resumption. This workflow fixes bugs identified by `pdd bug` by running unit tests, e2e tests, and `pdd fix` sequentially on failing dev units.
 
 % Requirements
-1. Function: `run_agentic_e2e_fix_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_e2e_fix_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run an outer loop (max `max_cycles` iterations) that executes steps 1-9 until all tests pass
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -163,13 +163,15 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
      - If "Failed" or still failing: set `{"fixed": false, "fix_attempts": N}`
    - Increment `fix_attempts` on each cycle where the dev unit is processed
 
-% State Persistence
-1. **State file location**: `.pdd/e2e-fix-state/issue-{issue_number}.json`
+% State Persistence (GitHub + Local)
+1. **State file location**: `.pdd/e2e-fix-state/issue-{issue_number}.json` (local cache)
+   - GitHub is primary storage (enables cross-machine resume)
    - Create parent directories with `Path.mkdir(parents=True, exist_ok=True)` before writing
 
 2. **State file structure**:
    ```json
    {
+     "workflow": "e2e_fix",
      "issue_url": "https://github.com/owner/repo/issues/123",
      "issue_number": 123,
      "current_cycle": 2,
@@ -186,22 +188,24 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
      "total_cost": 0.0567,
      "model_used": "anthropic",
      "changed_files": ["tests/test_a.py", "pdd/module_a.py"],
-     "last_saved_at": "2025-01-14T10:30:00Z"
+     "last_saved_at": "2025-01-14T10:30:00Z",
+     "github_comment_id": 12345678
    }
    ```
 
-3. **Helper functions**:
-   - `_get_state_file_path(cwd: Path, issue_number: int) -> Path`
-   - `_load_state(cwd: Path, issue_number: int) -> Optional[Dict]`
-   - `_save_state(cwd: Path, issue_number: int, state: Dict) -> None`
-   - `_clear_state(cwd: Path, issue_number: int) -> None`
+3. **Use shared functions from agentic_common**:
+   - `load_workflow_state(cwd, issue_number, "e2e_fix", state_dir, repo_owner, repo_name, use_github_state)` - Load from GitHub (primary) or local cache
+   - `save_workflow_state(cwd, issue_number, "e2e_fix", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)` - Save to GitHub first, then local
+   - `clear_workflow_state(cwd, issue_number, "e2e_fix", state_dir, repo_owner, repo_name, use_github_state)` - Clear on completion
+   - State directory: `_get_state_dir(cwd) -> Path` returns `.pdd/e2e-fix-state/` relative to git root
 
 4. **Resume logic**:
-   - If `resume=True` and state exists: Continue from saved cycle and step
-   - If `resume=False`: Start fresh, clear any existing state
-   - On successful completion (`ALL_TESTS_PASS`): Clear state file
+   - If `resume=True`: Call `load_workflow_state()` to check for existing state (GitHub first, then local)
+   - Track `github_comment_id` from load result for subsequent saves
+   - If `resume=False`: Start fresh, call `clear_workflow_state()` to clear any existing state
+   - On successful completion (`ALL_TESTS_PASS`): Call `clear_workflow_state()`
    - On max cycles reached: State remains for inspection
-   - On user interrupt (KeyboardInterrupt): Save current state before exiting
+   - On user interrupt (KeyboardInterrupt): Call `save_workflow_state()` before exiting
    - On fatal error: State remains for debugging
 
 5. **State staleness detection** (when resuming):
@@ -257,7 +261,7 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`
+Import from `agentic_common`: `run_agentic_task`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
 Note: `E2E_FIX_STEP_TIMEOUTS` is defined locally in this module (see Step Name Mapping section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
