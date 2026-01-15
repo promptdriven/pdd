@@ -1463,19 +1463,35 @@ pdd [GLOBAL OPTIONS] preprocess --output preprocessed/factorial_calculator_pytho
 
 ### 6. fix
 
-Fix errors in code and unit tests based on error messages and the original prompt file.
+Fix errors in code and unit tests. Supports two modes: **Agentic E2E Fix** (default when given a GitHub URL) for multi-dev-unit test fixing, and **Manual mode** for single dev-unit fixing with explicit file arguments.
 
+**Agentic E2E Fix Mode (GitHub URL):**
 ```
-pdd [GLOBAL OPTIONS] fix [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
+pdd [GLOBAL OPTIONS] fix [OPTIONS] <GITHUB_ISSUE_URL>
 ```
 
-Arguments:
+**Manual Mode (file arguments):**
+```
+pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
+```
+
+#### Manual Mode Arguments
 - `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
 - `CODE_FILE`: The filename of the code file to be fixed.
 - `UNIT_TEST_FILES`: The filename(s) of the unit test file(s). Multiple files can be provided, and each will be processed individually.
 - `ERROR_FILE`: The filename containing the unit test runtime error messages. Optional and does not need to exist when used with the `--loop` command.
 
-Options:
+#### Common Options
+- `--manual`: Use manual mode with explicit file arguments (required for legacy/single dev-unit fixing).
+- `--verbose`: Show detailed output during processing.
+- `--quiet`: Suppress all output except errors.
+
+#### Agentic E2E Fix Options
+- `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0).
+- `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
+- `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
+
+#### Manual Mode Options
 - `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. **Warning: If multiple `UNIT_TEST_FILES` are provided along with this option, only the fixed content of the last processed test file will be saved to this location, overwriting previous results. For individual fixed files, omit this option.**
 - `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.log`. If an environment variable `PDD_FIX_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
@@ -1548,6 +1564,50 @@ For the agentic fallback to function, you need to have at least one of the suppo
     *   Requires the `OPENAI_API_KEY` environment variable to be set.
 
 You can configure these keys using `pdd setup` or by setting them in your shell's environment.
+
+#### Agentic E2E Fix Mode
+
+For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates a 9-step iterative workflow to fix both unit tests and e2e tests across your codebase.
+
+**How it Works:**
+
+The workflow analyzes the GitHub issue to extract test information, then iteratively fixes failing tests:
+
+1. **Run Unit Tests**: Execute unit tests from the issue and run `pdd fix` on each failing test sequentially
+2. **Run E2E Tests**: Execute end-to-end tests to identify failures; stop if all pass
+3. **Root Cause Analysis**: Analyze failures against documentation to determine if issues are in code, tests, or both
+4. **Fix E2E Tests**: If e2e tests themselves are incorrect, fix them and return to step 2
+5. **Identify Dev Units**: Determine which dev units are involved in the failures
+6. **Create Unit Tests**: For code bugs, create or append unit tests for the affected dev units
+7. **Verify Tests**: Run new unit tests to confirm they detect the bugs and will pass once fixed
+8. **Run PDD Fix**: Execute `pdd fix` sequentially on failing unit tests for each dev unit
+9. **Verify All**: Return to step 1 and repeat until all tests pass
+
+**Resumable Operations:**
+
+State is automatically persisted, allowing you to resume interrupted workflows. Use `--no-resume` to start fresh.
+
+**Example:**
+```bash
+# Fix tests from a GitHub issue (agentic mode)
+pdd fix https://github.com/myorg/myrepo/issues/42
+
+# With custom timeout and max cycles
+pdd fix --timeout-adder 30 --max-cycles 10 https://github.com/myorg/myrepo/issues/42
+
+# Start fresh (ignore saved state)
+pdd fix --no-resume https://github.com/myorg/myrepo/issues/42
+```
+
+**Prerequisites:**
+- The `gh` CLI must be installed and authenticated
+- At least one supported agent CLI (Claude, Gemini, or Codex) with API key configured
+
+**Relationship with `pdd bug`:**
+
+This feature works seamlessly with issues processed by `pdd bug`. The typical workflow is:
+1. Use `pdd bug <issue_url>` to analyze a bug and generate failing unit tests
+2. Use `pdd fix <issue_url>` to iteratively fix the failing tests across all affected dev units
 
 Example (save to different location):
 ```
@@ -1888,6 +1948,16 @@ pdd bug https://github.com/myorg/myrepo/issues/42
 # Manual mode (legacy)
 pdd bug --manual prompt.prompt code.py main.py current.txt desired.txt
 ```
+
+**Next Step - Fixing the Bug:**
+
+After `pdd bug` creates failing tests and a draft PR, use `pdd fix` with the same issue URL to automatically fix the failing tests across all affected dev units:
+
+```bash
+pdd fix https://github.com/myorg/myrepo/issues/42
+```
+
+See the [fix command](#6-fix) documentation for details on the agentic E2E fix workflow.
 
 ### 15. auto-deps
 
