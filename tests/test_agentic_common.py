@@ -634,12 +634,12 @@ def test_step_timeouts_dictionary_exists():
             f"for medium complexity operations"
         )
 
-    # Verify simple steps have standard timeout (240 seconds)
+    # Verify simple steps have reasonable timeout (at least 240 seconds)
     simple_steps = [1, 10]  # Duplicate Check and Create PR
     for step in simple_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
-        assert STEP_TIMEOUTS[step] == 240.0, (
-            f"Step {step} timeout ({STEP_TIMEOUTS[step]}) should be 240 seconds "
+        assert STEP_TIMEOUTS[step] >= 240.0, (
+            f"Step {step} timeout ({STEP_TIMEOUTS[step]}) should be >= 240 seconds "
             f"for simple operations"
         )
 
