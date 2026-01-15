@@ -2045,6 +2045,44 @@ pdd auth token [OPTIONS]
 
 **When to use**: Use `auth` commands to manage your PDD Cloud authentication state. Use `auth login` to authenticate before using cloud features, `auth status` to verify your current session, and `auth token` when you need to pass credentials to scripts or other tools.
 
+### 19. `pdd sessions` - Manage Remote Sessions
+
+The `sessions` command group allows you to manage remote PDD sessions registered with PDD Cloud. Remote sessions enable you to control PDD instances running on other machines through the web frontend.
+
+#### List Sessions
+
+```bash
+pdd sessions list
+pdd sessions list --json
+```
+
+Lists all active remote sessions associated with your authenticated account. Use `--json` for machine-readable output.
+
+#### Session Info
+
+```bash
+pdd sessions info <session_id>
+```
+
+Displays detailed information about a specific session including project name, cloud URL, status, and last heartbeat time.
+
+#### Cleanup Sessions
+
+```bash
+pdd sessions cleanup --stale
+pdd sessions cleanup --all
+pdd sessions cleanup --all --force
+```
+
+**Options:**
+- `--stale`: Remove only stale sessions (no recent heartbeat)
+- `--all`: Remove all sessions for the current user
+- `--force`: Skip confirmation prompt
+
+**Note:** Sessions are automatically registered when running `pdd connect` (unless `--local-only` is specified) and deregistered on graceful shutdown. Use `pdd sessions cleanup` to manually remove orphaned sessions if a `pdd connect` instance was terminated ungracefully.
+
+**When to use**: Use `sessions list` to discover available remote sessions, `sessions info` to check session details, and `sessions cleanup` to remove stale or orphaned sessions.
+
 ## Example Review Process
 
 When the global `--review-examples` option is used with any command, PDD will present potential few-shot examples that might be used for the current operation. The review process follows these steps:

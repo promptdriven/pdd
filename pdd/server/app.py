@@ -24,6 +24,7 @@ from .jobs import JobManager
 from .routes.websocket import ConnectionManager, create_websocket_routes
 from .routes import architecture, auth, files, commands, prompts
 from .routes import websocket as ws_routes
+from .routes.config import router as config_router
 
 # Initialize Rich console
 console = Console()
@@ -50,7 +51,7 @@ class AppState:
         self.path_validator = PathValidator(self.project_root)
         # SAFETY: Limit concurrent jobs to 3 - LLM calls are resource-intensive
         # Running too many in parallel can exhaust memory/CPU and crash the system
-        self.job_manager = JobManager(max_concurrent=3)
+        self.job_manager = JobManager(max_concurrent=3, project_root=self.project_root)
         self.connection_manager = ConnectionManager()
 
     @property
@@ -244,6 +245,7 @@ def create_app(
 
     app.include_router(architecture.router)
     app.include_router(auth.router)
+    app.include_router(config_router)
     app.include_router(files.router)
     app.include_router(commands.router)
     app.include_router(prompts.router)

@@ -46,6 +46,8 @@
      - When command found: set status="processing", execute handler, set status="completed"
      - Use asyncio.Event for clean shutdown
      - Handle errors gracefully (set status="failed" with error message)
+     - Support cancellation detection via `_get_command_status()` using getCommandStatus endpoint
+     - Check for cancellation during command execution and abort if cancelled
 
   6. **Heartbeat behavior**:
      - Send heartbeat to `heartbeatSession` endpoint every 60 seconds
@@ -75,7 +77,9 @@
     - deregisterSession: POST/DELETE to deregister
     - listSessions: GET to list sessions
     - getCommands: GET to poll pending commands
+    - getCommandStatus: GET to check specific command status (for cancellation detection)
     - updateCommand: POST to update command status/response
+    - cancelCommand: POST to cancel a command
 
 % Instructions
   - Follow existing cloud API patterns in the codebase

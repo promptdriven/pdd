@@ -49,7 +49,18 @@ Test Plan for pdd.auth_service
    - **Case 4: Both fail**: Returns (False, combined_error_msg).
    - *Method*: Unit Test mocking `clear_jwt_cache` and `clear_refresh_token`.
 
-8. **Z3 Formal Verification**:
+8. **get_cached_jwt**:
+   - **Case 1: File does not exist**: Should return None.
+   - **Case 2: File exists but invalid JSON**: Should return None.
+   - **Case 3: File exists, valid JSON, but missing token keys**: Should return None.
+   - **Case 4: File exists, valid token, but expired**: Should return None.
+   - **Case 5: File exists, valid token, expires soon (within buffer)**: Should return None.
+   - **Case 6: File exists, valid token with 'id_token' key**: Should return token.
+   - **Case 7: File exists, valid token with legacy 'jwt' key**: Should return token.
+   - **Case 8: Both 'id_token' and 'jwt' exist**: Should prefer 'id_token'.
+   - *Method*: Unit Test with mocked file system.
+
+9. **Z3 Formal Verification**:
    - While the logic is mostly IO-bound, we can verify the temporal logic of `get_jwt_cache_info` to ensure the buffer logic (current_time + 300) holds for all possible timestamps.
    - We can also verify the state machine logic of `get_auth_status` (e.g., if cached is True, authenticated MUST be True).
 """
@@ -157,7 +168,7 @@ def test_get_jwt_cache_info_valid(mock_home):
     """Should return (True, expires_at) if token is valid and outside buffer."""
     cache_file = mock_home / ".pdd" / "jwt_cache"
     cache_file.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Expires in 600 seconds (more than 300s buffer)
     future_time = time.time() + 600
     cache_file.write_text(json.dumps({"expires_at": future_time}))
@@ -165,6 +176,113 @@ def test_get_jwt_cache_info_valid(mock_home):
     is_valid, expires_at = auth_service.get_jwt_cache_info()
     assert is_valid is True
     assert expires_at == future_time
+
+# --- get_cached_jwt Tests ---
+
+def test_get_cached_jwt_no_file(mock_home):
+    """Should return None if cache file does not exist."""
+    cache_file = mock_home / ".pdd" / "jwt_cache"
+    if cache_file.exists():
+        cache_file.unlink()
+
+    token = auth_service.get_cached_jwt()
+    assert token is None
+
+def test_get_cached_jwt_invalid_json(mock_home):
+    """Should return None if file contains invalid JSON."""
+    cache_file = mock_home / ".pdd" / "jwt_cache"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text("{invalid_json")
+
+    token = auth_service.get_cached_jwt()
+    assert token is None
+
+def test_get_cached_jwt_missing_token_key(mock_home):
+    """Should return None if JSON is valid but missing token keys."""
+    cache_file = mock_home / ".pdd" / "jwt_cache"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    future_time = time.time() + 600
+    cache_file.write_text(json.dumps({"expires_at": future_time, "some_other_key": "value"}))
+
+    token = auth_service.get_cached_jwt()
+    assert token is None
+
+def test_get_cached_jwt_expired(mock_home):
+    """Should return None if token is expired."""
+    cache_file = mock_home / ".pdd" / "jwt_cache"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Expired 1 second ago
+    past_time = time.time() - 1
+    cache_file.write_text(json.dumps({
+        "expires_at": past_time,
+        "id_token": "expired_token"
+    }))
+
+    token = auth_service.get_cached_jwt()
+    assert token is None
+
+def test_get_cached_jwt_within_buffer(mock_home):
+    """Should return None if token expires within the 300s buffer."""
+    cache_file = mock_home / ".pdd" / "jwt_cache"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Expires in 200 seconds (less than 300s buffer)
+    future_time = time.time() + 200
+    cache_file.write_text(json.dumps({
+        "expires_at": future_time,
+        "id_token": "almost_expired_token"
+    }))
+
+    token = auth_service.get_cached_jwt()
+    assert token is None
+
+def test_get_cached_jwt_valid_id_token(mock_home):
+    """Should return token when using 'id_token' key (new format)."""
+    cache_file = mock_home / ".pdd" / "jwt_cache"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Expires in 600 seconds (more than 300s buffer)
+    future_time = time.time() + 600
+    expected_token = "valid_id_token_abc123"
+    cache_file.write_text(json.dumps({
+        "expires_at": future_time,
+        "id_token": expected_token
+    }))
+
+    token = auth_service.get_cached_jwt()
+    assert token == expected_token
+
+def test_get_cached_jwt_valid_legacy_jwt(mock_home):
+    """Should return token when using legacy 'jwt' key for backwards compatibility."""
+    cache_file = mock_home / ".pdd" / "jwt_cache"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Expires in 600 seconds (more than 300s buffer)
+    future_time = time.time() + 600
+    expected_token = "legacy_jwt_token_xyz789"
+    cache_file.write_text(json.dumps({
+        "expires_at": future_time,
+        "jwt": expected_token
+    }))
+
+    token = auth_service.get_cached_jwt()
+    assert token == expected_token
+
+def test_get_cached_jwt_prefers_id_token_over_jwt(mock_home):
+    """Should prefer 'id_token' over 'jwt' if both exist."""
+    cache_file = mock_home / ".pdd" / "jwt_cache"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+    future_time = time.time() + 600
+    cache_file.write_text(json.dumps({
+        "expires_at": future_time,
+        "id_token": "preferred_token",
+        "jwt": "legacy_token"
+    }))
+
+    token = auth_service.get_cached_jwt()
+    assert token == "preferred_token"
 
 # --- has_refresh_token Tests ---
 

@@ -322,10 +322,20 @@ async def get_job_status(
             now = now.replace(tzinfo=None)
         duration = (now - job.started_at).total_seconds()
 
+    # For running/queued jobs, provide live output in the result field
+    result = job.result
+    if job.status in (JobStatus.RUNNING, JobStatus.QUEUED) and result is None:
+        # Provide live output while job is running
+        result = {
+            "stdout": job.live_stdout,
+            "stderr": job.live_stderr,
+            "exit_code": None,  # Not yet available
+        }
+
     return JobResult(
         job_id=job.id,
         status=job.status,
-        result=job.result,
+        result=result,
         error=job.error,
         cost=job.cost,
         duration_seconds=duration,

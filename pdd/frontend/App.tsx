@@ -67,7 +67,7 @@ const App: React.FC = () => {
   const [executionMode, setExecutionMode] = useState<'local' | 'remote'>('local');
   const [remoteSessions, setRemoteSessions] = useState<RemoteSessionInfo[]>([]);
   const [selectedRemoteSession, setSelectedRemoteSession] = useState<string | null>(null);
-  const [remoteCommandPolling, setRemoteCommandPolling] = useState<Map<string, number>>(new Map());
+  const [remoteSessionError, setRemoteSessionError] = useState<string | null>(null);
 
   // Task queue for sequential execution
   const taskQueue = useTaskQueue({
@@ -110,29 +110,50 @@ const App: React.FC = () => {
     setSelectedJobId,
     addSpawnedJob,
     markSpawnedJobDone,
+    markJobStatus,
+    updateSpawnedJobStatus,
   } = useJobs({ onJobComplete: handleJobComplete });
 
-  // Create a spawnTerminal-based job runner for the task queue
-  // This matches how handleRunCommand works - spawns a new terminal window
+  // Create a job runner for the task queue that respects execution mode
+  // Matches handleRunCommand behavior - routes to remote or local based on mode
   const spawnTerminalJob = useCallback(async (
     request: CommandRequest,
     displayCommand: string
   ): Promise<string | null> => {
     try {
-      const result = await api.spawnTerminal(request);
-      if (result.success && result.job_id) {
-        // Add to job dashboard for tracking
-        addSpawnedJob(displayCommand, request.command, result.job_id);
-        return result.job_id;
+      // Check if we're in remote mode with a selected session
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Submit to remote session via cloud
+        const { commandId } = await api.submitRemoteCommand({
+          sessionId: selectedRemoteSession,
+          type: request.command,
+          payload: { args: request.args, options: request.options },
+        });
+        // Add to job dashboard as remote job
+        addSpawnedJob(
+          `[Remote] ${displayCommand}`,
+          request.command,
+          commandId,
+          { remote: true, sessionId: selectedRemoteSession }
+        );
+        return commandId;
       } else {
-        console.error('Failed to spawn terminal:', result.message);
-        return null;
+        // Local execution - spawn in new terminal window
+        const result = await api.spawnTerminal(request);
+        if (result.success && result.job_id) {
+          // Add to job dashboard for tracking
+          addSpawnedJob(displayCommand, request.command, result.job_id);
+          return result.job_id;
+        } else {
+          console.error('Failed to spawn terminal:', result.message);
+          return null;
+        }
       }
     } catch (error) {
-      console.error('Failed to spawn terminal:', error);
+      console.error('Failed to submit job:', error);
       return null;
     }
-  }, [addSpawnedJob]);
+  }, [addSpawnedJob, executionMode, selectedRemoteSession]);
 
   // Connect the spawnTerminal job runner to the task queue
   useEffect(() => {
@@ -211,9 +232,21 @@ const App: React.FC = () => {
       try {
         const sessions = await api.listRemoteSessions();
         setRemoteSessions(sessions);
+        setRemoteSessionError(null); // Clear any previous errors
       } catch (err) {
-        console.error('Failed to fetch remote sessions:', err);
-        // Don't show error toast - user might not be authenticated yet
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Failed to fetch remote sessions:', errorMsg);
+        setRemoteSessionError(errorMsg);
+
+        // Parse error type and show appropriate toast
+        if (errorMsg.includes('Not authenticated') || errorMsg.includes('401') || errorMsg.includes('403')) {
+          // Don't spam toast for auth errors - user might not be logged in yet
+          // Error will be shown in debug panel
+        } else if (errorMsg.includes('timeout') || errorMsg.includes('network') || errorMsg.includes('Failed to fetch')) {
+          addToast('Network error: Cannot reach cloud. Check your connection.', 'error', 5000);
+        } else {
+          addToast(`Failed to load remote sessions: ${errorMsg}`, 'error', 5000);
+        }
       }
     };
 
@@ -224,86 +257,8 @@ const App: React.FC = () => {
     const interval = setInterval(fetchRemoteSessions, 30000);
 
     return () => clearInterval(interval);
-  }, [serverConnected]);
+  }, [serverConnected, addToast]);
 
-  // Poll remote command status every 5 seconds
-  const startRemoteCommandPolling = useCallback((commandId: string, sessionId: string) => {
-    let attempts = 0;
-    const maxAttempts = 120; // 10 minutes max (5s intervals)
-
-    const pollInterval = window.setInterval(async () => {
-      attempts++;
-
-      try {
-        const status = await api.getRemoteCommandStatus(sessionId, commandId);
-
-        if (!status) {
-          // Command not found - might have been cleaned up
-          console.warn(`Remote command ${commandId} not found`);
-          return;
-        }
-
-        // Update job status in dashboard
-        updateSpawnedJobStatus(commandId, {
-          status: status.status === 'completed' ? 'completed' :
-                  status.status === 'failed' ? 'failed' : 'running',
-          exit_code: status.response?.exit_code,
-          stdout: status.response?.stdout,
-          stderr: status.response?.stderr,
-        });
-
-        // Check for completion
-        if (status.status === 'completed' || status.status === 'failed') {
-          window.clearInterval(pollInterval);
-          setRemoteCommandPolling(prev => {
-            const next = new Map(prev);
-            next.delete(commandId);
-            return next;
-          });
-
-          // Show completion notification
-          addToast(
-            status.status === 'completed'
-              ? `Remote command completed successfully`
-              : `Remote command failed: ${status.response?.message || 'Unknown error'}`,
-            status.status === 'completed' ? 'success' : 'error',
-            5000
-          );
-        } else if (attempts >= maxAttempts) {
-          // Timeout
-          window.clearInterval(pollInterval);
-          setRemoteCommandPolling(prev => {
-            const next = new Map(prev);
-            next.delete(commandId);
-            return next;
-          });
-
-          updateSpawnedJobStatus(commandId, {
-            status: 'failed',
-            stderr: 'Command timed out after 10 minutes',
-          });
-
-          addToast('Remote command timed out', 'error', 5000);
-        }
-      } catch (error) {
-        console.error('Remote polling error:', error);
-        // Continue polling - might be a temporary network issue
-      }
-    }, 5000); // Poll every 5s
-
-    setRemoteCommandPolling(prev => {
-      const next = new Map(prev);
-      next.set(commandId, pollInterval);
-      return next;
-    });
-  }, [addToast]);
-
-  // Cleanup polling intervals on unmount
-  useEffect(() => {
-    return () => {
-      remoteCommandPolling.forEach(interval => window.clearInterval(interval));
-    };
-  }, [remoteCommandPolling]);
 
   const handleRunCommand = async (command: CommandType, prompt: PromptInfo, commandOptions?: Record<string, any>) => {
     if (!serverConnected) {
@@ -480,6 +435,22 @@ const App: React.FC = () => {
 
       // Check if we're in remote mode
       if (executionMode === 'remote' && selectedRemoteSession) {
+        // Validate session is not stale before submitting
+        const selectedSession = remoteSessions.find(s => s.sessionId === selectedRemoteSession);
+        if (selectedSession?.status === 'stale') {
+          const shouldContinue = window.confirm(
+            'Warning: The selected session appears to be offline (stale).\n\n' +
+            'The remote machine may not be running or has lost connection.\n' +
+            'The command may not be executed.\n\n' +
+            'Do you want to submit anyway?'
+          );
+          if (!shouldContinue) {
+            setIsExecuting(false);
+            setExecutionStatus('idle');
+            return;
+          }
+        }
+
         // Submit command to remote session via cloud
         try {
           const { commandId } = await api.submitRemoteCommand({
@@ -489,15 +460,13 @@ const App: React.FC = () => {
           });
 
           // Add to job dashboard as a remote job
+          // useJobs.ts will automatically poll for status updates on remote jobs
           addSpawnedJob(
             `[Remote] ${fullDisplayCommand}`,
             config.backendName,
             commandId,
             { remote: true, sessionId: selectedRemoteSession }
           );
-
-          // Start polling for command status
-          startRemoteCommandPolling(commandId, selectedRemoteSession);
 
           setExecutionStatus('success');
           addToast(`Command submitted to remote session`, 'success', 3000);
@@ -756,12 +725,25 @@ const App: React.FC = () => {
             </div>
 
             {/* Remote session controls - responsive */}
-            <div className="hidden lg:flex items-center gap-3 px-4 py-2 bg-surface-800/30 rounded-xl border border-surface-700/50">
+            <div className="flex items-center gap-2 md:gap-3 px-2 md:px-4 py-1.5 md:py-2 bg-surface-800/30 rounded-xl border border-surface-700/50">
               <RemoteSessionSelector
                 sessions={remoteSessions}
                 selectedSessionId={selectedRemoteSession}
                 onSelectSession={setSelectedRemoteSession}
                 disabled={!serverConnected}
+                error={remoteSessionError}
+                onRefresh={async () => {
+                  try {
+                    const sessions = await api.listRemoteSessions();
+                    setRemoteSessions(sessions);
+                    setRemoteSessionError(null);
+                    addToast('Sessions refreshed', 'success', 2000);
+                  } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    setRemoteSessionError(errorMsg);
+                    addToast('Failed to refresh sessions', 'error', 3000);
+                  }
+                }}
               />
               <ExecutionModeToggle
                 mode={executionMode}
@@ -1041,6 +1023,7 @@ const App: React.FC = () => {
         onRemoveJob={removeJob}
         onClearCompleted={clearCompletedJobs}
         onMarkSpawnedDone={markSpawnedJobDone}
+        onMarkJobStatus={markJobStatus}
         batchOperation={batchOperation}
         onCancelBatchOperation={handleCancelBatchOperation}
       />

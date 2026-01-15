@@ -190,22 +190,54 @@ class SecurityLoggingMiddleware(BaseHTTPMiddleware):
     """
     Middleware to log requests and provide basic request validation/monitoring.
     """
-    
+
+    # Endpoints that are polled frequently and should be quiet
+    QUIET_ENDPOINTS = [
+        "/api/v1/commands/jobs/",  # Job status polling
+        "/api/v1/commands/spawned-jobs/",  # Spawned job status polling
+        "/api/v1/prompts",  # Prompt listing
+        "/api/v1/status",  # Health checks
+        "/api/v1/auth/jwt-token",  # JWT token polling
+        "/api/v1/auth/status",  # Auth status
+        "/api/v1/files/",  # File operations
+        "/api/v1/config/",  # Config endpoints
+        "/assets/",  # Static assets
+    ]
+
+    # Also skip root and static files
+    QUIET_EXACT = ["/", "/index.html", "/favicon.ico"]
+
+    def _should_log(self, path: str) -> bool:
+        """Check if we should log this request (skip noisy polling endpoints)."""
+        # Check exact matches first
+        if path in self.QUIET_EXACT:
+            return False
+        # Check prefix/substring matches
+        for quiet_path in self.QUIET_ENDPOINTS:
+            if quiet_path in path:
+                return False
+        return True
+
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
         client_host = request.client.host if request.client else "unknown"
-        
-        # Log incoming request
-        console.print(f"[dim]Request:[/dim] {request.method} {request.url.path} [dim]from {client_host}[/dim]")
+        path = request.url.path
+        should_log = self._should_log(path)
+
+        # Log incoming request (skip noisy polling endpoints)
+        if should_log:
+            console.print(f"[dim]Request:[/dim] {request.method} {path} [dim]from {client_host}[/dim]")
 
         response = await call_next(request)
-        
+
         process_time = (time.time() - start_time) * 1000
-        status_color = "green" if response.status_code < 400 else "red"
-        
-        console.print(
-            f"[dim]Response:[/dim] [{status_color}]{response.status_code}[/{status_color}] "
-            f"took {process_time:.2f}ms"
-        )
-        
+
+        # Log response (skip noisy endpoints, but always log errors)
+        if should_log or response.status_code >= 400:
+            status_color = "green" if response.status_code < 400 else "red"
+            console.print(
+                f"[dim]Response:[/dim] [{status_color}]{response.status_code}[/{status_color}] "
+                f"took {process_time:.2f}ms"
+            )
+
         return response

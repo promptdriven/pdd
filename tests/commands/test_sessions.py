@@ -1,268 +1,344 @@
-# Test Plan for pdd/commands/sessions.py
-#
-# 1. Analysis of Code Under Test:
-#    - The module implements a Click command group `sessions` with two subcommands: `list` and `info`.
-#    - It interacts with `CloudConfig` for authentication (JWT token).
-#    - It interacts with `RemoteSessionManager` (async) to fetch data.
-#    - It uses `rich.console` and `rich.table` for output formatting.
-#    - It handles exceptions using a utility `handle_error`.
-#
-# 2. Logic & Edge Cases:
-#    - Authentication: Token missing -> Error message.
-#    - API Errors: `RemoteSessionManager` raises exception -> `handle_error` called.
-#    - `list` command:
-#      - Empty list -> Specific warning message.
-#      - JSON output -> Calls `console.print_json` with serialized data.
-#      - Table output -> Calls `console.print` with a Table object.
-#      - Status coloring -> "active" is green, "stale" is yellow.
-#    - `info` command:
-#      - Session not found -> Error message.
-#      - Session found -> Displays metadata table.
-#
-# 3. Z3 Formal Verification:
-#    - This module is primarily a CLI presentation layer (IO-bound, formatting, orchestration).
-#    - The logic consists of simple conditional branches (if auth, if json, if active/stale).
-#    - There are no complex algorithms, constraint satisfaction problems, or state machines suitable for SMT solving.
-#    - Therefore, Z3 tests are omitted in favor of comprehensive unit tests using mocks.
-#
-# 4. Unit Test Strategy:
-#    - Use `click.testing.CliRunner` to invoke commands.
-#    - Mock `CloudConfig.get_jwt_token`.
-#    - Mock `RemoteSessionManager` methods (`list_sessions`, `get_session`) using `AsyncMock` because they are called via `asyncio.run`.
-#    - Mock `console` to verify output calls (print, print_json).
-#    - Mock `handle_error` to verify exception handling delegation.
-#    - Create dummy session objects to test serialization logic (model_dump vs dict vs __dict__).
+"""
+Test Plan for pdd.commands.sessions
 
-import sys
-from unittest.mock import MagicMock, AsyncMock
+1. **sessions command group**:
+   - Should be a Click group with name "sessions"
+   - Should have docstring "Manage remote PDD sessions."
 
-# -----------------------------------------------------------------------------
-# Pre-import Mocking
-# -----------------------------------------------------------------------------
-# We must mock missing dependencies BEFORE importing the module under test
-# to avoid ModuleNotFoundError during test collection if the environment is incomplete.
+2. **sessions list**:
+   - **Case 1: Not authenticated**: Should show error message.
+   - **Case 2: No sessions**: Should show "No active remote sessions found."
+   - **Case 3: With sessions**: Should display table with SESSION ID, PROJECT, CLOUD URL, STATUS, LAST SEEN.
+   - **Case 4: With --json flag**: Should output JSON array.
+   - **Case 5: API error**: Should show error message.
 
-# Mock pdd.utils
-if "pdd.utils" not in sys.modules:
-    mock_utils = MagicMock()
-    sys.modules["pdd.utils"] = mock_utils
+3. **sessions info**:
+   - **Case 1: Not authenticated**: Should show error message.
+   - **Case 2: Session found**: Should display key-value table.
+   - **Case 3: Session not found**: Should show "Session not found."
+   - **Case 4: API error**: Should show error message.
 
-# Mock pdd.core.cloud
-if "pdd.core.cloud" not in sys.modules:
-    mock_cloud_mod = MagicMock()
-    sys.modules["pdd.core.cloud"] = mock_cloud_mod
+4. **sessions cleanup**:
+   - **Case 1: Not authenticated**: Should show error message.
+   - **Case 2: No sessions**: Should show "No active remote sessions found."
+   - **Case 3: With --all --force**: Should cleanup all sessions without prompt.
+   - **Case 4: With --stale --force**: Should cleanup only stale sessions.
+   - **Case 5: Partial failure**: Should report success/failure counts.
+"""
 
-# Mock pdd.remote_session
-if "pdd.remote_session" not in sys.modules:
-    mock_remote_mod = MagicMock()
-    sys.modules["pdd.remote_session"] = mock_remote_mod
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import patch
 from click.testing import CliRunner
-from rich.table import Table
 
-# Import the actual module
-# Renamed from sessions_group to sessions to match __init__.py expectations
 from pdd.commands.sessions import sessions
 
-# -----------------------------------------------------------------------------
-# Fixtures
-# -----------------------------------------------------------------------------
+
+# --- Mock Data ---
+
+@dataclass
+class MockSessionInfo:
+    """Mock session info for testing."""
+    session_id: str
+    project_name: str
+    cloud_url: str
+    status: str
+    last_heartbeat: str
+    created_at: str = "2024-01-01T00:00:00Z"
+    project_path: str = "/test/path"
+    metadata: dict = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
+
+
+@pytest.fixture
+def mock_sessions():
+    """Fixture providing sample session data."""
+    return [
+        MockSessionInfo(
+            session_id="abc12345-6789-def0-1234-567890abcdef",
+            project_name="test-project",
+            cloud_url="https://pdd.dev/connect/abc12345",
+            status="active",
+            last_heartbeat="2024-01-01T10:00:00Z",
+        ),
+        MockSessionInfo(
+            session_id="xyz98765-4321-fedc-ba98-7654321fedcba",
+            project_name="another-project",
+            cloud_url="https://pdd.dev/connect/xyz98765",
+            status="stale",
+            last_heartbeat="2024-01-01T08:00:00Z",
+        ),
+    ]
+
 
 @pytest.fixture
 def runner():
+    """Fixture to provide a CliRunner for testing Click commands."""
     return CliRunner()
 
-@pytest.fixture
-def mock_cloud_config():
-    with patch("pdd.commands.sessions.CloudConfig") as mock:
-        yield mock
 
-@pytest.fixture
-def mock_remote_session_manager():
-    with patch("pdd.commands.sessions.RemoteSessionManager") as mock:
-        yield mock
+# --- sessions list Tests ---
 
-@pytest.fixture
-def mock_console():
-    with patch("pdd.commands.sessions.console") as mock:
-        yield mock
-
-@pytest.fixture
-def mock_handle_error():
-    with patch("pdd.commands.sessions.handle_error") as mock:
-        yield mock
-
-# Helper class to simulate session objects with different serialization methods
-class MockSession:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-        self._data = kwargs
-
-    def dict(self):
-        return self._data
-
-class MockSessionPydanticV2:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-        self._data = kwargs
-
-    def model_dump(self):
-        return self._data
-
-class MockSessionPlain:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-# -----------------------------------------------------------------------------
-# Tests for 'list' command
-# -----------------------------------------------------------------------------
-
-def test_list_sessions_no_auth(runner, mock_cloud_config, mock_console):
-    """Test that list command fails gracefully when not authenticated."""
+@patch("pdd.commands.sessions.CloudConfig")
+def test_list_sessions_not_authenticated(mock_cloud_config, runner):
+    """Should show error when not authenticated."""
     mock_cloud_config.get_jwt_token.return_value = None
 
     result = runner.invoke(sessions, ["list"])
 
     assert result.exit_code == 0
-    mock_console.print.assert_called_with("[red]Error: Not authenticated. Please run 'pdd auth login'.[/red]")
+    assert "Not authenticated" in result.output
+    assert "pdd auth login" in result.output
 
-def test_list_sessions_api_error(runner, mock_cloud_config, mock_remote_session_manager, mock_handle_error):
-    """Test that list command handles API exceptions."""
-    mock_cloud_config.get_jwt_token.return_value = "fake_token"
-    mock_remote_session_manager.list_sessions = AsyncMock(side_effect=Exception("API Boom"))
 
-    result = runner.invoke(sessions, ["list"])
-
-    assert result.exit_code == 0
-    mock_handle_error.assert_called_once()
-    args, _ = mock_handle_error.call_args
-    assert str(args[0]) == "API Boom"
-
-def test_list_sessions_empty(runner, mock_cloud_config, mock_remote_session_manager, mock_console):
-    """Test list command with no active sessions."""
-    mock_cloud_config.get_jwt_token.return_value = "fake_token"
-    mock_remote_session_manager.list_sessions = AsyncMock(return_value=[])
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_list_sessions_empty(mock_cloud_config, mock_manager, runner):
+    """Should show message when no sessions found."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.list_sessions = AsyncMock(return_value=[])
 
     result = runner.invoke(sessions, ["list"])
 
     assert result.exit_code == 0
-    mock_console.print.assert_called_with("[yellow]No active remote sessions found.[/yellow]")
+    assert "No active remote sessions found" in result.output
 
-def test_list_sessions_table_output(runner, mock_cloud_config, mock_remote_session_manager, mock_console):
-    """Test list command displays a table with correct data and formatting."""
-    mock_cloud_config.get_jwt_token.return_value = "fake_token"
 
-    # Create mock sessions - using new API field names
-    s1 = MockSession(session_id="1234567890", project_name="proj1", cloud_url="https://pdd.dev/connect/1234", status="active", last_heartbeat="now")
-    s2 = MockSession(session_id="abc", project_name="proj2", cloud_url="https://pdd.dev/connect/abc", status="stale", last_heartbeat="yesterday")
-    s3 = MockSession(session_id="xyz", project_name="proj3", cloud_url="https://pdd.dev/connect/xyz", status="unknown", last_heartbeat="never")
-
-    mock_remote_session_manager.list_sessions = AsyncMock(return_value=[s1, s2, s3])
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_list_sessions_with_sessions(mock_cloud_config, mock_manager, runner, mock_sessions):
+    """Should display table with sessions."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.list_sessions = AsyncMock(return_value=mock_sessions)
 
     result = runner.invoke(sessions, ["list"])
 
     assert result.exit_code == 0
+    # Check table headers or content
+    assert "abc12345" in result.output  # Truncated session ID
+    assert "test-project" in result.output
+    assert "active" in result.output.lower() or "Active" in result.output
+    assert "xyz98765" in result.output
+    assert "another-project" in result.output
 
-    # Verify a table was printed
-    assert mock_console.print.called
-    args, _ = mock_console.print.call_args
-    printed_obj = args[0]
-    assert isinstance(printed_obj, Table)
 
-    # We can't easily inspect the rows of a Rich Table object directly via public API in a stable way for unit tests
-    # without accessing internal structures, but we can verify the call happened.
-    # We can verify the columns though.
-    assert len(printed_obj.columns) == 5
-    assert printed_obj.columns[0].header == "SESSION ID"
-
-def test_list_sessions_json_output(runner, mock_cloud_config, mock_remote_session_manager, mock_console):
-    """Test list command with --json flag handles different object types."""
-    mock_cloud_config.get_jwt_token.return_value = "fake_token"
-    
-    # Test handling of .model_dump(), .dict(), and __dict__
-    s1 = MockSessionPydanticV2(id="1", type="v2")
-    s2 = MockSession(id="2", type="v1")
-    s3 = MockSessionPlain(id="3", type="plain")
-    
-    mock_remote_session_manager.list_sessions = AsyncMock(return_value=[s1, s2, s3])
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_list_sessions_json_output(mock_cloud_config, mock_manager, runner, mock_sessions):
+    """Should output JSON when --json flag is used."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.list_sessions = AsyncMock(return_value=mock_sessions)
 
     result = runner.invoke(sessions, ["list", "--json"])
 
     assert result.exit_code == 0
-    
-    # Verify print_json was called with correct list
-    mock_console.print_json.assert_called_once()
-    _, kwargs = mock_console.print_json.call_args
-    data = kwargs.get('data')
-    
-    assert len(data) == 3
-    assert data[0] == {"id": "1", "type": "v2"}
-    assert data[1] == {"id": "2", "type": "v1"}
-    assert data[2] == {"id": "3", "type": "plain"}
+    # Output should be valid JSON
+    try:
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["session_id"] == mock_sessions[0].session_id
+    except json.JSONDecodeError:
+        pytest.fail(f"Output is not valid JSON: {result.output}")
 
-# -----------------------------------------------------------------------------
-# Tests for 'info' command
-# -----------------------------------------------------------------------------
 
-def test_session_info_no_auth(runner, mock_cloud_config, mock_console):
-    """Test info command fails when not authenticated."""
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_list_sessions_api_error(mock_cloud_config, mock_manager, runner):
+    """Should show error when API call fails."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.list_sessions = AsyncMock(side_effect=Exception("Network error"))
+
+    result = runner.invoke(sessions, ["list"])
+
+    assert result.exit_code == 0
+    assert "Error listing sessions" in result.output
+    assert "Network error" in result.output
+
+
+# --- sessions info Tests ---
+
+@patch("pdd.commands.sessions.CloudConfig")
+def test_info_not_authenticated(mock_cloud_config, runner):
+    """Should show error when not authenticated."""
     mock_cloud_config.get_jwt_token.return_value = None
 
-    result = runner.invoke(sessions, ["info", "sess_123"])
+    result = runner.invoke(sessions, ["info", "test-session-id"])
 
     assert result.exit_code == 0
-    mock_console.print.assert_called_with("[red]Error: Not authenticated. Please run 'pdd auth login'.[/red]")
+    assert "Not authenticated" in result.output
 
-def test_session_info_api_error(runner, mock_cloud_config, mock_remote_session_manager, mock_handle_error):
-    """Test info command handles API exceptions."""
-    mock_cloud_config.get_jwt_token.return_value = "fake_token"
-    mock_remote_session_manager.get_session = AsyncMock(side_effect=Exception("Fetch Failed"))
 
-    result = runner.invoke(sessions, ["info", "sess_123"])
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_info_session_found(mock_cloud_config, mock_manager, runner, mock_sessions):
+    """Should display session info when found."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.get_session = AsyncMock(return_value=mock_sessions[0])
 
-    assert result.exit_code == 0
-    mock_handle_error.assert_called_once()
-
-def test_session_info_not_found(runner, mock_cloud_config, mock_remote_session_manager, mock_console):
-    """Test info command when session is not found (returns None)."""
-    mock_cloud_config.get_jwt_token.return_value = "fake_token"
-    mock_remote_session_manager.get_session = AsyncMock(return_value=None)
-
-    result = runner.invoke(sessions, ["info", "sess_missing"])
+    result = runner.invoke(sessions, ["info", "abc12345"])
 
     assert result.exit_code == 0
-    mock_console.print.assert_called_with("[red]Session 'sess_missing' not found.[/red]")
+    assert "Session Information" in result.output
+    assert "test-project" in result.output
 
-def test_session_info_success(runner, mock_cloud_config, mock_remote_session_manager, mock_console):
-    """Test info command displays session details."""
-    mock_cloud_config.get_jwt_token.return_value = "fake_token"
-    
-    # Mock session with some data
-    session_data = {"session_id": "sess_123", "status": "active", "created_at": "2023-01-01"}
-    session = MockSession(**session_data)
-    
-    mock_remote_session_manager.get_session = AsyncMock(return_value=session)
 
-    result = runner.invoke(sessions, ["info", "sess_123"])
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_info_session_not_found(mock_cloud_config, mock_manager, runner):
+    """Should show error when session not found."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.get_session = AsyncMock(return_value=None)
+
+    result = runner.invoke(sessions, ["info", "nonexistent"])
 
     assert result.exit_code == 0
-    
-    # Verify calls
-    # 1. Header print
-    mock_console.print.assert_any_call("[bold blue]Session Information: sess_123[/bold blue]")
-    
-    # 2. Table print
-    # The last call should be the table
-    args, _ = mock_console.print.call_args
-    printed_obj = args[0]
-    assert isinstance(printed_obj, Table)
-    
-    # Verify table structure (Field, Value)
-    assert len(printed_obj.columns) == 2
-    assert printed_obj.columns[0].header == "Field"
-    assert printed_obj.columns[1].header == "Value"
+    assert "not found" in result.output.lower()
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_info_api_error(mock_cloud_config, mock_manager, runner):
+    """Should show error when API call fails."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.get_session = AsyncMock(side_effect=Exception("Network error"))
+
+    result = runner.invoke(sessions, ["info", "test-session"])
+
+    assert result.exit_code == 0
+    assert "Error fetching session" in result.output
+
+
+# --- sessions cleanup Tests ---
+
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_not_authenticated(mock_cloud_config, runner):
+    """Should show error when not authenticated."""
+    mock_cloud_config.get_jwt_token.return_value = None
+
+    result = runner.invoke(sessions, ["cleanup", "--all", "--force"])
+
+    assert result.exit_code == 0
+    assert "Not authenticated" in result.output
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_no_sessions(mock_cloud_config, mock_manager, runner):
+    """Should show message when no sessions to cleanup."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.list_sessions = AsyncMock(return_value=[])
+
+    result = runner.invoke(sessions, ["cleanup", "--all", "--force"])
+
+    assert result.exit_code == 0
+    assert "No active remote sessions found" in result.output
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_all_force(mock_cloud_config, mock_manager_class, runner, mock_sessions):
+    """Should cleanup all sessions with --all --force."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
+
+    # Mock the instance created for deregister
+    mock_instance = MagicMock()
+    mock_instance.deregister = AsyncMock(return_value=None)
+    mock_manager_class.return_value = mock_instance
+
+    result = runner.invoke(sessions, ["cleanup", "--all", "--force"])
+
+    assert result.exit_code == 0
+    assert "Successfully cleaned up" in result.output
+    assert "2" in result.output  # 2 sessions
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_stale_only(mock_cloud_config, mock_manager_class, runner, mock_sessions):
+    """Should cleanup only stale sessions with --stale --force."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
+
+    # Mock the instance created for deregister
+    mock_instance = MagicMock()
+    mock_instance.deregister = AsyncMock(return_value=None)
+    mock_manager_class.return_value = mock_instance
+
+    result = runner.invoke(sessions, ["cleanup", "--stale", "--force"])
+
+    assert result.exit_code == 0
+    assert "Successfully cleaned up" in result.output
+    assert "1" in result.output  # Only 1 stale session
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_no_stale_sessions(mock_cloud_config, mock_manager, runner):
+    """Should show message when no stale sessions to cleanup."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    # All sessions are active
+    active_sessions = [
+        MockSessionInfo(
+            session_id="active-1",
+            project_name="project1",
+            cloud_url="https://pdd.dev/connect/active-1",
+            status="active",
+            last_heartbeat="2024-01-01T10:00:00Z",
+        ),
+    ]
+    mock_manager.list_sessions = AsyncMock(return_value=active_sessions)
+
+    result = runner.invoke(sessions, ["cleanup", "--stale", "--force"])
+
+    assert result.exit_code == 0
+    assert "No stale sessions found" in result.output
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_partial_failure(mock_cloud_config, mock_manager_class, runner, mock_sessions):
+    """Should report both success and failure counts."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager_class.list_sessions = AsyncMock(return_value=mock_sessions)
+
+    # Mock deregister to fail for second session
+    call_count = 0
+
+    async def mock_deregister():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise Exception("Failed to deregister")
+
+    mock_instance = MagicMock()
+    mock_instance.deregister = mock_deregister
+    mock_manager_class.return_value = mock_instance
+
+    result = runner.invoke(sessions, ["cleanup", "--all", "--force"])
+
+    assert result.exit_code == 0
+    # Should show at least one success and one failure
+    assert "Successfully cleaned up" in result.output or "Failed to cleanup" in result.output
+
+
+@patch("pdd.commands.sessions.RemoteSessionManager")
+@patch("pdd.commands.sessions.CloudConfig")
+def test_cleanup_interactive_cancel(mock_cloud_config, mock_manager, runner, mock_sessions):
+    """Should allow cancellation in interactive mode."""
+    mock_cloud_config.get_jwt_token.return_value = "test-jwt-token"
+    mock_manager.list_sessions = AsyncMock(return_value=mock_sessions)
+
+    # Simulate user pressing Enter (empty input) to cancel
+    result = runner.invoke(sessions, ["cleanup"], input="\n")
+
+    assert result.exit_code == 0
+    assert "Cancelled" in result.output

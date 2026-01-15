@@ -363,17 +363,19 @@ export interface RemoteCommandRequest {
 export interface RemoteCommandStatus {
   commandId: string;
   type: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   createdAt: string;
   updatedAt?: string;
   response?: {
-    success: boolean;
+    success?: boolean;
     message?: string;
     exit_code?: number;
     stdout?: string;
     stderr?: string;
     files_created?: string[];
     cost?: number;
+    streaming?: boolean;  // True when this is a streaming update (intermediate output)
+    error?: string;
   };
 }
 
@@ -427,6 +429,7 @@ export interface PromptGenerationResult {
 class PDDApiClient {
   private baseUrl: string;
   private wsBaseUrl: string;
+  private cachedCloudUrl: string | null = null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
@@ -913,10 +916,28 @@ class PDDApiClient {
   }
 
   /**
-   * Get cloud functions URL from environment or default.
+   * Fetch cloud functions URL from server config.
+   * This ensures frontend uses the same cloud URL as CLI.
    */
-  private getCloudUrl(): string {
-    return import.meta.env.VITE_CLOUD_URL || 'https://us-central1-prompt-driven-development-stg.cloudfunctions.net';
+  private async fetchCloudUrl(): Promise<string> {
+    try {
+      const response = await this.request<{ cloud_url: string; environment: string }>('/api/v1/config/cloud-url');
+      return response.cloud_url;
+    } catch (error) {
+      console.warn('Failed to fetch cloud URL from server, using default:', error);
+      // Fallback to environment variable or staging default
+      return import.meta.env.VITE_CLOUD_URL || 'https://us-central1-prompt-driven-development.cloudfunctions.net';
+    }
+  }
+
+  /**
+   * Get cloud functions URL (cached or fetch from server).
+   */
+  private async getCloudUrl(): Promise<string> {
+    if (!this.cachedCloudUrl) {
+      this.cachedCloudUrl = await this.fetchCloudUrl();
+    }
+    return this.cachedCloudUrl;
   }
 
   /**
@@ -929,7 +950,7 @@ class PDDApiClient {
       throw new Error('Not authenticated. Please run: pdd auth login');
     }
 
-    const cloudUrl = this.getCloudUrl();
+    const cloudUrl = await this.getCloudUrl();
     const response = await fetch(`${cloudUrl}/listSessions`, {
       method: 'GET',
       headers: {
@@ -957,7 +978,7 @@ class PDDApiClient {
       throw new Error('Not authenticated. Please run: pdd auth login');
     }
 
-    const cloudUrl = this.getCloudUrl();
+    const cloudUrl = await this.getCloudUrl();
     const response = await fetch(`${cloudUrl}/submitCommand`, {
       method: 'POST',
       headers: {
@@ -977,7 +998,7 @@ class PDDApiClient {
 
   /**
    * Poll command status for remote session.
-   * Fetches latest status and response data.
+   * Fetches status of a single command by ID (any status, not just pending).
    */
   async getRemoteCommandStatus(
     sessionId: string,
@@ -988,23 +1009,28 @@ class PDDApiClient {
       throw new Error('Not authenticated. Please run: pdd auth login');
     }
 
-    const cloudUrl = this.getCloudUrl();
-    const response = await fetch(`${cloudUrl}/getCommands?sessionId=${sessionId}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    const cloudUrl = await this.getCloudUrl();
+    const response = await fetch(
+      `${cloudUrl}/getCommandStatus?sessionId=${encodeURIComponent(sessionId)}&commandId=${encodeURIComponent(commandId)}`,
+      {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
 
     if (!response.ok) {
+      if (response.status === 404) {
+        return null; // Command not found
+      }
       const error = await response.json().catch(() => ({ error: response.statusText }));
       throw new Error(error.error || `Failed to get command status: ${response.status}`);
     }
 
     const data = await response.json();
-    const commands = data.commands || [];
-    const command = commands.find((c: any) => c.command_id === commandId);
+    const command = data.command;
 
     if (!command) {
       return null;
@@ -1012,13 +1038,47 @@ class PDDApiClient {
 
     // Map cloud response to RemoteCommandStatus
     return {
-      commandId: command.command_id,
+      commandId: command.commandId,
       type: command.type,
       status: command.status,
-      createdAt: command.created_at,
-      updatedAt: command.updated_at,
+      createdAt: command.createdAt,
+      updatedAt: command.updatedAt,
       response: command.response,
     };
+  }
+
+  /**
+   * Cancel a pending or processing remote command.
+   *
+   * @param sessionId - The remote session ID
+   * @param commandId - The command ID to cancel
+   * @returns Success response with cancellation confirmation
+   */
+  async cancelRemoteCommand(params: {
+    sessionId: string;
+    commandId: string;
+  }): Promise<{ success: boolean; message: string }> {
+    const token = await this.getJWTToken();
+    if (!token) {
+      throw new Error('Not authenticated. Please run: pdd auth login');
+    }
+
+    const cloudUrl = await this.getCloudUrl();
+    const response = await fetch(`${cloudUrl}/cancelCommand`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(error.error || `Failed to cancel command: ${response.status}`);
+    }
+
+    return response.json();
   }
 
   // WebSocket for job streaming
