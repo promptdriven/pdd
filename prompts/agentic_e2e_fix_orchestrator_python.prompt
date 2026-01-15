@@ -29,13 +29,25 @@ STEP_NAMES = {
     8: "run_pdd_fix",
     9: "verify_all",
 }
+
+STEP_DESCRIPTIONS = {
+    1: "Running unit tests from issue",
+    2: "Running e2e tests",
+    3: "Analyzing root cause",
+    4: "Fixing e2e tests",
+    5: "Identifying dev units",
+    6: "Creating unit tests",
+    7: "Verifying tests detect bugs",
+    8: "Running pdd fix",
+    9: "Final verification",
+}
 ```
 
 % Step Execution
 For each step (1-9):
 1. Load the step prompt template via `load_prompt_template(f"agentic_e2e_fix_step{n}_{STEP_NAMES[n]}_LLM")`
 2. Format template with: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles, issue_content, step1_output, etc.
-3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num) + timeout_adder)`
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder)`
 4. Store the output for use by subsequent steps
 5. Save state to file after step completes
 6. Accumulate cost: `total_cost += step_cost`
@@ -99,6 +111,8 @@ Step 2 and Step 9 output specific tokens to control the outer loop:
 - `CONTINUE_CYCLE`: Some tests still failing, continue to next cycle (Step 9 only)
 - `MAX_CYCLES_REACHED`: Step 9 detected we're at max cycles (Step 9 only, informational)
 
+**Default behavior**: If Step 9 output contains none of these tokens, treat as `CONTINUE_CYCLE` (continue to next iteration). Log a warning about missing loop control token.
+
 % Context Accumulation
 All steps receive common variables: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles
 
@@ -111,7 +125,7 @@ Additionally:
 - Step 6 receives: issue_content, step1_output through step5_output, dev_units_identified
 - Step 7 receives: issue_content, step1_output through step6_output
 - Step 8 receives: issue_content, step1_output through step7_output, failing_dev_units
-- Step 9 receives: issue_content, step1_output through step8_output
+- Step 9 receives: issue_content, step1_output through step8_output, next_cycle (= cycle_number + 1)
 
 % Derived Variables (parsed from step outputs)
 The orchestrator must parse certain step outputs to extract machine-readable data:
@@ -126,10 +140,19 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
 
 3. **changed_files** (accumulated throughout):
    - Parse `FILES_CREATED: path1, path2` and `FILES_MODIFIED: path1, path2` lines from step outputs
+   - Split on comma and strip whitespace from each path
    - Accumulate across steps 4, 6, 7, 8 into a deduplicated list
+
+4. **dev_unit_states** (updated after Step 8):
+   - Parse Step 8 output for per-dev-unit results (e.g., "payment_processor: FIXED")
+   - For each dev unit mentioned in DEV_UNITS_IDENTIFIED:
+     - If "FIXED" in result: set `{"fixed": true, "fix_attempts": N}`
+     - If "Failed" or still failing: set `{"fixed": false, "fix_attempts": N}`
+   - Increment `fix_attempts` on each cycle where the dev unit is processed
 
 % State Persistence
 1. **State file location**: `.pdd/e2e-fix-state/issue-{issue_number}.json`
+   - Create parent directories with `Path.mkdir(parents=True, exist_ok=True)` before writing
 
 2. **State file structure**:
    ```json
@@ -185,9 +208,9 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
    [Cycle 2/5] Starting fix cycle...
    ```
 
-3. **Step progress** (before each step):
+3. **Step progress** (before each step, use `STEP_DESCRIPTIONS[step_num]`):
    ```
-   [Step N/9] {step_description}...
+   [Step N/9] {STEP_DESCRIPTIONS[step_num]}...
    ```
 
 4. **Step result** (after each step):
