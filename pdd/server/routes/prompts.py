@@ -154,6 +154,21 @@ class LineMapping(BaseModel):
     matchType: str = Field(..., description="Match type: exact, semantic, partial, or none")
 
 
+class HiddenKnowledgeLocation(BaseModel):
+    """Location of hidden knowledge in code."""
+    startLine: int = Field(..., description="Starting line number (1-indexed)")
+    endLine: int = Field(..., description="Ending line number (1-indexed)")
+
+
+class HiddenKnowledge(BaseModel):
+    """Undocumented code knowledge that would be lost on regeneration."""
+    type: str = Field(..., description="Type: magic_value, algorithm_choice, edge_case, error_handling, api_contract, optimization, business_logic, assumption")
+    location: HiddenKnowledgeLocation = Field(..., description="Location in code")
+    description: str = Field(..., description="What the code knows that the prompt doesn't say")
+    regenerationImpact: str = Field(..., description="Impact: would_differ, would_fail, or might_work")
+    suggestedPromptAddition: str = Field(..., description="What to add to the prompt to capture this")
+
+
 class DiffStats(BaseModel):
     """Aggregated statistics for the diff analysis."""
     totalRequirements: int = Field(..., description="Total number of requirements identified in prompt")
@@ -164,21 +179,26 @@ class DiffStats(BaseModel):
     undocumentedFeatures: int = Field(0, description="Number of code features not in prompt")
     promptToCodeCoverage: float = Field(..., description="How much of the prompt is implemented in code (0-100)")
     codeToPromptCoverage: float = Field(0.0, description="How much of the code is documented in prompt (0-100)")
+    hiddenKnowledgeCount: int = Field(0, description="Number of hidden knowledge items found")
+    criticalGaps: int = Field(0, description="Number of critical gaps that would cause regeneration failure")
 
 
 class DiffAnalysisResult(BaseModel):
-    """Detailed diff analysis result."""
-    overallScore: int = Field(..., description="Overall bidirectional match score 0-100")
+    """Detailed diff analysis result focused on regeneration capability."""
+    overallScore: int = Field(..., description="Overall regeneration capability score 0-100")
+    canRegenerate: bool = Field(False, description="Conservative assessment: could this prompt produce working code?")
+    regenerationRisk: str = Field("high", description="Risk level: low, medium, high, or critical")
     promptToCodeScore: int = Field(0, description="How well code implements prompt (0-100)")
     codeToPromptScore: int = Field(0, description="How well prompt describes code (0-100)")
-    summary: str = Field(..., description="Summary of the analysis")
+    summary: str = Field(..., description="Summary of regeneration viability")
     sections: list[DiffSection] = Field(default_factory=list, description="Prompt requirement sections with code mappings")
     codeSections: list[DiffSection] = Field(default_factory=list, description="Code feature sections with prompt mappings")
+    hiddenKnowledge: list[HiddenKnowledge] = Field(default_factory=list, description="Undocumented code knowledge that would be lost")
     lineMappings: list[LineMapping] = Field(default_factory=list, description="Line-level mappings")
     stats: DiffStats = Field(..., description="Aggregated statistics")
     missing: list[str] = Field(default_factory=list, description="Requirements in prompt but not in code")
-    extra: list[str] = Field(default_factory=list, description="Code features not documented in prompt")
-    suggestions: list[str] = Field(default_factory=list, description="Improvement suggestions")
+    extra: list[str] = Field(default_factory=list, description="Code features that would be LOST on regeneration")
+    suggestions: list[str] = Field(default_factory=list, description="Specific additions to enable regeneration")
 
 
 class DiffAnalysisRequest(BaseModel):
