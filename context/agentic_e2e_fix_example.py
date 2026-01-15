@@ -4,6 +4,11 @@ Example usage of the agentic_e2e_fix module.
 This script demonstrates how to invoke the `run_agentic_e2e_fix` function,
 which is the entry point for the agentic e2e fix workflow. It parses a GitHub
 issue URL, fetches the issue content, and orchestrates the 9-step fix process.
+
+Cross-machine support:
+- If run on same machine as `pdd bug`: automatically finds the worktree
+- If run on different machine: detects the branch from issue comments and
+  warns if you're not on the correct branch
 """
 
 from pdd.agentic_e2e_fix import run_agentic_e2e_fix
@@ -12,6 +17,14 @@ from pdd.agentic_e2e_fix import run_agentic_e2e_fix
 def main():
     """Main function demonstrating agentic e2e fix usage."""
     # Example GitHub issue URL (typically created by pdd bug)
+    #
+    # Same machine as pdd bug:
+    #   - Automatically finds worktree at .pdd/worktrees/fix-issue-42/
+    #
+    # Different machine:
+    #   - Parses issue comments to find branch name (e.g., fix/issue-42)
+    #   - Warns if not on correct branch
+    #   - Falls back to current directory
     issue_url = "https://github.com/myorg/myrepo/issues/42"
 
     # Run the agentic e2e fix workflow

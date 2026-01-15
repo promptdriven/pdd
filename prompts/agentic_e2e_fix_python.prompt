@@ -17,9 +17,31 @@ CLI entry point for the agentic e2e fix workflow. Fetches a GitHub issue (typica
 5. Fetch issue content via `gh api repos/{owner}/{repo}/issues/{number}` (requires `gh` CLI)
 6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
 7. Fetch comments via `gh api {comments_url}` to get full context (contains test file paths from `pdd bug`)
-8. Get current working directory: `cwd = Path.cwd()`
+8. Detect working directory using `_find_worktree_for_issue(issue_number)` (see Worktree Detection below)
 9. Call orchestrator: `run_agentic_e2e_fix_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, cwd=cwd, timeout_adder=timeout_adder, max_cycles=max_cycles, resume=resume, verbose=verbose, quiet=quiet)`
 10. Return aggregated results from orchestrator
+
+% Working Directory Detection (Cross-Machine Support)
+
+The workflow must work whether run on the same machine as `pdd bug` or a different machine.
+
+1. Helper: `_find_worktree_for_issue(issue_number: int) -> Optional[Path]`
+   - Check `.pdd/worktrees/` relative to git root for: `fix-issue-{N}`, `bug-issue-{N}`, `change-issue-{N}`
+   - Verify candidate is a valid git worktree before returning
+   - Return first valid path found, or `None`
+
+2. Helper: `_find_working_directory(issue_number: int, issue_comments: str, quiet: bool) -> Tuple[Path, Optional[str]]`
+   - First try `_find_worktree_for_issue()` (same machine scenario)
+   - If no worktree: parse issue comments to extract branch name from `pdd bug` output
+   - Compare current git branch against expected branch
+   - Return `(working_directory, optional_warning_message)`
+   - Warning should suggest: `git fetch origin && git checkout {expected_branch}`
+   - Fallback to `Path.cwd()` if no worktree found
+
+3. Print status (unless quiet):
+   - Worktree found: `"[blue]Using worktree: {path}[/blue]"`
+   - Branch mismatch: `"[yellow]Warning: Expected branch '{expected}' but on '{current}'[/yellow]"`
+   - No worktree: `"[yellow]No worktree found for issue #{N}, using current directory[/yellow]"`
 
 % CLI Options
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0)
