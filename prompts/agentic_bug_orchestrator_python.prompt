@@ -7,7 +7,7 @@ Write the `pdd/agentic_bug_orchestrator.py` module.
 Orchestrator for the 10-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
 % Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 10 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -16,13 +16,29 @@ Orchestrator for the 10-step agentic bug investigation workflow. Runs each step 
 7. For Step 9: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
 8. Pass extracted files to Step 9 (E2E) and Step 10 (PR) via `files_to_stage` context variable for explicit git staging
 
+% Per-Step Timeouts
+Define locally (workflow-specific configuration stays with the workflow):
+```python
+BUG_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 400.0,   # Docs Check
+    3: 400.0,   # Triage
+    4: 600.0,   # Reproduce (Complex)
+    5: 600.0,   # Root Cause (Complex)
+    6: 340.0,   # Test Plan
+    7: 1000.0,  # Generate Unit Test (Most Complex)
+    8: 600.0,   # Verify Unit Test
+    9: 2000.0,  # E2E Test (Complex - needs to discover env & run tests)
+    10: 240.0,  # Create PR
+}
+```
+
 % Step Execution
 For each step (1-10):
 1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
 2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
-3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=STEP_TIMEOUTS.get(step_num))`
-   - Import `STEP_TIMEOUTS` from `agentic_common` (Issue #261)
-   - Pass step-specific timeout to ensure complex steps get adequate time
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=BUG_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder)`
+   - Use step-specific timeout plus optional timeout_adder to allow caller to extend timeouts
 4. Store the output for use by subsequent steps
 5. Accumulate cost: `total_cost += step_cost`
 
@@ -148,7 +164,8 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`
+Import from `agentic_common`: `run_agentic_task`
+Note: `BUG_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 

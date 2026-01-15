@@ -111,6 +111,12 @@ def conflicts(
     default="Python",
     help="Programming language for the unit test (Manual mode only).",
 )
+@click.option(
+    "--timeout-adder",
+    type=float,
+    default=0.0,
+    help="Additional seconds to add to each step's timeout (agentic mode only).",
+)
 @click.pass_context
 @track_cost
 def bug(
@@ -119,6 +125,7 @@ def bug(
     args: Tuple[str, ...],
     output: Optional[str],
     language: str,
+    timeout_adder: float,
 ) -> Optional[Tuple[str, float, str]]:
     """Generate a unit test (manual) or investigate a bug (agentic).
 
@@ -167,6 +174,7 @@ def bug(
                 issue_url=issue_url,
                 verbose=ctx.obj.get("verbose", False),
                 quiet=ctx.obj.get("quiet", False),
+                timeout_adder=timeout_adder,
             )
             
             result_str = f"Success: {success}\nMessage: {message}\nChanged Files: {changed_files}"

@@ -4,7 +4,7 @@
 Orchestrator for the 12-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 10-11) that iterates until no issues are found.
 
 % Requirements
-1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 12 steps, with steps 10-11 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -15,14 +15,32 @@ Orchestrator for the 12-step agentic change workflow. Runs each step as a separa
 9. **Step Resumption**: On start, load saved state and skip steps that have already completed
 10. **Review Loop**: Steps 10-11 repeat until step 10 outputs "No Issues Found" (max 5 iterations)
 
+% Per-Step Timeouts
+Define locally (workflow-specific configuration stays with the workflow):
+```python
+CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 240.0,   # Docs Comparison
+    3: 340.0,   # Research
+    4: 340.0,   # Clarify
+    5: 340.0,   # Docs Changes
+    6: 340.0,   # Identify Dev Units
+    7: 340.0,   # Architecture Review
+    8: 600.0,   # Analyze Prompt Changes (Complex)
+    9: 1000.0,  # Implement Changes (Most Complex)
+    10: 340.0,  # Identify Issues
+    11: 600.0,  # Fix Issues (Complex)
+    12: 340.0,  # Create PR
+}
+```
+
 % Step Execution
 For steps 1-9 and 12:
 1. **Check if step already completed** (from saved state) - if so, skip and use cached output
 2. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
 3. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
-4. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=CHANGE_STEP_TIMEOUTS.get(step_num))`
-   - Import `CHANGE_STEP_TIMEOUTS` from `agentic_common` (Issue #239)
-   - Pass step-specific timeout to ensure complex steps get adequate time
+4. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder)`
+   - Use step-specific timeout plus optional timeout_adder to allow caller to extend timeouts
 5. Store the output for use by subsequent steps
 6. **Save state to file** after step completes (for resumption)
 7. Accumulate cost: `total_cost += step_cost`
@@ -251,7 +269,8 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `CHANGE_STEP_TIMEOUTS`
+Import from `agentic_common`: `run_agentic_task`
+Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 

@@ -62,6 +62,7 @@ def split(
 @click.option("--budget", type=float, default=5.0, help="Budget for the operation.")
 @click.option("--output", help="Output path.")
 @click.option("--csv", is_flag=True, help="Use CSV input for batch processing.")
+@click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds to add to each step's timeout (agentic mode only).")
 @click.pass_context
 @track_cost
 def change(
@@ -71,6 +72,7 @@ def change(
     budget: float,
     output: Optional[str],
     csv: bool,
+    timeout_adder: float,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Modify an input prompt file based on a change prompt or issue.
@@ -153,7 +155,8 @@ def change(
             success, message, cost, model, changed_files = run_agentic_change(
                 issue_url=issue_url,
                 verbose=verbose,
-                quiet=quiet
+                quiet=quiet,
+                timeout_adder=timeout_adder
             )
 
             # Display results using click.echo as requested

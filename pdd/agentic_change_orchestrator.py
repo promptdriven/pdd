@@ -12,11 +12,11 @@ from rich.panel import Panel
 
 # Internal imports
 try:
-    from .agentic_common import run_agentic_task, CHANGE_STEP_TIMEOUTS
+    from .agentic_common import run_agentic_task
     from .load_prompt_template import load_prompt_template
 except ImportError:
     # Fallback for development/testing if relative imports fail
-    from pdd.agentic_common import run_agentic_task, CHANGE_STEP_TIMEOUTS
+    from pdd.agentic_common import run_agentic_task
     from pdd.load_prompt_template import load_prompt_template
 
 console = Console()
@@ -24,6 +24,22 @@ console = Console()
 # -----------------------------------------------------------------------------
 # Constants & Configuration
 # -----------------------------------------------------------------------------
+
+# Per-step timeouts for the 12-step agentic change workflow (Issue #239)
+CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 240.0,   # Docs Comparison
+    3: 340.0,   # Research
+    4: 340.0,   # Clarify
+    5: 340.0,   # Docs Changes
+    6: 340.0,   # Identify Dev Units
+    7: 340.0,   # Architecture Review
+    8: 600.0,   # Analyze Prompt Changes (Complex)
+    9: 1000.0,  # Implement Changes (Most Complex)
+    10: 340.0,  # Identify Issues
+    11: 600.0,  # Fix Issues (Complex)
+    12: 340.0,  # Create PR
+}
 
 STATE_DIR = Path(".pdd/change-state")
 WORKTREE_DIR = Path(".pdd/worktrees")
@@ -198,7 +214,8 @@ def run_agentic_change_orchestrator(
     *,
     cwd: Path,
     verbose: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    timeout_adder: float = 0.0
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 12-step agentic change workflow.
@@ -356,12 +373,12 @@ def run_agentic_change_orchestrator(
                     s10_prompt = s10_template.format(**context)
                     
                     success, s10_output, cost, model = run_agentic_task(
-                        s10_prompt, 
-                        cwd=current_agent_cwd, 
-                        verbose=verbose, 
+                        s10_prompt,
+                        cwd=current_agent_cwd,
+                        verbose=verbose,
                         quiet=quiet,
                         label="step10",
-                        timeout=CHANGE_STEP_TIMEOUTS.get(10, 300)
+                        timeout=CHANGE_STEP_TIMEOUTS.get(10, 300) + timeout_adder
                     )
                     
                     total_cost += cost
@@ -408,12 +425,12 @@ def run_agentic_change_orchestrator(
                 s11_prompt = s11_template.format(**context)
                 
                 success, s11_output, cost, model = run_agentic_task(
-                    s11_prompt, 
-                    cwd=current_agent_cwd, 
-                    verbose=verbose, 
+                    s11_prompt,
+                    cwd=current_agent_cwd,
+                    verbose=verbose,
                     quiet=quiet,
                     label="step11",
-                    timeout=CHANGE_STEP_TIMEOUTS.get(11, 300)
+                    timeout=CHANGE_STEP_TIMEOUTS.get(11, 300) + timeout_adder
                 )
                 
                 total_cost += cost
@@ -476,7 +493,7 @@ def run_agentic_change_orchestrator(
             verbose=verbose,
             quiet=quiet,
             label=f"step{step_num}",
-            timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 300)
+            timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 300) + timeout_adder
         )
 
         # Update Metrics

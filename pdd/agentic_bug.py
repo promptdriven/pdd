@@ -176,6 +176,7 @@ def run_agentic_bug(
     *,
     verbose: bool = False,
     quiet: bool = False,
+    timeout_adder: float = 0.0,
     # Legacy/Manual mode arguments (handled via *args in a real CLI, but here explicit for type safety if called directly)
     manual_args: Optional[Tuple[str, str, str, str, str]] = None
 ) -> Tuple[bool, str, float, str, List[str]]:
@@ -303,7 +304,8 @@ def run_agentic_bug(
             issue_title=issue_title,
             cwd=cwd,
             verbose=verbose,
-            quiet=quiet
+            quiet=quiet,
+            timeout_adder=timeout_adder
         )
         return success, message, cost, model, changed_files
 

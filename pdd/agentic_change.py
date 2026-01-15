@@ -129,7 +129,8 @@ def run_agentic_change(
     issue_url: str,
     *,
     verbose: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    timeout_adder: float = 0.0
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     CLI entry point for the agentic change workflow.
@@ -221,5 +222,6 @@ def run_agentic_change(
         issue_title=title,
         cwd=work_dir,
         verbose=verbose,
-        quiet=quiet
+        quiet=quiet,
+        timeout_adder=timeout_adder
     )

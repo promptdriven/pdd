@@ -380,12 +380,14 @@ def test_step7_files_modified_for_append(mock_dependencies, default_args):
 
 def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_args):
     """
-    Test that step-specific timeouts from STEP_TIMEOUTS are passed to run_agentic_task.
+    Test that step-specific timeouts from BUG_STEP_TIMEOUTS are passed to run_agentic_task.
 
     This verifies the fix for Issue #261: Missing timeout parameters caused all steps
     to use the default 240-second timeout instead of step-specific values.
+
+    Note: Per-step timeouts now live in agentic_bug_orchestrator, not agentic_common.
     """
-    from pdd.agentic_common import STEP_TIMEOUTS
+    from pdd.agentic_bug_orchestrator import BUG_STEP_TIMEOUTS
 
     mock_run, _, _ = mock_dependencies
 
@@ -408,7 +410,7 @@ def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_arg
 
         # Extract step number from label (e.g., 'step7' -> 7)
         step_num = int(label.replace('step', ''))
-        expected_timeout = STEP_TIMEOUTS.get(step_num)
+        expected_timeout = BUG_STEP_TIMEOUTS.get(step_num, 340.0)
 
         assert timeout == expected_timeout, (
             f"Step {step_num}: expected timeout={expected_timeout}, got timeout={timeout}"

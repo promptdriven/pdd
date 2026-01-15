@@ -26,55 +26,11 @@ CLI_COMMANDS: Dict[str, str] = {
 
 # Timeouts
 DEFAULT_TIMEOUT_SECONDS: float = 240.0
-TIMEOUT_ENV_VAR: str = "PDD_AGENTIC_TIMEOUT"
 
-# Per-step timeouts for agentic bug orchestrator (Issue #256)
-# Complex steps (reproduce, root cause, generate, e2e) get more time.
-BUG_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 400.0,   # Duplicate Check
-    2: 800.0,   # Docs Check
-    3: 800.0,   # Triage
-    4: 1200.0,  # Reproduce (Complex)
-    5: 900.0,   # Root Cause (Complex)
-    6: 600.0,   # Test Plan
-    7: 1500.0,  # Generate Unit Test (Complex)
-    8: 900.0,   # Verify Unit Test
-    9: 3600.0,  # E2E Test (Complex - 1 hour max)
-    10: 400.0,  # Create PR
-}
-
-# Per-step timeouts for agentic change orchestrator
-CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 240.0,  # Duplicate Check
-    2: 240.0,  # Docs Comparison
-    3: 340.0,  # Research
-    4: 340.0,  # Clarify
-    5: 340.0,  # Docs Changes
-    6: 340.0,  # Identify Dev Units
-    7: 340.0,  # Architecture Review
-    8: 600.0,  # Analyze Prompt Changes (Complex)
-    9: 1000.0,  # Implement Changes (Most Complex)
-    10: 340.0,  # Identify Issues
-    11: 600.0,  # Fix Issues (Complex)
-    12: 340.0,  # Create PR
-}
-
-# Alias for backward compatibility
-STEP_TIMEOUTS: Dict[int, float] = BUG_STEP_TIMEOUTS
-
-# Per-step timeouts for agentic e2e fix orchestrator (Issue #295)
-# This workflow fixes bugs from GitHub issues across multiple dev units.
-E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 340.0,   # Run unit tests from issue, pdd fix failures
-    2: 240.0,   # Run e2e tests, check completion (early exit)
-    3: 340.0,   # Root cause analysis (code vs test vs both)
-    4: 340.0,   # Fix e2e tests if needed
-    5: 340.0,   # Identify dev units involved in failures
-    6: 600.0,   # Create/append unit tests for dev units (Complex)
-    7: 600.0,   # Verify unit tests detect bugs (Complex)
-    8: 1000.0,  # Run pdd fix on failing dev units (Most Complex - multiple LLM calls)
-    9: 240.0,   # Final verification, loop control
-}
+# Note: Per-step timeout dictionaries (BUG_STEP_TIMEOUTS, CHANGE_STEP_TIMEOUTS, E2E_FIX_STEP_TIMEOUTS)
+# are now defined in their respective orchestrator modules, not here.
+# This keeps workflow-specific configuration with the workflow.
+# The PDD_AGENTIC_TIMEOUT env var has been removed in favor of explicit --timeout-adder CLI option.
 
 # Issue #261: False positive detection
 # Minimum output length to consider a response as legitimate work
@@ -315,18 +271,12 @@ def _provider_has_api_key(provider: str, model_data: Any | None) -> bool:
 
 def _get_agent_timeout() -> float:
     """
-    Resolve the agentic subprocess timeout from environment, with a sane default.
+    Return the default agentic subprocess timeout.
+
+    Note: The PDD_AGENTIC_TIMEOUT env var has been removed. Timeout configuration
+    is now done via explicit --timeout-adder CLI options in agentic commands.
     """
-    raw = os.getenv(TIMEOUT_ENV_VAR)
-    if not raw:
-        return DEFAULT_TIMEOUT_SECONDS
-    try:
-        value = float(raw)
-        if value <= 0:
-            raise ValueError
-        return value
-    except ValueError:
-        return DEFAULT_TIMEOUT_SECONDS
+    return DEFAULT_TIMEOUT_SECONDS
 
 
 def _build_subprocess_env(
