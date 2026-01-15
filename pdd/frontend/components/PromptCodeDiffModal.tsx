@@ -157,11 +157,40 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Scores */}
+            {/* Regeneration Risk and Scores */}
             {diffResult && (
               <div className="flex items-center gap-3">
+                {/* Regeneration Risk Badge */}
+                <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${
+                  diffResult.result.regenerationRisk === 'critical' ? 'bg-red-500/20 border border-red-500/50' :
+                  diffResult.result.regenerationRisk === 'high' ? 'bg-orange-500/20 border border-orange-500/50' :
+                  diffResult.result.regenerationRisk === 'medium' ? 'bg-yellow-500/20 border border-yellow-500/50' :
+                  'bg-emerald-500/20 border border-emerald-500/50'
+                }`}>
+                  <span className={`text-xs font-medium ${
+                    diffResult.result.regenerationRisk === 'critical' ? 'text-red-400' :
+                    diffResult.result.regenerationRisk === 'high' ? 'text-orange-400' :
+                    diffResult.result.regenerationRisk === 'medium' ? 'text-yellow-400' :
+                    'text-emerald-400'
+                  }`}>
+                    {diffResult.result.regenerationRisk === 'critical' ? 'CRITICAL RISK' :
+                     diffResult.result.regenerationRisk === 'high' ? 'HIGH RISK' :
+                     diffResult.result.regenerationRisk === 'medium' ? 'MEDIUM RISK' :
+                     'LOW RISK'}
+                  </span>
+                  {diffResult.result.canRegenerate ? (
+                    <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  )}
+                </div>
+                {/* Score */}
                 <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-800 rounded-lg">
-                  <span className="text-xs text-purple-400">Match</span>
+                  <span className="text-xs text-purple-400">Score</span>
                   <span
                     className="text-lg font-bold"
                     style={{
@@ -247,9 +276,16 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-emerald-400">Code Implementation</span>
               {diffResult && (
-                <span className="text-xs text-surface-500">
-                  {diffResult.result.stats.documentedFeatures}/{diffResult.result.stats.totalCodeFeatures} documented
-                </span>
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="text-surface-500">
+                    {diffResult.result.stats.documentedFeatures}/{diffResult.result.stats.totalCodeFeatures} documented
+                  </span>
+                  {diffResult.result.hiddenKnowledge && diffResult.result.hiddenKnowledge.length > 0 && (
+                    <span className="text-orange-400">
+                      {diffResult.result.hiddenKnowledge.length} hidden
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -499,6 +535,20 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
               <>
                 <div className="text-sm text-surface-300">{diffResult.result.summary}</div>
                 <div className="flex items-center gap-4 text-xs">
+                  {diffResult.result.stats.criticalGaps > 0 && (
+                    <span className="text-red-400 flex items-center gap-1 font-medium">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      {diffResult.result.stats.criticalGaps} critical gaps
+                    </span>
+                  )}
+                  {diffResult.result.stats.hiddenKnowledgeCount > 0 && (
+                    <span className="text-orange-400 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-orange-500" />
+                      {diffResult.result.stats.hiddenKnowledgeCount} hidden knowledge
+                    </span>
+                  )}
                   {diffResult.result.stats.missingRequirements > 0 && (
                     <span className="text-red-400 flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-red-500" />
@@ -511,10 +561,15 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                       {diffResult.result.stats.undocumentedFeatures} undocumented
                     </span>
                   )}
-                  {diffResult.result.stats.missingRequirements === 0 && diffResult.result.stats.undocumentedFeatures === 0 && (
+                  {!diffResult.result.canRegenerate && (
+                    <span className="text-red-400 flex items-center gap-1 font-medium">
+                      Cannot safely regenerate
+                    </span>
+                  )}
+                  {diffResult.result.canRegenerate && diffResult.result.stats.criticalGaps === 0 && (
                     <span className="text-emerald-400 flex items-center gap-1">
                       <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                      Fully aligned
+                      Safe to regenerate
                     </span>
                   )}
                 </div>

@@ -46,12 +46,15 @@
   5. **POST /diff-analysis**:
      - Body: DiffAnalysisRequest with prompt_content, code_content, strength, mode
      - mode: "quick" (capped strength 0.25) or "detailed" (full analysis)
-     - Uses llm_invoke for detailed diff analysis between prompt and code
+     - Uses llm_invoke for strict regeneration capability analysis
      - Returns DiffAnalysisResponse with:
-       - result: DiffAnalysisResult with overallScore, summary, sections, lineMappings, stats
-       - sections: list of DiffSection with id, promptRange, codeRanges, status, matchConfidence, semanticLabel
+       - result: DiffAnalysisResult with overallScore, canRegenerate, regenerationRisk, summary, sections, hiddenKnowledge, lineMappings, stats
+       - canRegenerate: boolean indicating if prompt can safely regenerate the code
+       - regenerationRisk: "low", "medium", "high", or "critical"
+       - sections: list of DiffSection with id, promptRange, codeRanges, status, matchConfidence, semanticLabel, notes (required)
+       - hiddenKnowledge: list of HiddenKnowledge with type, location, description, regenerationImpact, suggestedPromptAddition
        - lineMappings: list of LineMapping with promptLine, codeLines, matchType
-       - stats: DiffStats with totalRequirements, matchedRequirements, missingRequirements, extraCodeSections, coveragePercent
+       - stats: DiffStats with totalRequirements, matchedRequirements, missingRequirements, hiddenKnowledgeCount, criticalGaps
        - cached flag indicating if result was from cache
      - Implements in-memory caching with 10-minute TTL based on content hash
      - Cache key generated from prompt_content + code_content + mode
@@ -74,8 +77,10 @@
      - CodeRange: startLine, endLine, text (for diff analysis code ranges)
      - DiffSection: id, promptRange, codeRanges, status, matchConfidence, semanticLabel, notes (required - explains WHY the status exists)
      - LineMapping: promptLine, codeLines, matchType (exact/semantic/partial/none)
-     - DiffStats: totalRequirements, matchedRequirements, missingRequirements, extraCodeSections, coveragePercent
-     - DiffAnalysisResult: overallScore, summary, sections, lineMappings, stats, missing, extra, suggestions
+     - HiddenKnowledgeLocation: startLine, endLine
+     - HiddenKnowledge: type, location, description, regenerationImpact, suggestedPromptAddition
+     - DiffStats: totalRequirements, matchedRequirements, missingRequirements, totalCodeFeatures, documentedFeatures, undocumentedFeatures, promptToCodeCoverage, codeToPromptCoverage, hiddenKnowledgeCount, criticalGaps
+     - DiffAnalysisResult: overallScore, canRegenerate, regenerationRisk, promptToCodeScore, codeToPromptScore, summary, sections, codeSections, hiddenKnowledge, lineMappings, stats, missing, extra, suggestions
      - DiffAnalysisRequest: prompt_content, code_content, strength, mode
      - DiffAnalysisResponse: result, cost, model, analysisMode, cached
 
@@ -105,7 +110,9 @@
   </security_note>
   Use pdd.sync_determine_operation for fingerprint and hash utilities:
     - read_fingerprint, get_pdd_file_paths, calculate_sha256
+  <include>context/sync_determine_operation_example.py</include>
   Use pdd.llm_invoke for LLM-based match checking:
+  <include>context/llm_invoke_example.py</include>
     - llm_invoke, _load_model_data, LLM_MODEL_CSV_PATH, DEFAULT_BASE_MODEL
   Use MODEL_CONTEXT_LIMITS from pdd.server.token_counter
 

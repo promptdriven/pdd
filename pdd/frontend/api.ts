@@ -230,6 +230,14 @@ export interface LineMapping {
   matchType: 'exact' | 'semantic' | 'partial' | 'none';
 }
 
+export interface HiddenKnowledge {
+  type: 'magic_value' | 'algorithm_choice' | 'edge_case' | 'error_handling' | 'api_contract' | 'optimization' | 'business_logic' | 'assumption';
+  location: { startLine: number; endLine: number };
+  description: string;           // What the code knows that the prompt doesn't say
+  regenerationImpact: 'would_differ' | 'would_fail' | 'might_work';
+  suggestedPromptAddition: string;  // What to add to the prompt to capture this
+}
+
 export interface DiffStats {
   totalRequirements: number;
   matchedRequirements: number;
@@ -239,20 +247,25 @@ export interface DiffStats {
   undocumentedFeatures: number;
   promptToCodeCoverage: number;  // % of prompt implemented in code
   codeToPromptCoverage: number;  // % of code documented in prompt
+  hiddenKnowledgeCount: number;  // Number of hidden knowledge items found
+  criticalGaps: number;          // Number of critical gaps that would cause regeneration failure
 }
 
 export interface DiffAnalysisResult {
-  overallScore: number;           // Overall bidirectional match score
+  overallScore: number;           // Overall regeneration capability score 0-100
+  canRegenerate: boolean;         // Conservative: could this prompt produce working code?
+  regenerationRisk: 'low' | 'medium' | 'high' | 'critical';
   promptToCodeScore: number;      // How well code implements prompt
   codeToPromptScore: number;      // How well prompt describes code
-  summary: string;
+  summary: string;                // Summary of regeneration viability
   sections: DiffSection[];        // Prompt requirements → code mappings
   codeSections: DiffSection[];    // Code features → prompt mappings
+  hiddenKnowledge: HiddenKnowledge[];  // Undocumented code knowledge
   lineMappings: LineMapping[];
   stats: DiffStats;
   missing: string[];              // Requirements in prompt but not in code
-  extra: string[];                // Code features not documented in prompt
-  suggestions: string[];
+  extra: string[];                // Code features that would be LOST on regeneration
+  suggestions: string[];          // Specific additions to enable regeneration
 }
 
 export interface DiffAnalysisRequest {
