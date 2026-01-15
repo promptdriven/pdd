@@ -183,7 +183,7 @@ def test_strength_0_malformed_only_closing_ticks():
     assert cost == 0.0
     assert model_name == "simple_extraction"
 
-@patch('pdd.postprocess.print') # Mock rich.print used in postprocess module
+@patch('pdd.postprocess.console.print') # Mock console.print used in postprocess module
 def test_strength_0_verbose_output(mock_rich_print):
     postprocess("```code```", "python", strength=0, verbose=True)
     mock_rich_print.assert_any_call("[blue]Using simple code extraction (strength = 0)[/blue]")
@@ -211,7 +211,7 @@ def test_strength_gt_0_llm_invoke_fails_no_result_key(mock_llm_invoke, mock_load
     with pytest.raises(ValueError, match="Failed to get valid response from LLM"):
         postprocess("some output", "python", strength=0.5)
 
-@patch('pdd.postprocess.print') # To check error print
+@patch('pdd.postprocess.console.print') # To check error print
 @patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt")
 @patch('pdd.postprocess.llm_invoke')
 def test_strength_gt_0_llm_invoke_raises_exception(mock_llm_invoke, mock_load_template, mock_rich_print):
@@ -326,7 +326,7 @@ def test_strength_gt_0_successful_extraction_llm_returns_code_with_internal_back
     assert cost == 0.08
     assert model_name == 'gpt-4'
 
-@patch('pdd.postprocess.print')
+@patch('pdd.postprocess.console.print')
 @patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt_template")
 @patch('pdd.postprocess.llm_invoke')
 def test_strength_gt_0_verbose_output(mock_llm_invoke, mock_load_template, mock_rich_print):
@@ -336,7 +336,7 @@ def test_strength_gt_0_verbose_output(mock_llm_invoke, mock_load_template, mock_
         'model_name': 'test_model'
     }
     postprocess("llm_output", "python", strength=0.5, verbose=True)
-    
+
     expected_calls = [
         call("[blue]Loaded prompt template for code extraction[/blue]"),
         call("[green]Successfully extracted code[/green]")
