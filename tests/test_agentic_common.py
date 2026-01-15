@@ -9,6 +9,7 @@ from pdd.agentic_common import (
     run_agentic_task,
     _calculate_gemini_cost,
     _calculate_codex_cost,
+    _provider_has_api_key,
     GEMINI_PRICING_BY_FAMILY,
     CODEX_PRICING
 )
@@ -1031,3 +1032,116 @@ def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_ru
     
     kwargs = mock_subprocess_run.call_args[1]
     assert kwargs['timeout'] == 999.0
+
+class TestCliDiscoveryBug:
+    """
+    Tests for CLI binary discovery bug.
+
+    These tests will FAIL on the current (buggy) code because it only uses
+    shutil.which() which doesn't search common installation directories.
+    """
+
+    def test_provider_detects_claude_in_local_bin_when_not_in_path(self, monkeypatch, tmp_path):
+        """
+        Bug reproduction: Claude installed in ~/.local/bin but not in PATH.
+
+        Current behavior (buggy): _provider_has_api_key returns False
+        Expected behavior (fixed): _provider_has_api_key returns True
+
+        This simulates a common scenario where:
+        1. User installs Claude via pip/npm with --user flag
+        2. ~/.local/bin is added to PATH in .bashrc/.zshrc
+        3. But pdd process doesn't inherit that PATH modification
+        """
+        from pdd.agentic_common import _provider_has_api_key
+
+        # Mock shutil.which to return None (simulates CLI not in PATH)
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Clear API key to force CLI detection path
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        # Create fake claude binary in ~/.local/bin
+        local_bin = tmp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        fake_claude = local_bin / "claude"
+        fake_claude.write_text("#!/bin/bash\necho claude")
+        fake_claude.chmod(0o755)
+
+        # Mock Path.home() to return our tmp_path
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        # This should return True because claude exists in ~/.local/bin
+        # But current buggy code only uses shutil.which() so it returns False
+        result = _provider_has_api_key("anthropic", None)
+
+        assert result is True, (
+            "Should detect Claude in ~/.local/bin when shutil.which fails. "
+            "Current code only uses shutil.which() which doesn't search common paths."
+        )
+
+    def test_provider_detects_claude_in_nvm_path(self, monkeypatch, tmp_path):
+        """
+        Bug reproduction: Claude installed via npm under nvm.
+
+        nvm installs packages to ~/.nvm/versions/node/vX.Y.Z/bin/
+        This path is typically added to PATH by nvm's shell integration,
+        but may not be available in non-interactive shells.
+        """
+        from pdd.agentic_common import _provider_has_api_key
+
+        # Mock shutil.which to return None
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Clear API key
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        # Create fake nvm structure
+        nvm_bin = tmp_path / ".nvm" / "versions" / "node" / "v20.10.0" / "bin"
+        nvm_bin.mkdir(parents=True)
+        fake_claude = nvm_bin / "claude"
+        fake_claude.write_text("#!/bin/bash\necho claude")
+        fake_claude.chmod(0o755)
+
+        # Mock Path.home()
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        result = _provider_has_api_key("anthropic", None)
+
+        assert result is True, (
+            "Should detect Claude in nvm path (~/.nvm/versions/node/*/bin/). "
+            "Current code only uses shutil.which() which doesn't search nvm paths."
+        )
+
+    def test_get_available_agents_finds_claude_in_common_paths(self, monkeypatch, tmp_path):
+        """
+        Bug reproduction: get_available_agents misses Claude in common paths.
+        """
+        from pdd.agentic_common import get_available_agents
+
+        # Mock shutil.which to return None for all CLIs
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Clear all API keys
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        # Mock _load_model_data to return None
+        monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda x: None)
+
+        # Create fake claude in ~/.local/bin
+        local_bin = tmp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        fake_claude = local_bin / "claude"
+        fake_claude.write_text("#!/bin/bash\necho claude")
+        fake_claude.chmod(0o755)
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        agents = get_available_agents()
+
+        assert "anthropic" in agents, (
+            "Should include 'anthropic' when Claude exists in ~/.local/bin. "
+            "Current code only uses shutil.which() which doesn't search common paths."
+        )
