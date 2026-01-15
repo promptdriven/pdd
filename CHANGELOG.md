@@ -1,3 +1,15 @@
+## v0.0.115 (2026-01-14)
+
+### Feat
+
+- **frontend**: Add browser control checkbox to login modal
+- **frontend**: Change default strength setting from 0.75 to 1
+- Enhance architecture sync and frontend features
+
+### Fix
+
+- **auth**: Add remote/SSH session detection and --no-browser flag support
+
 ## v0.0.114 (2026-01-14)
 
 ### Feat
