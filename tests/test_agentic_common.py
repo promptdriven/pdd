@@ -777,13 +777,46 @@ def test_get_available_agents_google_needs_key(mock_shutil_which, mock_env, mock
     mock_env["GEMINI_API_KEY"] = "secret"
     assert "google" in get_available_agents()
 
+def test_get_available_agents_google_vertex_ai_auth(mock_shutil_which, mock_env, mock_load_model_data):
+    """
+    Test that Google provider is available with Vertex AI authentication.
+
+    When using Vertex AI via Workload Identity Federation in GitHub Actions:
+    - GOOGLE_APPLICATION_CREDENTIALS is set (by google-github-actions/auth)
+    - GOOGLE_GENAI_USE_VERTEXAI=true indicates Vertex AI mode
+    - GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are set
+    - NO API key is needed (GOOGLE_API_KEY/GEMINI_API_KEY not required)
+
+    This test validates that PDD can detect Vertex AI authentication and
+    make the Google provider available without requiring an API key.
+    """
+    # Setup: gemini CLI is available
+    mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
+
+    # Setup: Vertex AI auth environment (no API key)
+    mock_env["GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/credentials.json"
+    mock_env["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    mock_env["GOOGLE_CLOUD_PROJECT"] = "test-project"
+    mock_env["GOOGLE_CLOUD_LOCATION"] = "us-central1"
+    # Explicitly NOT setting GOOGLE_API_KEY or GEMINI_API_KEY
+
+    agents = get_available_agents()
+
+    # Should detect Google as available via Vertex AI auth
+    assert "google" in agents, (
+        "Google provider should be available with Vertex AI auth "
+        "(GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_GENAI_USE_VERTEXAI=true), "
+        "even without GOOGLE_API_KEY or GEMINI_API_KEY"
+    )
+
+
 def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
     """Test that agents are returned in the correct preference order."""
     mock_shutil_which.return_value = "/bin/cmd"
     mock_env["ANTHROPIC_API_KEY"] = "key" # Not strictly needed for logic but good for completeness
     mock_env["GEMINI_API_KEY"] = "key"
     mock_env["OPENAI_API_KEY"] = "key"
-    
+
     agents = get_available_agents()
     assert agents == ["anthropic", "google", "openai"]
 

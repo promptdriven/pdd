@@ -1,9 +1,33 @@
+## v0.0.114 (2026-01-14)
+
+### Feat
+
+- Add early validation for empty and whitespace-only code files in fix_verification_errors_loop
+- **frontend**: Add Sync from JSON button to PromptSpace
+- **frontend**: Add advanced options modal to prompt generation
+- **frontend**: Add full advanced options to architecture page
+- Add bidirectional architecture.json ↔ prompt sync using PDD metadata tags
+- **frontend**: Add edge deletion and arrows to architecture graph
+
+### Fix
+
+- add lxml dependency to pyproject.toml
+- Add lxml to requirements.txt
+- **frontend**: Hide debug position coordinates in production
+
 ## v0.0.113 (2026-01-13)
 
 ### Feat
 
-- **frontend**: Add full-width layout for large screens
-- **frontend**: Add mobile responsive design with device-aware UI
+- **Full-Width Layout for Large Screens:** Removed `max-w-7xl` container constraints from header, main content, and footer, allowing content to span full screen width on large monitors (>1536px). Added `2xl:px-12` padding for ultra-wide screens while maintaining responsive padding at smaller breakpoints.
+
+- **Mobile Responsive Design:** Comprehensive mobile-first redesign of PDD Connect frontend. Key changes:
+  - All modals (AddModuleModal, AddToQueueModal, CreatePromptModal, ModuleEditModal, ReauthModal) now display full-screen on mobile devices (<768px)
+  - Architecture graph replaced with mobile-friendly list view showing module name, description, dependencies, and prompt status
+  - View switcher buttons use horizontal scroll with hidden scrollbar for compact mobile navigation
+  - New `DeviceIndicator` component (dev-only) displays current breakpoint and screen width for responsive testing
+  - Added CSS utilities: `.scrollbar-hide` for hidden scrollbars, `.safe-top/.safe-bottom` for notched device support, iOS zoom prevention on input focus
+  - Responsive typography and spacing adjustments throughout (`xs:`, `sm:`, `md:` breakpoints)
 
 ## v0.0.112 (2026-01-13)
 
