@@ -1,8 +1,34 @@
 """Unit tests for the auto_update module."""
 import importlib
+import os
 from unittest.mock import patch, MagicMock
 import pytest
 from pdd.auto_update import auto_update, detect_installation_method, get_upgrade_command
+
+
+@pytest.fixture(autouse=True)
+def clean_auto_update_env():
+    """Ensure auto_update tests run with clean environment (no CI mode skips)."""
+    # Save original values
+    orig_ci = os.environ.get("CI")
+    orig_skip = os.environ.get("PDD_SKIP_UPDATE_CHECK")
+
+    # Clear the environment variables that cause early exit
+    if "CI" in os.environ:
+        del os.environ["CI"]
+    if "PDD_SKIP_UPDATE_CHECK" in os.environ:
+        del os.environ["PDD_SKIP_UPDATE_CHECK"]
+
+    # Mock isatty to return True (simulating interactive terminal)
+    with patch("pdd.auto_update.sys.stdin.isatty", return_value=True):
+        yield
+
+    # Restore original values
+    if orig_ci is not None:
+        os.environ["CI"] = orig_ci
+    if orig_skip is not None:
+        os.environ["PDD_SKIP_UPDATE_CHECK"] = orig_skip
+
 
 @pytest.fixture(name="mock_importlib_metadata_version")
 def mock_importlib_metadata_version_fixture():
