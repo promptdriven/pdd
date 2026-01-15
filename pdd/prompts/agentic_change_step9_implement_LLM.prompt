@@ -42,6 +42,10 @@ Code generation happens separately via `pdd sync` after the PR is merged.
 </issue_content>
 
 % Previous Step Outputs
+<step5_output>
+{step5_output}
+</step5_output>
+
 <step7_output>
 {step7_output}
 </step7_output>
@@ -56,14 +60,21 @@ Code generation happens separately via `pdd sync` after the PR is merged.
    - Change to the worktree directory: {worktree_path}
    - All file modifications happen here, not in the main repo
 
-2. **Modify existing prompts**
+2. **Implement documentation changes from Step 5**
+   For each documentation file identified in Step 5's output:
+   - Update README.md (or equivalent) with new command documentation
+   - Update docs/ files with guides, tutorials, or API docs
+   - Follow the draft content provided in Step 5
+   - Preserve existing formatting and style conventions
+
+3. **Modify existing prompts**
    For each prompt identified for modification in Step 8:
    - Read the current prompt file
    - Apply the changes specified in Step 8
    - Preserve existing structure and formatting
    - Keep the prompt concise (10-30% of expected code size)
 
-3. **Create new prompts**
+4. **Create new prompts**
    For each new prompt identified in Step 8:
    - Use the standard prompt structure:
      ```
@@ -87,7 +98,7 @@ Code generation happens separately via `pdd sync` after the PR is merged.
      - Code: `pdd/module_name.py`
      ```
 
-4. **Track changes**
+5. **Track changes**
    - Report all files modified with `FILES_MODIFIED:` prefix
    - Report all files created with `FILES_CREATED:` prefix
 

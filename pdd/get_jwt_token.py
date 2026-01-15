@@ -50,6 +50,34 @@ class RateLimitError(AuthError):
 # JWT file cache path (Issue #273 - reduces keyring access to avoid password prompts)
 JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
 
+
+def _decode_jwt_payload(token: str) -> Dict:
+    """
+    Decode JWT payload without verification to extract claims.
+
+    Args:
+        token: The JWT token string.
+
+    Returns:
+        Dict containing the JWT payload claims, or empty dict on error.
+    """
+    try:
+        # JWT is header.payload.signature
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {}
+
+        payload = parts[1]
+        # Add padding if needed for base64 decoding
+        padding = len(payload) % 4
+        if padding:
+            payload += "=" * (4 - padding)
+
+        decoded = base64.urlsafe_b64decode(payload)
+        return json.loads(decoded)
+    except Exception:
+        return {}
+
 def _get_expected_jwt_audience() -> Optional[str]:
     """
     Determine the expected JWT audience based on PDD_ENV.
@@ -90,9 +118,12 @@ def _get_jwt_audience(jwt: str) -> Optional[str]:
         return None
 
 
-def _get_cached_jwt() -> Optional[str]:
+def _get_cached_jwt(verbose: bool = False) -> Optional[str]:
     """
     Get cached JWT if it exists and is not expired.
+
+    Args:
+        verbose: If True, print helpful messages when cache is invalid
 
     Returns:
         Optional[str]: The cached JWT if valid, None otherwise.
@@ -103,19 +134,37 @@ def _get_cached_jwt() -> Optional[str]:
         with open(JWT_CACHE_FILE, 'r') as f:
             cache = json.load(f)
         # Check expiration with 5 minute buffer
-        if cache.get('expires_at', 0) > time.time() + 300:
-            jwt = cache.get('jwt')
+        expires_at = cache.get('expires_at', 0)
+        current_time = time.time()
+        if expires_at > current_time + 300:
+            # Check both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility
+            jwt = cache.get('id_token') or cache.get('jwt')
             expected_aud = _get_expected_jwt_audience()
             if expected_aud:
                 actual_aud = _get_jwt_audience(jwt or "")
                 if actual_aud != expected_aud:
+                    if verbose:
+                        print(f"JWT cache invalidated: audience mismatch")
+                        print(f"  Expected: {expected_aud}")
+                        print(f"  Got:      {actual_aud}")
+                        print(f"  This usually means you switched environments (staging vs prod)")
+                        print(f"  Clearing cache and re-authenticating...")
                     try:
                         JWT_CACHE_FILE.unlink()
                     except OSError:
                         pass
                     return None
             return jwt
-    except (json.JSONDecodeError, IOError, KeyError):
+        else:
+            if verbose:
+                time_remaining = expires_at - current_time
+                if time_remaining < 0:
+                    print(f"JWT cache invalidated: token expired {int(-time_remaining / 60)} minutes ago")
+                else:
+                    print(f"JWT cache invalidated: token expires soon (in {int(time_remaining / 60)} minutes)")
+    except (json.JSONDecodeError, IOError, KeyError) as e:
+        if verbose:
+            print(f"JWT cache invalidated: corrupted cache file ({e})")
         # Cache corrupted, delete it
         try:
             JWT_CACHE_FILE.unlink()
@@ -130,13 +179,23 @@ def _cache_jwt(jwt: str, expires_in: int = 3600) -> None:
 
     Args:
         jwt: The JWT token to cache.
-        expires_in: Time in seconds until the JWT expires (default: 3600 = 1 hour).
+        expires_in: Fallback time in seconds if exp claim cannot be extracted (default: 3600 = 1 hour).
     """
     try:
         JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        # Try to extract actual expiration from JWT's exp claim
+        payload = _decode_jwt_payload(jwt)
+        exp_claim = payload.get('exp')
+        if exp_claim:
+            expires_at = exp_claim
+        else:
+            # Fallback to calculated expiration if exp claim not found
+            expires_at = time.time() + expires_in
+
         cache = {
-            'jwt': jwt,
-            'expires_at': time.time() + expires_in,
+            'id_token': jwt,  # Use 'id_token' key to match auth.py format
+            'expires_at': expires_at,
             'cached_at': time.time()
         }
         with open(JWT_CACHE_FILE, 'w') as f:
@@ -466,7 +525,12 @@ class FirebaseAuthenticator:
         """
         return bool(id_token)
 
-async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: str = "my-cli-app") -> str:
+async def get_jwt_token(
+    firebase_api_key: str,
+    github_client_id: str,
+    app_name: str = "my-cli-app",
+    no_browser: bool = False
+) -> str:
     """
     Get a Firebase ID token using GitHub's Device Flow authentication.
 
@@ -474,6 +538,7 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
         firebase_api_key: Firebase Web API key
         github_client_id: OAuth client ID for GitHub app
         app_name: Unique name for your CLI application
+        no_browser: If True, skip automatic browser opening (for remote/SSH sessions)
 
     Returns:
         str: A valid Firebase ID token
@@ -518,7 +583,18 @@ async def get_jwt_token(firebase_api_key: str, github_client_id: str, app_name: 
     print(f"To authenticate, visit: {device_code_response['verification_uri']}")
     print(f"Enter code: {device_code_response['user_code']}")
     sys.stdout.flush()  # Ensure visibility in piped contexts
-    webbrowser.open(device_code_response['verification_uri'])  # Auto-open browser
+
+    # Open browser only if not explicitly disabled
+    if not no_browser:
+        try:
+            webbrowser.open(device_code_response['verification_uri'])
+            print("Opening browser for authentication...")
+        except Exception as e:
+            print(f"Note: Could not open browser: {e}")
+            print("Please open the URL manually in your browser.")
+    else:
+        print("Browser opening disabled. Please open the URL manually in your browser.")
+
     print("Waiting for authentication...")
     sys.stdout.flush()
 

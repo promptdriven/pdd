@@ -577,6 +577,28 @@ def test_z3_review_loop_termination():
 
     _, term_final, _ = get_state(MAX_ITERATIONS)
     s.add(Not(term_final))
-    
+
     result = s.check()
     assert result == unsat, "The review loop is not guaranteed to terminate within MAX_ITERATIONS"
+
+
+# -----------------------------------------------------------------------------
+# Prompt Template Tests
+# -----------------------------------------------------------------------------
+
+def test_step9_prompt_template_includes_step5_output():
+    """
+    TDD test: Verify Step 9 prompt template references step5_output.
+
+    The orchestrator already includes step5_output in context (lines 270-272),
+    but the template must actually reference {step5_output} for the agent to see it.
+
+    Python's str.format(**context) silently ignores extra context keys,
+    so missing {step5_output} in the template means documentation changes
+    from Step 5 are never shown to the implementation agent.
+    """
+    prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_change_step9_implement_LLM.prompt"
+    template_content = prompt_path.read_text()
+
+    assert "{step5_output}" in template_content, \
+        "Step 9 template must include {step5_output} to receive documentation changes from Step 5"

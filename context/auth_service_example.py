@@ -81,6 +81,20 @@ def logout() -> Tuple[bool, Optional[str]]:
     ...
 
 
+def get_cached_jwt() -> Optional[str]:
+    """
+    Get the cached JWT token if it exists and is valid.
+
+    Reads from JWT_CACHE_FILE, checks expiration with 5-minute buffer,
+    and returns the token if valid. Supports both 'id_token' (new format)
+    and 'jwt' (legacy format) keys for backwards compatibility.
+
+    Returns:
+        The JWT token string if valid, None otherwise.
+    """
+    ...
+
+
 # Example usage in CLI commands:
 #
 # # In status command:
@@ -98,3 +112,12 @@ def logout() -> Tuple[bool, Optional[str]]:
 #     click.echo("Logged out of PDD Cloud.")
 # else:
 #     click.echo(f"Failed to logout: {error}", err=True)
+#
+# # Get cached JWT for API calls:
+# from pdd.auth_service import get_cached_jwt
+# token = get_cached_jwt()
+# if token:
+#     headers = {"Authorization": f"Bearer {token}"}
+#     # Make API call with headers
+# else:
+#     click.echo("Not authenticated or token expired")
