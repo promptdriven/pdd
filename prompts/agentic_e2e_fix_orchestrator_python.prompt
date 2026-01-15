@@ -16,10 +16,25 @@ Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separa
 7. Parse agent output for `FILES_CREATED:` and `FILES_MODIFIED:` lines to track changed files
 8. Apply `timeout_adder` to each step's base timeout from `E2E_FIX_STEP_TIMEOUTS`
 
+% Step Name Mapping
+```python
+STEP_NAMES = {
+    1: "unit_tests",
+    2: "e2e_tests",
+    3: "root_cause",
+    4: "fix_e2e_tests",
+    5: "identify_devunits",
+    6: "create_unit_tests",
+    7: "verify_tests",
+    8: "run_pdd_fix",
+    9: "verify_all",
+}
+```
+
 % Step Execution
 For each step (1-9):
-1. Load the step prompt template via `load_prompt_template(f"agentic_e2e_fix_step{n}_{name}_LLM")`
-2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, step1_output, etc.
+1. Load the step prompt template via `load_prompt_template(f"agentic_e2e_fix_step{n}_{STEP_NAMES[n]}_LLM")`
+2. Format template with: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles, issue_content, step1_output, etc.
 3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num) + timeout_adder)`
 4. Store the output for use by subsequent steps
 5. Save state to file after step completes
@@ -71,6 +86,9 @@ if cycle >= max_cycles:
 ```
 
 % Context Accumulation
+All steps receive common variables: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles
+
+Additionally:
 - Step 1 receives: issue_content
 - Step 2 receives: issue_content, step1_output
 - Step 3 receives: issue_content, step1_output, step2_output
@@ -79,7 +97,7 @@ if cycle >= max_cycles:
 - Step 6 receives: issue_content, step1_output through step5_output, dev_units_identified
 - Step 7 receives: issue_content, step1_output through step6_output
 - Step 8 receives: issue_content, step1_output through step7_output, failing_dev_units
-- Step 9 receives: issue_content, step1_output through step8_output, cycle_number, max_cycles
+- Step 9 receives: issue_content, step1_output through step8_output
 
 % State Persistence
 1. **State file location**: `.pdd/e2e-fix-state/issue-{issue_number}.json`
