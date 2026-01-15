@@ -725,8 +725,8 @@ const App: React.FC = () => {
               </button>
             </div>
 
-            {/* Remote session controls - responsive */}
-            <div className="flex items-center gap-2 md:gap-3 px-2 md:px-4 py-1.5 md:py-2 bg-surface-800/30 rounded-xl border border-surface-700/50">
+            {/* Remote session controls - hidden on small screens */}
+            <div className="hidden lg:flex items-center gap-2 md:gap-3 px-2 md:px-4 py-1.5 md:py-2 bg-surface-800/30 rounded-xl border border-surface-700/50">
               <RemoteSessionSelector
                 sessions={remoteSessions}
                 selectedSessionId={selectedRemoteSession}
@@ -751,6 +751,22 @@ const App: React.FC = () => {
                 onModeChange={setExecutionMode}
                 disabled={!selectedRemoteSession && executionMode === 'remote'}
               />
+            </div>
+
+            {/* Compact execution mode indicator for small screens */}
+            <div className="flex lg:hidden items-center">
+              <button
+                onClick={() => setExecutionMode(executionMode === 'local' ? 'remote' : 'local')}
+                disabled={!selectedRemoteSession && executionMode === 'local'}
+                className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  executionMode === 'remote'
+                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                    : 'bg-surface-700/50 text-surface-400 border border-surface-600/50'
+                } ${!selectedRemoteSession && executionMode === 'local' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                title={executionMode === 'remote' ? 'Remote mode (click to switch to local)' : 'Local mode (click to switch to remote)'}
+              >
+                {executionMode === 'remote' ? '🌐' : '💻'}
+              </button>
             </div>
 
             {/* Server status - responsive */}
