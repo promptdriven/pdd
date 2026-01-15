@@ -31,16 +31,16 @@ TIMEOUT_ENV_VAR: str = "PDD_AGENTIC_TIMEOUT"
 # Per-step timeouts for agentic bug orchestrator (Issue #256)
 # Complex steps (reproduce, root cause, generate, e2e) get more time.
 BUG_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 240.0,   # Duplicate Check
-    2: 400.0,   # Docs Check
-    3: 400.0,   # Triage
-    4: 600.0,   # Reproduce (Complex)
-    5: 600.0,   # Root Cause (Complex)
-    6: 340.0,   # Test Plan
-    7: 1000.0,  # Generate Unit Test (Complex)
-    8: 600.0,   # Verify Unit Test
-    9: 2000.0,   # E2E Test (Complex - needs to discover env & run tests)
-    10: 240.0,  # Create PR
+    1: 400.0,   # Duplicate Check
+    2: 800.0,   # Docs Check
+    3: 800.0,   # Triage
+    4: 1200.0,  # Reproduce (Complex)
+    5: 900.0,   # Root Cause (Complex)
+    6: 600.0,   # Test Plan
+    7: 1500.0,  # Generate Unit Test (Complex)
+    8: 900.0,   # Verify Unit Test
+    9: 3600.0,  # E2E Test (Complex - 1 hour max)
+    10: 400.0,  # Create PR
 }
 
 # Per-step timeouts for agentic change orchestrator
