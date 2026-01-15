@@ -2,18 +2,24 @@
 
 ### Feat
 
-- Add early validation for empty and whitespace-only code files in fix_verification_errors_loop
-- **frontend**: Add Sync from JSON button to PromptSpace
-- **frontend**: Add advanced options modal to prompt generation
-- **frontend**: Add full advanced options to architecture page
-- Add bidirectional architecture.json ↔ prompt sync using PDD metadata tags
-- **frontend**: Add edge deletion and arrows to architecture graph
+- **Architecture Metadata Tags:** New `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` XML tags in prompt files sync bidirectionally with `architecture.json`. Prompts are the source of truth. Includes circular dependency detection and lenient validation. New `architecture_sync.py` module (565 lines) with comprehensive tests (1,347 lines).
+
+- **Prompting Guide:** Updated `docs/prompting_guide.md` (864 lines) covering PDD best practices, prompt anatomy, metadata tags, and examples contrasting PDD with patch-style prompting.
+
+- **Frontend Sync UI:** "Sync from Prompt" modal in Architecture view updates `architecture.json` from prompt tags. "Sync from JSON" button in PromptSpace injects `<pdd-*>` tags into prompts. Shows validation results, circular dependency warnings, and per-module diffs.
+
+- **Frontend Advanced Options:** Generation options modal added to Architecture page and PromptSpace exposing temperature, model selection, cloud toggle, merge mode, and other `pdd generate` flags.
+
+- **Frontend Graph Improvements:** Dependency graph shows directional arrows, supports edge deletion via right-click in edit mode, and persists node positions to `architecture.json`.
+
+- **Early Empty File Validation:** `fix_verification_errors_loop` validates code files are non-empty before entering the fix loop, preventing infinite loops on blank generated files.
+
+- **Example Project Cleanup:** Replaced `examples/edit_file_tool_example/` with cleaner `examples/template_example/`. Added new `example_project/` with documented architecture patterns. Thanks to @RyanTanuki for your contribution!!
 
 ### Fix
 
-- add lxml dependency to pyproject.toml
-- Add lxml to requirements.txt
-- **frontend**: Hide debug position coordinates in production
+- **lxml Dependency:** Added `lxml>=5.0.0` to requirements for XML parsing in architecture sync.
+- **Frontend Position Debug:** Hidden node coordinate debug display in production builds.
 
 ## v0.0.113 (2026-01-13)
 
