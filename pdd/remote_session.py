@@ -482,7 +482,17 @@ class RemoteSessionManager:
 
         # Build CLI command string for display
         cli_parts = ["pdd", cmd.type]
+        # Handle positional args first (special 'args' key contains positional arguments)
+        if "args" in cmd_args:
+            args_value = cmd_args["args"]
+            if isinstance(args_value, (list, tuple)):
+                cli_parts.extend(str(v) for v in args_value)
+            elif args_value is not None:
+                cli_parts.append(str(args_value))
+        # Then handle other args as named options
         for key, value in cmd_args.items():
+            if key == "args":
+                continue  # Already handled above
             if isinstance(value, bool):
                 if value:
                     cli_parts.append(f"--{key}")
