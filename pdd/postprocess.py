@@ -24,16 +24,16 @@ def postprocess_0(llm_output: str, language: str) -> str:
     """Simple extraction of code blocks."""
     if language == "prompt":
         # Strip <prompt> tags
-        llm_output = re.sub(r"<prompt>\s*(.*?)?\s*</prompt>", r"\1", llm_output, flags=re.DOTALL)
+        llm_output = re.sub(r"<prompt>\s*(.*?)\s*</prompt>", r"\1", llm_output, flags=re.DOTALL)
         llm_output = llm_output.strip()
 
         # Also strip triple backticks if present
         lines = llm_output.splitlines()
-        if len(lines) >= 1 and lines[0].startswith("```"):
+        if lines and lines[0].startswith("```"):
             # Remove first line with opening backticks
             lines = lines[1:]
             # If there's a last line with closing backticks, remove it
-            if len(lines) >= 1 and lines[-1].strip() == "```":
+            if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
         llm_output = "\n".join(lines)
 
@@ -134,11 +134,11 @@ def postprocess(
 
         # Clean up triple backticks
         lines = extracted_code.splitlines()
-        if len(lines) >= 1 and lines[0].startswith("```"):
+        if lines and lines[0].startswith("```"):
             # Remove first line with opening backticks
             lines = lines[1:]
             # If there's a last line with closing backticks, remove it
-            if len(lines) >= 1 and lines[-1].startswith("```"):
+            if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
         extracted_code = "\n".join(lines)
 
