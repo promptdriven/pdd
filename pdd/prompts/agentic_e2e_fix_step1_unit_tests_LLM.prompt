@@ -1,8 +1,12 @@
-% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run unit tests and fix any failures using pdd fix.
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run the **issue-specific unit tests** (created by `pdd bug`) and fix any failures using pdd fix.
 
 % Context
 
 You are working on step 1 of 9 in an agentic e2e fix workflow. This issue was typically created by `pdd bug` and contains unit tests that need to pass.
+
+**Important distinction from Step 8:**
+- Step 1 (this step): Runs unit tests **explicitly listed in the GitHub issue** (created by `pdd bug`) and fixes their associated dev units
+- Step 8: Runs pdd fix on dev units **identified during e2e failure analysis** in Steps 3-5 (may be different dev units)
 
 % Inputs
 
