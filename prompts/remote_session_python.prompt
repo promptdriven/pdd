@@ -1,0 +1,91 @@
+% You are an expert Python engineer. Your goal is to write `pdd/remote_session.py`.
+
+% Role & Scope
+  This module handles remote session management for PDD Connect. It enables users to run
+  `pdd connect` on any machine and access it remotely via PDD Cloud. The cloud acts as a
+  **message bus** - it relays commands from the browser to the CLI via Firestore.
+  No external tunnel (ngrok) is required - the cloud hosts everything.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **SessionInfo dataclass**:
+     - Fields: session_id, cloud_url, project_name, project_path,
+       created_at, last_heartbeat, status, metadata
+     - Factory method `from_dict()` to parse cloud API responses
+     - Handle ISO datetime strings with timezone
+     - cloud_url is the URL users access in browser (e.g., https://pdd.dev/connect/{session_id})
+
+  2. **RemoteSessionError**:
+     - Custom exception for session operations
+     - Include message and optional status_code
+
+  3. **CommandInfo dataclass**:
+     - Fields: command_id, type, payload, status, created_at, response
+     - Represents a command from the Firestore message bus
+     - Status: "pending" | "processing" | "completed" | "failed"
+
+  4. **RemoteSessionManager class**:
+     - Constructor takes `jwt_token: str` and `project_path: Path`
+     - `register()`: Register session with cloud, return cloud_url
+       - Params: session_name (optional)
+       - Call POST to `registerSession` cloud endpoint
+       - Store session_id and cloud_url on success
+       - Returns the cloud_url for display to user
+     - `start_heartbeat()`: Start async background task sending heartbeats every 60 seconds
+     - `stop_heartbeat()`: Stop heartbeat task gracefully
+     - `start_command_listener(handler)`: Start polling Firestore for pending commands
+       - handler: Callable that takes CommandInfo and returns response
+       - Poll interval: 500ms (Firestore message bus approach)
+     - `stop_command_listener()`: Stop command listener gracefully
+     - `deregister()`: Call DELETE to `deregisterSession` endpoint on shutdown
+     - Static `list_sessions(jwt_token)`: GET `listSessions` endpoint, return List[SessionInfo]
+
+  5. **Command Listener behavior**:
+     - Poll cloud for pending commands every 500ms
+     - When command found: set status="processing", execute handler, set status="completed"
+     - Use asyncio.Event for clean shutdown
+     - Handle errors gracefully (set status="failed" with error message)
+     - Support cancellation detection via `_get_command_status()` using getCommandStatus endpoint
+     - Check for cancellation during command execution and abort if cancelled
+
+  6. **Heartbeat behavior**:
+     - Send heartbeat to `heartbeatSession` endpoint every 60 seconds
+     - Use asyncio.Event for clean shutdown
+     - Log warnings on heartbeat failures but don't crash
+
+  7. **Module-level state**:
+     - `_active_session_manager` global for server access
+     - `get_active_session_manager()` and `set_active_session_manager()` accessors
+
+% Dependencies
+  <cloud_config_example>
+  <include>context/cloud_example.py</include>
+  </cloud_config_example>
+
+  <pdd.core.cloud><include>context/cloud_example.py</include></pdd.core.cloud>
+  <pdd.commands.connect><include>context/commands/connect_example.py</include></pdd.commands.connect>
+
+% Technical Constraints
+  - Use httpx.AsyncClient for async HTTP (timeout 30s)
+  - Use CloudConfig.get_endpoint_url() for endpoint URLs
+  - Include metadata: hostname, platform, python_version
+  - Handle HTTP errors gracefully with RemoteSessionError
+  - Cloud endpoints needed:
+    - registerSession: POST to register, returns { sessionId, cloudUrl }
+    - heartbeatSession: POST to send heartbeat
+    - deregisterSession: POST/DELETE to deregister
+    - listSessions: GET to list sessions
+    - getCommands: GET to poll pending commands
+    - getCommandStatus: GET to check specific command status (for cancellation detection)
+    - updateCommand: POST to update command status/response
+    - cancelCommand: POST to cancel a command
+
+% Instructions
+  - Follow existing cloud API patterns in the codebase
+  - Use rich.console.Console for status messages
+  - Make deregister() idempotent (don't raise on failure during shutdown)
+  - Command listener runs alongside heartbeat as separate async task
+
+% Deliverables
+  - Code: `pdd/remote_session.py`

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
+import subprocess
+import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from uuid import uuid4
 
@@ -34,7 +40,140 @@ except ImportError:
 
 from .models import JobStatus
 
+
+# Global options that must be placed BEFORE the subcommand (defined on cli group)
+GLOBAL_OPTIONS = {
+    "force", "strength", "temperature", "time", "verbose", "quiet",
+    "output_cost", "review_examples", "local", "context", "list_contexts", "core_dump"
+}
+
+# Commands where specific args should be positional (not --options)
+POSITIONAL_ARGS = {
+    "sync": ["basename"],
+    "generate": ["prompt_file"],
+    "test": ["prompt_file", "code_file"],
+    "example": ["prompt_file", "code_file"],
+    "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
+    "bug": ["args"],
+    "update": ["args"],
+    "crash": ["prompt_file", "code_file", "program_file", "error_file"],
+    "verify": ["prompt_file", "code_file", "verification_program"],
+    "split": ["input_prompt", "input_code", "example_code"],
+    "change": ["change_prompt_file", "input_code", "input_prompt_file"],
+    "detect": ["args"],
+    "auto-deps": ["prompt_file", "directory_path"],
+    "conflicts": ["prompt_file", "prompt2"],
+    "preprocess": ["prompt_file"],
+}
+
 logger = logging.getLogger(__name__)
+
+
+def _find_pdd_executable() -> Optional[str]:
+    """Find the pdd executable path."""
+    import shutil
+
+    # First try to find 'pdd' in PATH
+    pdd_path = shutil.which("pdd")
+    if pdd_path:
+        return pdd_path
+
+    # Try to find 'pdd' in the same directory as the Python interpreter
+    python_dir = Path(sys.executable).parent
+    pdd_in_python_dir = python_dir / "pdd"
+    if pdd_in_python_dir.exists():
+        return str(pdd_in_python_dir)
+
+    return None
+
+
+def _build_subprocess_command_args(
+    command: str,
+    args: Optional[Dict[str, Any]],
+    options: Optional[Dict[str, Any]]
+) -> List[str]:
+    """
+    Build command line arguments for pdd subprocess.
+
+    Global options (--force, --strength, etc.) are placed BEFORE the subcommand.
+    Command-specific options are placed AFTER the subcommand and positional args.
+    """
+    pdd_exe = _find_pdd_executable()
+
+    if pdd_exe:
+        cmd_args = [pdd_exe]
+    else:
+        # Fallback: use runpy to run the CLI module
+        cmd_args = [
+            sys.executable, "-c",
+            "import sys; from pdd.cli import cli; sys.exit(cli())"
+        ]
+
+    # Separate global options from command-specific options
+    global_opts: Dict[str, Any] = {}
+    cmd_opts: Dict[str, Any] = {}
+
+    if options:
+        for key, value in options.items():
+            normalized_key = key.replace("-", "_")
+            if normalized_key in GLOBAL_OPTIONS:
+                global_opts[key] = value
+            else:
+                cmd_opts[key] = value
+
+    # Add global options BEFORE the command
+    for key, value in global_opts.items():
+        if isinstance(value, bool):
+            if value:
+                cmd_args.append(f"--{key.replace('_', '-')}")
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                cmd_args.extend([f"--{key.replace('_', '-')}", str(v)])
+        elif value is not None:
+            cmd_args.extend([f"--{key.replace('_', '-')}", str(value)])
+
+    # Add the command
+    cmd_args.append(command)
+
+    # Get positional arg names for this command
+    positional_names = POSITIONAL_ARGS.get(command, [])
+
+    if args:
+        # First, add positional arguments in order
+        for pos_name in positional_names:
+            if pos_name in args:
+                value = args[pos_name]
+                if pos_name == "args" and isinstance(value, (list, tuple)):
+                    cmd_args.extend(str(v) for v in value)
+                elif value is not None:
+                    cmd_args.append(str(value))
+
+        # Then, add remaining args as options
+        for key, value in args.items():
+            if key in positional_names:
+                continue
+            if isinstance(value, bool):
+                if value:
+                    cmd_args.append(f"--{key.replace('_', '-')}")
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    cmd_args.extend([f"--{key.replace('_', '-')}", str(v)])
+            elif value is not None:
+                cmd_args.extend([f"--{key.replace('_', '-')}", str(value)])
+
+    # Add command-specific options
+    if cmd_opts:
+        for key, value in cmd_opts.items():
+            if isinstance(value, bool):
+                if value:
+                    cmd_args.append(f"--{key.replace('_', '-')}")
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    cmd_args.extend([f"--{key.replace('_', '-')}", str(v)])
+            elif value is not None:
+                cmd_args.extend([f"--{key.replace('_', '-')}", str(value)])
+
+    return cmd_args
 
 
 @dataclass
@@ -53,6 +192,9 @@ class Job:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    # Live output during execution (updated in real-time)
+    live_stdout: str = ""
+    live_stderr: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -67,6 +209,8 @@ class Job:
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "live_stdout": self.live_stdout,
+            "live_stderr": self.live_stderr,
         }
 
 
@@ -129,20 +273,26 @@ class JobManager:
         self,
         max_concurrent: int = 1,
         executor: Optional[Callable[[Job], Awaitable[Dict[str, Any]]]] = None,
+        project_root: Optional[Path] = None,
     ):
         self.max_concurrent = max_concurrent
         self.callbacks = JobCallbacks()
-        
+        self.project_root = project_root or Path.cwd()
+
         self._jobs: Dict[str, Job] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._cancel_events: Dict[str, asyncio.Event] = {}
-        
+
+        # Track running subprocesses for cancellation
+        self._processes: Dict[str, subprocess.Popen] = {}
+        self._process_lock = threading.Lock()
+
         self._thread_pool = ThreadPoolExecutor(
-            max_workers=max_concurrent, 
+            max_workers=max_concurrent,
             thread_name_prefix="pdd_job_worker"
         )
-        
+
         self._custom_executor = executor
 
     async def submit(
@@ -244,41 +394,140 @@ class JobManager:
                 del self._cancel_events[job.id]
 
     async def _run_click_command(self, job: Job) -> Dict[str, Any]:
-        click_cmd = get_pdd_command(job.command)
-        if not click_cmd:
-            raise ValueError(f"Unknown command: {job.command}")
+        """
+        Run a PDD command as a subprocess with output streaming and cancellation support.
 
+        This uses subprocess execution instead of direct Click invocation to enable:
+        - Proper cancellation via SIGTERM/SIGKILL
+        - Process isolation
+        - Output streaming
+        """
         loop = asyncio.get_running_loop()
 
-        def sync_output_callback(stream: str, text: str):
-            if job.status == JobStatus.RUNNING:
-                asyncio.run_coroutine_threadsafe(
-                    self.callbacks.emit_output(job, stream, text),
-                    loop
+        # Build command args - add --force to skip confirmation prompts
+        options_with_force = dict(job.options) if job.options else {}
+        options_with_force['force'] = True  # Skip all confirmation prompts
+        cmd_args = _build_subprocess_command_args(job.command, job.args, options_with_force)
+
+        # Set up environment for headless execution
+        env = os.environ.copy()
+        env['CI'] = '1'
+        env['PDD_FORCE'] = '1'
+        env['TERM'] = 'dumb'
+        env['PDD_SKIP_UPDATE_CHECK'] = '1'  # Skip update prompts
+
+        stdout_lines = []
+        stderr_lines = []
+
+        def run_subprocess():
+            """Run subprocess in thread with output streaming."""
+            try:
+                process = subprocess.Popen(
+                    cmd_args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    cwd=str(self.project_root),
+                    env=env,
+                    text=True,
+                    bufsize=1,  # Line buffered
                 )
 
-        executor = ClickCommandExecutor(
-            base_context_obj=job.options,
-            output_callback=sync_output_callback
-        )
+                # Track process for cancellation
+                with self._process_lock:
+                    self._processes[job.id] = process
 
-        captured = await loop.run_in_executor(
-            self._thread_pool,
-            executor.execute,
-            click_cmd,
-            job.args,
-            job.options
-        )
+                # Read output in real-time
+                def read_stream(stream, stream_type, lines_list):
+                    try:
+                        for line in iter(stream.readline, ''):
+                            if line:
+                                lines_list.append(line)
+                                # Update live output on the job for polling
+                                if stream_type == "stdout":
+                                    job.live_stdout += line
+                                else:
+                                    job.live_stderr += line
+                                # Emit output callback
+                                if job.status == JobStatus.RUNNING:
+                                    asyncio.run_coroutine_threadsafe(
+                                        self.callbacks.emit_output(job, stream_type, line),
+                                        loop
+                                    )
+                    except Exception:
+                        pass
+                    finally:
+                        stream.close()
 
-        if captured.exit_code != 0:
-            error_msg = captured.stderr or captured.stdout or "Command failed with non-zero exit code"
+                # Start threads to read stdout and stderr
+                stdout_thread = threading.Thread(
+                    target=read_stream,
+                    args=(process.stdout, "stdout", stdout_lines)
+                )
+                stderr_thread = threading.Thread(
+                    target=read_stream,
+                    args=(process.stderr, "stderr", stderr_lines)
+                )
+
+                stdout_thread.start()
+                stderr_thread.start()
+
+                # Wait for process to complete
+                exit_code = process.wait()
+
+                # Wait for output threads to finish
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
+
+                return exit_code
+
+            finally:
+                # Clean up process tracking
+                with self._process_lock:
+                    self._processes.pop(job.id, None)
+
+        # Run in thread pool
+        exit_code = await loop.run_in_executor(self._thread_pool, run_subprocess)
+
+        # Check if cancelled
+        if self._cancel_events.get(job.id) and self._cancel_events[job.id].is_set():
+            raise asyncio.CancelledError("Job was cancelled")
+
+        stdout_text = ''.join(stdout_lines)
+        stderr_text = ''.join(stderr_lines)
+
+        if exit_code != 0:
+            # Combine stdout and stderr for complete error context
+            # Filter out INFO/DEBUG logs to find the actual error message
+            all_output = stdout_text + "\n" + stderr_text if stderr_text else stdout_text
+
+            # Try to find actual error lines (not INFO/DEBUG logs)
+            error_lines = []
+            for line in all_output.split('\n'):
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                # Skip common log prefixes
+                if ' - INFO - ' in line or ' - DEBUG - ' in line:
+                    continue
+                # Skip lines that are just timestamps with INFO
+                if line_stripped.startswith('202') and ' INFO ' in line:
+                    continue
+                error_lines.append(line)
+
+            if error_lines:
+                error_msg = '\n'.join(error_lines[-50:])  # Last 50 non-INFO lines
+            else:
+                # No non-INFO lines found, use all output
+                error_msg = all_output or f"Command failed with exit code {exit_code}"
+
             raise RuntimeError(error_msg)
 
         return {
-            "stdout": captured.stdout,
-            "stderr": captured.stderr,
-            "exit_code": captured.exit_code,
-            "cost": 0.0 
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "exit_code": exit_code,
+            "cost": 0.0
         }
 
     def get_job(self, job_id: str) -> Optional[Job]:
@@ -295,6 +544,16 @@ class JobManager:
         }
 
     async def cancel(self, job_id: str) -> bool:
+        """
+        Cancel a running job by terminating its subprocess.
+
+        This method:
+        1. Sets the cancel event to signal cancellation
+        2. Terminates the subprocess (SIGTERM, then SIGKILL if needed)
+        3. Cancels the async task
+
+        Returns True if cancellation was initiated, False if job already finished.
+        """
         job = self._jobs.get(job_id)
         if not job:
             return False
@@ -302,13 +561,39 @@ class JobManager:
         if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
             return False
 
+        # Set cancel event first
         if job_id in self._cancel_events:
             self._cancel_events[job_id].set()
-            
+
+        # Terminate the subprocess if running
+        with self._process_lock:
+            process = self._processes.get(job_id)
+            if process and process.poll() is None:
+                console.print(f"[yellow]Terminating subprocess for job:[/yellow] {job_id}")
+                try:
+                    # Try graceful termination first
+                    process.terminate()
+
+                    # Give it a moment to terminate
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        # Force kill if it doesn't respond
+                        console.print(f"[yellow]Force killing subprocess for job:[/yellow] {job_id}")
+                        process.kill()
+                        process.wait(timeout=2)
+                except Exception as e:
+                    console.print(f"[red]Error terminating subprocess: {e}[/red]")
+
+        # Cancel the async task
         if job_id in self._tasks:
             self._tasks[job_id].cancel()
-            
-        console.print(f"[yellow]Cancellation requested for job:[/yellow] {job_id}")
+
+        # Update job status
+        job.status = JobStatus.CANCELLED
+        job.completed_at = datetime.now(timezone.utc)
+
+        console.print(f"[yellow]Cancellation completed for job:[/yellow] {job_id}")
         return True
 
     def cleanup_old_jobs(self, max_age_seconds: float = 3600) -> int:

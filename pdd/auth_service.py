@@ -46,6 +46,30 @@ def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
     return False, None
 
 
+def get_cached_jwt() -> Optional[str]:
+    """
+    Get the cached JWT token if it exists and is valid.
+
+    Returns:
+        The JWT token string if valid, None otherwise.
+    """
+    if not JWT_CACHE_FILE.exists():
+        return None
+
+    try:
+        with open(JWT_CACHE_FILE, "r") as f:
+            cache = json.load(f)
+        expires_at = cache.get("expires_at", 0)
+        # Check if token is still valid (with 5 minute buffer)
+        if expires_at > time.time() + 300:
+            # Check both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility
+            return cache.get("id_token") or cache.get("jwt")
+    except (json.JSONDecodeError, IOError, KeyError):
+        pass
+
+    return None
+
+
 def has_refresh_token() -> bool:
     """
     Check if there's a stored refresh token in keyring.

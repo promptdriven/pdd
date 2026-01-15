@@ -587,7 +587,7 @@ def test_step_timeouts_dictionary_exists():
     This test verifies that:
     1. A STEP_TIMEOUTS dictionary is defined in agentic_common.py or agentic_bug_orchestrator.py
     2. Steps 4, 5, and 7 have longer timeouts (>= 600 seconds)
-    3. Other steps have the default timeout (240 seconds)
+    3. Other steps have the default or medium timeout
 
     Currently FAILS because STEP_TIMEOUTS is not defined.
     Should PASS after implementing the fix.

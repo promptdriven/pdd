@@ -12,6 +12,7 @@ interface JobCardProps {
   onCancel: () => void;
   onRemove?: () => void;
   onMarkDone?: (success: boolean) => void;
+  onMarkStatus?: (status: 'completed' | 'failed' | 'cancelled') => void;
 }
 
 /**
@@ -75,10 +76,12 @@ const JobCard: React.FC<JobCardProps> = ({
   onCancel,
   onRemove,
   onMarkDone,
+  onMarkStatus,
 }) => {
   const statusStyle = getStatusStyle(job.status);
   const isActive = job.status === 'queued' || job.status === 'running';
   const isSpawnedJob = job.id.startsWith('spawned-');
+  const isRemoteJob = job.metadata?.remote === true;
   const progressPercent = job.progress
     ? Math.round((job.progress.current / job.progress.total) * 100)
     : null;
@@ -189,8 +192,8 @@ const JobCard: React.FC<JobCardProps> = ({
 
       {/* Actions */}
       <div className="flex items-center gap-2 flex-wrap">
-        {/* Spawned jobs get Mark Done buttons and Dismiss */}
-        {isActive && isSpawnedJob && onMarkDone && (
+        {/* Spawned LOCAL jobs (not remote) get Mark Done buttons and Dismiss */}
+        {isActive && isSpawnedJob && !isRemoteJob && onMarkDone && (
           <>
             <button
               onClick={(e) => {
@@ -226,8 +229,56 @@ const JobCard: React.FC<JobCardProps> = ({
             )}
           </>
         )}
-        {/* Regular jobs get Cancel button */}
-        {isActive && !isSpawnedJob && (
+        {/* Remote jobs get manual status buttons and Cancel Remote */}
+        {isActive && isRemoteJob && onMarkStatus && (
+          <>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMarkStatus('completed');
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 rounded-lg transition-colors"
+              title="Mark as successfully completed"
+            >
+              Done
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMarkStatus('failed');
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg transition-colors"
+              title="Mark as failed"
+            >
+              Failed
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMarkStatus('cancelled');
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-surface-400 bg-surface-700/50 hover:bg-surface-700 border border-surface-600/50 rounded-lg transition-colors"
+              title="Mark as cancelled"
+            >
+              Cancelled
+            </button>
+          </>
+        )}
+        {isActive && isRemoteJob && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              // TODO: Cancel remote not fully implemented yet
+              alert('Cancel Remote is not fully implemented yet. Use the manual status buttons above to mark the job status.');
+            }}
+            className="px-3 py-1.5 text-xs font-medium text-purple-400/50 bg-purple-500/5 border border-purple-500/10 rounded-lg cursor-not-allowed"
+            title="Coming soon - use manual status buttons for now"
+          >
+            Cancel Remote (Coming Soon)
+          </button>
+        )}
+        {/* Regular async jobs get Cancel button */}
+        {isActive && !isSpawnedJob && !isRemoteJob && (
           <button
             onClick={(e) => {
               e.stopPropagation();

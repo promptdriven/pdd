@@ -3,7 +3,7 @@ import { CommandConfig, CommandType, GlobalOption, GlobalDefaults } from './type
 
 // Default values matching PDD CLI defaults
 export const GLOBAL_DEFAULTS: GlobalDefaults = {
-  strength: 0.75,
+  strength: 1,
   temperature: 0.0,
   time: 0.25,
   verbose: false,
@@ -19,7 +19,7 @@ export const GLOBAL_OPTIONS: GlobalOption[] = [
     name: 'strength',
     cliFlag: '--strength',
     type: 'range',
-    placeholder: '0.75',
+    placeholder: '1',
     description: 'Model strength: <0.5 = cheaper models, 0.5 = base, >0.5 = stronger models',
     defaultValue: GLOBAL_DEFAULTS.strength,
     min: 0,

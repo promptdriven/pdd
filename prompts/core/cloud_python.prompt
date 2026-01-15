@@ -37,7 +37,7 @@
   - `GITHUB_CLIENT_ID_ENV = "GITHUB_CLIENT_ID"`
   - `PDD_CLOUD_URL_ENV = "PDD_CLOUD_URL"`
   - `PDD_JWT_TOKEN_ENV = "PDD_JWT_TOKEN"`
-  - `CLOUD_ENDPOINTS` dict with keys: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke
+  - `CLOUD_ENDPOINTS` dict with keys: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, updateCommand
 
 % Dependencies
   - Import auth functions and exceptions from `..get_jwt_token`

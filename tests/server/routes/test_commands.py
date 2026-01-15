@@ -126,7 +126,7 @@ def client(commands_module, mock_job_manager):
 class MockJob:
     """Helper class to create mock job objects with all required attributes."""
     def __init__(self, id, status, created_at, started_at=None, completed_at=None,
-                 result=None, error=None, cost=0.0):
+                 result=None, error=None, cost=0.0, live_stdout="", live_stderr=""):
         self.id = id
         self.status = status
         self.created_at = created_at
@@ -135,6 +135,8 @@ class MockJob:
         self.result = result
         self.error = error
         self.cost = cost
+        self.live_stdout = live_stdout
+        self.live_stderr = live_stderr
 
 
 # ============================================================================

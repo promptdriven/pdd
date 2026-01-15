@@ -52,6 +52,14 @@
      - Returns Tuple[bool, Optional[str]] - (success, combined_error_message).
      - Collect errors from both operations if any.
 
+  8. **get_cached_jwt**:
+     - Retrieve the cached JWT token if valid and not expired.
+     - Read from JWT_CACHE_FILE, parse JSON.
+     - Check if token exists and expires_at > current_time + 300 (5 minute buffer).
+     - Support both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility.
+     - Returns Optional[str] - the JWT token string or None if invalid/expired/missing.
+     - Handle file not found, invalid JSON, and missing keys gracefully.
+
 % Dependencies
   <get_jwt_token><include>context/get_jwt_token_example.py</include></get_jwt_token>
 
@@ -65,4 +73,4 @@
 
 % Deliverables
   - Code: `pdd/auth_service.py`
-  - Exports: get_jwt_cache_info, has_refresh_token, clear_jwt_cache, clear_refresh_token, get_auth_status, logout, JWT_CACHE_FILE, KEYRING_SERVICE_NAME, KEYRING_USER_NAME
+  - Exports: get_jwt_cache_info, has_refresh_token, clear_jwt_cache, clear_refresh_token, get_auth_status, logout, get_cached_jwt, JWT_CACHE_FILE, KEYRING_SERVICE_NAME, KEYRING_USER_NAME

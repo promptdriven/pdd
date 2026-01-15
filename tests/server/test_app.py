@@ -146,6 +146,7 @@ def app_module_with_mocks():
         "pdd.server.routes.commands",
         "pdd.server.routes.websocket",
         "pdd.server.routes.prompts",
+        "pdd.server.routes.config",
     ]
 
     # Save and remove ALL pdd.server modules to ensure clean slate
@@ -223,6 +224,10 @@ def app_module_with_mocks():
         _mock_routes_auth.router = APIRouter()
         sys.modules["pdd.server.routes.auth"] = _mock_routes_auth
 
+        _mock_routes_config = types.ModuleType("pdd.server.routes.config")
+        _mock_routes_config.router = APIRouter()
+        sys.modules["pdd.server.routes.config"] = _mock_routes_config
+
         # Set submodules as attributes on the routes module (required for 'from .routes import X')
         _mock_routes.architecture = _mock_routes_architecture
         _mock_routes.files = _mock_routes_files
@@ -230,6 +235,7 @@ def app_module_with_mocks():
         _mock_routes.websocket = _mock_routes_ws
         _mock_routes.prompts = _mock_routes_prompts
         _mock_routes.auth = _mock_routes_auth
+        _mock_routes.config = _mock_routes_config
 
         # Remove cached app module if any
         if "pdd.server.app" in sys.modules:
@@ -304,7 +310,10 @@ def test_app_state_initialization(app_module_with_mocks, mock_project_root, mock
     assert isinstance(state.uptime_seconds, float)
 
     mock_managers["PathValidator"].assert_called_once_with(state.project_root)
-    mock_managers["JobManager"].assert_called_once_with(max_concurrent=3)
+    # JobManager is called with max_concurrent and project_root
+    mock_managers["JobManager"].assert_called_once_with(
+        max_concurrent=3, project_root=state.project_root
+    )
     mock_managers["ConnectionManager"].assert_called_once()
 
 
