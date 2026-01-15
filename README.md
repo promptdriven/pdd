@@ -1490,6 +1490,7 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0).
 - `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
 - `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
+- `--force`: Override the branch mismatch safety check. By default, the command aborts if the current git branch doesn't match the expected branch from the issue (to prevent accidentally modifying the wrong codebase).
 
 #### Manual Mode Options
 - `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. **Warning: If multiple `UNIT_TEST_FILES` are provided along with this option, only the fixed content of the last processed test file will be saved to this location, overwriting previous results. For individual fixed files, omit this option.**

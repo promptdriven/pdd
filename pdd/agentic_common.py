@@ -62,6 +62,20 @@ CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
 # Alias for backward compatibility
 STEP_TIMEOUTS: Dict[int, float] = BUG_STEP_TIMEOUTS
 
+# Per-step timeouts for agentic e2e fix orchestrator (Issue #295)
+# This workflow fixes bugs from GitHub issues across multiple dev units.
+E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 340.0,   # Run unit tests from issue, pdd fix failures
+    2: 240.0,   # Run e2e tests, check completion (early exit)
+    3: 340.0,   # Root cause analysis (code vs test vs both)
+    4: 340.0,   # Fix e2e tests if needed
+    5: 340.0,   # Identify dev units involved in failures
+    6: 600.0,   # Create/append unit tests for dev units (Complex)
+    7: 600.0,   # Verify unit tests detect bugs (Complex)
+    8: 1000.0,  # Run pdd fix on failing dev units (Most Complex - multiple LLM calls)
+    9: 240.0,   # Final verification, loop control
+}
+
 # Issue #261: False positive detection
 # Minimum output length to consider a response as legitimate work
 # Responses shorter than this with $0.00 cost are likely false positives

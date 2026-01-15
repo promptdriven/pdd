@@ -113,7 +113,7 @@ All bugs fixed successfully in {cycle_number} cycle(s).
 {explanation_of_remaining_failures}
 
 ---
-*Starting Cycle {cycle_number + 1}*
+*Starting Cycle {next_cycle}*
 ```
 
 **If max cycles reached:**
