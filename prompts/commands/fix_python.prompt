@@ -36,7 +36,7 @@
   <pdd.fix_main><include>context/fix_main_example.py</include></pdd.fix_main>
   </fix_main_example>
   <run_agentic_e2e_fix_example>
-  <pdd.agentic_e2e_fix><include>context/agentic_e2e_fix_orchestrator_example.py</include></pdd.agentic_e2e_fix>
+  <pdd.agentic_e2e_fix><include>context/agentic_e2e_fix_example.py</include></pdd.agentic_e2e_fix>
   </run_agentic_e2e_fix_example>
   <track_cost_example>
   <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>

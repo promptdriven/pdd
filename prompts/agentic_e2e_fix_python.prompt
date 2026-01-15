@@ -17,8 +17,9 @@ CLI entry point for the agentic e2e fix workflow. Fetches a GitHub issue (typica
 5. Fetch issue content via `gh api repos/{owner}/{repo}/issues/{number}` (requires `gh` CLI)
 6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
 7. Fetch comments via `gh api {comments_url}` to get full context (contains test file paths from `pdd bug`)
-8. Call orchestrator: `run_agentic_e2e_fix_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, timeout_adder=timeout_adder, max_cycles=max_cycles, resume=resume, ...)`
-9. Return aggregated results from orchestrator
+8. Get current working directory: `cwd = Path.cwd()`
+9. Call orchestrator: `run_agentic_e2e_fix_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, cwd=cwd, timeout_adder=timeout_adder, max_cycles=max_cycles, resume=resume, verbose=verbose, quiet=quiet)`
+10. Return aggregated results from orchestrator
 
 % CLI Options
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0)

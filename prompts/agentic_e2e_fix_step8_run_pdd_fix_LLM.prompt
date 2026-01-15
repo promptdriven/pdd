@@ -52,7 +52,10 @@ You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `
 
 1. **Run pdd fix for each failing dev unit**
    - For each dev unit from Step 5 (DEV_UNITS_IDENTIFIED):
-   - Execute: `pdd fix {dev_unit_name}`
+   - Execute pdd fix in manual mode:
+     ```bash
+     pdd fix --manual prompts/{dev_unit}_python.prompt pdd/{dev_unit}.py tests/test_{dev_unit}.py /dev/null --loop
+     ```
    - Wait for completion before starting next
    - Capture output from each run
 
