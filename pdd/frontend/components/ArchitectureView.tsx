@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions, ArchitectureValidationResult } from '../api';
+import { api, ArchitectureModule, PromptInfo, PromptGenerationResult, GenerationGlobalOptions, ArchitectureValidationResult, ArchitectureSyncResult } from '../api';
 import DependencyViewer from './DependencyViewer';
 import FileBrowser from './FileBrowser';
 import GenerationProgressModal from './GenerationProgressModal';
@@ -7,8 +7,10 @@ import PromptOrderModal from './PromptOrderModal';
 import GraphToolbar from './GraphToolbar';
 import ModuleEditModal from './ModuleEditModal';
 import AddModuleModal from './AddModuleModal';
+import SyncFromPromptModal from './SyncFromPromptModal';
 import { useArchitectureHistory } from '../hooks/useArchitectureHistory';
-import { GLOBAL_DEFAULTS } from '../constants';
+import { GLOBAL_DEFAULTS, GLOBAL_OPTIONS } from '../constants';
+import { GlobalOption, CommandOption } from '../types';
 
 interface ArchitectureViewProps {
   serverConnected: boolean;
@@ -21,6 +23,98 @@ interface ArchitectureViewProps {
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
+
+// Helper to format option names for display
+function formatOptionName(name: string): string {
+  return name
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// Individual option input component - matches PromptSpace styling
+const OptionInput: React.FC<{
+  option: CommandOption | GlobalOption;
+  value: any;
+  onChange: (value: any) => void;
+  compact?: boolean;
+}> = ({ option, value, onChange, compact = false }) => {
+  const inputId = `arch-option-${option.name}`;
+
+  if (option.type === 'checkbox') {
+    return (
+      <label htmlFor={inputId} className={`flex items-start gap-3 ${compact ? 'p-2' : 'p-3'} rounded-xl bg-surface-800/30 hover:bg-surface-800/50 transition-colors cursor-pointer group`}>
+        <input
+          type="checkbox"
+          id={inputId}
+          checked={!!value}
+          onChange={(e) => onChange(e.target.checked)}
+          className="w-4 h-4 mt-0.5 rounded bg-surface-700 border-surface-600 text-accent-500 focus:ring-accent-500 focus:ring-offset-surface-800"
+        />
+        <div className="flex-1 min-w-0">
+          <div className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-white group-hover:text-accent-300 transition-colors`}>{formatOptionName(option.name)}</div>
+          <div className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400 mt-0.5`}>{option.description}</div>
+        </div>
+      </label>
+    );
+  }
+
+  if (option.type === 'range') {
+    const min = option.min ?? 0;
+    const max = option.max ?? 1;
+    const step = option.step ?? 0.1;
+    const displayValue = value ?? option.defaultValue ?? min;
+
+    return (
+      <div className={compact ? 'space-y-1.5' : 'space-y-2'}>
+        <div className="flex items-center justify-between">
+          <label htmlFor={inputId} className={`${compact ? 'text-xs' : 'text-sm'} font-medium text-white`}>
+            {formatOptionName(option.name)}
+          </label>
+          <span className={`${compact ? 'text-xs' : 'text-sm'} font-mono text-accent-400 bg-accent-500/10 px-2 py-0.5 rounded-lg`}>
+            {typeof displayValue === 'number' ? displayValue.toFixed(2) : displayValue}
+          </span>
+        </div>
+        <p className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400`}>{option.description}</p>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-surface-500 w-6 text-right">{min}</span>
+          <input
+            type="range"
+            id={inputId}
+            min={min}
+            max={max}
+            step={step}
+            value={displayValue}
+            onChange={(e) => onChange(parseFloat(e.target.value))}
+            className="flex-1 h-2 bg-surface-700 rounded-full appearance-none cursor-pointer accent-accent-500
+              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-500
+              [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:shadow-accent-500/30
+              [&::-webkit-slider-thumb]:hover:bg-accent-400 [&::-webkit-slider-thumb]:transition-colors"
+          />
+          <span className="text-[10px] text-surface-500 w-6">{max}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <label htmlFor={inputId} className={`block ${compact ? 'text-xs' : 'text-sm'} font-medium text-white mb-1.5`}>
+        {formatOptionName(option.name)}
+      </label>
+      <p className={`${compact ? 'text-[10px]' : 'text-xs'} text-surface-400 mb-2`}>{option.description}</p>
+      <input
+        type={option.type === 'number' ? 'number' : 'text'}
+        id={inputId}
+        value={value || ''}
+        onChange={(e) => onChange(option.type === 'number' ? (e.target.value ? Number(e.target.value) : '') : e.target.value)}
+        placeholder={option.placeholder}
+        className="w-full px-3 py-2.5 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all"
+      />
+    </div>
+  );
+};
 
 const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   serverConnected,
@@ -66,8 +160,12 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [globalOptions, setGlobalOptions] = useState<GenerationGlobalOptions>({
     strength: GLOBAL_DEFAULTS.strength,
+    temperature: GLOBAL_DEFAULTS.temperature,
+    time: GLOBAL_DEFAULTS.time,
     verbose: GLOBAL_DEFAULTS.verbose,
+    quiet: GLOBAL_DEFAULTS.quiet,
     force: GLOBAL_DEFAULTS.force,
+    local: GLOBAL_DEFAULTS.local,
   });
 
   // Cancel ref for batch generation
@@ -75,6 +173,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
   // Sidebar collapsed state
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Section transition state for smooth view switching
+  const [isSectionTransitioning, setIsSectionTransitioning] = useState(false);
 
   // Existing prompts state - track which prompts already exist with their file info
   const [existingPrompts, setExistingPrompts] = useState<Set<string>>(new Set());
@@ -89,6 +190,14 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [validationResult, setValidationResult] = useState<ArchitectureValidationResult | null>(null);
   const [highlightedModules, setHighlightedModules] = useState<Set<string>>(new Set());
 
+  // Mobile detection state
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  // Sync from prompts state
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<ArchitectureSyncResult | null>(null);
+
   // Architecture history hook for undo/redo
   const {
     architecture: editableArchitecture,
@@ -98,6 +207,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     deleteModule,
     addDependency,
     removeDependency,
+    updatePositions,
     undo,
     redo,
     canUndo,
@@ -112,6 +222,13 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       setOriginal(architecture);
     }
   }, [architecture, setOriginal]);
+
+  // Mobile detection useEffect
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Display architecture: use editable version if in edit mode
   const displayArchitecture = editMode ? editableArchitecture : architecture;
@@ -381,6 +498,49 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     await loadExistingPrompts();
   }, [loadExistingPrompts]);
 
+  // ==================== Sync from Prompts Handlers ====================
+
+  // Open sync modal
+  const handleOpenSyncModal = useCallback(() => {
+    setSyncResult(null);
+    setShowSyncModal(true);
+  }, []);
+
+  // Perform sync from prompts
+  const handleSync = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      const result = await api.syncArchitectureFromPrompts({ dry_run: false });
+      setSyncResult(result);
+
+      // If sync succeeded and validation passed, reload architecture
+      if (result.success && result.validation.valid) {
+        const modules = await api.getArchitecture();
+        setArchitecture(modules);
+        // Refresh existing prompts
+        await loadExistingPrompts();
+      }
+    } catch (e: any) {
+      console.error('Sync failed:', e);
+      setSyncResult({
+        success: false,
+        updated_count: 0,
+        skipped_count: 0,
+        results: [],
+        validation: { valid: true, errors: [], warnings: [] },
+        errors: [e.message || 'Unexpected error during sync'],
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [loadExistingPrompts]);
+
+  // Close sync modal
+  const handleCloseSyncModal = useCallback(() => {
+    setShowSyncModal(false);
+    setSyncResult(null);
+  }, []);
+
   // ==================== Edit Mode Handlers ====================
 
   // Toggle edit mode
@@ -435,6 +595,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const handleDependencyRemove = useCallback((targetFilename: string, sourceFilename: string) => {
     removeDependency(targetFilename, sourceFilename);
   }, [removeDependency]);
+
+  // Handle positions change (from node drag - updates all positions at once)
+  const handlePositionsChange = useCallback((positions: Map<string, { x: number; y: number }>) => {
+    updatePositions(positions);
+  }, [updatePositions]);
 
   // Validate and save architecture
   const handleSaveArchitecture = useCallback(async () => {
@@ -722,6 +887,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                   </div>
                 )}
                 <textarea
+                  key={prdPath || 'prd-manual'}
                   value={prdContent}
                   onChange={(e) => {
                     setPrdContent(e.target.value);
@@ -735,16 +901,24 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
               {/* Tech Stack Section (Collapsible) */}
               <div className="border-t border-surface-700/50">
                 <button
-                  onClick={() => setShowTechStack(!showTechStack)}
+                  onClick={() => {
+                    if (isSectionTransitioning) return;
+                    setIsSectionTransitioning(true);
+                    // Small delay for smooth transition
+                    requestAnimationFrame(() => {
+                      setShowTechStack(!showTechStack);
+                      setTimeout(() => setIsSectionTransitioning(false), 150);
+                    });
+                  }}
                   className="w-full p-2 flex items-center justify-between text-left hover:bg-surface-800/30 transition-colors"
                 >
                   <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Tech Stack (optional)</span>
-                  <svg className={`w-4 h-4 text-surface-400 transition-transform ${showTechStack ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className={`w-4 h-4 text-surface-400 transition-transform duration-200 ${showTechStack ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
                 {showTechStack && (
-                  <div className="border-t border-surface-700/30">
+                  <div className={`border-t border-surface-700/30 transition-opacity duration-150 ${isSectionTransitioning ? 'opacity-50' : 'opacity-100'}`}>
                     <div className="p-2 flex items-center justify-end">
                       <button
                         onClick={() => setShowFileBrowser('techStack')}
@@ -762,6 +936,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                       </div>
                     )}
                     <textarea
+                      key={techStackPath || 'tech-manual'}
                       value={techStackContent}
                       onChange={(e) => {
                         setTechStackContent(e.target.value);
@@ -777,65 +952,60 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
               {/* Advanced Options (Collapsible) */}
               <div className="border-t border-surface-700/50">
                 <button
-                  onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                  onClick={() => {
+                    if (isSectionTransitioning) return;
+                    setIsSectionTransitioning(true);
+                    requestAnimationFrame(() => {
+                      setShowAdvancedOptions(!showAdvancedOptions);
+                      setTimeout(() => setIsSectionTransitioning(false), 150);
+                    });
+                  }}
                   className="w-full p-2 flex items-center justify-between text-left hover:bg-surface-800/30 transition-colors"
                 >
-                  <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Model Options</span>
-                  <svg className={`w-4 h-4 text-surface-400 transition-transform ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">Advanced Options</span>
+                    {(globalOptions.strength !== GLOBAL_DEFAULTS.strength ||
+                      globalOptions.temperature !== GLOBAL_DEFAULTS.temperature ||
+                      globalOptions.time !== GLOBAL_DEFAULTS.time ||
+                      globalOptions.local ||
+                      globalOptions.verbose ||
+                      globalOptions.quiet ||
+                      globalOptions.force) && (
+                      <span className="w-2 h-2 rounded-full bg-accent-500 animate-pulse" title="Custom settings applied" />
+                    )}
+                  </div>
+                  <svg className={`w-4 h-4 text-surface-400 transition-transform duration-200 ${showAdvancedOptions ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
                 </button>
                 {showAdvancedOptions && (
-                  <div className="border-t border-surface-700/30 p-3 space-y-4">
-                    {/* Strength slider */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-medium text-surface-300">Strength</label>
-                        <span className="text-xs font-mono text-accent-400 bg-accent-500/10 px-2 py-0.5 rounded">
-                          {(globalOptions.strength ?? GLOBAL_DEFAULTS.strength).toFixed(2)}
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={1}
-                        step={0.05}
-                        value={globalOptions.strength ?? GLOBAL_DEFAULTS.strength}
-                        onChange={(e) => setGlobalOptions(prev => ({ ...prev, strength: parseFloat(e.target.value) }))}
-                        className="w-full h-2 bg-surface-700 rounded-full appearance-none cursor-pointer accent-accent-500"
-                      />
-                      <p className="text-[10px] text-surface-500">&lt;0.5 cheaper, 0.5 base, &gt;0.5 stronger</p>
+                  <div className={`border-t border-surface-700/30 p-3 space-y-3 transition-opacity duration-150 ${isSectionTransitioning ? 'opacity-50' : 'opacity-100'}`}>
+                    {/* Model Settings Group */}
+                    <div className="space-y-3 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
+                      <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Model Settings</div>
+                      {GLOBAL_OPTIONS.filter(opt => ['strength', 'temperature', 'time'].includes(opt.name)).map(opt => (
+                        <OptionInput
+                          key={opt.name}
+                          option={opt}
+                          value={globalOptions[opt.name as keyof GenerationGlobalOptions]}
+                          onChange={(val) => setGlobalOptions(prev => ({ ...prev, [opt.name]: val }))}
+                          compact
+                        />
+                      ))}
                     </div>
 
-                    {/* Checkbox options */}
-                    <div className="space-y-2">
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input
-                          type="checkbox"
-                          checked={globalOptions.local ?? false}
-                          onChange={(e) => setGlobalOptions(prev => ({ ...prev, local: e.target.checked }))}
-                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
+                    {/* Execution Options Group */}
+                    <div className="space-y-1 p-3 rounded-xl bg-surface-800/20 border border-surface-700/30">
+                      <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider mb-2">Execution Options</div>
+                      {GLOBAL_OPTIONS.filter(opt => ['local', 'verbose', 'quiet', 'force'].includes(opt.name)).map(opt => (
+                        <OptionInput
+                          key={opt.name}
+                          option={opt}
+                          value={globalOptions[opt.name as keyof GenerationGlobalOptions]}
+                          onChange={(val) => setGlobalOptions(prev => ({ ...prev, [opt.name]: val }))}
+                          compact
                         />
-                        <span className="text-xs text-surface-300 group-hover:text-white">Run locally (not cloud)</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input
-                          type="checkbox"
-                          checked={globalOptions.verbose ?? false}
-                          onChange={(e) => setGlobalOptions(prev => ({ ...prev, verbose: e.target.checked }))}
-                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
-                        />
-                        <span className="text-xs text-surface-300 group-hover:text-white">Verbose output</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input
-                          type="checkbox"
-                          checked={globalOptions.force ?? false}
-                          onChange={(e) => setGlobalOptions(prev => ({ ...prev, force: e.target.checked }))}
-                          className="w-4 h-4 rounded border-surface-600 bg-surface-800 text-accent-500 focus:ring-accent-500"
-                        />
-                        <span className="text-xs text-surface-300 group-hover:text-white">Force (skip prompts)</span>
-                      </label>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -930,6 +1100,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
             canUndo={canUndo}
             canRedo={canRedo}
             isSaving={isSaving}
+            onSyncFromPrompts={handleOpenSyncModal}
           />
         )}
 
@@ -954,23 +1125,85 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 
         <div className="flex-1 min-h-0">
           {mode === 'graph' && displayArchitecture ? (
-            <DependencyViewer
-              architecture={displayArchitecture}
-              prdContent={prdContent}
-              appName={appName}
-              onRegenerate={handleRegenerate}
-              onModuleClick={handleModuleClick}
-              onGeneratePrompts={handleGeneratePrompts}
-              isGeneratingPrompts={isGeneratingPrompts}
-              existingPrompts={existingPrompts}
-              promptsInfo={promptsInfo}
-              editMode={editMode}
-              onModuleEdit={handleModuleEdit}
-              onModuleDelete={handleModuleDelete}
-              onDependencyAdd={handleDependencyAdd}
-              onDependencyRemove={handleDependencyRemove}
-              highlightedModules={highlightedModules}
-            />
+            isMobile ? (
+              // Mobile fallback - simplified list view
+              <div className="glass rounded-xl border border-surface-700/50 h-full overflow-y-auto p-4">
+                <div className="text-center mb-6">
+                  <svg className="w-12 h-12 mx-auto mb-3 text-surface-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  <h3 className="text-white font-semibold mb-2">Architecture Graph</h3>
+                  <p className="text-sm text-surface-400 mb-4">
+                    The interactive architecture graph is best viewed on desktop devices (screen width &gt; 768px)
+                  </p>
+                  <div className="flex items-center justify-center gap-2 text-xs text-surface-500">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Module list shown below</span>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {displayArchitecture.map((module) => (
+                    <div
+                      key={module.filename}
+                      className="bg-surface-800/50 p-4 rounded-lg border border-surface-700/30 hover:border-surface-600/50 transition-colors"
+                      onClick={() => handleModuleClick(module)}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <div className="font-medium text-white text-sm flex-1">{module.filename}</div>
+                        {existingPrompts.has(`${module.filename.replace('.py', '')}.prompt`) && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-500/10 text-green-400 border border-green-500/20 flex-shrink-0">
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                            Prompt exists
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-surface-400 line-clamp-2 mb-3">{module.description}</p>
+                      {module.dependencies && module.dependencies.length > 0 && (
+                        <div className="flex items-center gap-1.5 text-xs text-surface-500">
+                          <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                          </svg>
+                          <span className="truncate">Depends on: {module.dependencies.join(', ')}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {!editMode && (
+                  <button
+                    onClick={() => handleGeneratePrompts()}
+                    disabled={isGeneratingPrompts}
+                    className="mt-6 w-full px-4 py-3 bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white rounded-xl font-medium transition-all duration-200 shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isGeneratingPrompts ? 'Generating Prompts...' : 'Generate All Prompts'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              // Desktop - full interactive graph
+              <DependencyViewer
+                architecture={displayArchitecture}
+                prdContent={prdContent}
+                appName={appName}
+                onRegenerate={handleRegenerate}
+                onModuleClick={handleModuleClick}
+                onGeneratePrompts={handleGeneratePrompts}
+                isGeneratingPrompts={isGeneratingPrompts}
+                existingPrompts={existingPrompts}
+                promptsInfo={promptsInfo}
+                editMode={editMode}
+                onModuleEdit={handleModuleEdit}
+                onModuleDelete={handleModuleDelete}
+                onDependencyAdd={handleDependencyAdd}
+                onDependencyRemove={handleDependencyRemove}
+                onPositionsChange={handlePositionsChange}
+                highlightedModules={highlightedModules}
+              />
+            )
           ) : (
             <div className="glass rounded-xl border border-surface-700/50 h-full flex items-center justify-center">
               <div className="text-center text-surface-400">
@@ -1000,6 +1233,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           isOpen={showOrderModal}
           modules={architecture}
           existingPrompts={existingPrompts}
+          globalOptions={globalOptions}
+          onGlobalOptionsChange={setGlobalOptions}
           onClose={() => setShowOrderModal(false)}
           onConfirm={handleConfirmGeneratePrompts}
         />
@@ -1035,6 +1270,15 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         existingModules={editableArchitecture}
         onAdd={handleAddModule}
         onClose={() => setShowAddModal(false)}
+      />
+
+      {/* Sync from Prompts Modal */}
+      <SyncFromPromptModal
+        isOpen={showSyncModal}
+        isSyncing={isSyncing}
+        result={syncResult}
+        onSync={handleSync}
+        onClose={handleCloseSyncModal}
       />
     </div>
   );

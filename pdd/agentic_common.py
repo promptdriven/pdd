@@ -244,6 +244,21 @@ def _provider_has_api_key(provider: str, model_data: Any | None) -> bool:
             # even without an API key
             return True
 
+    # For Google: Check for Vertex AI authentication via Application Default Credentials
+    # This supports GitHub Actions with Workload Identity Federation where:
+    # - GOOGLE_APPLICATION_CREDENTIALS is set by google-github-actions/auth
+    # - GOOGLE_GENAI_USE_VERTEXAI=true indicates Vertex AI mode (standard env var)
+    # - No API key is needed when using ADC
+    if provider == "google":
+        vertex_ai_mode = env.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true"
+        has_adc = bool(
+            env.get("GOOGLE_APPLICATION_CREDENTIALS")
+            or env.get("CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE")
+            or env.get("GOOGLE_GHA_CREDS_PATH")
+        )
+        if vertex_ai_mode and has_adc:
+            return True
+
     # Try to extract env var hints from model_data, if it looks like a DataFrame.
     inferred_env_vars: List[str] = []
     if model_data is not None:
