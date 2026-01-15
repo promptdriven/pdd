@@ -233,21 +233,24 @@ async def test_heartbeat_execution_logic(manager, mock_cloud_config, mock_httpx_
 async def test_heartbeat_error_handling(manager, mock_cloud_config, mock_httpx_client):
     """Test that heartbeat errors are logged but don't crash the loop."""
     manager.session_id = "sess-1"
-    
+
     # First call raises exception, second call works (simulated by stopping loop)
     mock_httpx_client.post.side_effect = Exception("Network blip")
-    
+
+    # Initialize the stop event before patching
+    manager._stop_event = asyncio.Event()
+
     # We want the loop to run once (fail) then stop.
     # We can set the stop event from within the side effect or just run one iteration logic.
-    
+
     # Let's just test the inner logic block manually to avoid infinite loops in tests
     # if we can't easily control the while loop.
     # Alternatively, we can patch `_stop_event.is_set` to return False once then True.
-    
+
     with patch.object(manager._stop_event, "is_set", side_effect=[False, True]):
         with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
              await manager._heartbeat_loop()
-    
+
     # Should have attempted post
     mock_httpx_client.post.assert_called()
 
@@ -258,41 +261,41 @@ async def test_deregister_success(manager, mock_cloud_config, mock_httpx_client)
     """Test successful deregistration."""
     manager.session_id = "sess-1"
     manager.start_heartbeat() # Start it so we can verify it stops
-    
+
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_httpx_client.request.return_value = mock_response
+    mock_httpx_client.post.return_value = mock_response
 
     await manager.deregister()
 
     assert manager.session_id is None
     assert manager._heartbeat_task is None # Should be stopped
-    
-    mock_httpx_client.request.assert_called_once()
-    args, kwargs = mock_httpx_client.request.call_args
-    assert args[0] == "DELETE"
-    assert args[1] == "https://api.pdd.dev/deregisterSession"
+
+    mock_httpx_client.post.assert_called_once()
+    args, kwargs = mock_httpx_client.post.call_args
+    assert args[0] == "https://api.pdd.dev/deregisterSession"
+    assert kwargs["json"]["sessionId"] == "sess-1"
 
 @pytest.mark.asyncio
 async def test_deregister_idempotent(manager, mock_cloud_config, mock_httpx_client):
     """Test deregister handles errors gracefully (idempotency)."""
     manager.session_id = "sess-1"
-    
+
     # Simulate API error
     mock_response = MagicMock()
     mock_response.status_code = 500
-    mock_httpx_client.request.return_value = mock_response
+    mock_httpx_client.post.return_value = mock_response
 
     # Should not raise exception
     await manager.deregister()
-    
+
     assert manager.session_id is None # Should still clear local ID
 
     # Test when session_id is already None
     manager.session_id = None
-    mock_httpx_client.request.reset_mock()
+    mock_httpx_client.post.reset_mock()
     await manager.deregister()
-    mock_httpx_client.request.assert_not_called()
+    mock_httpx_client.post.assert_not_called()
 
 # --- RemoteSessionManager List Sessions Tests ---
 
