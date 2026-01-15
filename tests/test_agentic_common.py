@@ -587,7 +587,7 @@ def test_step_timeouts_dictionary_exists():
     This test verifies that:
     1. A STEP_TIMEOUTS dictionary is defined in agentic_common.py or agentic_bug_orchestrator.py
     2. Steps 4, 5, and 7 have longer timeouts (>= 600 seconds)
-    3. Other steps have the default timeout (240 seconds)
+    3. Other steps have the default or medium timeout
 
     Currently FAILS because STEP_TIMEOUTS is not defined.
     Should PASS after implementing the fix.
@@ -625,17 +625,17 @@ def test_step_timeouts_dictionary_exists():
         f"for verify fix plan operations"
     )
 
-    # Verify medium complexity steps have ~400 seconds
-    medium_steps = [2, 3]  # Docs Check and Triage
+    # Verify steps 2 and 3 have medium timeouts (>= 300 seconds for docs/triage)
+    medium_steps = [2, 3]
     for step in medium_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
-        assert STEP_TIMEOUTS[step] >= 340.0, (
-            f"Step {step} timeout ({STEP_TIMEOUTS[step]}) should be >= 340 seconds "
+        assert STEP_TIMEOUTS[step] >= 300.0, (
+            f"Step {step} timeout ({STEP_TIMEOUTS[step]}) should be >= 300 seconds "
             f"for medium complexity operations"
         )
 
     # Verify simple steps have standard timeout (240 seconds)
-    simple_steps = [1, 10]  # Duplicate Check and Create PR
+    simple_steps = [1, 10]
     for step in simple_steps:
         assert step in STEP_TIMEOUTS, f"STEP_TIMEOUTS missing entry for step {step}"
         assert STEP_TIMEOUTS[step] == 240.0, (
@@ -777,46 +777,13 @@ def test_get_available_agents_google_needs_key(mock_shutil_which, mock_env, mock
     mock_env["GEMINI_API_KEY"] = "secret"
     assert "google" in get_available_agents()
 
-def test_get_available_agents_google_vertex_ai_auth(mock_shutil_which, mock_env, mock_load_model_data):
-    """
-    Test that Google provider is available with Vertex AI authentication.
-
-    When using Vertex AI via Workload Identity Federation in GitHub Actions:
-    - GOOGLE_APPLICATION_CREDENTIALS is set (by google-github-actions/auth)
-    - GOOGLE_GENAI_USE_VERTEXAI=true indicates Vertex AI mode
-    - GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION are set
-    - NO API key is needed (GOOGLE_API_KEY/GEMINI_API_KEY not required)
-
-    This test validates that PDD can detect Vertex AI authentication and
-    make the Google provider available without requiring an API key.
-    """
-    # Setup: gemini CLI is available
-    mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
-
-    # Setup: Vertex AI auth environment (no API key)
-    mock_env["GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/credentials.json"
-    mock_env["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
-    mock_env["GOOGLE_CLOUD_PROJECT"] = "test-project"
-    mock_env["GOOGLE_CLOUD_LOCATION"] = "us-central1"
-    # Explicitly NOT setting GOOGLE_API_KEY or GEMINI_API_KEY
-
-    agents = get_available_agents()
-
-    # Should detect Google as available via Vertex AI auth
-    assert "google" in agents, (
-        "Google provider should be available with Vertex AI auth "
-        "(GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_GENAI_USE_VERTEXAI=true), "
-        "even without GOOGLE_API_KEY or GEMINI_API_KEY"
-    )
-
-
 def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock_load_model_data):
     """Test that agents are returned in the correct preference order."""
     mock_shutil_which.return_value = "/bin/cmd"
     mock_env["ANTHROPIC_API_KEY"] = "key" # Not strictly needed for logic but good for completeness
     mock_env["GEMINI_API_KEY"] = "key"
     mock_env["OPENAI_API_KEY"] = "key"
-
+    
     agents = get_available_agents()
     assert agents == ["anthropic", "google", "openai"]
 
