@@ -62,10 +62,10 @@ while cycle < max_cycles:
     # Step 1: Run unit tests, pdd fix failures
     step1_output = run_step_1()
 
-    # Step 2: Run e2e tests
+    # Step 2: Run e2e tests (early exit check)
     step2_output = run_step_2()
     if "ALL_TESTS_PASS" in step2_output:
-        break  # Success! Exit outer loop
+        break  # Success! Exit outer loop early
 
     # Steps 3-8: Fix cycle
     step3_output = run_step_3()  # Root cause
@@ -75,15 +75,29 @@ while cycle < max_cycles:
     step7_output = run_step_7()  # Verify tests
     step8_output = run_step_8()  # Run pdd fix
 
-    # Step 9: Final verification
+    # Step 9: Final verification and loop control
     step9_output = run_step_9()
 
     # Save cycle state
     save_state(cycle, step_outputs)
 
-if cycle >= max_cycles:
+    # Check Step 9 output for loop control tokens
+    if "ALL_TESTS_PASS" in step9_output:
+        break  # Success! All tests pass after fixes
+    elif "MAX_CYCLES_REACHED" in step9_output:
+        # Step 9 detected we're at max cycles - let loop exit naturally
+        pass
+    # "CONTINUE_CYCLE" means continue to next iteration (default behavior)
+
+if cycle >= max_cycles and "ALL_TESTS_PASS" not in step9_output:
     return (False, f"Max cycles ({max_cycles}) reached without all tests passing", ...)
 ```
+
+% Loop Control Tokens
+Step 2 and Step 9 output specific tokens to control the outer loop:
+- `ALL_TESTS_PASS`: All tests pass, exit loop successfully (checked in both Step 2 and Step 9)
+- `CONTINUE_CYCLE`: Some tests still failing, continue to next cycle (Step 9 only)
+- `MAX_CYCLES_REACHED`: Step 9 detected we're at max cycles (Step 9 only, informational)
 
 % Context Accumulation
 All steps receive common variables: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles
@@ -98,6 +112,21 @@ Additionally:
 - Step 7 receives: issue_content, step1_output through step6_output
 - Step 8 receives: issue_content, step1_output through step7_output, failing_dev_units
 - Step 9 receives: issue_content, step1_output through step8_output
+
+% Derived Variables (parsed from step outputs)
+The orchestrator must parse certain step outputs to extract machine-readable data:
+
+1. **dev_units_identified** (from Step 5):
+   - Parse `DEV_UNITS_IDENTIFIED: name1, name2, ...` line from step5_output
+   - Pass to Step 6 and Step 8 as comma-separated string
+
+2. **failing_dev_units** (for Step 8):
+   - Same as dev_units_identified, or filtered based on Step 7's verification results
+   - If Step 7 shows some tests already pass, exclude those dev units
+
+3. **changed_files** (accumulated throughout):
+   - Parse `FILES_CREATED: path1, path2` and `FILES_MODIFIED: path1, path2` lines from step outputs
+   - Accumulate across steps 4, 6, 7, 8 into a deduplicated list
 
 % State Persistence
 1. **State file location**: `.pdd/e2e-fix-state/issue-{issue_number}.json`
@@ -120,7 +149,8 @@ Additionally:
      },
      "total_cost": 0.0567,
      "model_used": "anthropic",
-     "changed_files": ["tests/test_a.py", "pdd/module_a.py"]
+     "changed_files": ["tests/test_a.py", "pdd/module_a.py"],
+     "last_saved_at": "2025-01-14T10:30:00Z"
    }
    ```
 
@@ -133,8 +163,16 @@ Additionally:
 4. **Resume logic**:
    - If `resume=True` and state exists: Continue from saved cycle and step
    - If `resume=False`: Start fresh, clear any existing state
-   - On successful completion: Clear state file
+   - On successful completion (`ALL_TESTS_PASS`): Clear state file
    - On max cycles reached: State remains for inspection
+   - On user interrupt (KeyboardInterrupt): Save current state before exiting
+   - On fatal error: State remains for debugging
+
+5. **State staleness detection** (when resuming):
+   - Before resuming, verify that key files from state still exist
+   - Check if any `changed_files` in state have been modified since state was saved (compare mtimes)
+   - If staleness detected, print warning: `"[yellow]Warning: Codebase may have changed since last run. Consider --no-resume for fresh start.[/yellow]"`
+   - Proceed with resume unless files are missing (then warn and start fresh)
 
 % Console Output
 1. **Header** (at start):
