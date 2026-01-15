@@ -16,6 +16,12 @@ from .get_run_command import get_run_command_for_file  # Gets run command for a 
 from .llm_invoke import _load_model_data          # Loads provider/model metadata from llm_model.csv
 from .load_prompt_template import load_prompt_template  # Loads prompt templates by name
 from .agentic_langtest import default_verify_cmd_for    # Provides a default verify command (per language)
+from .agentic_common import (                     # Shared CLI discovery utilities
+    _find_cli_binary,
+    _load_agentic_config,
+    _get_cli_diagnostic_info,
+    _COMMON_CLI_PATHS,
+)
 
 console = Console()
 
@@ -150,6 +156,7 @@ def find_llm_csv_path() -> Optional[Path]:
     if project_path.is_file():
         return project_path
     return None
+
 
 def _print_head(label: str, text: str, max_lines: int = _MAX_LOG_LINES) -> None:
     """
@@ -391,14 +398,20 @@ def _run_cli_args_openai(args: List[str], cwd: Path, timeout: int) -> subprocess
         env=_sanitized_env_for_openai(),
     )
 
-def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str, cli_path: Optional[str] = None) -> subprocess.CompletedProcess:
     """
     Try several OpenAI CLI variants to improve robustness.
     Returns the first attempt that yields output or succeeds.
 
     NOTE: Agents need write access to modify files in agentic mode,
     so we do not restrict the sandbox.
+
+    Args:
+        cli_path: Full path to the codex binary. If None, falls back to "codex".
     """
+    # Use the discovered CLI path, or fall back to bare command name
+    codex_cmd = cli_path or "codex"
+
     # Write prompt to a unique temp file to avoid race conditions in concurrent execution
     with tempfile.NamedTemporaryFile(
         mode='w',
@@ -420,8 +433,8 @@ def _run_openai_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         )
 
         variants = [
-            ["codex", "exec", agentic_instruction],
-            ["codex", "exec", "--skip-git-repo-check", agentic_instruction],
+            [codex_cmd, "exec", agentic_instruction],
+            [codex_cmd, "exec", "--skip-git-repo-check", agentic_instruction],
         ]
         per_attempt = 300
         last = None
@@ -452,13 +465,19 @@ def _run_cli_args_anthropic(args: List[str], cwd: Path, timeout: int) -> subproc
         env=_sanitized_env_for_anthropic(use_cli_auth=True),
     )
 
-def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str, cli_path: Optional[str] = None) -> subprocess.CompletedProcess:
     """
     Anthropic CLI runner in agentic mode (without -p flag).
 
     NOTE: We do NOT use -p (print mode) because it prevents file tool access.
     Instead, we write the prompt to a file and let Claude read it in agentic mode.
+
+    Args:
+        cli_path: Full path to the claude binary. If None, falls back to "claude".
     """
+    # Use the discovered CLI path, or fall back to bare command name
+    claude_cmd = cli_path or "claude"
+
     # Write prompt to a unique temp file to avoid race conditions in concurrent execution
     with tempfile.NamedTemporaryFile(
         mode='w',
@@ -480,7 +499,7 @@ def _run_anthropic_variants(prompt_text: str, cwd: Path, total_timeout: int, lab
         )
 
         variants = [
-            ["claude", "--dangerously-skip-permissions", agentic_instruction],
+            [claude_cmd, "--dangerously-skip-permissions", agentic_instruction],
         ]
         per_attempt = 300
         last: Optional[subprocess.CompletedProcess] = None
@@ -517,13 +536,19 @@ def _run_cli_args_google(args: List[str], cwd: Path, timeout: int) -> subprocess
         env=_sanitized_env_common(),
     )
 
-def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str) -> subprocess.CompletedProcess:
+def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label: str, cli_path: Optional[str] = None) -> subprocess.CompletedProcess:
     """
     Google CLI runner in agentic mode (without -p flag).
 
     NOTE: We do NOT use -p (pipe mode) because it may prevent tool access.
     Instead, we write the prompt to a file and let Gemini read it in agentic mode.
+
+    Args:
+        cli_path: Full path to the gemini binary. If None, falls back to "gemini".
     """
+    # Use the discovered CLI path, or fall back to bare command name
+    gemini_cmd = cli_path or "gemini"
+
     # Write prompt to a unique temp file to avoid race conditions in concurrent execution
     with tempfile.NamedTemporaryFile(
         mode='w',
@@ -545,7 +570,7 @@ def _run_google_variants(prompt_text: str, cwd: Path, total_timeout: int, label:
         )
 
         variants = [
-            ["gemini", agentic_instruction],
+            [gemini_cmd, agentic_instruction],
         ]
         per_attempt = 300
         last = None
@@ -788,12 +813,16 @@ def _try_harvest_then_verify(
     verify_cmd: Optional[str],
     verify_enabled: bool,
     changed_files: List[str],
+    cli_path: Optional[str] = None,
 ) -> bool:
     """
     Strict, fast path:
     - Ask agent to ONLY emit corrected file blocks (and optionally TESTCMD).
     - Apply emitted results deterministically.
     - Verify locally.
+
+    Args:
+        cli_path: Full path to the CLI binary. If None, falls back to bare command name.
     """
     harvest_prompt_template = load_prompt_template("agentic_fix_harvest_only_LLM")
     if not harvest_prompt_template:
@@ -822,11 +851,11 @@ def _try_harvest_then_verify(
     try:
         # Provider-specific variant runners with shorter time budgets
         if provider == "openai":
-            res = _run_openai_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest")
+            res = _run_openai_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest", cli_path=cli_path)
         elif provider == "anthropic":
-            res = _run_anthropic_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest")
+            res = _run_anthropic_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest", cli_path=cli_path)
         elif provider == "google":
-            res = _run_google_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest")
+            res = _run_google_variants(harvest_instr, cwd, max(60, _AGENT_CALL_TIMEOUT // 3), "harvest", cli_path=cli_path)
         else:
             res = _run_cli(get_agent_command(provider, harvest_file), cwd, max(60, _AGENT_CALL_TIMEOUT // 2))
     except subprocess.TimeoutExpired:
@@ -979,7 +1008,8 @@ def run_agentic_fix(
             if not api_key_name:
                 continue
             # Check CLI availability first (subscription auth), then API key
-            has_cli_auth = provider == "anthropic" and shutil.which("claude")
+            # Use _find_cli_binary for robust CLI discovery (searches PATH + common locations + .pddrc)
+            has_cli_auth = provider == "anthropic" and _find_cli_binary("claude")
             has_api_key = os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY"))
             if has_cli_auth or has_api_key:
                 if has_cli_auth:
@@ -1143,16 +1173,19 @@ def run_agentic_fix(
             used_model = f"agentic-{provider}"
             cmd = get_agent_command(provider, instruction_file)
             binary = (cmd[0] if cmd else {"anthropic": "claude", "google": "gemini", "openai": "codex"}.get(provider, ""))
-            cli_path = shutil.which(binary) or "NOT-IN-PATH"
+            # Use _find_cli_binary for robust CLI discovery (searches PATH + common locations + .pddrc)
+            cli_path = _find_cli_binary(binary) or "NOT-IN-PATH"
             _info(f"[cyan]Attempting fix with {provider.capitalize()} agent...[/cyan]")
             if _IS_VERBOSE:
                 _verbose(f"[cyan]CLI binary: {binary} -> {cli_path}[/cyan]")
                 if cmd:
                     _verbose(f"Executing (cwd={working_dir}): {' '.join(cmd)}")
 
-            # Skip if the provider CLI is not available on PATH
+            # Skip if the provider CLI is not available anywhere
             if cli_path == "NOT-IN-PATH":
-                _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found in PATH).[/yellow]")
+                _info(f"[yellow]Skipping {provider.capitalize()} (CLI '{binary}' not found).[/yellow]")
+                if _IS_VERBOSE:
+                    _verbose(f"[yellow]{_get_cli_diagnostic_info(binary)}[/yellow]")
                 continue
 
             # PRIMARY-FIRST: Try the full agent approach first (allows exploration, debugging)
@@ -1164,11 +1197,11 @@ def run_agentic_fix(
             
             try:
                 if provider == "openai":
-                    res = _run_openai_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_openai_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary", cli_path=cli_path)
                 elif provider == "anthropic":
-                    res = _run_anthropic_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_anthropic_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary", cli_path=cli_path)
                 elif provider == "google":
-                    res = _run_google_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary")
+                    res = _run_google_variants(primary_instr, working_dir, max(30, _AGENT_CALL_TIMEOUT // 2), "primary", cli_path=cli_path)
                 else:
                     res = _run_cli(cmd, working_dir, _AGENT_CALL_TIMEOUT)
             except subprocess.TimeoutExpired:
@@ -1248,6 +1281,7 @@ def run_agentic_fix(
                         verify_cmd=verify_cmd,
                         verify_enabled=verify_enabled,
                         changed_files=changed_files,
+                        cli_path=cli_path,
                     ):
                         try:
                             instruction_file.unlink()

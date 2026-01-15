@@ -24,6 +24,31 @@ CLI_COMMANDS: Dict[str, str] = {
     "openai": "codex",
 }
 
+# Common installation paths for CLI tools (platform-specific)
+# Used as fallback when shutil.which() fails to find the binary
+_COMMON_CLI_PATHS: Dict[str, List[Path]] = {
+    "claude": [
+        Path.home() / ".npm-global" / "bin" / "claude",
+        Path.home() / ".local" / "bin" / "claude",
+        Path.home() / "bin" / "claude",
+        Path("/usr/local/bin/claude"),
+        Path("/opt/homebrew/bin/claude"),
+        Path("/home/linuxbrew/.linuxbrew/bin/claude"),
+        Path.home() / ".nvm" / "versions" / "node",  # Will be glob-expanded for nvm
+    ],
+    "codex": [
+        Path.home() / ".npm-global" / "bin" / "codex",
+        Path.home() / ".local" / "bin" / "codex",
+        Path("/usr/local/bin/codex"),
+        Path("/opt/homebrew/bin/codex"),
+    ],
+    "gemini": [
+        Path.home() / ".local" / "bin" / "gemini",
+        Path("/usr/local/bin/gemini"),
+        Path("/opt/homebrew/bin/gemini"),
+    ],
+}
+
 # Timeouts
 DEFAULT_TIMEOUT_SECONDS: float = 240.0
 TIMEOUT_ENV_VAR: str = "PDD_AGENTIC_TIMEOUT"
@@ -203,6 +228,143 @@ def log_error(message: str, *, verbose: bool, quiet: bool, label: str = "") -> N
 
 
 # ---------------------------------------------------------------------------
+# CLI Discovery (addresses GitHub issue: Claude not found during agentic fallback)
+# ---------------------------------------------------------------------------
+
+
+def _load_agentic_config() -> Dict[str, Any]:
+    """
+    Load agentic CLI configuration from .pddrc.
+
+    Looks for an 'agentic' section in .pddrc with CLI path overrides:
+
+        agentic:
+          claude_path: /path/to/claude
+          codex_path: /path/to/codex
+          gemini_path: /path/to/gemini
+
+    Returns empty dict if no config found.
+    """
+    import yaml
+
+    # Search for .pddrc in current dir and parent dirs
+    search_path = Path.cwd()
+    pddrc_path: Optional[Path] = None
+    for _ in range(10):  # Limit search depth
+        candidate = search_path / ".pddrc"
+        if candidate.is_file():
+            pddrc_path = candidate
+            break
+        parent = search_path.parent
+        if parent == search_path:
+            break
+        search_path = parent
+
+    # Also check home directory
+    if not pddrc_path:
+        home_pddrc = Path.home() / ".pddrc"
+        if home_pddrc.is_file():
+            pddrc_path = home_pddrc
+
+    if not pddrc_path:
+        return {}
+
+    try:
+        with open(pddrc_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        if isinstance(config, dict):
+            return config.get("agentic", {}) or {}
+    except Exception:
+        pass
+
+    return {}
+
+
+def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """
+    Find a CLI binary using multiple strategies.
+
+    This function addresses a common issue where CLI tools like 'claude' are
+    installed and runnable from the user's shell, but not found by shutil.which()
+    when pdd runs. This happens because shell profiles (.bashrc, .zshrc) may add
+    directories to PATH that aren't available in the pdd process environment.
+
+    Strategies (in order):
+        1. Check for explicit path override in .pddrc agentic config
+        2. Try shutil.which() for standard PATH lookup
+        3. Search common installation directories
+
+    Args:
+        name: CLI binary name (e.g., "claude", "codex", "gemini")
+        config: Optional pre-loaded agentic config dict (avoids repeated file reads)
+
+    Returns:
+        Full path to the binary if found, None otherwise
+    """
+    # Strategy 1: Check .pddrc config override
+    if config is None:
+        config = _load_agentic_config()
+
+    config_key = f"{name}_path"
+    if config_key in config:
+        custom_path = Path(config[config_key])
+        if custom_path.exists() and os.access(custom_path, os.X_OK):
+            return str(custom_path)
+
+    # Strategy 2: Standard PATH lookup
+    path_result = shutil.which(name)
+    if path_result:
+        return path_result
+
+    # Strategy 3: Search common installation directories
+    common_paths = _COMMON_CLI_PATHS.get(name, [])
+    for candidate in common_paths:
+        # Handle nvm directory (needs glob for version subdirs)
+        if "nvm" in str(candidate) and candidate.name == "node":
+            try:
+                for version_dir in candidate.glob("*/bin"):
+                    nvm_binary = version_dir / name
+                    if nvm_binary.exists() and os.access(nvm_binary, os.X_OK):
+                        return str(nvm_binary)
+            except Exception:
+                continue
+        elif candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+
+    return None
+
+
+def _get_cli_diagnostic_info(name: str) -> str:
+    """
+    Generate diagnostic info to help users troubleshoot CLI discovery issues.
+
+    Returns a formatted string with troubleshooting tips including:
+    - How to verify installation
+    - Current PATH entries
+    - How to configure explicit path in .pddrc
+    """
+    lines = [
+        f"CLI '{name}' not found. Troubleshooting tips:",
+        f"  1. Verify installation: Run 'which {name}' in your terminal",
+        f"  2. Check PATH: Current PATH includes:",
+    ]
+
+    # Show relevant PATH entries (first 5)
+    path_env = os.environ.get("PATH", "")
+    path_entries = path_env.split(os.pathsep)[:5]
+    for entry in path_entries:
+        lines.append(f"       - {entry}")
+    if len(path_env.split(os.pathsep)) > 5:
+        lines.append(f"       ... and {len(path_env.split(os.pathsep)) - 5} more")
+
+    lines.append(f"  3. Configure explicitly in .pddrc:")
+    lines.append(f"       agentic:")
+    lines.append(f"         {name}_path: /full/path/to/{name}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -239,7 +401,7 @@ def _provider_has_api_key(provider: str, model_data: Any | None) -> bool:
     # For Anthropic: Check if Claude CLI is available for subscription auth
     # This is more robust as it uses the user's Claude subscription instead of API credits
     if provider == "anthropic":
-        if shutil.which("claude"):
+        if _find_cli_binary("claude"):
             # Claude CLI is available - we can use subscription auth
             # even without an API key
             return True
@@ -353,6 +515,7 @@ def _build_provider_command(
     instruction: str,
     *,
     use_interactive_mode: bool = False,
+    cli_path: Optional[str] = None,
 ) -> List[str]:
     """
     Build the CLI command line for the given provider.
@@ -377,13 +540,23 @@ def _build_provider_command(
         use_interactive_mode: If True, use interactive mode instead of -p flag.
                               This is more robust for Anthropic as it uses
                               subscription auth and allows full file access.
+        cli_path: Full path to the CLI binary. If None, uses _find_cli_binary to discover it.
     """
+    # Get the CLI binary path - use provided path or discover it
+    cli_names = {"anthropic": "claude", "google": "gemini", "openai": "codex"}
+    cli_name = cli_names.get(provider)
+    if not cli_name:
+        raise ValueError(f"Unknown provider: {provider}")
+
+    # Use provided cli_path, or discover it, or fall back to bare command name
+    cmd = cli_path or _find_cli_binary(cli_name) or cli_name
+
     if provider == "anthropic":
         if use_interactive_mode:
             # Interactive mode: no -p flag, uses subscription auth
             # This allows full file access and is more robust
             return [
-                "claude",
+                cmd,
                 "--dangerously-skip-permissions",
                 "--output-format",
                 "json",
@@ -391,7 +564,7 @@ def _build_provider_command(
             ]
         else:
             return [
-                "claude",
+                cmd,
                 "-p",
                 instruction,
                 "--dangerously-skip-permissions",
@@ -402,7 +575,7 @@ def _build_provider_command(
         if use_interactive_mode:
             # Interactive mode for Gemini
             return [
-                "gemini",
+                cmd,
                 "--yolo",
                 "--output-format",
                 "json",
@@ -410,7 +583,7 @@ def _build_provider_command(
             ]
         else:
             return [
-                "gemini",
+                cmd,
                 "-p",
                 instruction,
                 "--yolo",
@@ -419,7 +592,7 @@ def _build_provider_command(
             ]
     if provider == "openai":
         return [
-            "codex",
+            cmd,
             "exec",
             "--full-auto",
             "--json",
@@ -816,7 +989,8 @@ def get_available_agents() -> List[str]:
     Return a list of available agent providers, e.g. ["anthropic", "google"].
 
     A provider is considered available if:
-      - Its CLI binary exists on PATH (checked via shutil.which)
+      - Its CLI binary exists (checked via _find_cli_binary which searches
+        PATH, common installation directories, and .pddrc config)
       - Its API key appears configured (using llm_invoke's model data plus
         well-known environment variables)
     """
@@ -827,7 +1001,7 @@ def get_available_agents() -> List[str]:
         cli = CLI_COMMANDS.get(provider)
         if not cli:
             continue
-        if shutil.which(cli) is None:
+        if _find_cli_binary(cli) is None:
             continue
         if not _provider_has_api_key(provider, model_data):
             continue

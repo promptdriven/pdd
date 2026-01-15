@@ -148,9 +148,10 @@ def mock_console():
     with patch("pdd.agentic_common.console") as mock:
         yield mock
 
-def test_get_available_agents_none(mock_env, mock_load_model_data, mock_shutil_which):
+def test_get_available_agents_none(mock_env, mock_load_model_data, monkeypatch):
     """Test when no agents are available (no CLI, no keys)."""
-    mock_shutil_which.return_value = None # No CLIs found
+    # Must mock _find_cli_binary (not just shutil.which) since it searches common paths too
+    monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda name, config=None: None)
     agents = get_available_agents()
     assert agents == []
 
@@ -200,9 +201,10 @@ def test_run_agentic_task_validation(mock_cwd):
     assert not success
     assert "does not exist" in msg
 
-def test_run_agentic_task_no_agents(mock_cwd, mock_load_model_data, mock_shutil_which):
+def test_run_agentic_task_no_agents(mock_cwd, mock_load_model_data, monkeypatch):
     """Test behavior when no agents are available."""
-    mock_shutil_which.return_value = None
+    # Must mock _find_cli_binary (not just shutil.which) since it searches common paths too
+    monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda name, config=None: None)
     success, msg, cost, provider = run_agentic_task("instruction", mock_cwd)
     assert not success
     assert "No agent providers are available" in msg
@@ -210,10 +212,10 @@ def test_run_agentic_task_no_agents(mock_cwd, mock_load_model_data, mock_shutil_
 
 def test_run_agentic_task_anthropic_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test successful execution with Anthropic (Claude)."""
-    # Setup availability
+    # Setup availability - mock_shutil_which is called by _find_cli_binary
     mock_shutil_which.return_value = "/bin/claude"
     os.environ["ANTHROPIC_API_KEY"] = "key"
-    
+
     # Mock subprocess output
     mock_output = {
         "response": "Task completed.",
@@ -230,15 +232,15 @@ def test_run_agentic_task_anthropic_success(mock_cwd, mock_env, mock_load_model_
     assert msg == "Task completed."
     assert cost == 0.05
     assert provider == "anthropic"
-    
-    # Verify command structure
+
+    # Verify command structure - cmd[0] should be the full path from _find_cli_binary
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
-    assert cmd[0] == "claude"
+    assert cmd[0] == "/bin/claude", f"Command should use discovered path, got: {cmd[0]}"
     assert "--dangerously-skip-permissions" in cmd
     assert "--output-format" in cmd
     assert "json" in cmd
-    
+
     # Verify temp file creation and cleanup
     temp_files = list(mock_cwd.glob(".agentic_prompt_*.txt"))
     assert len(temp_files) == 0 # Should be cleaned up
@@ -309,10 +311,10 @@ def test_run_agentic_task_gemini_success(mock_cwd, mock_env, mock_load_model_dat
     # Cost = 0.35 + 1.05 = 1.40
     assert abs(cost - 1.40) < 0.0001
 
-    # Verify command
+    # Verify command - cmd[0] should be the full path from _find_cli_binary
     args, _ = mock_subprocess.call_args
     cmd = args[0]
-    assert cmd[0] == "gemini"
+    assert cmd[0] == "/bin/gemini", f"Command should use discovered path, got: {cmd[0]}"
     assert "--yolo" in cmd
 
 def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
@@ -348,10 +350,10 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert "Codex output." in msg
     assert abs(cost - 7.50) < 0.0001
 
-    # Verify command
+    # Verify command - cmd[0] should be the full path from _find_cli_binary
     args, _ = mock_subprocess.call_args
     cmd = args[0]
-    assert cmd[0] == "codex"
+    assert cmd[0] == "/bin/codex", f"Command should use discovered path, got: {cmd[0]}"
     assert "--full-auto" in cmd
     assert "--json" in cmd
 
@@ -360,14 +362,14 @@ def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_
     # Setup availability for both
     mock_shutil_which.return_value = "/bin/cmd"
     mock_env["GEMINI_API_KEY"] = "key"
-    
+
     # Setup subprocess responses
     # First call (Anthropic) fails
     fail_response = MagicMock()
     fail_response.returncode = 1
     fail_response.stdout = ""
     fail_response.stderr = "Error"
-    
+
     # Second call (Google) succeeds
     success_response = MagicMock()
     success_response.returncode = 0
@@ -376,11 +378,11 @@ def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_
         "response": "Google success. This response is now long enough to pass the false positive detection check which requires at least 50 characters of output.",
         "stats": {}
     })
-    
+
     mock_subprocess_run.side_effect = [fail_response, success_response]
-    
+
     success, msg, cost, provider = run_agentic_task("Do work", tmp_path)
-    
+
     assert success
     assert "Google success" in msg
     assert provider == "google"
@@ -709,7 +711,10 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     This test verifies that such false positives are rejected and that the
     system falls back to a provider that performs real work.
     """
-    mock_shutil_which.return_value = "/bin/exe"
+    # Return different paths for different CLIs so we can distinguish them in subprocess mock
+    def which_side_effect(cli):
+        return f"/bin/{cli}" if cli in ("claude", "gemini", "codex") else None
+    mock_shutil_which.side_effect = which_side_effect
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["GEMINI_API_KEY"] = "key"
 
@@ -732,10 +737,12 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     })
     google_real_success.stderr = ""
 
+    # cmd is a list, cmd[0] is the CLI path (e.g., "/bin/claude")
     def run_side_effect(cmd, **kwargs):
-        if "claude" in cmd:
+        cli_path = cmd[0] if isinstance(cmd, list) else cmd
+        if "claude" in cli_path:
             return anthropic_false_positive
-        if "gemini" in cmd:
+        if "gemini" in cli_path:
             return google_real_success
         return MagicMock(returncode=1)
 
@@ -903,7 +910,7 @@ def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_su
     # Verify command arguments
     args, kwargs = mock_subprocess_run.call_args
     cmd = args[0]
-    assert cmd[0] == "claude"
+    assert cmd[0] == "/bin/claude", f"Command should use discovered path, got: {cmd[0]}"
     assert "--dangerously-skip-permissions" in cmd
     # Should NOT have -p flag for interactive mode
     assert "-p" not in cmd
@@ -939,7 +946,7 @@ def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_ru
     
     # Verify command
     cmd = mock_subprocess_run.call_args[0][0]
-    assert cmd[0] == "gemini"
+    assert cmd[0] == "/bin/gemini", f"Command should use discovered path, got: {cmd[0]}"
     assert "--yolo" in cmd
 
 def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
@@ -1032,6 +1039,306 @@ def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_ru
     
     kwargs = mock_subprocess_run.call_args[1]
     assert kwargs['timeout'] == 999.0
+
+# ---------------------------------------------------------------------------
+# CLI Discovery Tests (GitHub issue: Claude not found during agentic fallback)
+# ---------------------------------------------------------------------------
+
+
+class TestCliDiscovery:
+    """
+    Tests for CLI binary discovery in agentic_common.py.
+
+    Bug Report:
+        Even with Claude present and runnable in the shell environment,
+        pdd fix didn't find claude during agentic fallback.
+
+    Root Cause:
+        shutil.which("claude") searches the PATH of the pdd process, which may
+        differ from the user's interactive shell PATH.
+
+    Solution:
+        _find_cli_binary() function that searches:
+        1. .pddrc config override
+        2. shutil.which() (PATH lookup)
+        3. Common installation directories
+    """
+
+    def test_find_cli_binary_exists_in_agentic_common(self):
+        """Verify _find_cli_binary is exported from agentic_common."""
+        from pdd.agentic_common import _find_cli_binary
+        assert callable(_find_cli_binary)
+
+    def test_find_cli_binary_via_shutil_which(self, monkeypatch):
+        """When shutil.which finds the CLI, _find_cli_binary should return it."""
+        from pdd.agentic_common import _find_cli_binary
+
+        monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/local/bin/{cmd}" if cmd == "claude" else None)
+
+        result = _find_cli_binary("claude")
+        assert result == "/usr/local/bin/claude"
+
+    def test_find_cli_binary_fallback_to_common_paths(self, monkeypatch, tmp_path):
+        """When shutil.which returns None, should search common paths."""
+        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Create a fake claude binary in a common path
+        local_bin = tmp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        fake_claude = local_bin / "claude"
+        fake_claude.write_text("#!/bin/bash\necho claude")
+        fake_claude.chmod(0o755)
+
+        # Temporarily modify _COMMON_CLI_PATHS
+        original_paths = _COMMON_CLI_PATHS.get("claude", [])
+        monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [fake_claude] + original_paths)
+
+        result = _find_cli_binary("claude")
+        assert result == str(fake_claude)
+
+    def test_find_cli_binary_pddrc_override(self, monkeypatch, tmp_path):
+        """.pddrc agentic.claude_path should take precedence."""
+        from pdd.agentic_common import _find_cli_binary
+
+        monkeypatch.setattr("shutil.which", lambda cmd: "/other/path/claude" if cmd == "claude" else None)
+
+        # Create a custom claude binary
+        custom_claude = tmp_path / "custom" / "claude"
+        custom_claude.parent.mkdir(parents=True)
+        custom_claude.write_text("#!/bin/bash\necho custom claude")
+        custom_claude.chmod(0o755)
+
+        # Create .pddrc with custom path
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text(f"""
+version: "1.0"
+agentic:
+  claude_path: {custom_claude}
+contexts:
+  default:
+    defaults:
+      default_language: python
+""")
+
+        monkeypatch.chdir(tmp_path)
+
+        result = _find_cli_binary("claude")
+        assert result == str(custom_claude)
+
+    def test_find_cli_binary_returns_none_when_not_found(self, monkeypatch, tmp_path):
+        """When CLI is not found anywhere, should return None."""
+        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        monkeypatch.setitem(_COMMON_CLI_PATHS, "nonexistent_cli", [])
+        monkeypatch.chdir(tmp_path)
+
+        result = _find_cli_binary("nonexistent_cli")
+        assert result is None
+
+    def test_get_available_agents_uses_find_cli_binary(self, mock_env, mock_load_model_data, monkeypatch):
+        """
+        Verify get_available_agents uses _find_cli_binary instead of shutil.which.
+
+        This test ensures the bug fix is properly integrated.
+        """
+        from pdd.agentic_common import _find_cli_binary
+
+        # Track calls to _find_cli_binary
+        find_calls = []
+        original_find = _find_cli_binary
+
+        def tracking_find(name, config=None):
+            find_calls.append(name)
+            return f"/mocked/path/{name}"
+
+        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", tracking_find)
+        os.environ["ANTHROPIC_API_KEY"] = "key"
+        os.environ["GEMINI_API_KEY"] = "key"
+        os.environ["OPENAI_API_KEY"] = "key"
+
+        agents = get_available_agents()
+
+        # Should have called _find_cli_binary for each provider's CLI
+        assert "claude" in find_calls, "get_available_agents should use _find_cli_binary for claude"
+        assert "gemini" in find_calls, "get_available_agents should use _find_cli_binary for gemini"
+        assert "codex" in find_calls, "get_available_agents should use _find_cli_binary for codex"
+
+    def test_provider_has_api_key_uses_find_cli_binary_for_anthropic(self, mock_env, mock_load_model_data, monkeypatch):
+        """
+        Verify _provider_has_api_key uses _find_cli_binary for Anthropic subscription auth check.
+        """
+        from pdd.agentic_common import _provider_has_api_key
+
+        # Track calls to _find_cli_binary
+        find_calls = []
+
+        def tracking_find(name, config=None):
+            find_calls.append(name)
+            return f"/mocked/path/{name}" if name == "claude" else None
+
+        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", tracking_find)
+
+        # No API key set - should check for CLI auth
+        result = _provider_has_api_key("anthropic", None)
+
+        assert "claude" in find_calls, "_provider_has_api_key should use _find_cli_binary for claude"
+        assert result is True, "Should return True when claude CLI is found (subscription auth)"
+
+    def test_find_cli_binary_invalid_pddrc_path_falls_back(self, monkeypatch, tmp_path):
+        """
+        If .pddrc specifies an invalid path, should fall back to other methods.
+        """
+        from pdd.agentic_common import _find_cli_binary
+
+        # Mock shutil.which to return a valid path
+        monkeypatch.setattr("shutil.which", lambda cmd: f"/valid/path/{cmd}" if cmd == "claude" else None)
+
+        # Create .pddrc with invalid (non-existent) path
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+agentic:
+  claude_path: /nonexistent/path/to/claude
+contexts:
+  default:
+    defaults:
+      default_language: python
+""")
+
+        monkeypatch.chdir(tmp_path)
+
+        result = _find_cli_binary("claude")
+        # Should fall back to shutil.which result
+        assert result == "/valid/path/claude", \
+            f"Should fall back to PATH when .pddrc path is invalid, got: {result}"
+
+    def test_get_cli_diagnostic_info_provides_helpful_message(self, monkeypatch):
+        """
+        _get_cli_diagnostic_info should provide actionable troubleshooting tips.
+        """
+        from pdd.agentic_common import _get_cli_diagnostic_info
+
+        # Set a known PATH for testing
+        monkeypatch.setenv("PATH", "/usr/bin:/usr/local/bin:/home/user/.local/bin")
+
+        info = _get_cli_diagnostic_info("claude")
+
+        # Should include the CLI name
+        assert "claude" in info
+
+        # Should suggest checking installation
+        assert "which claude" in info or "installation" in info.lower()
+
+        # Should show PATH entries
+        assert "/usr/bin" in info or "PATH" in info
+
+        # Should suggest .pddrc configuration
+        assert ".pddrc" in info or "pddrc" in info.lower()
+        assert "claude_path" in info
+
+    def test_cli_discovery_with_nvm_installed_claude(self, monkeypatch, tmp_path):
+        """
+        Test finding Claude installed via nvm (Node Version Manager).
+
+        Claude Code is often installed via npm, which under nvm goes to:
+        ~/.nvm/versions/node/vX.Y.Z/bin/claude
+        """
+        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+
+        # Mock shutil.which to return None
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Create fake nvm structure
+        nvm_dir = tmp_path / ".nvm" / "versions" / "node" / "v20.10.0" / "bin"
+        nvm_dir.mkdir(parents=True)
+        nvm_claude = nvm_dir / "claude"
+        nvm_claude.write_text("#!/bin/bash\necho nvm claude")
+        nvm_claude.chmod(0o755)
+
+        # Patch _COMMON_CLI_PATHS to include our test nvm path
+        nvm_node_dir = tmp_path / ".nvm" / "versions" / "node"
+        original_paths = _COMMON_CLI_PATHS.get("claude", [])
+        # Add the nvm node parent directory (will be glob-expanded)
+        monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [nvm_node_dir] + original_paths)
+
+        # The real code should glob ~/.nvm/versions/node/*/bin/claude
+        result = _find_cli_binary("claude")
+
+        # Verify nvm path searching actually finds the binary
+        assert result is not None, \
+            f"Should find claude in nvm path, but got None. Expected: {nvm_claude}"
+        assert result == str(nvm_claude), \
+            f"Should find claude at {nvm_claude}, but got {result}"
+
+    def test_build_provider_command_uses_discovered_path(self, monkeypatch):
+        """
+        Verify _build_provider_command uses the path from _find_cli_binary.
+
+        This is the critical test that ensures the bug fix is complete:
+        not only discovering the CLI path, but actually USING it in commands.
+        """
+        from pdd.agentic_common import _build_provider_command
+
+        # Mock _find_cli_binary to return custom paths
+        def mock_find(name, config=None):
+            return f"/custom/path/to/{name}"
+
+        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", mock_find)
+
+        # Test Anthropic
+        cmd = _build_provider_command("anthropic", "test instruction")
+        assert cmd[0] == "/custom/path/to/claude", \
+            f"Anthropic command should use discovered path, got: {cmd[0]}"
+
+        # Test Google
+        cmd = _build_provider_command("google", "test instruction")
+        assert cmd[0] == "/custom/path/to/gemini", \
+            f"Google command should use discovered path, got: {cmd[0]}"
+
+        # Test OpenAI
+        cmd = _build_provider_command("openai", "test instruction")
+        assert cmd[0] == "/custom/path/to/codex", \
+            f"OpenAI command should use discovered path, got: {cmd[0]}"
+
+    def test_build_provider_command_accepts_explicit_cli_path(self, monkeypatch):
+        """
+        Verify _build_provider_command respects explicit cli_path parameter.
+
+        When cli_path is explicitly provided, it should be used directly
+        without calling _find_cli_binary.
+        """
+        from pdd.agentic_common import _build_provider_command
+
+        # Track calls to _find_cli_binary
+        find_calls = []
+
+        def tracking_find(name, config=None):
+            find_calls.append(name)
+            return f"/should/not/be/used/{name}"
+
+        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", tracking_find)
+
+        # When cli_path is provided, _find_cli_binary should NOT be called
+        cmd = _build_provider_command(
+            "anthropic",
+            "test instruction",
+            cli_path="/explicit/path/claude"
+        )
+
+        assert cmd[0] == "/explicit/path/claude", \
+            f"Should use explicit cli_path, got: {cmd[0]}"
+        assert len(find_calls) == 0, \
+            f"_find_cli_binary should not be called when cli_path is provided, but was called for: {find_calls}"
+
+
+# ---------------------------------------------------------------------------
+# CLI Discovery Bug Reproduction Tests
+# (Added in first commit to reproduce the bug)
+# ---------------------------------------------------------------------------
+
 
 class TestCliDiscoveryBug:
     """
