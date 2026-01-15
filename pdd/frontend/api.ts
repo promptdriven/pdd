@@ -221,7 +221,7 @@ export interface DiffSection {
   status: 'matched' | 'partial' | 'missing' | 'extra';
   matchConfidence: number;
   semanticLabel: string;
-  notes?: string;
+  notes: string;  // Required explanation of WHY this status exists
 }
 
 export interface LineMapping {
