@@ -9,9 +9,9 @@
   1. **detect**: Validate >= 2 files (last is change file). Call `detect_change_main`. Options: `--output`.
   2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
   3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
-     - Agentic mode (first arg is URL): Call `run_agentic_bug(issue_url, verbose=..., quiet=...)`.
+     - Agentic mode (first arg is URL): Call `run_agentic_bug(issue_url, verbose=..., quiet=..., timeout_adder=...)`.
      - Manual mode (`--manual` flag): Call `bug_main(ctx, prompt_file, code_file, program_file, current_output, desired_output, ...)`.
-     Options: `--manual`, `--output`, `--language`.
+     Options: `--manual`, `--output`, `--language`, `--timeout-adder` (float, default 0.0, agentic mode only).
   4. **crash**: Takes 4 positional files (prompt, code, program, error). Call `crash_main`. Options: `--output`, `--output-program`, `--loop`, `--max-attempts`, `--budget`.
   5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
 

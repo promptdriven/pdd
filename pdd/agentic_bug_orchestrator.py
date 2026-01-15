@@ -8,11 +8,26 @@ from typing import List, Tuple, Optional, Dict, Any
 
 from rich.console import Console
 
-from .agentic_common import run_agentic_task, STEP_TIMEOUTS
+from .agentic_common import run_agentic_task
 from .load_prompt_template import load_prompt_template
 
 # Initialize console
 console = Console()
+
+# Per-step timeouts for the 10-step agentic bug workflow (Issue #256)
+# Complex steps (reproduce, root cause, generate, e2e) get more time.
+BUG_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 400.0,   # Docs Check
+    3: 400.0,   # Triage
+    4: 600.0,   # Reproduce (Complex)
+    5: 600.0,   # Root Cause (Complex)
+    6: 340.0,   # Test Plan
+    7: 1000.0,  # Generate Unit Test (Most Complex)
+    8: 600.0,   # Verify Unit Test
+    9: 2000.0,  # E2E Test (Complex - needs to discover env & run tests)
+    10: 240.0,  # Create PR
+}
 
 # State management for resume functionality
 STATE_DIR = Path(".pdd/bug-state")
@@ -217,7 +232,8 @@ def run_agentic_bug_orchestrator(
     *,
     cwd: Path,
     verbose: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    timeout_adder: float = 0.0
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 10-step agentic bug investigation workflow.
@@ -342,7 +358,7 @@ def run_agentic_bug_orchestrator(
             verbose=verbose,
             quiet=quiet,
             label=f"step{step_num}",
-            timeout=STEP_TIMEOUTS.get(step_num),
+            timeout=BUG_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder,
         )
 
         # Update tracking

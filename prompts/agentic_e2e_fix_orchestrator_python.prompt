@@ -41,6 +41,19 @@ STEP_DESCRIPTIONS = {
     8: "Running pdd fix",
     9: "Final verification",
 }
+
+# Per-step timeouts for the 9-step agentic e2e fix workflow
+E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 340.0,   # Run unit tests from issue, pdd fix failures
+    2: 240.0,   # Run e2e tests, check completion (early exit)
+    3: 340.0,   # Root cause analysis (code vs test vs both)
+    4: 340.0,   # Fix e2e tests if needed
+    5: 340.0,   # Identify dev units involved in failures
+    6: 600.0,   # Create/append unit tests for dev units (Complex)
+    7: 600.0,   # Verify unit tests detect bugs (Complex)
+    8: 1000.0,  # Run pdd fix on failing dev units (Most Complex - multiple LLM calls)
+    9: 240.0,   # Final verification, loop control
+}
 ```
 
 % Step Execution
@@ -244,7 +257,8 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `E2E_FIX_STEP_TIMEOUTS`
+Import from `agentic_common`: `run_agentic_task`
+Note: `E2E_FIX_STEP_TIMEOUTS` is defined locally in this module (see Step Name Mapping section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 
