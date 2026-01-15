@@ -736,7 +736,10 @@ const App: React.FC = () => {
               }`}
               title={showRemotePanel ? 'Hide remote session panel' : 'Show remote session panel'}
             >
-              <span>{executionMode === 'remote' ? '🌐' : '💻'}</span>
+              <span aria-hidden="true">{executionMode === 'remote' ? '🌐' : '💻'}</span>
+              <span className="sr-only">
+                {executionMode === 'remote' ? 'Remote execution mode' : 'Local execution mode'}
+              </span>
               <span className="hidden sm:inline">{executionMode === 'remote' ? 'Remote' : 'Local'}</span>
               <svg
                 className={`w-3 h-3 transition-transform ${showRemotePanel ? 'rotate-180' : ''}`}
@@ -804,6 +807,7 @@ const App: React.FC = () => {
                 onClick={() => setShowRemotePanel(false)}
                 className="absolute right-4 sm:relative sm:right-auto text-surface-400 hover:text-white p-1 rounded-lg hover:bg-surface-700/50 transition-colors"
                 title="Close panel"
+                aria-label="Close remote session panel"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
