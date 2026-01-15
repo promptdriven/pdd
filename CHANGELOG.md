@@ -1,14 +1,30 @@
+## v0.0.116 (2026-01-15)
+
 ## v0.0.115 (2026-01-14)
 
 ### Feat
 
-- **frontend**: Add browser control checkbox to login modal
-- **frontend**: Change default strength setting from 0.75 to 1
-- Enhance architecture sync and frontend features
+- **Remote Session Management:** New `pdd sessions` command group (284 lines) with subcommands: `list` (display active sessions in table or JSON), `info` (detailed session view), and `cleanup` (remove stale/orphaned sessions). Core `remote_session.py` module (833 lines) handles cloud registration via Firestore message bus—no ngrok/tunneling required. Sessions auto-register on `pdd connect` and deregister on graceful shutdown.
+
+- **Cloud-Hosted Remote Access:** `pdd connect` now automatically registers with PDD Cloud for remote browser access. New options `--local-only` (skip cloud registration) and `--session-name` (custom identification). Frontend adds `RemoteSessionSelector` dropdown, `ExecutionModeToggle` (local/remote), and collapsible remote session panel with responsive layout. Commands execute on selected remote session via cloud relay.
+
+- **Remote Job Execution:** Job system extended to support remote jobs. Frontend `useJobs` hook tracks remote job metadata, routes commands through cloud API, and polls for status updates. Backend `jobs.py` adds subprocess command builder with proper global option placement and positional argument handling.
+
+- **Config API Endpoint:** New `/api/v1/config/cloud-url` route ensures frontend uses the same cloud URL as CLI, preventing environment mismatches between staging and production.
+
+- **Remote/SSH Session Detection:** New `pdd/core/remote_session.py` (61 lines) auto-detects SSH sessions, headless environments (no DISPLAY), and WSL without WSLg. `pdd auth login` supports `--browser/--no-browser` flag with auto-detection fallback.
+
+- **Auto-Update Improvements:** Skip update check in CI environments (`CI=1`), when `PDD_SKIP_UPDATE_CHECK=1`, or when stdin is not a TTY.
+
+- **Frontend UX:** Login modal adds browser control checkbox. Default strength setting changed from 0.75 to 1. Accessibility improvements for remote session panel.
 
 ### Fix
 
-- **auth**: Add remote/SSH session detection and --no-browser flag support
+- **Agentic Timeouts:** Increased `pdd bug` step timeouts to reduce failures on complex codebases. E2E test step extended to 1 hour max.
+
+- **JWT Caching:** Fixed test flakiness when JWT caching tests run alongside other tests. Proper environment isolation for token caching.
+
+- **Responsive Layout:** Fixed collapsible remote session panel layout on various screen sizes.
 
 ## v0.0.114 (2026-01-14)
 
