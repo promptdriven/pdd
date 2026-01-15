@@ -16,7 +16,7 @@ import socket
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
 from rich.console import Console
@@ -345,7 +345,7 @@ class RemoteSessionManager:
         response: Optional[Dict[str, Any]] = None
     ) -> None:
         """
-        Update the status of a command in the cloud.
+        Update the status of a command in the cloud with retry logic.
 
         Args:
             command_id: The command ID to update.
@@ -353,7 +353,7 @@ class RemoteSessionManager:
             response: Optional response data (for completed/failed status).
 
         Raises:
-            RemoteSessionError: If update fails.
+            RemoteSessionError: If update fails after all retries.
         """
         if not self.session_id:
             return
@@ -368,23 +368,310 @@ class RemoteSessionManager:
         if response is not None:
             payload["response"] = response
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # Retry logic with exponential backoff
+        max_retries = 3
+        retry_delay = 1  # Start with 1 second
+
+        for attempt in range(max_retries):
             try:
-                result = await client.post(
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    result = await client.post(
+                        endpoint,
+                        json=payload,
+                        headers=self._get_headers()
+                    )
+
+                    if result.status_code >= 400:
+                        error_msg = f"Failed to update command status: {result.text}"
+                        console.print(f"[red]{error_msg}[/red]")
+                        raise RuntimeError(error_msg)
+
+                    # Success - return immediately
+                    return
+
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    # Final attempt failed - raise error
+                    console.print(f"[red]Failed to update command after {max_retries} attempts: {e}[/red]")
+                    raise
+                # Retry with exponential backoff
+                console.print(f"[yellow]Cloud update failed (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...[/yellow]")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+
+    async def _get_command_status(self, command_id: str) -> str:
+        """
+        Get current status of a command from cloud.
+
+        Uses the getCommandStatus endpoint which returns any command regardless
+        of status (unlike getCommands which only returns pending commands).
+
+        Args:
+            command_id: The command ID to check.
+
+        Returns:
+            str: Current status ('pending', 'processing', 'completed', 'failed', 'cancelled', or 'unknown').
+        """
+        if not self.session_id:
+            return "unknown"
+
+        endpoint = CloudConfig.get_endpoint_url("getCommandStatus")
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                result = await client.get(
+                    endpoint,
+                    params={
+                        "sessionId": self.session_id,
+                        "commandId": command_id
+                    },
+                    headers=self._get_headers()
+                )
+
+                if result.status_code == 200:
+                    data = result.json()
+                    command = data.get("command", {})
+                    return command.get("status", "unknown")
+                elif result.status_code == 404:
+                    # Command not found
+                    return "unknown"
+                return "unknown"
+
+        except Exception as e:
+            console.print(f"[yellow]Failed to check command status: {e}[/yellow]")
+            return "unknown"
+
+    async def _is_cancelled(self, command_id: str) -> bool:
+        """
+        Check if command was cancelled.
+
+        Args:
+            command_id: The command ID to check.
+
+        Returns:
+            bool: True if command status is 'cancelled', False otherwise.
+        """
+        status = await self._get_command_status(command_id)
+        return status == "cancelled"
+
+    async def _do_execute(self, cmd: CommandInfo) -> Tuple[str, dict]:
+        """
+        Actually execute the command via local FastAPI endpoint with log streaming.
+
+        Args:
+            cmd: The command to execute.
+
+        Returns:
+            Tuple[str, dict]: (job_id, response) from the local server.
+
+        Raises:
+            Exception: If execution fails.
+            asyncio.CancelledError: If the command was cancelled.
+        """
+        local_url = "http://127.0.0.1:9876"
+        execute_endpoint = "/api/v1/commands/execute"
+
+        # Build request payload in CommandRequest format
+        cmd_args = cmd.payload.get("args", {})
+        cmd_options = cmd.payload.get("options", {})
+        request_payload = {
+            "command": cmd.type,
+            "args": cmd_args,
+            "options": cmd_options
+        }
+
+        # Build CLI command string for display
+        cli_parts = ["pdd", cmd.type]
+        for key, value in cmd_args.items():
+            if isinstance(value, bool):
+                if value:
+                    cli_parts.append(f"--{key}")
+            elif isinstance(value, str) and " " in value:
+                cli_parts.append(f'--{key} "{value}"')
+            else:
+                cli_parts.append(f"--{key} {value}")
+        for key, value in cmd_options.items():
+            if isinstance(value, bool):
+                if value:
+                    cli_parts.append(f"--{key}")
+            else:
+                cli_parts.append(f"--{key} {value}")
+        cli_command = " ".join(cli_parts)
+
+        # Log command details
+        console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
+        console.print(f"[bold cyan]REMOTE COMMAND RECEIVED[/bold cyan]")
+        console.print(f"[bold cyan]{'═' * 60}[/bold cyan]")
+        console.print(f"[bold]Command:[/bold] [green]{cli_command}[/green]")
+        console.print(f"[dim]{'─' * 60}[/dim]")
+        console.print(f"[bold]Output:[/bold]")
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            # Submit the job
+            submit_result = await client.post(
+                f"{local_url}{execute_endpoint}",
+                json=request_payload
+            )
+
+            if submit_result.status_code >= 400:
+                raise Exception(submit_result.text)
+
+            submit_data = submit_result.json()
+            job_id = submit_data.get("job_id")
+
+            if not job_id:
+                raise Exception("No job_id in response")
+
+            # Poll for job completion with log streaming and cancellation checks
+            status_endpoint = f"/api/v1/commands/jobs/{job_id}"
+            last_update_time = asyncio.get_event_loop().time()
+            update_interval = 2.0  # Send updates every 2 seconds (was 3)
+            last_stdout_len = 0
+            last_stderr_len = 0
+
+            while True:
+                # Check for cancellation BEFORE polling - this is critical for responsiveness
+                if await self._is_cancelled(cmd.command_id):
+                    console.print(f"[yellow]Cancellation detected during job execution[/yellow]")
+                    # Cancel the local job
+                    await self._cancel_local_job(job_id)
+                    # Return cancelled status
+                    return job_id, {"status": "cancelled", "result": {}}
+
+                status_result = await client.get(f"{local_url}{status_endpoint}")
+                if status_result.status_code >= 400:
+                    raise Exception(status_result.text)
+
+                status_data = status_result.json()
+                job_status = status_data.get("status")
+
+                # Get current output and display new content
+                result = status_data.get("result", {})
+                if isinstance(result, dict):
+                    stdout = result.get("stdout", "")
+                    stderr = result.get("stderr", "")
+
+                    # Print incremental stdout (raw, preserving formatting)
+                    if stdout and len(stdout) > last_stdout_len:
+                        new_stdout = stdout[last_stdout_len:]
+                        # Print raw output directly to preserve formatting
+                        print(new_stdout, end="", flush=True)
+                        last_stdout_len = len(stdout)
+
+                    # Send periodic output updates to cloud
+                    current_time = asyncio.get_event_loop().time()
+                    if current_time - last_update_time >= update_interval:
+                        if stdout or stderr:
+                            try:
+                                await self._update_command_output(
+                                    cmd.command_id,
+                                    stdout=stdout,
+                                    stderr=stderr
+                                )
+                                last_update_time = current_time
+                            except Exception:
+                                pass  # Don't clutter output with cloud update errors
+
+                if job_status in ("completed", "failed", "cancelled"):
+                    # Get final output
+                    final_result = status_data.get("result", {})
+                    final_stdout = final_result.get("stdout", "") if isinstance(final_result, dict) else ""
+                    final_stderr = final_result.get("stderr", "") if isinstance(final_result, dict) else ""
+                    exit_code = final_result.get("exit_code", 0) if isinstance(final_result, dict) else 0
+
+                    # Print final summary
+                    console.print(f"\n[dim]{'─' * 60}[/dim]")
+                    console.print(f"[bold]Exit code:[/bold] {exit_code}")
+                    if final_stdout:
+                        console.print(f"[bold]Stdout ({len(final_stdout)} chars)[/bold]")
+                    if final_stderr:
+                        console.print(f"[bold yellow]Stderr ({len(final_stderr)} chars):[/bold yellow]")
+                        # Print stderr since we didn't stream it
+                        for line in final_stderr.splitlines():
+                            console.print(f"[yellow]{line}[/yellow]")
+                    console.print(f"[dim]{'─' * 60}[/dim]")
+                    if job_status == "completed":
+                        console.print(f"[bold green]✓ COMMAND COMPLETED[/bold green]")
+                    elif job_status == "failed":
+                        console.print(f"[bold red]✗ COMMAND FAILED[/bold red]")
+                    elif job_status == "cancelled":
+                        console.print(f"[bold yellow]⊘ COMMAND CANCELLED[/bold yellow]")
+                    console.print(f"[bold cyan]{'═' * 60}[/bold cyan]\n")
+                    return job_id, status_data
+
+                # Short sleep to be responsive to cancellation
+                await asyncio.sleep(0.5)
+
+    async def _update_command_output(
+        self,
+        command_id: str,
+        stdout: str = "",
+        stderr: str = ""
+    ) -> None:
+        """
+        Update cloud with intermediate command output for log streaming.
+
+        Args:
+            command_id: The command ID to update.
+            stdout: Current stdout output.
+            stderr: Current stderr output.
+        """
+        if not self.session_id:
+            return
+
+        endpoint = CloudConfig.get_endpoint_url("updateCommand")
+
+        payload = {
+            "sessionId": self.session_id,
+            "commandId": command_id,
+            "status": "processing",  # Keep status as processing
+            "response": {
+                "stdout": stdout,
+                "stderr": stderr,
+                "streaming": True,  # Indicate this is a streaming update
+            }
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
                     endpoint,
                     json=payload,
                     headers=self._get_headers()
                 )
+        except Exception:
+            pass  # Don't fail on streaming updates
 
-                if result.status_code >= 400:
-                    console.print(f"[yellow]Warning: Failed to update command status (Status: {result.status_code})[/yellow]")
+    async def _cancel_local_job(self, job_id: str) -> bool:
+        """
+        Cancel a job running on the local server.
 
-            except Exception as e:
-                console.print(f"[yellow]Warning: Error updating command: {str(e)}[/yellow]")
+        Args:
+            job_id: The local job ID to cancel.
+
+        Returns:
+            bool: True if cancellation was successful.
+        """
+        local_url = "http://127.0.0.1:9876"
+        cancel_endpoint = f"/api/v1/commands/jobs/{job_id}/cancel"
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                result = await client.post(f"{local_url}{cancel_endpoint}")
+                if result.status_code < 400:
+                    data = result.json()
+                    return data.get("cancelled", False)
+                return False
+        except Exception as e:
+            console.print(f"[yellow]Failed to cancel local job: {e}[/yellow]")
+            return False
 
     async def _execute_command(self, cmd: CommandInfo) -> None:
         """
         Execute a command locally and report results back to the cloud.
+
+        Supports cancellation during execution - cancellation is now checked
+        inside _do_execute() for faster response times.
 
         Args:
             cmd: The command to execute.
@@ -392,47 +679,53 @@ class RemoteSessionManager:
         try:
             # 1. Update status to "processing"
             await self.update_command(cmd.command_id, status="processing")
-            console.print(f"[cyan]Executing remote command: {cmd.type}[/cyan]")
 
-            # 2. Execute via local FastAPI endpoint
-            # The local server is running on 127.0.0.1:9876 by default
-            local_url = "http://127.0.0.1:9876"
+            # 2. Check if command was cancelled before starting execution
+            if await self._is_cancelled(cmd.command_id):
+                console.print(f"[yellow]Command cancelled before execution[/yellow]")
+                await self.update_command(cmd.command_id, status="cancelled")
+                return
 
-            # Map command type to local API endpoint
-            endpoint_map = {
-                "generate": "/api/v1/commands/generate",
-                "fix": "/api/v1/commands/fix",
-                "test": "/api/v1/commands/test",
-                "crash": "/api/v1/commands/crash",
+            # 3. Execute the command - cancellation is checked inside _do_execute()
+            local_job_id, response_data = await self._do_execute(cmd)
+
+            # 4. Check if the local job was cancelled
+            job_status = response_data.get("status", "")
+            if job_status == "cancelled":
+                await self.update_command(cmd.command_id, status="cancelled")
+                console.print(f"[yellow]Command was cancelled[/yellow]")
+                return
+
+            # 5. Map to expected structure for frontend
+            result = response_data.get("result", {})
+            error_msg = ""
+            if job_status == "failed":
+                # Capture error from response or from stderr
+                error_msg = response_data.get("error", "")
+                if not error_msg and isinstance(result, dict):
+                    error_msg = result.get("stderr", "") or result.get("stdout", "")
+
+            formatted_response = {
+                "success": job_status == "completed",
+                "message": error_msg,
+                "exit_code": result.get("exit_code", 0) if isinstance(result, dict) else 0,
+                "stdout": result.get("stdout", "") if isinstance(result, dict) else "",
+                "stderr": result.get("stderr", "") if isinstance(result, dict) else "",
+                "files_created": result.get("files_created", []) if isinstance(result, dict) else [],
+                "cost": response_data.get("cost", 0.0),
             }
 
-            endpoint = endpoint_map.get(cmd.type)
-            if not endpoint:
-                raise ValueError(f"Unknown command type: {cmd.type}")
+            final_status = "completed" if job_status == "completed" else "failed"
+            await self.update_command(
+                cmd.command_id,
+                status=final_status,
+                response=formatted_response
+            )
 
-            async with httpx.AsyncClient(timeout=300.0) as client:
-                result = await client.post(
-                    f"{local_url}{endpoint}",
-                    json=cmd.payload
-                )
-
-                if result.status_code >= 400:
-                    # Command failed
-                    await self.update_command(
-                        cmd.command_id,
-                        status="failed",
-                        response={"error": result.text}
-                    )
-                    console.print(f"[red]Command failed: {result.text}[/red]")
-                else:
-                    # Command succeeded
-                    response_data = result.json()
-                    await self.update_command(
-                        cmd.command_id,
-                        status="completed",
-                        response=response_data
-                    )
-                    console.print(f"[green]Command completed successfully[/green]")
+        except asyncio.CancelledError:
+            # Task was cancelled externally
+            console.print(f"[yellow]Command execution cancelled[/yellow]")
+            await self.update_command(cmd.command_id, status="cancelled")
 
         except Exception as e:
             # Execution error

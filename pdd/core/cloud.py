@@ -53,7 +53,9 @@ CLOUD_ENDPOINTS = {
     "deregisterSession": "/deregisterSession",
     # Command relay endpoints (Firestore message bus)
     "getCommands": "/getCommands",
+    "getCommandStatus": "/getCommandStatus",
     "updateCommand": "/updateCommand",
+    "cancelCommand": "/cancelCommand",
 }
 
 

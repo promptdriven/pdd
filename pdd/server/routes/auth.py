@@ -297,3 +297,68 @@ async def poll_login_status(poll_id: str) -> LoginPollResponse:
             del _active_sessions[poll_id]
 
     return LoginPollResponse(status=session["status"], message=session.get("message"))
+
+
+class CloudConnectionTestResponse(BaseModel):
+    """Response model for cloud connection test."""
+
+    connected: bool
+    session_count: Optional[int] = None
+    error: Optional[str] = None
+    cloud_url: str
+    environment: str
+
+
+@router.get("/test-cloud-connection", response_model=CloudConnectionTestResponse)
+async def test_cloud_connection() -> CloudConnectionTestResponse:
+    """
+    Test JWT token validity by calling cloud's /listSessions endpoint.
+
+    This helps diagnose connectivity issues and validates that:
+    1. JWT token is present and valid
+    2. Cloud URL is accessible
+    3. Token has correct permissions
+
+    Returns:
+        CloudConnectionTestResponse with connection status and session count
+    """
+    from pdd.core.cloud import CloudConfig
+    from pdd.remote_session import RemoteSessionManager
+    import os
+
+    cloud_url = CloudConfig.get_base_url()
+    environment = os.environ.get("PDD_ENV", "production")
+
+    # Get JWT token
+    jwt_token = _get_cached_jwt()
+    if not jwt_token:
+        return CloudConnectionTestResponse(
+            connected=False,
+            error="No JWT token found. Please authenticate with 'pdd auth login'.",
+            cloud_url=cloud_url,
+            environment=environment
+        )
+
+    # Try to list sessions
+    try:
+        sessions = await RemoteSessionManager.list_sessions(jwt_token)
+        return CloudConnectionTestResponse(
+            connected=True,
+            session_count=len(sessions),
+            cloud_url=cloud_url,
+            environment=environment
+        )
+    except Exception as e:
+        error_msg = str(e)
+        # Parse common error types
+        if "401" in error_msg or "403" in error_msg or "Unauthorized" in error_msg:
+            error_msg = f"Authentication failed: {error_msg}. Token may be expired or invalid."
+        elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+            error_msg = f"Network error: {error_msg}. Cloud may be unreachable."
+
+        return CloudConnectionTestResponse(
+            connected=False,
+            error=error_msg,
+            cloud_url=cloud_url,
+            environment=environment
+        )

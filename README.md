@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.114-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.111-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.114
+Current version: 0.0.111
 
 To check your installed version, run:
 ```
@@ -2044,6 +2044,44 @@ pdd auth token [OPTIONS]
 - `--format [raw|json]`: Output format for the token. Use `raw` for just the token string (default), or `json` for structured output including token and expiration time.
 
 **When to use**: Use `auth` commands to manage your PDD Cloud authentication state. Use `auth login` to authenticate before using cloud features, `auth status` to verify your current session, and `auth token` when you need to pass credentials to scripts or other tools.
+
+### 19. `pdd sessions` - Manage Remote Sessions
+
+The `sessions` command group allows you to manage remote PDD sessions registered with PDD Cloud. Remote sessions enable you to control PDD instances running on other machines through the web frontend.
+
+#### List Sessions
+
+```bash
+pdd sessions list
+pdd sessions list --json
+```
+
+Lists all active remote sessions associated with your authenticated account. Use `--json` for machine-readable output.
+
+#### Session Info
+
+```bash
+pdd sessions info <session_id>
+```
+
+Displays detailed information about a specific session including project name, cloud URL, status, and last heartbeat time.
+
+#### Cleanup Sessions
+
+```bash
+pdd sessions cleanup --stale
+pdd sessions cleanup --all
+pdd sessions cleanup --all --force
+```
+
+**Options:**
+- `--stale`: Remove only stale sessions (no recent heartbeat)
+- `--all`: Remove all sessions for the current user
+- `--force`: Skip confirmation prompt
+
+**Note:** Sessions are automatically registered when running `pdd connect` (unless `--local-only` is specified) and deregistered on graceful shutdown. Use `pdd sessions cleanup` to manually remove orphaned sessions if a `pdd connect` instance was terminated ungracefully.
+
+**When to use**: Use `sessions list` to discover available remote sessions, `sessions info` to check session details, and `sessions cleanup` to remove stale or orphaned sessions.
 
 ## Example Review Process
 

@@ -256,6 +256,31 @@ def _convert_option_type(key: str, value: Any) -> Any:
     return value
 
 
+def _get_command_positional_args(command: click.Command) -> List[str]:
+    """Extract positional argument names from Click command in order."""
+    positionals = []
+    for param in command.params:
+        if isinstance(param, click.Argument):
+            positionals.append(param.name)
+    return positionals
+
+
+def _is_variadic_argument(command: click.Command, param_name: str) -> bool:
+    """Check if a parameter is a variadic argument (nargs=-1)."""
+    for param in command.params:
+        if param.name == param_name and isinstance(param, click.Argument):
+            return param.nargs == -1
+    return False
+
+
+def _is_multiple_option(command: click.Command, param_name: str) -> bool:
+    """Check if an option accepts multiple values (multiple=True)."""
+    for param in command.params:
+        if param.name == param_name and isinstance(param, click.Option):
+            return param.multiple
+    return False
+
+
 class ClickCommandExecutor:
     """
     Executes Click commands programmatically with output capture.
@@ -316,21 +341,74 @@ class ClickCommandExecutor:
         # Set up headless environment for server-executed commands
         _setup_headless_environment()
 
-        # Merge context objects
-        obj = {**self._base_context_obj, **(options or {})}
+        # Global options that belong in ctx.obj, not passed as command params
+        # These match the global options defined in pdd/core/cli.py
+        GLOBAL_OPTIONS = {
+            "force", "strength", "temperature", "time", "verbose", "quiet",
+            "output_cost", "review_examples", "local", "context", "list_contexts", "core_dump"
+        }
 
-        # Merge args and options into params
-        # Convert hyphens to underscores in keys (CLI uses hyphens, Python uses underscores)
-        # Also convert string values to appropriate types for known options
-        params = {}
-        if args:
-            for key, value in args.items():
-                normalized_key = key.replace("-", "_")
-                params[normalized_key] = _convert_option_type(normalized_key, value)
+        # 1. Build ctx.obj with ONLY global options
+        obj = {**self._base_context_obj}
         if options:
             for key, value in options.items():
                 normalized_key = key.replace("-", "_")
-                params[normalized_key] = _convert_option_type(normalized_key, value)
+                if normalized_key in GLOBAL_OPTIONS:
+                    obj[normalized_key] = value
+
+        # 2. Build params dict for command execution
+        params = {}
+
+        # Handle args dict
+        if args:
+            # Special case: "args" key with list (for bug, change commands)
+            # These commands have @click.argument("args", nargs=-1)
+            if "args" in args and isinstance(args["args"], list):
+                # This is a variadic positional - pass as tuple
+                params["args"] = tuple(args["args"])
+            else:
+                # Regular positional arguments
+                for key, value in args.items():
+                    normalized_key = key.replace("-", "_")
+
+                    # Skip if this is a global option (shouldn't be in args, but be safe)
+                    if normalized_key in GLOBAL_OPTIONS:
+                        continue
+
+                    # Check if it's a variadic argument (nargs=-1)
+                    if _is_variadic_argument(command, normalized_key):
+                        # Convert list to tuple for variadic arguments
+                        if isinstance(value, list):
+                            params[normalized_key] = tuple(value)
+                        elif value is not None:
+                            # Single value - wrap in tuple
+                            params[normalized_key] = (value,)
+                        else:
+                            params[normalized_key] = ()
+                    else:
+                        # Regular argument - apply type conversion
+                        params[normalized_key] = _convert_option_type(normalized_key, value)
+
+        # Handle options (command-specific only)
+        if options:
+            for key, value in options.items():
+                normalized_key = key.replace("-", "_")
+
+                # Skip global options - already in ctx.obj
+                if normalized_key in GLOBAL_OPTIONS:
+                    continue
+
+                # Check if it's a multiple option (multiple=True)
+                if _is_multiple_option(command, normalized_key):
+                    # Convert list to tuple for multiple options
+                    if isinstance(value, list):
+                        params[normalized_key] = tuple(value)
+                    else:
+                        # Single value or other type - keep as-is
+                        params[normalized_key] = value
+                else:
+                    # Regular option - apply type conversion
+                    params[normalized_key] = _convert_option_type(normalized_key, value)
 
         # Create isolated context
         ctx = create_isolated_context(command, obj)
