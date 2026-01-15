@@ -24,6 +24,7 @@
 
 % Dependencies
   <pdd.core.cloud><include>context/cloud_example.py</include></pdd.core.cloud>
+  <config_example><include>context/server/routes/config_example.py</include></config_example>
 
 % Technical Constraints
   - Use async endpoint for FastAPI best practices
