@@ -256,29 +256,117 @@ class TestJWTCaching:
             if hasattr(jwt_module, 'JWT_CACHE_FILE'):
                 jwt_module.JWT_CACHE_FILE = tmp_path / "jwt_cache"
 
-            with patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token",
-                       return_value="refresh_token") as mock_keyring:
-                with patch("pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token",
-                           return_value="id_token_abc"):
-                    with patch("pdd.get_jwt_token.FirebaseAuthenticator.verify_firebase_token",
-                               return_value=True):
-                        # First call - may access keyring to get refresh token
-                        token1 = await get_jwt_token("key", "client")
-                        assert token1 == "id_token_abc"
-                        first_keyring_calls = mock_keyring.call_count
+            # Bypass audience check - mock token "id_token_abc" isn't valid JWT format,
+            # so audience extraction fails. When PDD_ENV is set by other tests,
+            # the audience mismatch would invalidate the cache.
+            with patch("pdd.get_jwt_token._get_expected_jwt_audience", return_value=None):
+                with patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token",
+                           return_value="refresh_token") as mock_keyring:
+                    with patch("pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token",
+                               return_value="id_token_abc"):
+                        with patch("pdd.get_jwt_token.FirebaseAuthenticator.verify_firebase_token",
+                                   return_value=True):
+                            # First call - may access keyring to get refresh token
+                            token1 = await get_jwt_token("key", "client")
+                            assert token1 == "id_token_abc"
+                            first_keyring_calls = mock_keyring.call_count
 
-                        # Second call - should use cached JWT, NOT access keyring
-                        token2 = await get_jwt_token("key", "client")
-                        assert token2 == "id_token_abc"
-                        second_keyring_calls = mock_keyring.call_count - first_keyring_calls
+                            # Second call - should use cached JWT, NOT access keyring
+                            token2 = await get_jwt_token("key", "client")
+                            assert token2 == "id_token_abc"
+                            second_keyring_calls = mock_keyring.call_count - first_keyring_calls
 
-                        # BUG: Currently fails because keyring accessed every time
-                        assert second_keyring_calls == 0, (
-                            f"Second call accessed keyring {second_keyring_calls} times. "
-                            "Expected 0 - JWT should be cached between calls to avoid "
-                            "repeated keyring/password prompts."
-                        )
+                            # BUG: Currently fails because keyring accessed every time
+                            assert second_keyring_calls == 0, (
+                                f"Second call accessed keyring {second_keyring_calls} times. "
+                                "Expected 0 - JWT should be cached between calls to avoid "
+                                "repeated keyring/password prompts."
+                            )
         finally:
             # Restore original JWT_CACHE_FILE to avoid affecting other tests
             if original_cache_file is not None:
                 jwt_module.JWT_CACHE_FILE = original_cache_file
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_with_no_browser_false(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser is opened when no_browser=False (default behavior).
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=False)
+    assert token == "id_token_abc"
+    # Verify browser.open was called
+    mock_browser_open.assert_called_once_with("https://github.com/login/device")
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open")
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_with_no_browser_true(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser is NOT opened when no_browser=True.
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=True)
+    assert token == "id_token_abc"
+    # Verify browser.open was NOT called
+    mock_browser_open.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.webbrowser.open", side_effect=Exception("Browser open failed"))
+@patch("pdd.get_jwt_token._cache_jwt")
+@patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._store_refresh_token")
+@patch("pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token", return_value=("id_token_abc", "refresh_token_new"))
+@patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_123")
+@patch("pdd.get_jwt_token.DeviceFlow.request_device_code", return_value={
+    "device_code": "test_device",
+    "user_code": "ABCD-EFGH",
+    "verification_uri": "https://github.com/login/device",
+    "interval": 5,
+    "expires_in": 900
+})
+@patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token", return_value=None)
+async def test_get_jwt_token_browser_open_error_handled(
+    mock_get_stored, mock_device_code, mock_poll, mock_exchange,
+    mock_store, mock_cache_read, mock_cache_write, mock_browser_open
+):
+    """
+    Test that browser opening errors are handled gracefully and auth still succeeds.
+    """
+    token = await get_jwt_token("fake_firebase_key", "fake_github_client", no_browser=False)
+    assert token == "id_token_abc"
+    # Verify browser.open was called but error was caught
+    mock_browser_open.assert_called_once_with("https://github.com/login/device")

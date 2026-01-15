@@ -375,6 +375,50 @@ export interface LoginPollResponse {
   message?: string;
 }
 
+// Remote session types
+export interface RemoteSessionInfo {
+  sessionId: string;
+  cloudUrl: string;
+  projectName: string;
+  projectPath: string;
+  createdAt: string;
+  lastHeartbeat: string;
+  status: 'active' | 'stale';
+  metadata: {
+    hostname: string;
+    platform: string;
+    pythonVersion: string;
+  };
+}
+
+export interface RemoteCommandRequest {
+  sessionId: string;
+  type: string; // "generate", "fix", "test", etc.
+  payload: {
+    args?: Record<string, any>;
+    options?: Record<string, any>;
+  };
+}
+
+export interface RemoteCommandStatus {
+  commandId: string;
+  type: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  updatedAt?: string;
+  response?: {
+    success?: boolean;
+    message?: string;
+    exit_code?: number;
+    stdout?: string;
+    stderr?: string;
+    files_created?: string[];
+    cost?: number;
+    streaming?: boolean;  // True when this is a streaming update (intermediate output)
+    error?: string;
+  };
+}
+
 // Global options that can be passed to any generation command
 export interface GenerationGlobalOptions {
   strength?: number;      // 0-1, model strength
@@ -425,6 +469,7 @@ export interface PromptGenerationResult {
 class PDDApiClient {
   private baseUrl: string;
   private wsBaseUrl: string;
+  private cachedCloudUrl: string | null = null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
@@ -465,9 +510,10 @@ class PDDApiClient {
     });
   }
 
-  async startLogin(): Promise<LoginResponse> {
+  async startLogin(options?: { no_browser?: boolean }): Promise<LoginResponse> {
     return this.request<LoginResponse>('/api/v1/auth/login', {
       method: 'POST',
+      body: JSON.stringify(options || {}),
     });
   }
 
@@ -920,6 +966,188 @@ class PDDApiClient {
     }
 
     return results;
+  }
+
+  // Remote session operations
+
+  /**
+   * Get JWT token from local cache.
+   * Returns null if not authenticated.
+   */
+  private async getJWTToken(): Promise<string | null> {
+    try {
+      // Call local server to get JWT token from cache
+      const response = await this.request<{ jwt: string | null }>('/api/v1/auth/jwt-token');
+      return response.jwt;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch cloud functions URL from server config.
+   * This ensures frontend uses the same cloud URL as CLI.
+   */
+  private async fetchCloudUrl(): Promise<string> {
+    try {
+      const response = await this.request<{ cloud_url: string; environment: string }>('/api/v1/config/cloud-url');
+      return response.cloud_url;
+    } catch (error) {
+      console.warn('Failed to fetch cloud URL from server, using default:', error);
+      // Fallback to environment variable or staging default
+      return import.meta.env.VITE_CLOUD_URL || 'https://us-central1-prompt-driven-development.cloudfunctions.net';
+    }
+  }
+
+  /**
+   * Get cloud functions URL (cached or fetch from server).
+   */
+  private async getCloudUrl(): Promise<string> {
+    if (!this.cachedCloudUrl) {
+      this.cachedCloudUrl = await this.fetchCloudUrl();
+    }
+    return this.cachedCloudUrl;
+  }
+
+  /**
+   * List remote sessions for authenticated user.
+   * Fetches from cloud, requires JWT token.
+   */
+  async listRemoteSessions(): Promise<RemoteSessionInfo[]> {
+    const token = await this.getJWTToken();
+    if (!token) {
+      throw new Error('Not authenticated. Please run: pdd auth login');
+    }
+
+    const cloudUrl = await this.getCloudUrl();
+    const response = await fetch(`${cloudUrl}/listSessions`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(error.error || `Failed to list sessions: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.sessions || [];
+  }
+
+  /**
+   * Submit command to remote session.
+   * Returns command ID for polling status.
+   */
+  async submitRemoteCommand(request: RemoteCommandRequest): Promise<{ commandId: string; status: string }> {
+    const token = await this.getJWTToken();
+    if (!token) {
+      throw new Error('Not authenticated. Please run: pdd auth login');
+    }
+
+    const cloudUrl = await this.getCloudUrl();
+    const response = await fetch(`${cloudUrl}/submitCommand`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(error.error || `Failed to submit command: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  /**
+   * Poll command status for remote session.
+   * Fetches status of a single command by ID (any status, not just pending).
+   */
+  async getRemoteCommandStatus(
+    sessionId: string,
+    commandId: string
+  ): Promise<RemoteCommandStatus | null> {
+    const token = await this.getJWTToken();
+    if (!token) {
+      throw new Error('Not authenticated. Please run: pdd auth login');
+    }
+
+    const cloudUrl = await this.getCloudUrl();
+    const response = await fetch(
+      `${cloudUrl}/getCommandStatus?sessionId=${encodeURIComponent(sessionId)}&commandId=${encodeURIComponent(commandId)}`,
+      {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return null; // Command not found
+      }
+      const error = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(error.error || `Failed to get command status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const command = data.command;
+
+    if (!command) {
+      return null;
+    }
+
+    // Map cloud response to RemoteCommandStatus
+    return {
+      commandId: command.commandId,
+      type: command.type,
+      status: command.status,
+      createdAt: command.createdAt,
+      updatedAt: command.updatedAt,
+      response: command.response,
+    };
+  }
+
+  /**
+   * Cancel a pending or processing remote command.
+   *
+   * @param sessionId - The remote session ID
+   * @param commandId - The command ID to cancel
+   * @returns Success response with cancellation confirmation
+   */
+  async cancelRemoteCommand(params: {
+    sessionId: string;
+    commandId: string;
+  }): Promise<{ success: boolean; message: string }> {
+    const token = await this.getJWTToken();
+    if (!token) {
+      throw new Error('Not authenticated. Please run: pdd auth login');
+    }
+
+    const cloudUrl = await this.getCloudUrl();
+    const response = await fetch(`${cloudUrl}/cancelCommand`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: response.statusText }));
+      throw new Error(error.error || `Failed to cancel command: ${response.status}`);
+    }
+
+    return response.json();
   }
 
   // WebSocket for job streaming

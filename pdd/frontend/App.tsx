@@ -11,8 +11,10 @@ import AddToQueueModal from './components/AddToQueueModal';
 import AuthStatusIndicator from './components/AuthStatusIndicator';
 import ReauthModal from './components/ReauthModal';
 import ErrorBoundary from './components/ErrorBoundary';
+import RemoteSessionSelector from './components/RemoteSessionSelector';
+import ExecutionModeToggle from './components/ExecutionModeToggle';
 import DeviceIndicator from './components/DeviceIndicator';
-import { api, PromptInfo, RunResult, CommandRequest } from './api';
+import { api, PromptInfo, RunResult, CommandRequest, RemoteSessionInfo } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
 import { useJobs, JobInfo } from './hooks/useJobs';
 import { useTaskQueue } from './hooks/useTaskQueue';
@@ -62,6 +64,12 @@ const App: React.FC = () => {
   // Toast notifications
   const { addToast } = useToast();
 
+  // Remote session state
+  const [executionMode, setExecutionMode] = useState<'local' | 'remote'>('local');
+  const [remoteSessions, setRemoteSessions] = useState<RemoteSessionInfo[]>([]);
+  const [selectedRemoteSession, setSelectedRemoteSession] = useState<string | null>(null);
+  const [remoteSessionError, setRemoteSessionError] = useState<string | null>(null);
+
   // Task queue for sequential execution
   const taskQueue = useTaskQueue({
     onTaskStart: (task) => {
@@ -103,29 +111,50 @@ const App: React.FC = () => {
     setSelectedJobId,
     addSpawnedJob,
     markSpawnedJobDone,
+    markJobStatus,
+    updateSpawnedJobStatus,
   } = useJobs({ onJobComplete: handleJobComplete });
 
-  // Create a spawnTerminal-based job runner for the task queue
-  // This matches how handleRunCommand works - spawns a new terminal window
+  // Create a job runner for the task queue that respects execution mode
+  // Matches handleRunCommand behavior - routes to remote or local based on mode
   const spawnTerminalJob = useCallback(async (
     request: CommandRequest,
     displayCommand: string
   ): Promise<string | null> => {
     try {
-      const result = await api.spawnTerminal(request);
-      if (result.success && result.job_id) {
-        // Add to job dashboard for tracking
-        addSpawnedJob(displayCommand, request.command, result.job_id);
-        return result.job_id;
+      // Check if we're in remote mode with a selected session
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Submit to remote session via cloud
+        const { commandId } = await api.submitRemoteCommand({
+          sessionId: selectedRemoteSession,
+          type: request.command,
+          payload: { args: request.args, options: request.options },
+        });
+        // Add to job dashboard as remote job
+        addSpawnedJob(
+          `[Remote] ${displayCommand}`,
+          request.command,
+          commandId,
+          { remote: true, sessionId: selectedRemoteSession }
+        );
+        return commandId;
       } else {
-        console.error('Failed to spawn terminal:', result.message);
-        return null;
+        // Local execution - spawn in new terminal window
+        const result = await api.spawnTerminal(request);
+        if (result.success && result.job_id) {
+          // Add to job dashboard for tracking
+          addSpawnedJob(displayCommand, request.command, result.job_id);
+          return result.job_id;
+        } else {
+          console.error('Failed to spawn terminal:', result.message);
+          return null;
+        }
       }
     } catch (error) {
-      console.error('Failed to spawn terminal:', error);
+      console.error('Failed to submit job:', error);
       return null;
     }
-  }, [addSpawnedJob]);
+  }, [addSpawnedJob, executionMode, selectedRemoteSession]);
 
   // Connect the spawnTerminal job runner to the task queue
   useEffect(() => {
@@ -195,6 +224,42 @@ const App: React.FC = () => {
       });
     }
   }, [serverConnected, pendingPromptPath]);
+
+  // Fetch remote sessions on mount and refresh every 30 seconds
+  useEffect(() => {
+    if (!serverConnected) return;
+
+    const fetchRemoteSessions = async () => {
+      try {
+        const sessions = await api.listRemoteSessions();
+        setRemoteSessions(sessions);
+        setRemoteSessionError(null); // Clear any previous errors
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('Failed to fetch remote sessions:', errorMsg);
+        setRemoteSessionError(errorMsg);
+
+        // Parse error type and show appropriate toast
+        if (errorMsg.includes('Not authenticated') || errorMsg.includes('401') || errorMsg.includes('403')) {
+          // Don't spam toast for auth errors - user might not be logged in yet
+          // Error will be shown in debug panel
+        } else if (errorMsg.includes('timeout') || errorMsg.includes('network') || errorMsg.includes('Failed to fetch')) {
+          addToast('Network error: Cannot reach cloud. Check your connection.', 'error', 5000);
+        } else {
+          addToast(`Failed to load remote sessions: ${errorMsg}`, 'error', 5000);
+        }
+      }
+    };
+
+    // Initial fetch
+    fetchRemoteSessions();
+
+    // Refresh every 30s
+    const interval = setInterval(fetchRemoteSessions, 30000);
+
+    return () => clearInterval(interval);
+  }, [serverConnected, addToast]);
+
 
   const handleRunCommand = async (command: CommandType, prompt: PromptInfo, commandOptions?: Record<string, any>) => {
     if (!serverConnected) {
@@ -369,21 +434,68 @@ const App: React.FC = () => {
         }
       }
 
-      // Spawn command in a new terminal window for complete isolation
-      const result = await api.spawnTerminal({
-        command: config.backendName,
-        args,
-        options,
-      });
+      // Check if we're in remote mode
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Validate session is not stale before submitting
+        const selectedSession = remoteSessions.find(s => s.sessionId === selectedRemoteSession);
+        if (selectedSession?.status === 'stale') {
+          const shouldContinue = window.confirm(
+            'Warning: The selected session appears to be offline (stale).\n\n' +
+            'The remote machine may not be running or has lost connection.\n' +
+            'The command may not be executed.\n\n' +
+            'Do you want to submit anyway?'
+          );
+          if (!shouldContinue) {
+            setIsExecuting(false);
+            setExecutionStatus('idle');
+            return;
+          }
+        }
 
-      if (result.success) {
-        // Add to job dashboard for tracking with server-provided job_id
-        addSpawnedJob(fullDisplayCommand, config.backendName, result.job_id);
-        setExecutionStatus('success');
-        addToast(`Opened terminal: ${fullDisplayCommand}`, 'success', 3000);
+        // Submit command to remote session via cloud
+        try {
+          const { commandId } = await api.submitRemoteCommand({
+            sessionId: selectedRemoteSession,
+            type: config.backendName,
+            payload: { args, options },
+          });
+
+          // Add to job dashboard as a remote job
+          // useJobs.ts will automatically poll for status updates on remote jobs
+          addSpawnedJob(
+            `[Remote] ${fullDisplayCommand}`,
+            config.backendName,
+            commandId,
+            { remote: true, sessionId: selectedRemoteSession }
+          );
+
+          setExecutionStatus('success');
+          addToast(`Command submitted to remote session`, 'success', 3000);
+        } catch (error) {
+          setExecutionStatus('failed');
+          addToast(
+            `Failed to submit remote command: ${error instanceof Error ? error.message : String(error)}`,
+            'error',
+            5000
+          );
+        }
       } else {
-        setExecutionStatus('failed');
-        addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+        // Local execution: Spawn command in a new terminal window for complete isolation
+        const result = await api.spawnTerminal({
+          command: config.backendName,
+          args,
+          options,
+        });
+
+        if (result.success) {
+          // Add to job dashboard for tracking with server-provided job_id
+          addSpawnedJob(fullDisplayCommand, config.backendName, result.job_id);
+          setExecutionStatus('success');
+          addToast(`Opened terminal: ${fullDisplayCommand}`, 'success', 3000);
+        } else {
+          setExecutionStatus('failed');
+          addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+        }
       }
 
       // Clear the status bar after a short delay
@@ -611,6 +723,34 @@ const App: React.FC = () => {
               >
                 <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1" />Settings
               </button>
+            </div>
+
+            {/* Remote session controls - responsive */}
+            <div className="flex items-center gap-2 md:gap-3 px-2 md:px-4 py-1.5 md:py-2 bg-surface-800/30 rounded-xl border border-surface-700/50">
+              <RemoteSessionSelector
+                sessions={remoteSessions}
+                selectedSessionId={selectedRemoteSession}
+                onSelectSession={setSelectedRemoteSession}
+                disabled={!serverConnected}
+                error={remoteSessionError}
+                onRefresh={async () => {
+                  try {
+                    const sessions = await api.listRemoteSessions();
+                    setRemoteSessions(sessions);
+                    setRemoteSessionError(null);
+                    addToast('Sessions refreshed', 'success', 2000);
+                  } catch (err) {
+                    const errorMsg = err instanceof Error ? err.message : String(err);
+                    setRemoteSessionError(errorMsg);
+                    addToast('Failed to refresh sessions', 'error', 3000);
+                  }
+                }}
+              />
+              <ExecutionModeToggle
+                mode={executionMode}
+                onModeChange={setExecutionMode}
+                disabled={!selectedRemoteSession && executionMode === 'remote'}
+              />
             </div>
 
             {/* Server status - responsive */}
@@ -884,6 +1024,7 @@ const App: React.FC = () => {
         onRemoveJob={removeJob}
         onClearCompleted={clearCompletedJobs}
         onMarkSpawnedDone={markSpawnedJobDone}
+        onMarkJobStatus={markJobStatus}
         batchOperation={batchOperation}
         onCancelBatchOperation={handleCancelBatchOperation}
       />

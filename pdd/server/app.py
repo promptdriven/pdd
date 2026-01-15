@@ -24,6 +24,7 @@ from .jobs import JobManager
 from .routes.websocket import ConnectionManager, create_websocket_routes
 from .routes import architecture, auth, files, commands, prompts
 from .routes import websocket as ws_routes
+from .routes.config import router as config_router
 
 # Initialize Rich console
 console = Console()
@@ -50,7 +51,7 @@ class AppState:
         self.path_validator = PathValidator(self.project_root)
         # SAFETY: Limit concurrent jobs to 3 - LLM calls are resource-intensive
         # Running too many in parallel can exhaust memory/CPU and crash the system
-        self.job_manager = JobManager(max_concurrent=3)
+        self.job_manager = JobManager(max_concurrent=3, project_root=self.project_root)
         self.connection_manager = ConnectionManager()
 
     @property
@@ -138,16 +139,33 @@ async def lifespan(app: FastAPI):
     Handles startup initialization and shutdown cleanup.
     """
     state = get_app_state()
-    
+
     # Startup
     console.print(f"[green]PDD Server starting...[/green]")
     console.print(f"Project Root: [bold]{state.project_root}[/bold]")
-    
+
+    # Start remote session heartbeat and command polling if configured
+    from ..remote_session import get_active_session_manager
+    session_manager = get_active_session_manager()
+    if session_manager:
+        session_manager.start_heartbeat()
+        session_manager.start_command_polling()
+        console.print("[dim]Remote session heartbeat and command polling started[/dim]")
+
     yield
-    
+
     # Shutdown
     console.print("[yellow]Shutting down PDD Server...[/yellow]")
-    
+
+    # Stop remote session heartbeat and command polling
+    if session_manager:
+        try:
+            await session_manager.stop_heartbeat()
+            await session_manager.stop_command_polling()
+            console.print("[dim]Remote session heartbeat and command polling stopped[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Error stopping remote session tasks: {e}[/yellow]")
+
     # Cancel active jobs
     try:
         active_jobs = state.job_manager.get_active_jobs()
@@ -156,7 +174,7 @@ async def lifespan(app: FastAPI):
             await state.job_manager.shutdown()
     except Exception as e:
         console.print(f"[red]Error during job manager shutdown: {e}[/red]")
-    
+
     console.print("[green]Shutdown complete.[/green]")
 
 
@@ -227,6 +245,7 @@ def create_app(
 
     app.include_router(architecture.router)
     app.include_router(auth.router)
+    app.include_router(config_router)
     app.include_router(files.router)
     app.include_router(commands.router)
     app.include_router(prompts.router)

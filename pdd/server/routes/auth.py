@@ -19,6 +19,7 @@ from pdd.auth_service import (
     has_refresh_token as _has_refresh_token,
     clear_jwt_cache as _clear_jwt_cache,
     clear_refresh_token as _clear_refresh_token,
+    get_cached_jwt as _get_cached_jwt,
 )
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -44,6 +45,12 @@ class LogoutResult(BaseModel):
 
     success: bool
     message: str
+
+
+class LoginRequest(BaseModel):
+    """Request model for starting login flow."""
+
+    no_browser: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -82,6 +89,24 @@ async def get_auth_status() -> AuthStatus:
         return AuthStatus(authenticated=True, cached=False, expires_at=None)
 
     return AuthStatus(authenticated=False, cached=False, expires_at=None)
+
+
+class JWTTokenResponse(BaseModel):
+    """Response model for JWT token."""
+
+    jwt: Optional[str] = None
+
+
+@router.get("/jwt-token", response_model=JWTTokenResponse)
+async def get_jwt_token() -> JWTTokenResponse:
+    """
+    Get the current JWT token from cache.
+
+    Returns the cached JWT token if valid, otherwise returns null.
+    Used by the frontend to authenticate with cloud services.
+    """
+    token = _get_cached_jwt()
+    return JWTTokenResponse(jwt=token)
 
 
 @router.post("/logout", response_model=LogoutResult)
@@ -174,13 +199,16 @@ async def _poll_for_auth(poll_id: str, device_code: str, interval: int, expires_
 
 
 @router.post("/login", response_model=LoginResponse)
-async def start_login(background_tasks: BackgroundTasks) -> LoginResponse:
+async def start_login(
+    background_tasks: BackgroundTasks,
+    request: LoginRequest = LoginRequest()
+) -> LoginResponse:
     """
     Start GitHub Device Flow authentication.
 
     Clears existing tokens and initiates a new GitHub Device Flow.
     Returns the user code and verification URL for the user to complete authentication.
-    Opens the browser automatically.
+    Opens the browser automatically unless no_browser is True.
     """
     # Check for required environment variables
     github_client_id = os.environ.get(GITHUB_CLIENT_ID_ENV)
@@ -216,9 +244,16 @@ async def start_login(background_tasks: BackgroundTasks) -> LoginResponse:
             "created_at": time.time(),
         }
 
-        # Open browser for user
+        # Open browser for user (unless disabled)
         verification_uri = device_code_response["verification_uri"]
-        webbrowser.open(verification_uri)
+
+        if not request.no_browser:
+            try:
+                webbrowser.open(verification_uri)
+            except Exception as e:
+                # Log error but don't fail - user can still open manually
+                import logging
+                logging.warning(f"Failed to open browser: {e}")
 
         # Start background polling task
         background_tasks.add_task(
@@ -262,3 +297,68 @@ async def poll_login_status(poll_id: str) -> LoginPollResponse:
             del _active_sessions[poll_id]
 
     return LoginPollResponse(status=session["status"], message=session.get("message"))
+
+
+class CloudConnectionTestResponse(BaseModel):
+    """Response model for cloud connection test."""
+
+    connected: bool
+    session_count: Optional[int] = None
+    error: Optional[str] = None
+    cloud_url: str
+    environment: str
+
+
+@router.get("/test-cloud-connection", response_model=CloudConnectionTestResponse)
+async def test_cloud_connection() -> CloudConnectionTestResponse:
+    """
+    Test JWT token validity by calling cloud's /listSessions endpoint.
+
+    This helps diagnose connectivity issues and validates that:
+    1. JWT token is present and valid
+    2. Cloud URL is accessible
+    3. Token has correct permissions
+
+    Returns:
+        CloudConnectionTestResponse with connection status and session count
+    """
+    from pdd.core.cloud import CloudConfig
+    from pdd.remote_session import RemoteSessionManager
+    import os
+
+    cloud_url = CloudConfig.get_base_url()
+    environment = os.environ.get("PDD_ENV", "production")
+
+    # Get JWT token
+    jwt_token = _get_cached_jwt()
+    if not jwt_token:
+        return CloudConnectionTestResponse(
+            connected=False,
+            error="No JWT token found. Please authenticate with 'pdd auth login'.",
+            cloud_url=cloud_url,
+            environment=environment
+        )
+
+    # Try to list sessions
+    try:
+        sessions = await RemoteSessionManager.list_sessions(jwt_token)
+        return CloudConnectionTestResponse(
+            connected=True,
+            session_count=len(sessions),
+            cloud_url=cloud_url,
+            environment=environment
+        )
+    except Exception as e:
+        error_msg = str(e)
+        # Parse common error types
+        if "401" in error_msg or "403" in error_msg or "Unauthorized" in error_msg:
+            error_msg = f"Authentication failed: {error_msg}. Token may be expired or invalid."
+        elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+            error_msg = f"Network error: {error_msg}. Cloud may be unreachable."
+
+        return CloudConnectionTestResponse(
+            connected=False,
+            error=error_msg,
+            cloud_url=cloud_url,
+            environment=environment
+        )

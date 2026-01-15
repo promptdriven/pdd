@@ -1,0 +1,54 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/sessions.py`.
+
+% Role & Scope
+  This module provides CLI commands for managing remote PDD sessions registered with PDD Cloud.
+  It allows users to list, inspect, and cleanup remote sessions that were registered via `pdd connect`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **sessions command group**:
+     - Click group named "sessions"
+     - Docstring: "Manage remote PDD sessions."
+
+  2. **sessions list command**:
+     - Lists all active remote sessions for the authenticated user
+     - Options:
+       - `--json`: Output as JSON instead of table
+     - Display columns: SESSION ID (truncated to 8 chars), PROJECT, CLOUD URL, STATUS, LAST SEEN
+     - Color-code status: green for "active", yellow for "stale"
+     - Handle unauthenticated state with error message
+     - Use RemoteSessionManager.list_sessions() static method
+
+  3. **sessions info command**:
+     - Takes session_id as argument
+     - Displays detailed information about a specific session
+     - Format as key-value table (snake_case converted to Title Case)
+     - Handle session not found gracefully
+     - Use RemoteSessionManager.get_session() static method
+
+  4. **sessions cleanup command**:
+     - Options:
+       - `--all`: Cleanup all sessions (including active)
+       - `--stale`: Cleanup only stale sessions
+       - `--force`: Skip confirmation prompt
+     - Interactive mode (no flags): Show sessions with numbers, let user select
+     - User can enter: session numbers (comma-separated), "stale", "all", or empty to cancel
+     - Confirm before cleanup (unless --force)
+     - Show progress and summary (success/fail counts)
+     - Use RemoteSessionManager.deregister() to cleanup each session
+
+% Dependencies
+  <pdd.core.cloud><include>context/cloud_example.py</include></pdd.core.cloud>
+  <pdd.remote_session><include>context/remote_session_example.py</include></pdd.remote_session>
+
+% Technical Constraints
+  - Use asyncio.run() to call async methods from sync CLI commands
+  - Use rich.console.Console for output
+  - Use rich.table.Table for tabular display
+  - Handle Pydantic v1/v2 and dataclass objects (model_dump, dict, __dict__)
+  - Get JWT token via CloudConfig.get_jwt_token()
+
+% Deliverables
+  - Code: `pdd/commands/sessions.py`
+  - Exports: sessions (Click group)

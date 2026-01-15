@@ -45,7 +45,7 @@
      - Generic Exception -> 500 with safe error message
 
   6. **Route registration**:
-     - Include routers from: routes.files, routes.commands, routes.prompts
+     - Include routers from: routes.files, routes.commands, routes.prompts, routes.session
      - WebSocket routes via create_websocket_routes(app, connection_manager, job_manager)
        - Pass job_manager to enable WebSocket callbacks for job output streaming
      - Status endpoint at /api/v1/status returning ServerStatus

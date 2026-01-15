@@ -20,6 +20,7 @@
     - `templates_group` (from `.templates`)
     - `connect` (from `.connect`) - Web frontend server command
     - `auth_group` (from `.auth`) - PDD Cloud authentication management
+    - `sessions` (from `.sessions`) - Remote session management command group
 
 % Instructions
   - Ensure clean imports.

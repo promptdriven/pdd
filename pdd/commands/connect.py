@@ -7,6 +7,7 @@ REST server to enable the web frontend to interact with PDD.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import webbrowser
 from pathlib import Path
@@ -64,6 +65,16 @@ except (ImportError, ValueError):
     help="Custom frontend URL",
     default=None,
 )
+@click.option(
+    "--local-only",
+    is_flag=True,
+    help="Skip cloud registration (local access only)",
+)
+@click.option(
+    "--session-name",
+    help="Custom session name for identification",
+    default=None,
+)
 @click.pass_context
 def connect(
     ctx: click.Context,
@@ -73,6 +84,8 @@ def connect(
     token: Optional[str],
     no_browser: bool,
     frontend_url: Optional[str],
+    local_only: bool,
+    session_name: Optional[str],
 ) -> None:
     """
     Launch the local REST server for the PDD web frontend.
@@ -80,6 +93,9 @@ def connect(
     This command starts a FastAPI server that exposes the PDD functionality
     via a REST API. It automatically opens the web interface in your default
     browser unless --no-browser is specified.
+
+    For authenticated users, the session is automatically registered with
+    PDD Cloud for remote access. Use --local-only to skip cloud registration.
     """
     # Check uvicorn is available
     if uvicorn is None:
@@ -133,9 +149,76 @@ def connect(
         "http://127.0.0.1:5173",
         f"http://localhost:{port}",
         f"http://127.0.0.1:{port}",
+        # PDD Cloud frontend
+        "https://pdd.dev",
+        "https://www.pdd.dev",
     ]
     if frontend_url:
         allowed_origins.append(frontend_url)
+
+    # 4.5 Cloud Session Registration (automatic for authenticated users)
+    session_manager = None
+    cloud_url = None
+    if not local_only:
+        try:
+            from ..core.cloud import CloudConfig
+            from ..remote_session import (
+                RemoteSessionManager,
+                RemoteSessionError,
+                set_active_session_manager,
+            )
+
+            # Check if user is authenticated
+            jwt_token = CloudConfig.get_jwt_token(verbose=False)
+            if not jwt_token:
+                click.echo(click.style(
+                    "Not authenticated. Running in local-only mode.",
+                    dim=True
+                ))
+                click.echo(click.style(
+                    "Run 'pdd login' to enable remote access via cloud.",
+                    dim=True
+                ))
+            else:
+                click.echo("Registering session with PDD Cloud...")
+                session_manager = RemoteSessionManager(jwt_token, project_root)
+                try:
+                    # Register with cloud - no public URL needed, cloud hosts everything
+                    cloud_url = asyncio.run(session_manager.register(
+                        session_name=session_name,
+                    ))
+                    # Heartbeat will be started by the app's lifespan manager
+                    set_active_session_manager(session_manager)
+
+                    click.echo(click.style(
+                        "Session registered with PDD Cloud!", fg="green", bold=True
+                    ))
+                    # TODO: Re-enable when production /connect page is deployed
+                    # click.echo(f"  Access URL: {click.style(cloud_url, fg='cyan', underline=True)}")
+                    # click.echo(click.style(
+                    #     "  Share this URL to access your PDD session from any browser.",
+                    #     dim=True
+                    # ))
+                except RemoteSessionError as e:
+                    click.echo(click.style(
+                        f"Warning: Failed to register with cloud: {e.message}",
+                        fg="yellow"
+                    ))
+                    click.echo(click.style(
+                        "Running in local-only mode.",
+                        dim=True
+                    ))
+                    session_manager = None
+        except ImportError as e:
+            click.echo(click.style(
+                f"Running in local-only mode (cloud dependencies not available).",
+                dim=True
+            ))
+    else:
+        click.echo(click.style(
+            "Running in local-only mode (--local-only flag set).",
+            dim=True
+        ))
 
     # 5. Initialize Server App
     try:
@@ -152,27 +235,39 @@ def connect(
     click.echo(click.style(f"Starting PDD server on {server_url}", fg="green", bold=True))
     click.echo(f"Project Root: {click.style(str(project_root), fg='blue')}")
     click.echo(f"API Documentation: {click.style(f'{server_url}/docs', underline=True)}")
-    click.echo(f"Frontend: {click.style(target_url, underline=True)}")
+    click.echo(f"Local Frontend: {click.style(target_url, underline=True)}")
+    # TODO: Re-enable when production /connect page is deployed
+    # if cloud_url:
+    #     click.echo(f"Remote Access: {click.style(cloud_url, fg='cyan', underline=True)}")
     click.echo(click.style("Press Ctrl+C to stop the server", dim=True))
 
     # 7. Open Browser
     if not no_browser:
+        # Import remote session detection
+        from ..core.remote_session import is_remote_session
+
+        is_remote, reason = is_remote_session()
+        if is_remote:
+            click.echo(click.style(f"Note: {reason}", fg="yellow"))
+            click.echo("Opening browser may not work in remote sessions. Use the URL above to connect manually.")
+
         click.echo("Opening browser...")
         try:
             webbrowser.open(target_url)
         except Exception as e:
             click.echo(click.style(f"Could not open browser: {e}", fg="yellow"))
+            click.echo(f"Please open {target_url} manually in your browser.")
 
     # 8. Run Server
     try:
         # Run uvicorn
-        # We use log_level="info" to show access logs, but suppress excessive debug info
+        # Disable access_log to avoid noisy polling logs - custom middleware handles important logging
         uvicorn.run(
             app,
             host=host,
             port=port,
-            log_level="info",
-            access_log=True
+            log_level="warning",  # Only show warnings and errors from uvicorn
+            access_log=False  # Custom middleware handles request logging
         )
     except KeyboardInterrupt:
         click.echo(click.style("\nServer stopping...", fg="yellow", bold=True))
@@ -180,4 +275,16 @@ def connect(
         click.echo(click.style(f"\nServer error: {e}", fg="red", bold=True))
         ctx.exit(1)
     finally:
+        # Clean up cloud session if registered
+        if session_manager is not None:
+            click.echo("Deregistering from PDD Cloud...")
+            try:
+                from ..remote_session import set_active_session_manager
+                asyncio.run(session_manager.stop_heartbeat())
+                asyncio.run(session_manager.deregister())
+                set_active_session_manager(None)
+                click.echo(click.style("Session deregistered.", fg="green"))
+            except Exception as e:
+                click.echo(click.style(f"Warning: Error during session cleanup: {e}", fg="yellow"))
+
         click.echo(click.style("Goodbye!", fg="blue"))

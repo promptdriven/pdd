@@ -75,7 +75,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
-staging*
+staging/
+*.staging.log
+.staging_*
 
 # Translations
 *.mo

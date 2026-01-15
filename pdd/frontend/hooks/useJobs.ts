@@ -27,6 +27,11 @@ export interface JobInfo {
   startedAt: Date;
   completedAt: Date | null;
   error: string | null;
+  metadata?: {
+    remote?: boolean;
+    sessionId?: string;
+    [key: string]: any;
+  };
 }
 
 interface UseJobsOptions {
@@ -238,10 +243,37 @@ export function useJobs(options: UseJobsOptions = {}) {
 
   /**
    * Cancel a running job.
+   * Handles both local jobs (WebSocket/REST) and remote jobs (cloud API).
    */
   const cancelJob = useCallback(async (jobId: string) => {
     try {
-      // Send cancel via WebSocket if connected
+      const job = jobs.get(jobId);
+
+      // Check if this is a remote job
+      if (job?.metadata?.remote && job?.metadata?.sessionId) {
+        // Remote job - use cloud API
+        await api.cancelRemoteCommand({
+          sessionId: job.metadata.sessionId,
+          commandId: jobId,
+        });
+
+        // Update local state
+        setJobs((prev) => {
+          const updated = new Map(prev);
+          const job = updated.get(jobId);
+          if (job) {
+            updated.set(jobId, {
+              ...job,
+              status: 'cancelled',
+              completedAt: new Date(),
+            });
+          }
+          return updated;
+        });
+        return;
+      }
+
+      // Local job - existing WebSocket/REST logic
       const ws = wsConnections.current.get(jobId);
       if (ws && ws.readyState === WebSocket.OPEN) {
         api.sendCancelRequest(ws);
@@ -265,7 +297,23 @@ export function useJobs(options: UseJobsOptions = {}) {
       });
     } catch (error) {
       console.error('Failed to cancel job:', error);
+      throw error;
     }
+  }, [jobs]);
+
+  /**
+   * Update the status and details of a spawned job.
+   * Used for remote job polling to update job state when status changes.
+   */
+  const updateSpawnedJobStatus = useCallback((jobId: string, updates: Partial<JobInfo>) => {
+    setJobs((prev) => {
+      const updated = new Map(prev);
+      const job = updated.get(jobId);
+      if (job) {
+        updated.set(jobId, { ...job, ...updates });
+      }
+      return updated;
+    });
   }, []);
 
   /**
@@ -308,8 +356,14 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Add a spawned terminal job to the dashboard.
    * These jobs run in separate terminal windows with automatic completion tracking.
    * The terminal script calls back to the server when done.
+   * For remote jobs, metadata should include { remote: true, sessionId: string }.
    */
-  const addSpawnedJob = useCallback((displayCommand: string, command: string, serverJobId?: string): string => {
+  const addSpawnedJob = useCallback((
+    displayCommand: string,
+    command: string,
+    serverJobId?: string,
+    metadata?: { remote?: boolean; sessionId?: string; [key: string]: any }
+  ): string => {
     // Use server-provided job ID if available, otherwise generate one
     const jobId = serverJobId || `spawned-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
@@ -320,7 +374,9 @@ export function useJobs(options: UseJobsOptions = {}) {
       status: 'running',
       progress: null,
       output: [
-        'Command running in separate terminal window.',
+        metadata?.remote
+          ? 'Command running on remote session.'
+          : 'Command running in separate terminal window.',
         '',
         'Status will update automatically when command completes.',
       ],
@@ -328,6 +384,7 @@ export function useJobs(options: UseJobsOptions = {}) {
       startedAt: new Date(),
       completedAt: null,
       error: null,
+      metadata,
     };
 
     setJobs((prev) => {
@@ -356,6 +413,34 @@ export function useJobs(options: UseJobsOptions = {}) {
         });
         if (onJobComplete) {
           onJobComplete({ ...job, status: success ? 'completed' : 'failed' }, success);
+        }
+      }
+      return updated;
+    });
+  }, [onJobComplete]);
+
+  /**
+   * Manually mark any job with a final status (completed, failed, or cancelled).
+   * Useful for remote jobs when automatic status detection isn't working.
+   */
+  const markJobStatus = useCallback((jobId: string, status: 'completed' | 'failed' | 'cancelled') => {
+    setJobs((prev) => {
+      const updated = new Map(prev);
+      const job = updated.get(jobId);
+      if (job) {
+        const statusMessages: Record<string, string> = {
+          completed: '✓ Manually marked as completed by user.',
+          failed: '✗ Manually marked as failed by user.',
+          cancelled: '⚠ Manually marked as cancelled by user.',
+        };
+        updated.set(jobId, {
+          ...job,
+          status,
+          completedAt: new Date(),
+          output: [...job.output, '', statusMessages[status]],
+        });
+        if (onJobComplete) {
+          onJobComplete({ ...job, status }, status === 'completed');
         }
       }
       return updated;
@@ -415,6 +500,142 @@ export function useJobs(options: UseJobsOptions = {}) {
     return () => clearInterval(pollInterval);
   }, [jobs, onJobComplete]);
 
+  /**
+   * Poll for remote job status updates.
+   * Remote jobs run on a different machine and we poll the cloud for status updates.
+   * Uses jobsRef to always get the latest job state inside the polling callback.
+   */
+  useEffect(() => {
+    // Check if there are any remote running jobs
+    const hasRemoteRunningJobs = Array.from(jobs.values()).some(
+      (j) => j.metadata?.remote && j.status === 'running'
+    );
+
+    if (!hasRemoteRunningJobs) return;
+
+    const pollInterval = setInterval(async () => {
+      // Use jobsRef to get the LATEST jobs state (avoid stale closure)
+      const currentJobs = jobsRef.current;
+      const remoteRunningJobs = Array.from(currentJobs.values()).filter(
+        (j) => j.metadata?.remote && j.status === 'running'
+      );
+
+      for (const job of remoteRunningJobs) {
+        if (!job.metadata?.sessionId) continue;
+
+        try {
+          const status = await api.getRemoteCommandStatus(
+            job.metadata.sessionId,
+            job.id
+          );
+
+          if (!status) continue;
+
+          // Debug logging for remote job polling
+          console.log(`[RemotePoll] Job ${job.id}:`, status.status, status.response?.success);
+
+          // Update output if streaming - parse line by line
+          if (status.status === 'processing' && status.response?.streaming) {
+            setJobs((prev) => {
+              const updated = new Map(prev);
+              const currentJob = updated.get(job.id);
+              if (currentJob && currentJob.status === 'running') {
+                // Parse stdout and stderr into lines
+                const newLines: string[] = [];
+                if (status.response?.stdout) {
+                  const stdoutLines = status.response.stdout.split('\n').filter((l: string) => l.trim());
+                  newLines.push(...stdoutLines);
+                }
+                if (status.response?.stderr) {
+                  const stderrLines = status.response.stderr.split('\n').filter((l: string) => l.trim());
+                  newLines.push(...stderrLines.map((l: string) => `[stderr] ${l}`));
+                }
+
+                if (newLines.length > 0) {
+                  // Replace the placeholder message with actual output
+                  const isPlaceholder = currentJob.output.length <= 3 &&
+                    currentJob.output.some((line: string) =>
+                      line.includes('Command running') || line.includes('Status will update')
+                    );
+
+                  updated.set(job.id, {
+                    ...currentJob,
+                    output: isPlaceholder ? newLines : newLines,
+                  });
+                }
+              }
+              return updated;
+            });
+          }
+
+          // Check for completion
+          if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
+            const success = status.status === 'completed';
+            const cancelled = status.status === 'cancelled';
+
+            console.log(`[RemotePoll] Job ${job.id} transitioning to:`, status.status);
+
+            // Store completed job info to call callback outside setState
+            let completedJobForCallback: { job: JobInfo; success: boolean } | null = null;
+
+            setJobs((prev) => {
+              const updated = new Map(prev);
+              const currentJob = updated.get(job.id);
+              // Allow update from running or queued status
+              if (currentJob && (currentJob.status === 'running' || currentJob.status === 'queued')) {
+                // Parse final output line by line
+                const finalOutput: string[] = [];
+
+                // Add final output from response, parsed line by line
+                if (status.response?.stdout) {
+                  const stdoutLines = status.response.stdout.split('\n').filter((l: string) => l.trim());
+                  finalOutput.push(...stdoutLines);
+                }
+                if (status.response?.stderr) {
+                  const stderrLines = status.response.stderr.split('\n').filter((l: string) => l.trim());
+                  finalOutput.push(...stderrLines.map((l: string) => `[stderr] ${l}`));
+                }
+
+                // Add status message
+                if (cancelled) {
+                  finalOutput.push('', '⚠ Command was cancelled');
+                } else if (success) {
+                  finalOutput.push('', `✓ Command completed successfully`);
+                } else {
+                  finalOutput.push('', `✗ Command failed: ${status.response?.message || 'Unknown error'}`);
+                }
+
+                const completedJob: JobInfo = {
+                  ...currentJob,
+                  status: cancelled ? 'cancelled' : (success ? 'completed' : 'failed'),
+                  completedAt: new Date(),
+                  output: finalOutput.length > 0 ? finalOutput : currentJob.output,
+                  cost: status.response?.cost || 0,
+                  error: success ? null : (status.response?.message || 'Command failed'),
+                };
+                updated.set(job.id, completedJob);
+
+                // Store for callback outside setState
+                completedJobForCallback = { job: completedJob, success };
+              }
+              return updated;
+            });
+
+            // Trigger callback outside setState to avoid race conditions
+            if (completedJobForCallback && onJobComplete) {
+              onJobComplete(completedJobForCallback.job, completedJobForCallback.success);
+            }
+          }
+        } catch (e) {
+          // Ignore polling errors - cloud might be temporarily unavailable
+          console.warn('Failed to poll remote job status:', e);
+        }
+      }
+    }, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [jobs, onJobComplete]);
+
   // Derived state
   const activeJobs = Array.from(jobs.values()).filter(
     (j) => j.status === 'queued' || j.status === 'running'
@@ -442,6 +663,8 @@ export function useJobs(options: UseJobsOptions = {}) {
     setSelectedJobId,
     addSpawnedJob,
     markSpawnedJobDone,
+    markJobStatus,
+    updateSpawnedJobStatus,
   };
 }
 
