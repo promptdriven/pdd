@@ -1,0 +1,35 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/config.py`.
+
+% Role & Scope
+  This module provides REST API endpoints for server configuration information.
+  It allows the frontend to discover the cloud URL that the server is using,
+  ensuring the frontend and CLI use the same cloud environment.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **Router setup**:
+     - FastAPI APIRouter with prefix "/api/v1/config"
+     - Tags: ["config"]
+
+  2. **CloudUrlResponse model**:
+     - Pydantic BaseModel
+     - Fields: cloud_url (str), environment (str)
+
+  3. **GET /cloud-url endpoint**:
+     - Returns CloudUrlResponse
+     - Get cloud_url from CloudConfig.get_base_url()
+     - Get environment from PDD_ENV env var (default "production")
+     - Purpose: Frontend uses this to ensure same cloud URL as CLI
+
+% Dependencies
+  <pdd.core.cloud><include>context/cloud_example.py</include></pdd.core.cloud>
+
+% Technical Constraints
+  - Use async endpoint for FastAPI best practices
+  - Use Pydantic BaseModel for response
+  - Import os inside function to avoid module-level import issues
+
+% Deliverables
+  - Code: `pdd/server/routes/config.py`
+  - Exports: router

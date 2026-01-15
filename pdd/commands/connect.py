@@ -193,11 +193,12 @@ def connect(
                     click.echo(click.style(
                         "Session registered with PDD Cloud!", fg="green", bold=True
                     ))
-                    click.echo(f"  Access URL: {click.style(cloud_url, fg='cyan', underline=True)}")
-                    click.echo(click.style(
-                        "  Share this URL to access your PDD session from any browser.",
-                        dim=True
-                    ))
+                    # TODO: Re-enable when production /connect page is deployed
+                    # click.echo(f"  Access URL: {click.style(cloud_url, fg='cyan', underline=True)}")
+                    # click.echo(click.style(
+                    #     "  Share this URL to access your PDD session from any browser.",
+                    #     dim=True
+                    # ))
                 except RemoteSessionError as e:
                     click.echo(click.style(
                         f"Warning: Failed to register with cloud: {e.message}",
@@ -235,8 +236,9 @@ def connect(
     click.echo(f"Project Root: {click.style(str(project_root), fg='blue')}")
     click.echo(f"API Documentation: {click.style(f'{server_url}/docs', underline=True)}")
     click.echo(f"Local Frontend: {click.style(target_url, underline=True)}")
-    if cloud_url:
-        click.echo(f"Remote Access: {click.style(cloud_url, fg='cyan', underline=True)}")
+    # TODO: Re-enable when production /connect page is deployed
+    # if cloud_url:
+    #     click.echo(f"Remote Access: {click.style(cloud_url, fg='cyan', underline=True)}")
     click.echo(click.style("Press Ctrl+C to stop the server", dim=True))
 
     # 7. Open Browser
@@ -259,13 +261,13 @@ def connect(
     # 8. Run Server
     try:
         # Run uvicorn
-        # We use log_level="info" to show access logs, but suppress excessive debug info
+        # Disable access_log to avoid noisy polling logs - custom middleware handles important logging
         uvicorn.run(
             app,
             host=host,
             port=port,
-            log_level="info",
-            access_log=True
+            log_level="warning",  # Only show warnings and errors from uvicorn
+            access_log=False  # Custom middleware handles request logging
         )
     except KeyboardInterrupt:
         click.echo(click.style("\nServer stopping...", fg="yellow", bold=True))

@@ -223,29 +223,29 @@ def logout_cmd():
 @click.option("--format", "output_format", type=click.Choice(["raw", "json"]), default="raw", help="Output format.")
 def token_cmd(output_format: str):
     """Print the current authentication token."""
-    
+
     token_str = None
     expires_at = None
-    
+
     # Attempt to read valid token from cache
     if JWT_CACHE_FILE.exists():
         try:
             data = json.loads(JWT_CACHE_FILE.read_text())
             cached_token = data.get("id_token")
             cached_exp = data.get("expires_at")
-            
+
             # Simple expiry check
             if cached_token and cached_exp and cached_exp > time.time():
                 token_str = cached_token
                 expires_at = cached_exp
         except Exception:
             pass
-            
+
     if not token_str:
         # Removed err=True because rich.console.Console.print does not support it
         console.print("[red]No valid token available. Please login.[/red]")
         sys.exit(1)
-        
+
     if output_format == "json":
         output = {
             "token": token_str,
@@ -254,3 +254,56 @@ def token_cmd(output_format: str):
         console.print_json(data=output)
     else:
         console.print(token_str)
+
+
+@auth_group.command("clear-cache")
+def clear_cache():
+    """Clear the JWT token cache.
+
+    This is useful when:
+    - Switching between environments (staging vs production)
+    - Experiencing authentication issues
+    - JWT token audience mismatch errors
+
+    After clearing the cache, you'll need to re-authenticate
+    with 'pdd auth login' or source the appropriate environment
+    setup script (e.g., setup_staging_env.sh).
+    """
+    if not JWT_CACHE_FILE.exists():
+        console.print("[yellow]No JWT cache found at ~/.pdd/jwt_cache[/yellow]")
+        console.print("Nothing to clear.")
+        return
+
+    try:
+        # Try to read cache before deleting to show what was cached
+        cache_data = json.loads(JWT_CACHE_FILE.read_text())
+        token = cache_data.get("id_token") or cache_data.get("jwt")
+        if token:
+            payload = _decode_jwt_payload(token)
+            aud = payload.get("aud") or payload.get("firebase", {}).get("aud")
+            exp = payload.get("exp")
+
+            console.print("[dim]Cached token info:[/dim]")
+            if aud:
+                console.print(f"  Audience: {aud}")
+            if exp:
+                if exp > time.time():
+                    time_remaining = int((exp - time.time()) / 60)
+                    console.print(f"  Expires in: {time_remaining} minutes")
+                else:
+                    console.print("  Status: [red]Expired[/red]")
+    except Exception:
+        # If we can't read the cache, that's fine - just proceed with deletion
+        pass
+
+    # Delete the cache file
+    try:
+        JWT_CACHE_FILE.unlink()
+        console.print("[green]✓[/green] JWT cache cleared successfully")
+        console.print()
+        console.print("[dim]To re-authenticate:[/dim]")
+        console.print("  - For production: [bold]pdd auth login[/bold]")
+        console.print("  - For staging: [bold]source setup_staging_env.sh[/bold]")
+    except OSError as e:
+        console.print(f"[red]Failed to clear cache: {e}[/red]")
+        sys.exit(1)

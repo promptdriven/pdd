@@ -12,17 +12,17 @@ const ExecutionModeToggle: React.FC<ExecutionModeToggleProps> = ({
   disabled = false,
 }) => {
   return (
-    <div className="flex items-center gap-2">
-      <label className="text-sm text-surface-300 font-medium">
-        Execution Mode:
+    <div className="flex items-center gap-1.5 sm:gap-2">
+      <label className="text-xs sm:text-sm text-surface-300 font-medium whitespace-nowrap">
+        Mode:
       </label>
 
-      <div className="flex bg-surface-800 border border-surface-700 rounded-lg p-0.5">
+      <div className="flex bg-surface-800 border border-surface-700 rounded-lg p-0.5 sm:p-1">
         {/* Local Execution Button */}
         <button
           onClick={() => onModeChange('local')}
           disabled={disabled}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all ${
             mode === 'local'
               ? 'bg-blue-500 text-white shadow-sm'
               : 'text-surface-400 hover:text-surface-200'
@@ -30,7 +30,7 @@ const ExecutionModeToggle: React.FC<ExecutionModeToggleProps> = ({
           title="Execute commands on this machine"
         >
           {/* Computer Icon */}
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -45,7 +45,7 @@ const ExecutionModeToggle: React.FC<ExecutionModeToggleProps> = ({
         <button
           onClick={() => onModeChange('remote')}
           disabled={disabled}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all ${
             mode === 'remote'
               ? 'bg-purple-500 text-white shadow-sm'
               : 'text-surface-400 hover:text-surface-200'
@@ -53,7 +53,7 @@ const ExecutionModeToggle: React.FC<ExecutionModeToggleProps> = ({
           title="Control a remote session via cloud"
         >
           {/* Cloud Icon */}
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -65,9 +65,9 @@ const ExecutionModeToggle: React.FC<ExecutionModeToggleProps> = ({
         </button>
       </div>
 
-      {/* Info tooltip */}
+      {/* Info tooltip - hide on small screens */}
       {mode === 'remote' && !disabled && (
-        <span className="text-xs text-purple-400 flex items-center gap-1">
+        <span className="hidden sm:flex text-xs text-purple-400 items-center gap-1">
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"

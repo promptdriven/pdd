@@ -62,7 +62,8 @@ def get_cached_jwt() -> Optional[str]:
         expires_at = cache.get("expires_at", 0)
         # Check if token is still valid (with 5 minute buffer)
         if expires_at > time.time() + 300:
-            return cache.get("jwt")
+            # Check both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility
+            return cache.get("id_token") or cache.get("jwt")
     except (json.JSONDecodeError, IOError, KeyError):
         pass
 
