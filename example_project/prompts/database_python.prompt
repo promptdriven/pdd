@@ -1,0 +1,66 @@
+<pdd-reason>Provides database connection pooling and query execution</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_connection",
+        "signature": "() -> Connection",
+        "returns": "Connection",
+        "sideEffects": ["Establishes database connection"]
+      },
+      {
+        "name": "execute_query",
+        "signature": "(sql: str, params: Optional[Dict] = None) -> List[Dict]",
+        "returns": "List[Dict]",
+        "sideEffects": ["Executes SQL query"]
+      },
+      {
+        "name": "close_connection",
+        "signature": "(conn: Connection) -> None",
+        "returns": "None",
+        "sideEffects": ["Closes database connection"]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+% Role & Scope
+Your goal is to implement the database module that provides connection pooling
+and query execution for the application.
+
+% Requirements
+1. Implement connection pooling with configurable pool size
+2. Support parameterized queries to prevent SQL injection
+3. Handle connection timeouts and retries
+4. Provide transaction support (begin, commit, rollback)
+5. Implement query result caching for frequently accessed data
+6. Log all queries for debugging (configurable log level)
+7. Use environment variables for database credentials
+8. Support multiple database backends (PostgreSQL, MySQL, SQLite)
+9. Implement health check functionality
+10. Handle connection pool exhaustion gracefully
+
+% Dependencies
+No external module dependencies (uses standard library and database drivers)
+
+% Instructions
+1. Create connection pool on module initialization
+2. Implement get_connection() with timeout and retry logic
+3. Implement execute_query() with parameter sanitization
+4. Add transaction context manager for atomic operations
+5. Implement caching layer with TTL support
+6. Add comprehensive error handling and logging
+7. Support async/await patterns for non-blocking operations
+
+% Deliverables
+- Single file: pdd/database.py
+- Connection pool implementation
+- Query execution functions
+- Transaction support
+- Caching layer
+- Comprehensive error handling
+- Type hints for all functions

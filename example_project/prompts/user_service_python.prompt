@@ -1,0 +1,73 @@
+<pdd-reason>Handles user authentication, authorization, and profile management</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "authenticate_user",
+        "signature": "(username: str, password: str) -> Optional[User]",
+        "returns": "Optional[User]",
+        "sideEffects": ["Validates credentials"]
+      },
+      {
+        "name": "create_user",
+        "signature": "(username: str, email: str, password: str) -> User",
+        "returns": "User",
+        "sideEffects": ["Creates user in database"]
+      },
+      {
+        "name": "get_user_by_id",
+        "signature": "(user_id: int) -> Optional[User]",
+        "returns": "Optional[User]",
+        "sideEffects": ["None"]
+      },
+      {
+        "name": "update_user_profile",
+        "signature": "(user_id: int, profile_data: Dict) -> bool",
+        "returns": "bool",
+        "sideEffects": ["Updates user in database"]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>database_python.prompt</pdd-dependency>
+
+% Role & Scope
+Your goal is to implement the user_service module that handles all user-related
+operations including authentication, registration, and profile management.
+
+% Requirements
+1. Implement secure password hashing (bcrypt or argon2)
+2. Validate email addresses and usernames
+3. Enforce password strength requirements
+4. Implement rate limiting for login attempts
+5. Support password reset functionality
+6. Implement user session management
+7. Add email verification for new accounts
+8. Support OAuth2 authentication providers
+9. Implement user roles and permissions
+10. Log all authentication attempts
+
+% Dependencies
+Depends on database module for data persistence.
+
+% Instructions
+1. Use database.execute_query() for all database operations
+2. Hash passwords before storing using bcrypt
+3. Implement email validation with regex
+4. Add rate limiting using in-memory counter
+5. Generate secure tokens for password reset
+6. Implement session token generation and validation
+7. Add comprehensive input validation
+
+% Deliverables
+- Single file: pdd/user_service.py
+- User model class
+- Authentication functions
+- Registration functions
+- Profile management functions
+- Type hints for all functions

@@ -1,3 +1,50 @@
+## v0.0.114 (2026-01-14)
+
+### Feat
+
+- **Architecture Metadata Tags:** New `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` XML tags in prompt files sync bidirectionally with `architecture.json`. Prompts are the source of truth. Includes circular dependency detection and lenient validation. New `architecture_sync.py` module (565 lines) with comprehensive tests (1,347 lines).
+
+- **Prompting Guide:** Updated `docs/prompting_guide.md` (864 lines) covering PDD best practices, prompt anatomy, metadata tags, and examples contrasting PDD with patch-style prompting.
+
+- **Frontend Sync UI:** "Sync from Prompt" modal in Architecture view updates `architecture.json` from prompt tags. "Sync from JSON" button in PromptSpace injects `<pdd-*>` tags into prompts. Shows validation results, circular dependency warnings, and per-module diffs.
+
+- **Frontend Advanced Options:** Generation options modal added to Architecture page and PromptSpace exposing temperature, model selection, cloud toggle, merge mode, and other `pdd generate` flags.
+
+- **Frontend Graph Improvements:** Dependency graph shows directional arrows, supports edge deletion via right-click in edit mode, and persists node positions to `architecture.json`.
+
+- **Early Empty File Validation:** `fix_verification_errors_loop` validates code files are non-empty before entering the fix loop, preventing infinite loops on blank generated files.
+
+- **Example Project Cleanup:** Replaced `examples/edit_file_tool_example/` with cleaner `examples/template_example/`. Added new `example_project/` with documented architecture patterns. Thanks to @RyanTanuki for your contribution!!
+
+### Fix
+
+- **lxml Dependency:** Added `lxml>=5.0.0` to requirements for XML parsing in architecture sync.
+- **Frontend Position Debug:** Hidden node coordinate debug display in production builds.
+
+## v0.0.113 (2026-01-13)
+
+### Feat
+
+- **Full-Width Layout for Large Screens:** Removed `max-w-7xl` container constraints from header, main content, and footer, allowing content to span full screen width on large monitors (>1536px). Added `2xl:px-12` padding for ultra-wide screens while maintaining responsive padding at smaller breakpoints.
+
+- **Mobile Responsive Design:** Comprehensive mobile-first redesign of PDD Connect frontend. Key changes:
+  - All modals (AddModuleModal, AddToQueueModal, CreatePromptModal, ModuleEditModal, ReauthModal) now display full-screen on mobile devices (<768px)
+  - Architecture graph replaced with mobile-friendly list view showing module name, description, dependencies, and prompt status
+  - View switcher buttons use horizontal scroll with hidden scrollbar for compact mobile navigation
+  - New `DeviceIndicator` component (dev-only) displays current breakpoint and screen width for responsive testing
+  - Added CSS utilities: `.scrollbar-hide` for hidden scrollbars, `.safe-top/.safe-bottom` for notched device support, iOS zoom prevention on input focus
+  - Responsive typography and spacing adjustments throughout (`xs:`, `sm:`, `md:` breakpoints)
+
+## v0.0.112 (2026-01-13)
+
+### Feat
+
+- **Resume Support for `pdd bug`:** Agentic bug orchestrator now persists state to `.pdd/bug-state/` after each step completion, enabling automatic resume of interrupted workflows. Restored state includes step outputs, cost tracking, changed files, and worktree path. Worktree recreation preserves existing branch with accumulated work.
+
+### Fix
+
+- **OpenAI Strict Mode Schema Compliance:** Fixed JSON schema generation to meet OpenAI's strict mode requirements. New `_ensure_all_properties_required()` helper ensures all properties are in the `required` array (Pydantic only includes fields without defaults). Added `additionalProperties: false` to all structured output schemas. Fixes schema rejection errors when using OpenAI models with strict mode enabled.
+
 ## v0.0.111 (2026-01-12)
 
 ### Feat

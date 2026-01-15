@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.111"
+version = "0.0.114"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -44,6 +44,7 @@ dependencies = [
     "psutil>=7.0.0",
     "pydantic==2.11.4",
     "litellm[caching]>=1.80.0",
+    "lxml>=5.0.0",
     "rich==14.0.0",
     "semver==3.0.2",
     "setuptools",
@@ -106,7 +107,7 @@ dev = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.0.111"
+version = "0.0.114"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",

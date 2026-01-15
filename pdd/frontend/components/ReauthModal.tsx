@@ -149,7 +149,7 @@ const ReauthModal: React.FC<ReauthModalProps> = ({ onClose }) => {
       aria-labelledby="reauth-modal-title"
     >
       <div
-        className="bg-gray-800 rounded-lg shadow-xl w-full max-w-md flex flex-col ring-1 ring-white/10"
+        className="bg-gray-800 rounded-none sm:rounded-lg shadow-xl w-full h-full sm:h-auto sm:max-w-md sm:max-h-[90vh] flex flex-col ring-1 ring-white/10 overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
         <header className="flex items-center justify-between p-4 border-b border-gray-700">

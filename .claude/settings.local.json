@@ -71,7 +71,10 @@
       "WebFetch(domain:github.com)",
       "Bash(git fetch:*)",
       "Bash(git rebase:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(find:*)",
+      "Bash(python3:*)",
+      "Bash(git merge:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

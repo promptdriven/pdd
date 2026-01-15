@@ -370,7 +370,7 @@ const AddToQueueModal: React.FC<AddToQueueModalProps> = ({
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={onClose}>
       <div
-        className="glass rounded-2xl border border-surface-600/50 shadow-2xl w-full max-w-md animate-scale-in"
+        className="glass rounded-none sm:rounded-2xl border-0 sm:border border-surface-600/50 shadow-2xl w-full h-full sm:h-auto sm:max-w-md sm:max-h-[90vh] overflow-y-auto animate-scale-in"
         onClick={e => e.stopPropagation()}
       >
         <div className="px-4 sm:px-6 py-4 border-b border-surface-700/50">

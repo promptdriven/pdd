@@ -1,17 +1,30 @@
+<pdd-reason>REST API endpoints for architecture.json validation and bidirectional sync with prompt files.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "validate_architecture", "signature": "(request: ValidateArchitectureRequest)", "returns": "ValidationResult"},
+      {"name": "sync_from_prompts", "signature": "(request: SyncRequest)", "returns": "SyncResult"},
+      {"name": "generate_tags_for_prompt", "signature": "(request: GenerateTagsRequest)", "returns": "GenerateTagsResult"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/architecture.py`.
 
 % Role & Scope
-  This module provides REST API endpoints for architecture.json validation operations.
-  It enables the web frontend to validate architecture changes before saving,
-  detecting circular dependencies, missing references, and other structural issues.
+  This module provides REST API endpoints for architecture.json validation and sync operations.
+  It enables the web frontend to:
+  - Validate architecture changes before saving (circular deps, missing refs, structural issues)
+  - Sync architecture.json from PDD metadata tags in prompt files (prompts → architecture)
+  - Generate PDD metadata tags for prompts from architecture.json (architecture → prompts)
 
 <context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
-
-% Documentation References
-  - FastAPI Routers:
-    <web>https://fastapi.tiangolo.com/tutorial/bigger-applications/</web>
-  - Pydantic Models:
-    <web>https://docs.pydantic.dev/latest/concepts/models/</web>
 
 % Requirements
   1. **POST /architecture/validate**:
@@ -20,24 +33,32 @@
      - Returns: ValidationResult with valid flag, errors list, warnings list
      - Does NOT modify any files
 
-  2. **Validation Checks**:
+  2. **POST /architecture/sync-from-prompts**:
+     - Body: SyncRequest with optional filenames array and dry_run flag
+     - Reads PDD metadata tags (<pdd-reason>, <pdd-interface>, <pdd-dependency>) from prompt files
+     - Updates corresponding entries in architecture.json
+     - If filenames is null, syncs ALL prompt files
+     - Returns: SyncResult with updated_count, skipped_count, per-file results, and validation
+
+  3. **POST /architecture/generate-tags-for-prompt**:
+     - Body: GenerateTagsRequest with prompt_filename
+     - Reads architecture.json entry for the prompt
+     - Generates XML tags string ready to inject into prompt
+     - Returns: GenerateTagsResult with tags string, has_existing_tags flag, architecture_entry
+
+  4. **Validation Checks**:
      - Circular dependency detection using DFS algorithm
      - Missing dependency detection (references to non-existent modules)
      - Duplicate dependency warnings
      - Orphan module warnings (no dependencies and not depended upon)
      - Required field validation (filename, filepath, description)
 
-  3. **Circular Dependency Detection**:
-     - Build adjacency graph from module dependencies
-     - Use DFS with recursion stack to detect cycles
-     - Return list of cycles found (as arrays of module filenames)
-
-  4. **Error Types**:
+  5. **Error Types**:
      - `circular_dependency`: Modules form a dependency cycle
      - `missing_dependency`: Module depends on non-existent module
      - `invalid_field`: Required field missing or invalid
 
-  5. **Warning Types**:
+  6. **Warning Types**:
      - `duplicate_dependency`: Module lists same dependency twice
      - `orphan_module`: Module has no connections (may be intentional)
 
@@ -56,7 +77,7 @@
   class ValidationError(BaseModel):
       type: str  # circular_dependency, missing_dependency, invalid_field
       message: str
-      modules: List[str]  # Affected module filenames
+      modules: List[str]
 
   class ValidationWarning(BaseModel):
       type: str  # duplicate_dependency, orphan_module
@@ -70,20 +91,47 @@
       valid: bool  # True if no errors (warnings OK)
       errors: List[ValidationError]
       warnings: List[ValidationWarning]
+
+  class SyncRequest(BaseModel):
+      filenames: Optional[List[str]] = None  # None = sync all
+      dry_run: bool = False
+
+  class SyncResult(BaseModel):
+      success: bool
+      updated_count: int
+      skipped_count: int = 0
+      results: List[Dict[str, Any]]
+      validation: ValidationResult
+      errors: List[str] = Field(default_factory=list)
+
+  class GenerateTagsRequest(BaseModel):
+      prompt_filename: str
+
+  class GenerateTagsResult(BaseModel):
+      success: bool
+      tags: Optional[str] = None
+      has_existing_tags: bool = False
+      architecture_entry: Optional[Dict[str, Any]] = None
+      error: Optional[str] = None
   ```
 
 % Dependencies
+  <architecture_sync>
+    <include>context/architecture_sync_example.py</include>
+  </architecture_sync>
   <fastapi_example>
-  <server.main><include>context/fastapi_example.py</include></server.main>
+    <include>context/fastapi_example.py</include>
   </fastapi_example>
 
 % Instructions
   - Create router with prefix="/api/v1/architecture", tags=["architecture"]
-  - Implement DFS-based cycle detection algorithm
+  - Implement DFS-based cycle detection algorithm for validation
   - Return all cycles found, not just the first one
   - Errors block save (valid=False), warnings are informational (valid=True)
-  - Keep validation logic pure (no file I/O)
+  - sync-from-prompts: delegate to architecture_sync module, run validation on result
+  - generate-tags-for-prompt: check if prompt already has PDD tags before generating
+  - Handle exceptions gracefully and return appropriate error responses
 
 % Deliverables
   - Code: `pdd/server/routes/architecture.py`
-  - Export: `architecture_router`
+  - Export: router (APIRouter instance)

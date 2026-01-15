@@ -1,0 +1,136 @@
+[
+  {
+    "filename": "database_python.prompt",
+    "filepath": "pdd/database.py",
+    "reason": "Provides database connection pooling and query execution",
+    "description": "Handles database connections and queries",
+    "dependencies": [],
+    "priority": 1,
+    "tags": [
+      "module",
+      "python",
+      "database"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_connection",
+            "signature": "() -> Connection",
+            "returns": "Connection",
+            "sideEffects": [
+              "Establishes database connection"
+            ]
+          },
+          {
+            "name": "execute_query",
+            "signature": "(sql: str, params: Optional[Dict] = None) -> List[Dict]",
+            "returns": "List[Dict]",
+            "sideEffects": [
+              "Executes SQL query"
+            ]
+          },
+          {
+            "name": "close_connection",
+            "signature": "(conn: Connection) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "Closes database connection"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "filename": "user_service_python.prompt",
+    "filepath": "pdd/user_service.py",
+    "reason": "Handles user authentication, authorization, and profile management",
+    "description": "Manages user authentication and profiles",
+    "dependencies": [
+      "database_python.prompt"
+    ],
+    "priority": 2,
+    "tags": [
+      "module",
+      "python",
+      "service"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "authenticate_user",
+            "signature": "(username: str, password: str) -> Optional[User]",
+            "returns": "Optional[User]",
+            "sideEffects": [
+              "Validates credentials"
+            ]
+          },
+          {
+            "name": "create_user",
+            "signature": "(username: str, email: str, password: str) -> User",
+            "returns": "User",
+            "sideEffects": [
+              "Creates user in database"
+            ]
+          },
+          {
+            "name": "get_user_by_id",
+            "signature": "(user_id: int) -> Optional[User]",
+            "returns": "Optional[User]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "update_user_profile",
+            "signature": "(user_id: int, profile_data: Dict) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "Updates user in database"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "filename": "api_server_python.prompt",
+    "filepath": "pdd/api_server.py",
+    "reason": "Provides REST API endpoints for the web application",
+    "description": "REST API server using FastAPI",
+    "dependencies": [],
+    "priority": 3,
+    "tags": [
+      "module",
+      "python",
+      "api"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "create_app",
+            "signature": "() -> FastAPI",
+            "returns": "FastAPI",
+            "sideEffects": [
+              "Initializes FastAPI application"
+            ]
+          },
+          {
+            "name": "register_routes",
+            "signature": "(app: FastAPI) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "Registers API routes"
+            ]
+          }
+        ]
+      }
+    }
+  }
+]
