@@ -77,37 +77,8 @@
      - On shutdown: stop command listener, stop heartbeat, deregister from cloud
 
 % Dependencies
-  <server_app_example>
-  <include>context/server/app_example.py</include>
-  </server_app_example>
-  <remote_session_example>
-  Example usage of RemoteSessionManager:
-  ```python
-  from pdd.remote_session import (
-      RemoteSessionManager,
-      RemoteSessionError,
-      set_active_session_manager,
-  )
-  from pdd.core.cloud import CloudConfig
-
-  # Auto-register for authenticated users (no public URL needed)
-  jwt_token = CloudConfig.get_jwt_token()
-  if jwt_token and not local_only:
-      manager = RemoteSessionManager(jwt_token, project_root)
-      cloud_url = await manager.register(session_name=session_name)
-      print(f"Access URL: {cloud_url}")
-
-      await manager.start_heartbeat()
-      await manager.start_command_listener(handle_command)
-      set_active_session_manager(manager)
-
-      # On shutdown:
-      await manager.stop_command_listener()
-      await manager.stop_heartbeat()
-      await manager.deregister()
-      set_active_session_manager(None)
-  ```
-  </remote_session_example>
+  <server_app_example><include>context/server/app_example.py</include></server_app_example>
+  <remote_session_example><include>context/remote_session_example.py</include></remote_session_example>
 
 <pdd.commands.misc><include>context/commands/misc_example.py</include></pdd.commands.misc>
 <pdd.commands><include>context/commands/__init___example.py</include></pdd.commands>
