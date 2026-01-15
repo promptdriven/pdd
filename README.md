@@ -1971,11 +1971,16 @@ Options:
 - `--token TEXT`: Bearer token for authentication. Recommended when using `--allow-remote`.
 - `--no-browser`: Don't open the browser automatically when starting the server.
 - `--frontend-url TEXT`: Custom frontend URL to open instead of the default.
+- `--local-only`: Skip cloud registration and run in local-only mode. The session will not be accessible remotely via PDD Cloud.
+- `--session-name TEXT`: Custom session name for identification. Useful when running multiple sessions.
 
 The command starts a FastAPI server and automatically opens the web interface in your default browser. The server provides:
 - A REST API for programmatic access to PDD commands
 - API documentation at `http://localhost:9876/docs`
 - A web-based frontend for interactive use
+
+**Remote Session Registration:**
+By default, `pdd connect` registers with PDD Cloud, allowing you to access your session remotely from any browser. The session is automatically deregistered on graceful shutdown (Ctrl+C).
 
 Security Notes:
 - By default, the server only accepts connections from localhost (127.0.0.1).
@@ -1992,6 +1997,12 @@ pdd connect --port 8080 --no-browser
 
 # Allow remote connections with authentication
 pdd connect --allow-remote --token "your-secret-token"
+
+# Run in local-only mode (no cloud registration)
+pdd connect --local-only
+
+# Start with a custom session name for easy identification
+pdd connect --session-name "my-dev-server"
 ```
 
 **When to use**: Use `connect` when you prefer a graphical interface for working with PDD, when demonstrating PDD to others, or when integrating PDD with other tools that can communicate via REST APIs.
