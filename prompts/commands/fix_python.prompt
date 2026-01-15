@@ -14,7 +14,7 @@
 
 % Requirements
   - **fix**: Takes either a GitHub issue URL (agentic mode) or `--manual` with file arguments.
-    - Agentic mode (first arg looks like a URL): Call `run_agentic_e2e_fix(issue_url, timeout_adder=..., max_cycles=..., resume=..., force=..., verbose=..., quiet=...)`.
+    - Agentic mode (first arg looks like a URL): Call `run_agentic_e2e_fix(issue_url, timeout_adder=..., max_cycles=..., resume=..., force=..., verbose=..., quiet=..., use_github_state=...)`.
     - Manual mode (`--manual` flag): Call `fix_main(ctx, prompt_file, code_file, unit_test_file, error_file, ...)`.
     - Use `nargs=-1` for `args` argument to accept variable arguments.
     - Detect URL by checking if first arg starts with "http" or "github.com".
@@ -25,6 +25,7 @@
       - `--max-cycles INT`: (Agentic) Maximum outer loop cycles (default: 5).
       - `--resume/--no-resume`: (Agentic) Resume from saved state (default: True).
       - `--force`: (Agentic) Override branch mismatch safety check (default: False).
+      - `--no-github-state`: (Agentic) Disable GitHub issue comment-based state persistence (default: enabled).
       - `--output-test`, `--output-code`, `--output-results`: (Manual) Output locations.
       - `--loop`, `--verification-program`, `--max-attempts`, `--budget`: (Manual) Loop options.
       - `--auto-submit`: (Manual) Auto-submit on success.

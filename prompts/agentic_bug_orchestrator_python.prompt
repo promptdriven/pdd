@@ -7,7 +7,7 @@ Write the `pdd/agentic_bug_orchestrator.py` module.
 Orchestrator for the 10-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
 % Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 10 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -163,8 +163,56 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
 
+% State Persistence (GitHub + Local)
+
+To avoid re-running completed steps when the workflow is paused (e.g., needs more info from author), implement state persistence using shared functions from agentic_common. GitHub is primary storage (enables cross-machine resume), local file is cache.
+
+1. **State file location**: `.pdd/bug-state/issue-{issue_number}.json` (local cache)
+
+2. **State file structure**:
+   ```json
+   {
+     "workflow": "bug",
+     "issue_url": "https://github.com/owner/repo/issues/123",
+     "issue_number": 123,
+     "last_completed_step": 4,
+     "step_outputs": {
+       "1": "Step 1 output...",
+       "2": "Step 2 output...",
+       "3": "Step 3 output...",
+       "4": "Step 4 output..."
+     },
+     "total_cost": 0.0234,
+     "model_used": "anthropic",
+     "worktree_path": null,
+     "github_comment_id": 12345678
+   }
+   ```
+
+3. **Use shared functions from agentic_common**:
+   - `load_workflow_state(cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state)` - Load from GitHub (primary) or local cache
+   - `save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)` - Save to GitHub first, then local
+   - `clear_workflow_state(cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state)` - Clear on completion
+   - State directory: `_get_state_dir(cwd) -> Path` returns `.pdd/bug-state/` relative to git root
+
+4. **Orchestrator logic**:
+   - On start: Call `load_workflow_state()`, determine `start_step = last_completed_step + 1`
+   - Track `github_comment_id` from load result for subsequent saves
+   - If state exists: Print `"Resuming from step {start_step} (steps 1-{last_completed_step} cached)"`
+   - For steps < start_step: Use cached output from `state["step_outputs"]`
+   - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
+   - On successful completion (step 10 completes): Call `clear_workflow_state()`
+   - On hard stop (e.g., needs more info): State remains for next run
+
+5. **Console output for resumption**:
+   ```
+   Resuming bug investigation for issue #123
+      Steps 1-4 already complete (cached)
+      Starting from Step 5: Root Cause Analysis
+   ```
+
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`
+Import from `agentic_common`: `run_agentic_task`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
 Note: `BUG_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
