@@ -540,21 +540,67 @@ const App: React.FC = () => {
     setLastCommand(displayCommand);
 
     try {
-      // Spawn bug command in a new terminal window for complete isolation
-      const result = await api.spawnTerminal({
-        command: 'bug',
-        args: { args: [bugIssueUrl] },
-        options: {},
-      });
+      // Check if we're in remote mode
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Validate session is not stale before submitting
+        const selectedSession = remoteSessions.find(s => s.sessionId === selectedRemoteSession);
+        if (selectedSession?.status === 'stale') {
+          const shouldContinue = window.confirm(
+            'Warning: The selected session appears to be offline (stale).\n\n' +
+            'The remote machine may not be running or has lost connection.\n' +
+            'The command may not be executed.\n\n' +
+            'Do you want to submit anyway?'
+          );
+          if (!shouldContinue) {
+            setIsExecuting(false);
+            setExecutionStatus('idle');
+            return;
+          }
+        }
 
-      if (result.success) {
-        // Add to job dashboard for tracking with server-provided job_id
-        addSpawnedJob(displayCommand, 'bug', result.job_id);
-        setExecutionStatus('success');
-        addToast(`Opened terminal: ${displayCommand}`, 'success', 3000);
+        // Submit command to remote session via cloud
+        try {
+          const { commandId } = await api.submitRemoteCommand({
+            sessionId: selectedRemoteSession,
+            type: 'bug',
+            payload: { args: { args: [bugIssueUrl] }, options: {} },
+          });
+
+          // Add to job dashboard as a remote job
+          addSpawnedJob(
+            `[Remote] ${displayCommand}`,
+            'bug',
+            commandId,
+            { remote: true, sessionId: selectedRemoteSession }
+          );
+
+          setExecutionStatus('success');
+          addToast(`Command submitted to remote session`, 'success', 3000);
+        } catch (error) {
+          setExecutionStatus('failed');
+          addToast(
+            `Failed to submit remote command: ${error instanceof Error ? error.message : String(error)}`,
+            'error',
+            5000
+          );
+        }
       } else {
-        setExecutionStatus('failed');
-        addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+        // Local execution: Spawn bug command in a new terminal window for complete isolation
+        const result = await api.spawnTerminal({
+          command: 'bug',
+          args: { args: [bugIssueUrl] },
+          options: {},
+        });
+
+        if (result.success) {
+          // Add to job dashboard for tracking with server-provided job_id
+          addSpawnedJob(displayCommand, 'bug', result.job_id);
+          setExecutionStatus('success');
+          addToast(`Opened terminal: ${displayCommand}`, 'success', 3000);
+        } else {
+          setExecutionStatus('failed');
+          addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+        }
       }
 
       setTimeout(() => {
