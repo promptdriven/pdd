@@ -224,9 +224,12 @@ const AddToQueueModal: React.FC<AddToQueueModalProps> = ({
         options['context'] = prompt.context;
       }
     } else if (command === CommandType.UPDATE) {
-      // Update command: pdd update [PROMPT_FILE] <CODE_FILE> [ORIGINAL_CODE_FILE]
+      // Update command: pdd update [CODE_FILE]
+      // - No args: repo-wide mode (scan entire repo)
+      // - One arg: single-file mode (update prompt for specific code file)
+      // The command finds the corresponding prompt file automatically
       if (codeFile) {
-        args.args = [prompt.prompt, codeFile];
+        args.args = [codeFile];
       } else {
         args.args = [];
       }
