@@ -256,3 +256,127 @@ def test_preprocess_main_error_handling(basic_click_context, capsys):
         captured = capsys.readouterr()
         assert "Error during preprocessing: Construct paths failed!" in captured.out
         mock_exit.assert_called_once_with(1)
+
+
+def test_preprocess_main_with_pdd_tags(basic_click_context):
+    """
+    Test that preprocess_main correctly injects PDD tags when pdd_tags=True
+    and the prompt doesn't already have tags.
+    """
+    with patch("pdd.preprocess_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.preprocess_main.preprocess") as mock_preprocess, \
+         patch("pdd.preprocess_main.get_architecture_entry_for_prompt") as mock_get_entry, \
+         patch("pdd.preprocess_main.has_pdd_tags") as mock_has_tags, \
+         patch("pdd.preprocess_main.generate_tags_from_architecture") as mock_gen_tags, \
+         patch("builtins.open", mock_open()) as m_file:
+
+        # Mock the return values
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {"prompt_file": "% Role & Scope\nYour goal is..."},
+            {"output": "/tmp/output.prompt"},
+            None
+        )
+        mock_get_entry.return_value = {
+            "filename": "test.prompt",
+            "reason": "Test module",
+            "dependencies": ["dep.prompt"]
+        }
+        mock_has_tags.return_value = False
+        mock_gen_tags.return_value = "<pdd-reason>Test module</pdd-reason>\n<pdd-dependency>dep.prompt</pdd-dependency>"
+        mock_preprocess.return_value = "<pdd-reason>Test module</pdd-reason>\n<pdd-dependency>dep.prompt</pdd-dependency>\n\n% Role & Scope\nYour goal is..."
+
+        # Call the function under test with pdd_tags=True
+        result = preprocess_main(
+            ctx=basic_click_context,
+            prompt_file="test.prompt",
+            output=None,
+            xml=False,
+            recursive=False,
+            double=False,
+            exclude=[],
+            pdd_tags=True
+        )
+
+        # Assertions
+        assert "<pdd-reason>Test module</pdd-reason>" in result[0]
+        assert result[1] == 0.0
+        assert result[2] == "N/A"
+
+        # Ensure architecture sync functions were called
+        mock_get_entry.assert_called_once()
+        mock_has_tags.assert_called_once()
+        mock_gen_tags.assert_called_once()
+
+
+def test_preprocess_main_pdd_tags_skip_existing(basic_click_context):
+    """
+    Test that PDD tags injection is skipped when prompt already has tags.
+    """
+    with patch("pdd.preprocess_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.preprocess_main.preprocess") as mock_preprocess, \
+         patch("pdd.preprocess_main.get_architecture_entry_for_prompt") as mock_get_entry, \
+         patch("pdd.preprocess_main.has_pdd_tags") as mock_has_tags, \
+         patch("pdd.preprocess_main.generate_tags_from_architecture") as mock_gen_tags, \
+         patch("builtins.open", mock_open()) as m_file:
+
+        # Mock the return values
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "<pdd-reason>Existing</pdd-reason>\n% Content"},
+            {"output": "/tmp/output.prompt"},
+            None
+        )
+        mock_get_entry.return_value = {"filename": "test.prompt", "reason": "Test"}
+        mock_has_tags.return_value = True  # Already has tags
+        mock_preprocess.return_value = "<pdd-reason>Existing</pdd-reason>\n% Content"
+
+        result = preprocess_main(
+            ctx=basic_click_context,
+            prompt_file="test.prompt",
+            output=None,
+            xml=False,
+            recursive=False,
+            double=False,
+            exclude=[],
+            pdd_tags=True
+        )
+
+        # generate_tags should NOT be called when tags already exist
+        mock_gen_tags.assert_not_called()
+
+
+def test_preprocess_main_pdd_tags_no_entry(basic_click_context):
+    """
+    Test that PDD tags injection is skipped when no architecture entry exists.
+    """
+    with patch("pdd.preprocess_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.preprocess_main.preprocess") as mock_preprocess, \
+         patch("pdd.preprocess_main.get_architecture_entry_for_prompt") as mock_get_entry, \
+         patch("pdd.preprocess_main.has_pdd_tags") as mock_has_tags, \
+         patch("pdd.preprocess_main.generate_tags_from_architecture") as mock_gen_tags, \
+         patch("builtins.open", mock_open()) as m_file:
+
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "% Content without tags"},
+            {"output": "/tmp/output.prompt"},
+            None
+        )
+        mock_get_entry.return_value = None  # No architecture entry
+        mock_preprocess.return_value = "% Content without tags"
+
+        result = preprocess_main(
+            ctx=basic_click_context,
+            prompt_file="orphan.prompt",
+            output=None,
+            xml=False,
+            recursive=False,
+            double=False,
+            exclude=[],
+            pdd_tags=True
+        )
+
+        # has_pdd_tags and generate_tags should NOT be called when no entry exists
+        mock_has_tags.assert_not_called()
+        mock_gen_tags.assert_not_called()
