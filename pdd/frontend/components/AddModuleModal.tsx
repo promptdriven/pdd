@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ArchitectureModule } from '../api';
+import FilePickerInput from './FilePickerInput';
 
 interface AddModuleModalProps {
   isOpen: boolean;
@@ -184,15 +185,13 @@ const AddModuleModal: React.FC<AddModuleModalProps> = ({
 
           {/* Filepath */}
           <div>
-            <label className="block text-sm font-medium text-surface-300 mb-1">
-              Filepath <span className="text-surface-500">(auto-suggested)</span>
-            </label>
-            <input
-              type="text"
+            <FilePickerInput
+              label="Filepath"
               value={filepath}
-              onChange={(e) => setFilepath(e.target.value)}
+              onChange={setFilepath}
               placeholder={suggestedFilepath || 'e.g., src/api/user.py'}
-              className="w-full px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500 text-sm"
+              description="Target path for the generated code (auto-suggested based on name and type)"
+              title="Select Output Path"
             />
             {!filepath && suggestedFilepath && (
               <p className="text-xs text-surface-500 mt-1">Will use: {suggestedFilepath}</p>

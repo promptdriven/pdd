@@ -803,6 +803,16 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 }}
               />
               <button
+                onClick={() => setShowFileBrowser('architecture')}
+                className="p-2 bg-surface-700 hover:bg-surface-600 text-surface-400 hover:text-white rounded-lg transition-colors"
+                disabled={!serverConnected}
+                title="Browse files"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+              </button>
+              <button
                 onClick={handleLoadArchitectureFromPath}
                 className="px-4 py-2 bg-surface-700 hover:bg-surface-600 text-surface-300 hover:text-white rounded-lg text-sm font-medium transition-colors"
                 disabled={!serverConnected}
@@ -827,8 +837,14 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           <FileBrowser
             onSelect={handleFileSelect}
             onClose={() => setShowFileBrowser(null)}
-            filter=".md"
-            title={showFileBrowser === 'prd' ? 'Select PRD File' : 'Select Tech Stack File'}
+            filter={showFileBrowser === 'architecture' ? '.json' : '.md'}
+            title={
+              showFileBrowser === 'prd'
+                ? 'Select PRD File'
+                : showFileBrowser === 'architecture'
+                ? 'Select Architecture File'
+                : 'Select Tech Stack File'
+            }
           />
         )}
       </div>
@@ -1068,6 +1084,15 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                       }}
                     />
                     <button
+                      onClick={() => setShowFileBrowser('architecture')}
+                      className="p-1.5 bg-surface-700 hover:bg-surface-600 text-surface-400 hover:text-white rounded transition-colors"
+                      title="Browse files"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                      </svg>
+                    </button>
+                    <button
                       onClick={handleLoadArchitectureFromPath}
                       className="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 text-surface-300 hover:text-white rounded text-xs font-medium transition-colors"
                     >
@@ -1077,6 +1102,32 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                   {loadArchitectureError && (
                     <p className="text-red-400 text-[10px] mt-1">{loadArchitectureError}</p>
                   )}
+                </div>
+              </div>
+
+              {/* Start New Project */}
+              <div className="border-t border-surface-700/50">
+                <div className="p-3">
+                  <button
+                    onClick={() => {
+                      // Reset all state and go back to empty mode
+                      setArchitecture(null);
+                      setPrdContent('');
+                      setPrdPath(null);
+                      setTechStackContent('');
+                      setTechStackPath(null);
+                      setAppName('');
+                      setMode('empty');
+                      setEditMode(false);
+                    }}
+                    className="w-full px-3 py-2 bg-surface-800/50 hover:bg-surface-700 text-surface-400 hover:text-white rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-2"
+                    title="Start a new project from scratch"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    Start New Project
+                  </button>
                 </div>
               </div>
             </>
@@ -1222,8 +1273,14 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         <FileBrowser
           onSelect={handleFileSelect}
           onClose={() => setShowFileBrowser(null)}
-          filter=".md"
-          title={showFileBrowser === 'prd' ? 'Select PRD File' : 'Select Tech Stack File'}
+          filter={showFileBrowser === 'architecture' ? '.json' : '.md'}
+          title={
+            showFileBrowser === 'prd'
+              ? 'Select PRD File'
+              : showFileBrowser === 'architecture'
+              ? 'Select Architecture File'
+              : 'Select Tech Stack File'
+          }
         />
       )}
 

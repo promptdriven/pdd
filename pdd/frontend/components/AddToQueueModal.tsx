@@ -8,6 +8,7 @@ import React, { useState, useMemo } from 'react';
 import { PromptInfo, CommandRequest } from '../api';
 import { CommandType, CommandConfig, CommandOption, GlobalOption } from '../types';
 import { COMMANDS, GLOBAL_OPTIONS } from '../constants';
+import FilePickerInput from './FilePickerInput';
 
 interface AddToQueueModalProps {
   isOpen: boolean;
@@ -424,53 +425,29 @@ const AddToQueueModal: React.FC<AddToQueueModalProps> = ({
             <>
               {/* File path inputs for required files */}
               {commandConfig.requiresCode && (
-                <div>
-                  <label className="block text-sm font-medium text-white mb-1.5">
-                    Code File
-                    <span className="text-red-400 ml-1">*</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={optionValues['_code'] || ''}
-                      onChange={(e) => handleValueChange('_code', e.target.value)}
-                      placeholder="e.g., src/calculator.py"
-                      className={`w-full px-3 py-2.5 bg-surface-900/50 border rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all ${
-                        prompt?.code ? 'border-green-500/50' : 'border-yellow-500/50'
-                      }`}
-                    />
-                    {prompt?.code && (
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-green-400 text-xs px-1.5 py-0.5 rounded bg-green-500/20">
-                        detected
-                      </span>
-                    )}
-                  </div>
-                </div>
+                <FilePickerInput
+                  label="Code File"
+                  value={optionValues['_code'] || ''}
+                  onChange={(path) => handleValueChange('_code', path)}
+                  placeholder="e.g., src/calculator.py"
+                  required
+                  filter={['.py', '.ts', '.tsx', '.js', '.jsx', '.java', '.go', '.rs', '.rb', '.php', '.cs', '.cpp', '.c', '.h']}
+                  title="Select Code File"
+                  isDetected={!!prompt?.code}
+                />
               )}
 
               {commandConfig.requiresTest && (
-                <div>
-                  <label className="block text-sm font-medium text-white mb-1.5">
-                    Test File
-                    <span className="text-red-400 ml-1">*</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={optionValues['_test'] || ''}
-                      onChange={(e) => handleValueChange('_test', e.target.value)}
-                      placeholder="e.g., tests/test_calculator.py"
-                      className={`w-full px-3 py-2.5 bg-surface-900/50 border rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all ${
-                        prompt?.test ? 'border-green-500/50' : 'border-yellow-500/50'
-                      }`}
-                    />
-                    {prompt?.test && (
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-green-400 text-xs px-1.5 py-0.5 rounded bg-green-500/20">
-                        detected
-                      </span>
-                    )}
-                  </div>
-                </div>
+                <FilePickerInput
+                  label="Test File"
+                  value={optionValues['_test'] || ''}
+                  onChange={(path) => handleValueChange('_test', path)}
+                  placeholder="e.g., tests/test_calculator.py"
+                  required
+                  filter={['.py', '.ts', '.tsx', '.js', '.jsx', '.java', '.go', '.rs', '.rb', '.php', '.cs', '.cpp', '.c']}
+                  title="Select Test File"
+                  isDetected={!!prompt?.test}
+                />
               )}
 
               {/* Command-specific options */}

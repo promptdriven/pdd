@@ -72,7 +72,7 @@
      - MatchCheckResponse: result, cost, model
      - PromptRange: startLine, endLine, text (for diff analysis line ranges)
      - CodeRange: startLine, endLine, text (for diff analysis code ranges)
-     - DiffSection: id, promptRange, codeRanges, status, matchConfidence, semanticLabel, notes
+     - DiffSection: id, promptRange, codeRanges, status, matchConfidence, semanticLabel, notes (required - explains WHY the status exists)
      - LineMapping: promptLine, codeLines, matchType (exact/semantic/partial/none)
      - DiffStats: totalRequirements, matchedRequirements, missingRequirements, extraCodeSections, coveragePercent
      - DiffAnalysisResult: overallScore, summary, sections, lineMappings, stats, missing, extra, suggestions

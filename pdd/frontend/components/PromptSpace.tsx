@@ -21,6 +21,7 @@ import { ModelInfo } from '../api';
 import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
 import { findIncludeAtCursor, IncludeTagInfo, parseIncludeManyPaths } from '../lib/includeAnalyzer';
 import PromptCodeDiffModal from './PromptCodeDiffModal';
+import FilePickerInput from './FilePickerInput';
 
 // Helper to get language extension based on file path
 function getLanguageExtension(filePath: string) {
@@ -262,63 +263,35 @@ const CommandOptionsModal: React.FC<{
 
             {/* File path inputs for required files */}
             {command.requiresCode && (
-              <div>
-                <label className="block text-sm font-medium text-white mb-1.5">
-                  Code File
-                  <span className="text-red-400 ml-1">*</span>
-                </label>
-                <p className="text-xs text-surface-400 mb-2">
-                  {prompt.code
-                    ? 'Auto-detected code file. Change if needed.'
-                    : 'No code file detected. Enter the path to use.'}
-                </p>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={optionValues['_code'] || ''}
-                    onChange={(e) => handleValueChange('_code', e.target.value)}
-                    placeholder="e.g., src/calculator.py"
-                    className={`w-full px-3 py-2.5 bg-surface-900/50 border rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all ${
-                      prompt.code ? 'border-green-500/50' : 'border-yellow-500/50'
-                    }`}
-                  />
-                  {prompt.code && (
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-green-400 text-xs px-1.5 py-0.5 rounded bg-green-500/20">
-                      detected
-                    </span>
-                  )}
-                </div>
-              </div>
+              <FilePickerInput
+                label="Code File"
+                value={optionValues['_code'] || ''}
+                onChange={(path) => handleValueChange('_code', path)}
+                placeholder="e.g., src/calculator.py"
+                description={prompt.code
+                  ? 'Auto-detected code file. Change if needed.'
+                  : 'No code file detected. Enter the path to use.'}
+                required
+                filter={['.py', '.ts', '.tsx', '.js', '.jsx', '.java', '.go', '.rs', '.rb', '.php', '.cs', '.cpp', '.c', '.h']}
+                title="Select Code File"
+                isDetected={!!prompt.code}
+              />
             )}
 
             {command.requiresTest && (
-              <div>
-                <label className="block text-sm font-medium text-white mb-1.5">
-                  Test File
-                  <span className="text-red-400 ml-1">*</span>
-                </label>
-                <p className="text-xs text-surface-400 mb-2">
-                  {prompt.test
-                    ? 'Auto-detected test file. Change if needed.'
-                    : 'No test file detected. Enter the path to use.'}
-                </p>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={optionValues['_test'] || ''}
-                    onChange={(e) => handleValueChange('_test', e.target.value)}
-                    placeholder="e.g., tests/test_calculator.py"
-                    className={`w-full px-3 py-2.5 bg-surface-900/50 border rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all ${
-                      prompt.test ? 'border-green-500/50' : 'border-yellow-500/50'
-                    }`}
-                  />
-                  {prompt.test && (
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-green-400 text-xs px-1.5 py-0.5 rounded bg-green-500/20">
-                      detected
-                    </span>
-                  )}
-                </div>
-              </div>
+              <FilePickerInput
+                label="Test File"
+                value={optionValues['_test'] || ''}
+                onChange={(path) => handleValueChange('_test', path)}
+                placeholder="e.g., tests/test_calculator.py"
+                description={prompt.test
+                  ? 'Auto-detected test file. Change if needed.'
+                  : 'No test file detected. Enter the path to use.'}
+                required
+                filter={['.py', '.ts', '.tsx', '.js', '.jsx', '.java', '.go', '.rs', '.rb', '.php', '.cs', '.cpp', '.c']}
+                title="Select Test File"
+                isDetected={!!prompt.test}
+              />
             )}
 
             {/* Command options */}
@@ -1828,6 +1801,8 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
         codeContent={codeContent || ''}
         promptPath={prompt?.prompt}
         codePath={prompt?.code}
+        prompt={prompt}
+        onRunCommand={onRunCommand}
       />
     </div>
   );

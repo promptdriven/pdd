@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ArchitectureModule } from '../api';
+import FilePickerInput from './FilePickerInput';
 
 interface ModuleEditModalProps {
   isOpen: boolean;
@@ -145,18 +146,15 @@ const ModuleEditModal: React.FC<ModuleEditModalProps> = ({
           </div>
 
           {/* Filepath */}
-          <div>
-            <label className="block text-sm font-medium text-surface-300 mb-1">
-              Filepath <span className="text-red-400">*</span>
-            </label>
-            <input
-              type="text"
-              value={filepath}
-              onChange={(e) => setFilepath(e.target.value)}
-              placeholder="e.g., src/api/user.py"
-              className="w-full px-3 py-2 bg-surface-900 border border-surface-700 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:ring-2 focus:ring-accent-500 text-sm"
-            />
-          </div>
+          <FilePickerInput
+            label="Filepath"
+            value={filepath}
+            onChange={setFilepath}
+            placeholder="e.g., src/api/user.py"
+            description="Target path for the generated code"
+            required
+            title="Select Output Path"
+          />
 
           {/* Description */}
           <div>

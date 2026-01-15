@@ -29,7 +29,10 @@ Respond with a JSON object containing:
    - "status": "matched", "partial", or "missing"
    - "matchConfidence": 0-100
    - "semanticLabel": descriptive label like "Error Handling", "Input Validation"
-   - "notes": optional explanation
+   - "notes": REQUIRED one-sentence explanation of WHY this status exists:
+     * For "missing": "The prompt specifies [specific requirement], but the code does not implement [what's missing]"
+     * For "partial": "The prompt requires [full requirement], but the code only implements [partial aspect]"
+     * For "matched": "[Requirement] is fully implemented in the code"
 6. "codeSections": array of CODE feature sections (code -> prompt), each with:
    - "id": unique string like "code_1", "code_2"
    - "promptRange": {{"startLine": int, "endLine": int, "text": "excerpt"}} (the prompt lines that document this, empty text if undocumented)
@@ -37,7 +40,10 @@ Respond with a JSON object containing:
    - "status": "matched" (documented in prompt), "partial", or "extra" (not in prompt)
    - "matchConfidence": 0-100
    - "semanticLabel": descriptive label like "Helper Function", "Error Handler"
-   - "notes": optional explanation
+   - "notes": REQUIRED one-sentence explanation of WHY this status exists:
+     * For "extra": "The code implements [specific feature] which is not specified in the prompt - this may be lost during regeneration"
+     * For "partial": "The code feature [feature] is only partially documented in the prompt"
+     * For "matched": "[Feature] is fully documented in the prompt"
 7. "lineMappings": array of line-level mappings from prompt to code:
    - "promptLine": int
    - "codeLines": array of ints (corresponding code lines, can be empty)
@@ -62,3 +68,5 @@ Guidelines:
 - "missing" = prompt requirements without code implementation
 - "extra" = code behaviors/features without prompt documentation
 - Be thorough in identifying undocumented code behavior
+- IMPORTANT: Always provide the "notes" field explaining WHY the status is what it is
+- Be specific in notes: mention the exact requirement/feature name and what is missing/extra/partial
