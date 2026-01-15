@@ -69,6 +69,7 @@ const App: React.FC = () => {
   const [remoteSessions, setRemoteSessions] = useState<RemoteSessionInfo[]>([]);
   const [selectedRemoteSession, setSelectedRemoteSession] = useState<string | null>(null);
   const [remoteSessionError, setRemoteSessionError] = useState<string | null>(null);
+  const [showRemotePanel, setShowRemotePanel] = useState(false);
 
   // Task queue for sequential execution
   const taskQueue = useTaskQueue({
@@ -725,49 +726,27 @@ const App: React.FC = () => {
               </button>
             </div>
 
-            {/* Remote session controls - hidden on small screens */}
-            <div className="hidden lg:flex items-center gap-2 md:gap-3 px-2 md:px-4 py-1.5 md:py-2 bg-surface-800/30 rounded-xl border border-surface-700/50">
-              <RemoteSessionSelector
-                sessions={remoteSessions}
-                selectedSessionId={selectedRemoteSession}
-                onSelectSession={setSelectedRemoteSession}
-                disabled={!serverConnected}
-                error={remoteSessionError}
-                onRefresh={async () => {
-                  try {
-                    const sessions = await api.listRemoteSessions();
-                    setRemoteSessions(sessions);
-                    setRemoteSessionError(null);
-                    addToast('Sessions refreshed', 'success', 2000);
-                  } catch (err) {
-                    const errorMsg = err instanceof Error ? err.message : String(err);
-                    setRemoteSessionError(errorMsg);
-                    addToast('Failed to refresh sessions', 'error', 3000);
-                  }
-                }}
-              />
-              <ExecutionModeToggle
-                mode={executionMode}
-                onModeChange={setExecutionMode}
-                disabled={!selectedRemoteSession && executionMode === 'remote'}
-              />
-            </div>
-
-            {/* Compact execution mode indicator for small screens */}
-            <div className="flex lg:hidden items-center">
-              <button
-                onClick={() => setExecutionMode(executionMode === 'local' ? 'remote' : 'local')}
-                disabled={!selectedRemoteSession && executionMode === 'local'}
-                className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors ${
-                  executionMode === 'remote'
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    : 'bg-surface-700/50 text-surface-400 border border-surface-600/50'
-                } ${!selectedRemoteSession && executionMode === 'local' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                title={executionMode === 'remote' ? 'Remote mode (click to switch to local)' : 'Local mode (click to switch to remote)'}
+            {/* Remote session toggle button */}
+            <button
+              onClick={() => setShowRemotePanel(!showRemotePanel)}
+              className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+                executionMode === 'remote'
+                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                  : 'bg-surface-700/50 text-surface-400 border border-surface-600/50 hover:bg-surface-700'
+              }`}
+              title={showRemotePanel ? 'Hide remote session panel' : 'Show remote session panel'}
+            >
+              <span>{executionMode === 'remote' ? '🌐' : '💻'}</span>
+              <span className="hidden sm:inline">{executionMode === 'remote' ? 'Remote' : 'Local'}</span>
+              <svg
+                className={`w-3 h-3 transition-transform ${showRemotePanel ? 'rotate-180' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
               >
-                {executionMode === 'remote' ? '🌐' : '💻'}
-              </button>
-            </div>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
 
             {/* Server status - responsive */}
             <div className={`flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1.5 rounded-full transition-colors ${
@@ -784,6 +763,65 @@ const App: React.FC = () => {
           </div>
         </div>
       </header>
+
+      {/* Collapsible Remote Session Panel */}
+      {showRemotePanel && (
+        <div className="glass border-b border-surface-700/50 animate-slide-down">
+          <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-3">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
+              {/* Execution mode toggle */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-surface-400">Mode:</span>
+                <ExecutionModeToggle
+                  mode={executionMode}
+                  onModeChange={setExecutionMode}
+                />
+              </div>
+
+              {/* Remote session selector - only shown in remote mode */}
+              {executionMode === 'remote' && (
+                <div className="flex-1 w-full sm:w-auto">
+                  <RemoteSessionSelector
+                    sessions={remoteSessions}
+                    selectedSessionId={selectedRemoteSession}
+                    onSelectSession={setSelectedRemoteSession}
+                    error={remoteSessionError}
+                    onRefresh={async () => {
+                      try {
+                        const sessions = await api.listRemoteSessions();
+                        setRemoteSessions(sessions);
+                        setRemoteSessionError(null);
+                      } catch (err) {
+                        setRemoteSessionError(err instanceof Error ? err.message : String(err));
+                      }
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Close button */}
+              <button
+                onClick={() => setShowRemotePanel(false)}
+                className="absolute right-4 sm:relative sm:right-auto text-surface-400 hover:text-white p-1 rounded-lg hover:bg-surface-700/50 transition-colors"
+                title="Close panel"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Help text */}
+            <p className="text-xs text-surface-500 mt-2">
+              {executionMode === 'local'
+                ? 'Commands execute on this machine in terminal windows.'
+                : selectedRemoteSession
+                  ? 'Commands will be sent to the selected remote session via cloud.'
+                  : 'Select a remote session to execute commands remotely.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Status bar - modern glass effect */}
       {executionStatus !== 'idle' && (
