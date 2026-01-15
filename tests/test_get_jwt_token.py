@@ -256,28 +256,32 @@ class TestJWTCaching:
             if hasattr(jwt_module, 'JWT_CACHE_FILE'):
                 jwt_module.JWT_CACHE_FILE = tmp_path / "jwt_cache"
 
-            with patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token",
-                       return_value="refresh_token") as mock_keyring:
-                with patch("pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token",
-                           return_value="id_token_abc"):
-                    with patch("pdd.get_jwt_token.FirebaseAuthenticator.verify_firebase_token",
-                               return_value=True):
-                        # First call - may access keyring to get refresh token
-                        token1 = await get_jwt_token("key", "client")
-                        assert token1 == "id_token_abc"
-                        first_keyring_calls = mock_keyring.call_count
+            # Bypass audience check - mock token "id_token_abc" isn't valid JWT format,
+            # so audience extraction fails. When PDD_ENV is set by other tests,
+            # the audience mismatch would invalidate the cache.
+            with patch("pdd.get_jwt_token._get_expected_jwt_audience", return_value=None):
+                with patch("pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token",
+                           return_value="refresh_token") as mock_keyring:
+                    with patch("pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token",
+                               return_value="id_token_abc"):
+                        with patch("pdd.get_jwt_token.FirebaseAuthenticator.verify_firebase_token",
+                                   return_value=True):
+                            # First call - may access keyring to get refresh token
+                            token1 = await get_jwt_token("key", "client")
+                            assert token1 == "id_token_abc"
+                            first_keyring_calls = mock_keyring.call_count
 
-                        # Second call - should use cached JWT, NOT access keyring
-                        token2 = await get_jwt_token("key", "client")
-                        assert token2 == "id_token_abc"
-                        second_keyring_calls = mock_keyring.call_count - first_keyring_calls
+                            # Second call - should use cached JWT, NOT access keyring
+                            token2 = await get_jwt_token("key", "client")
+                            assert token2 == "id_token_abc"
+                            second_keyring_calls = mock_keyring.call_count - first_keyring_calls
 
-                        # BUG: Currently fails because keyring accessed every time
-                        assert second_keyring_calls == 0, (
-                            f"Second call accessed keyring {second_keyring_calls} times. "
-                            "Expected 0 - JWT should be cached between calls to avoid "
-                            "repeated keyring/password prompts."
-                        )
+                            # BUG: Currently fails because keyring accessed every time
+                            assert second_keyring_calls == 0, (
+                                f"Second call accessed keyring {second_keyring_calls} times. "
+                                "Expected 0 - JWT should be cached between calls to avoid "
+                                "repeated keyring/password prompts."
+                            )
         finally:
             # Restore original JWT_CACHE_FILE to avoid affecting other tests
             if original_cache_file is not None:
