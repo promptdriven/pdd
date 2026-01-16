@@ -6,16 +6,17 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { CommandRequest, PromptInfo } from '../api';
+import { PromptInfo } from '../api';
+import { CommandType } from '../types';
 
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 export type ExecutionMode = 'auto' | 'manual';
 
 export interface TaskQueueItem {
   id: string;
-  command: string;
-  prompt: PromptInfo | null;
-  request: CommandRequest;
+  commandType: CommandType;  // Store enum for reconstruction
+  prompt: PromptInfo;        // Required - needed to rebuild command
+  rawOptions: Record<string, any>;  // Store _code, _test, _global_* for reconstruction
   displayCommand: string;
   status: TaskStatus;
   jobId?: string;
@@ -57,7 +58,8 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
   callbacksRef.current = { onTaskStart, onTaskComplete, onQueueComplete };
 
   // Function to submit a job - will be set by the parent component
-  const submitJobRef = useRef<((request: CommandRequest, displayCommand: string) => Promise<string | null>) | null>(null);
+  // Takes the full TaskQueueItem so it can reconstruct the command exactly
+  const submitJobRef = useRef<((task: TaskQueueItem) => Promise<string | null>) | null>(null);
 
   // Load from localStorage on mount
   useEffect(() => {
@@ -99,18 +101,20 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
 
   /**
    * Add a new task to the queue.
+   * Stores the raw inputs (commandType, prompt, rawOptions) so the command
+   * can be reconstructed exactly like PromptSpace at execution time.
    */
   const addTask = useCallback((
-    command: string,
-    prompt: PromptInfo | null,
-    request: CommandRequest,
+    commandType: CommandType,
+    prompt: PromptInfo,
+    rawOptions: Record<string, any>,
     displayCommand: string
   ) => {
     const newTask: TaskQueueItem = {
       id: generateTaskId(),
-      command,
+      commandType,
       prompt,
-      request,
+      rawOptions,
       displayCommand,
       status: 'pending',
       createdAt: new Date(),
@@ -206,8 +210,8 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
     callbacksRef.current.onTaskStart?.(nextTask);
 
     try {
-      // Submit the job
-      const jobId = await submitJobRef.current(nextTask.request, nextTask.displayCommand);
+      // Submit the job - pass the full task so command can be reconstructed
+      const jobId = await submitJobRef.current(nextTask);
 
       if (jobId) {
         updateTask(nextTask.id, { jobId });
@@ -340,8 +344,10 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
 
   /**
    * Set the function used to submit jobs (called by parent component).
+   * The function receives the full task so it can reconstruct the command
+   * exactly like PromptSpace does.
    */
-  const setSubmitJob = useCallback((fn: (request: CommandRequest, displayCommand: string) => Promise<string | null>) => {
+  const setSubmitJob = useCallback((fn: (task: TaskQueueItem) => Promise<string | null>) => {
     submitJobRef.current = fn;
   }, []);
 

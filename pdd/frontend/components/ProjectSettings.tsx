@@ -475,7 +475,7 @@ const ProjectSettings: React.FC = () => {
       return;
     }
     const newContexts: Record<string, PddrcContext> = {};
-    for (const [key, value] of Object.entries(config.contexts)) {
+    for (const [key, value] of Object.entries(config.contexts) as [string, PddrcContext][]) {
       if (key === oldName) {
         newContexts[newName] = value;
       } else {

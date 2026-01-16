@@ -273,6 +273,9 @@ export interface DiffAnalysisRequest {
   code_content: string;
   strength?: number;
   mode?: 'quick' | 'detailed';
+  include_tests?: boolean;        // Include test content in analysis
+  prompt_path?: string;           // Prompt path for auto-detecting tests
+  code_path?: string;             // Code path for finding associated tests
 }
 
 export interface DiffAnalysisResponse {
@@ -281,6 +284,59 @@ export interface DiffAnalysisResponse {
   model: string;
   analysisMode: string;
   cached: boolean;
+  tests_included: boolean;        // Whether tests were included in analysis
+  test_files: string[];           // Test files included in analysis
+}
+
+// Prompt Version History types
+export interface PromptVersionInfo {
+  commit_hash: string;
+  commit_date: string;
+  commit_message: string;
+  author: string;
+  prompt_content: string;
+}
+
+export interface PromptHistoryRequest {
+  prompt_path: string;
+  limit?: number;
+}
+
+export interface PromptHistoryResponse {
+  versions: PromptVersionInfo[];
+  current_content: string;
+  has_uncommitted_changes: boolean;
+}
+
+export interface LinguisticChange {
+  change_type: 'added' | 'removed' | 'modified';
+  category: 'requirement' | 'constraint' | 'behavior' | 'format';
+  description: string;
+  old_text?: string;
+  new_text?: string;
+  impact: 'breaking' | 'enhancement' | 'clarification';
+}
+
+export interface PromptDiffRequest {
+  prompt_path: string;
+  version_a: string;  // commit hash, 'HEAD', or 'working'
+  version_b: string;
+  code_path?: string;
+  strength?: number;  // Model strength 0-1 for analysis quality
+}
+
+export interface PromptDiffResponse {
+  prompt_a_content: string;
+  prompt_b_content: string;
+  text_diff: string;
+  linguistic_changes: LinguisticChange[];
+  code_diff?: string;
+  summary: string;
+  cost: number;
+  model: string;
+  version_a_label: string;  // Label for the older version
+  version_b_label: string;  // Label for the newer version
+  versions_swapped: boolean;  // Whether versions were auto-swapped to ensure old→new
 }
 
 // Architecture types (re-exported for convenience)
@@ -717,6 +773,36 @@ class PDDApiClient {
    */
   async analyzeDiff(request: DiffAnalysisRequest): Promise<DiffAnalysisResponse> {
     return this.request<DiffAnalysisResponse>('/api/v1/prompts/diff-analysis', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Get git history for a prompt file.
+   * Returns a list of versions with their content and commit info.
+   *
+   * @param request.prompt_path - Path to the prompt file
+   * @param request.limit - Maximum number of versions to retrieve (default 10)
+   */
+  async getPromptHistory(request: PromptHistoryRequest): Promise<PromptHistoryResponse> {
+    return this.request<PromptHistoryResponse>('/api/v1/prompts/git-history', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Compare two prompt versions with LLM-powered linguistic analysis.
+   * Analyzes semantic differences and categorizes changes by type and impact.
+   *
+   * @param request.prompt_path - Path to the prompt file
+   * @param request.version_a - First version: commit hash, 'HEAD', or 'working'
+   * @param request.version_b - Second version: commit hash, 'HEAD', or 'working'
+   * @param request.code_path - Optional code path for related code diff
+   */
+  async getPromptDiff(request: PromptDiffRequest): Promise<PromptDiffResponse> {
+    return this.request<PromptDiffResponse>('/api/v1/prompts/prompt-diff', {
       method: 'POST',
       body: JSON.stringify(request),
     });

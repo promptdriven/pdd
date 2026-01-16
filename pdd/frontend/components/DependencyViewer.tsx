@@ -13,6 +13,7 @@ import ReactFlow, {
   Connection,
   ConnectionMode,
   addEdge,
+  MarkerType,
 } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
@@ -197,7 +198,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           type: 'smoothstep',
           style: { stroke: '#60a5fa', strokeWidth: 2 },
           markerEnd: {
-            type: 'arrowclosed' as const,
+            type: MarkerType.ArrowClosed,
             color: '#60a5fa',
             width: 20,
             height: 20,
@@ -246,7 +247,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
             type: 'smoothstep',
             style: { stroke: '#60a5fa', strokeWidth: 2 },
             markerEnd: {
-              type: 'arrowclosed' as const,
+              type: MarkerType.ArrowClosed,
               color: '#60a5fa',
               width: 20,
               height: 20,
@@ -469,7 +470,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
             style: { stroke: '#60a5fa', strokeWidth: 2 },
             type: 'smoothstep',
             markerEnd: {
-              type: 'arrowclosed',
+              type: MarkerType.ArrowClosed,
               color: '#60a5fa',
               width: 20,
               height: 20,

@@ -5,9 +5,10 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { PromptInfo, CommandRequest } from '../api';
+import { PromptInfo } from '../api';
 import { CommandType, CommandConfig, CommandOption, GlobalOption } from '../types';
 import { COMMANDS, GLOBAL_OPTIONS } from '../constants';
+import { buildDisplayCommand } from '../lib/commandBuilder';
 import FilePickerInput from './FilePickerInput';
 
 interface AddToQueueModalProps {
@@ -15,9 +16,9 @@ interface AddToQueueModalProps {
   prompt: PromptInfo | null;
   preselectedCommand?: CommandType;
   onAddToQueue: (
-    command: string,
-    prompt: PromptInfo | null,
-    request: CommandRequest,
+    commandType: CommandType,
+    prompt: PromptInfo,
+    rawOptions: Record<string, any>,
     displayCommand: string
   ) => void;
   onClose: () => void;
@@ -188,172 +189,15 @@ const AddToQueueModal: React.FC<AddToQueueModalProps> = ({
     setOptionValues(prev => ({ ...prev, [optionName]: value }));
   };
 
-  const buildCommandRequest = (): { request: CommandRequest; displayCommand: string } | null => {
-    if (!commandConfig || !prompt) return null;
-
-    const command = commandConfig.name;
-    const codeFile = optionValues['_code'] || prompt.code;
-    const testFile = optionValues['_test'] || prompt.test;
-
-    // Build clean options for CLI
-    const options: Record<string, any> = {};
-
-    // Add command-specific options (remove internal prefixes)
-    commandConfig.options.forEach(opt => {
-      const value = optionValues[opt.name];
-      if (value !== '' && value !== undefined && value !== null && value !== opt.defaultValue) {
-        options[opt.name] = value;
-      }
-    });
-
-    // Add global options (strip _global_ prefix)
-    GLOBAL_OPTIONS.forEach(opt => {
-      const value = optionValues[`_global_${opt.name}`];
-      if (value !== opt.defaultValue && value !== undefined && value !== null) {
-        options[opt.name] = value;
-      }
-    });
-
-    // Build args based on command type (matching handleRunCommand in App.tsx exactly)
-    const args: Record<string, any> = {};
-
-    if (command === CommandType.SYNC) {
-      // Sync uses basename, not prompt_file
-      args.basename = prompt.sync_basename;
-      if (prompt.context) {
-        options['context'] = prompt.context;
-      }
-    } else if (command === CommandType.UPDATE) {
-      // Update command: pdd update [CODE_FILE]
-      // - No args: repo-wide mode (scan entire repo)
-      // - One arg: single-file mode (update prompt for specific code file)
-      // The command finds the corresponding prompt file automatically
-      if (codeFile) {
-        args.args = [codeFile];
-      } else {
-        args.args = [];
-      }
-    } else if (command === CommandType.GENERATE) {
-      args.prompt_file = prompt.prompt;
-    } else if (command === CommandType.TEST) {
-      args.prompt_file = prompt.prompt;
-      args.code_file = codeFile;
-    } else if (command === CommandType.EXAMPLE) {
-      args.prompt_file = prompt.prompt;
-      args.code_file = codeFile;
-    } else if (command === CommandType.FIX) {
-      args.prompt_file = prompt.prompt;
-      args.code_file = codeFile;
-      args.unit_test_files = testFile;
-      // error_file is positional, not option
-      if (options['error-file']) {
-        args.error_file = options['error-file'];
-        delete options['error-file'];
-      }
-    } else if (command === CommandType.SPLIT) {
-      // Split command: pdd split INPUT_PROMPT INPUT_CODE EXAMPLE_CODE [--output-sub] [--output-modified]
-      args.input_prompt = prompt.prompt;
-      args.input_code = codeFile;
-      if (options['example-code']) {
-        args.example_code = options['example-code'];
-        delete options['example-code'];
-      }
-    } else if (command === CommandType.CHANGE) {
-      // Change command: pdd change CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE] [--budget] [--output]
-      if (options['change-prompt']) {
-        args.change_prompt_file = options['change-prompt'];
-        delete options['change-prompt'];
-      }
-      args.input_code = codeFile;
-      args.input_prompt_file = prompt.prompt;
-    } else if (command === CommandType.DETECT) {
-      // Detect command: pdd detect [PROMPT_FILES...] CHANGE_FILE [--output]
-      const promptFilesStr = options['prompt-files'] || '';
-      const changeFile = options['change-file'] || '';
-      const promptFiles = promptFilesStr.split(',').map((f: string) => f.trim()).filter(Boolean);
-      args.args = [...promptFiles, changeFile].filter(Boolean);
-      delete options['prompt-files'];
-      delete options['change-file'];
-    } else if (command === CommandType.AUTO_DEPS) {
-      // Auto-deps command: pdd auto-deps PROMPT_FILE DIRECTORY_PATH [--output] [--csv] [--force-scan]
-      args.prompt_file = prompt.prompt;
-      if (options['directory-path']) {
-        args.directory_path = options['directory-path'];
-        delete options['directory-path'];
-      }
-    } else if (command === CommandType.CONFLICTS) {
-      // Conflicts command: pdd conflicts PROMPT1 PROMPT2 [--output]
-      args.prompt_file = prompt.prompt;
-      if (options['prompt2']) {
-        args.prompt2 = options['prompt2'];
-        delete options['prompt2'];
-      }
-    } else if (command === CommandType.PREPROCESS) {
-      // Preprocess command: pdd preprocess PROMPT_FILE [--output] [--xml] [--recursive] [--double]
-      args.prompt_file = prompt.prompt;
-    } else if (command === CommandType.CRASH) {
-      // Crash command: pdd crash PROMPT_FILE CODE_FILE PROGRAM_FILE ERROR_FILE [options]
-      args.prompt_file = prompt.prompt;
-      args.code_file = codeFile;
-      if (options['program-file']) {
-        args.program_file = options['program-file'];
-        delete options['program-file'];
-      }
-      if (options['error-file']) {
-        args.error_file = options['error-file'];
-        delete options['error-file'];
-      }
-    } else if (command === CommandType.VERIFY) {
-      // Verify command: pdd verify PROMPT_FILE CODE_FILE VERIFICATION_PROGRAM [options]
-      args.prompt_file = prompt.prompt;
-      args.code_file = codeFile;
-      if (options['verification-program']) {
-        args.verification_program = options['verification-program'];
-        delete options['verification-program'];
-      }
-    } else if (command === CommandType.SUBMIT_EXAMPLE) {
-      // Submit Example uses fix --loop --auto-submit under the hood
-      args.prompt_file = prompt.prompt;
-      args.code_file = codeFile;
-      args.unit_test_files = testFile;
-      // Create a placeholder error file path (loop mode doesn't require existing error file)
-      args.error_file = '.pdd/submit_example_errors.log';
-      // Force loop and auto-submit flags
-      options['loop'] = true;
-      options['auto-submit'] = true;
-      // Move verification-program from options to args
-      if (options['verification-program']) {
-        args.verification_program = options['verification-program'];
-        delete options['verification-program'];
-      }
-    } else {
-      // Default: use prompt_file
-      args.prompt_file = prompt.prompt;
-    }
-
-    // Build display command
-    const displayArg = command === CommandType.SYNC ? prompt.sync_basename : prompt.prompt;
-    const promptName = displayArg || prompt.prompt?.split('/').pop()?.replace('.prompt', '') || 'prompt';
-    let displayCommand = `pdd ${commandConfig.backendName} ${promptName}`;
-    if (codeFile && command !== CommandType.SYNC) {
-      displayCommand += ` ${codeFile.split('/').pop()}`;
-    }
-
-    return {
-      request: {
-        command: commandConfig.backendName, // Use backendName for actual CLI command
-        args,
-        options,
-      },
-      displayCommand,
-    };
-  };
-
   const handleAddToQueue = () => {
-    const result = buildCommandRequest();
-    if (!result || !selectedCommand || !prompt) return;
+    if (!commandConfig || !prompt || !selectedCommand) return;
 
-    onAddToQueue(selectedCommand, prompt, result.request, result.displayCommand);
+    // Store the raw inputs (commandType, prompt, rawOptions) so the command
+    // can be reconstructed exactly like PromptSpace at execution time.
+    // This ensures queue execution uses the same code path as direct execution.
+    const display = buildDisplayCommand(commandConfig.name, prompt, optionValues);
+
+    onAddToQueue(commandConfig.name, prompt, optionValues, display);
     onClose();
   };
 

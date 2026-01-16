@@ -80,26 +80,11 @@
 % Dependencies
   <auth_service_note>
   Use shared auth functions from pdd/auth_service.py:
-  - get_jwt_cache_info() -> (is_valid: bool, expires_at: Optional[float])
-  - has_refresh_token() -> bool
-  - clear_jwt_cache() -> (success: bool, error: Optional[str])
-  - clear_refresh_token() -> (success: bool, error: Optional[str])
-  Import these with aliases to maintain internal naming convention:
-    from pdd.auth_service import (
-        get_jwt_cache_info as _get_jwt_cache_info,
-        has_refresh_token as _has_refresh_token,
-        clear_jwt_cache as _clear_jwt_cache,
-        clear_refresh_token as _clear_refresh_token,
-    )
+  <include>context/auth_service_example.py</include>
   </auth_service_note>
   <get_jwt_token_note>
   Use DeviceFlow, FirebaseAuthenticator, and exceptions from pdd/get_jwt_token.py:
-  - DeviceFlow.request_device_code() -> dict with user_code, verification_uri, device_code, interval, expires_in
-  - DeviceFlow.poll_for_token(device_code, interval, expires_in) -> github_token
-  - FirebaseAuthenticator.exchange_github_token_for_firebase_token(github_token) -> (id_token, refresh_token)
-  - FirebaseAuthenticator._store_refresh_token(refresh_token)
-  - _cache_jwt(id_token) helper function
-  - AuthError, NetworkError, TokenError, UserCancelledError exceptions
+   <include>context/get_jwt_token_example.py</include>
   </get_jwt_token_note>
 
 % Instructions

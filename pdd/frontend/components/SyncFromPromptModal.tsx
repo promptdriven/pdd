@@ -273,21 +273,24 @@ const ModuleResultCard: React.FC<{ result: ArchitectureSyncModuleResult }> = ({ 
 
       {showChanges && hasChanges && (
         <div className="mt-3 pt-3 border-t border-surface-700/30 space-y-2">
-          {Object.entries(result.changes).map(([field, change]) => (
-            <div key={field} className="text-xs">
-              <div className="text-surface-400 font-medium mb-1">{field}:</div>
-              <div className="bg-surface-900/50 rounded p-2 space-y-1">
-                <div className="flex items-start gap-2">
-                  <span className="text-red-400 flex-shrink-0">-</span>
-                  <span className="text-red-300/80 break-all">{JSON.stringify(change.old).slice(0, 100)}{JSON.stringify(change.old).length > 100 ? '...' : ''}</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="text-green-400 flex-shrink-0">+</span>
-                  <span className="text-green-300/80 break-all">{JSON.stringify(change.new).slice(0, 100)}{JSON.stringify(change.new).length > 100 ? '...' : ''}</span>
+          {Object.entries(result.changes).map(([field, change]) => {
+            const typedChange = change as { old: unknown; new: unknown };
+            return (
+              <div key={field} className="text-xs">
+                <div className="text-surface-400 font-medium mb-1">{field}:</div>
+                <div className="bg-surface-900/50 rounded p-2 space-y-1">
+                  <div className="flex items-start gap-2">
+                    <span className="text-red-400 flex-shrink-0">-</span>
+                    <span className="text-red-300/80 break-all">{JSON.stringify(typedChange.old).slice(0, 100)}{JSON.stringify(typedChange.old).length > 100 ? '...' : ''}</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-green-400 flex-shrink-0">+</span>
+                    <span className="text-green-300/80 break-all">{JSON.stringify(typedChange.new).slice(0, 100)}{JSON.stringify(typedChange.new).length > 100 ? '...' : ''}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
