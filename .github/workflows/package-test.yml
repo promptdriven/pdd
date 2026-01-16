@@ -76,7 +76,6 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          PDD_JWT_TOKEN: ${{ secrets.PDD_JWT_TOKEN }}
         working-directory: examples/hello
         run: |
           set -o pipefail  # Ensure pdd exit code propagates through pipe
