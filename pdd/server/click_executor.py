@@ -359,9 +359,34 @@ class ClickCommandExecutor:
         # 2. Build params dict for command execution
         params = {}
 
+        # Manual mode file key mappings for fix/change commands
+        # These commands use variadic "args" for BOTH modes, but the frontend sends semantic keys
+        # for manual mode which we need to convert to ordered positional arguments
+        MANUAL_MODE_FILE_KEYS = {
+            "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
+            "change": ["change_prompt_file", "input_code", "input_prompt_file"],
+        }
+
+        # Handle fix/change manual mode: convert semantic file keys to positional args
+        command_name = command.name if hasattr(command, 'name') else str(command)
+        if command_name in MANUAL_MODE_FILE_KEYS and args and "args" not in args:
+            file_keys = MANUAL_MODE_FILE_KEYS[command_name]
+            if any(k in args for k in file_keys):
+                # Convert file keys to ordered positional args list
+                positional_values = []
+                for key in file_keys:
+                    if key in args and args[key] is not None:
+                        positional_values.append(str(args[key]))
+                # Replace args with converted positional args
+                args = {"args": positional_values}
+                # Add --manual flag to options
+                if options is None:
+                    options = {}
+                options["manual"] = True
+
         # Handle args dict
         if args:
-            # Special case: "args" key with list (for bug, fix, change agentic mode)
+            # Special case: "args" key with list (for bug, fix, change)
             # These commands have @click.argument("args", nargs=-1)
             if "args" in args and isinstance(args["args"], list):
                 # This is a variadic positional - pass as tuple
