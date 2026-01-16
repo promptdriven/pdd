@@ -1669,6 +1669,12 @@ The 12-step workflow:
 
 **Review Loop**: Steps 10-11 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
+**Worktree Branching Behavior**: When running `pdd change` or `pdd bug`, a new git worktree is created based on your current HEAD:
+- **From main/master**: Branch is based on latest main - creates independent PR
+- **From feature branch**: Branch inherits commits from that branch - useful for stacked/dependent PRs
+
+If you want independent changes, run the command from the main branch. A warning will be displayed when running from a non-main branch.
+
 Example (agentic mode):
 ```bash
 pdd change https://github.com/myorg/myrepo/issues/239
