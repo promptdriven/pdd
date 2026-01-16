@@ -344,6 +344,8 @@ def test_cli_fix_multiple_test_files(tmp_path):
             budget=5.0,
             auto_submit=False,
             agentic_fallback=True,
+            strength=None,
+            temperature=None,
         )
         mock_fix_main.assert_any_call(
             ctx=ANY,
@@ -360,4 +362,6 @@ def test_cli_fix_multiple_test_files(tmp_path):
             budget=5.0,
             auto_submit=False,
             agentic_fallback=True,
+            strength=None,
+            temperature=None,
         )
