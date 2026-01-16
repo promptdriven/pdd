@@ -53,17 +53,25 @@ POSITIONAL_ARGS = {
     "generate": ["prompt_file"],
     "test": ["prompt_file", "code_file"],
     "example": ["prompt_file", "code_file"],
-    "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
+    "fix": ["args"],  # Always uses variadic "args" (both agentic and manual modes)
     "bug": ["args"],
     "update": ["args"],
     "crash": ["prompt_file", "code_file", "program_file", "error_file"],
     "verify": ["prompt_file", "code_file", "verification_program"],
     "split": ["input_prompt", "input_code", "example_code"],
-    "change": ["change_prompt_file", "input_code", "input_prompt_file"],
+    "change": ["args"],  # Always uses variadic "args" (both agentic and manual modes)
     "detect": ["args"],
     "auto-deps": ["prompt_file", "directory_path"],
     "conflicts": ["prompt_file", "prompt2"],
     "preprocess": ["prompt_file"],
+}
+
+# Manual mode file key mappings for fix/change commands
+# These commands use variadic "args" for BOTH modes, but the frontend sends semantic keys
+# for manual mode which we need to convert to ordered positional arguments
+MANUAL_MODE_FILE_KEYS = {
+    "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
+    "change": ["change_prompt_file", "input_code", "input_prompt_file"],
 }
 
 logger = logging.getLogger(__name__)
@@ -134,6 +142,28 @@ def _build_subprocess_command_args(
 
     # Add the command
     cmd_args.append(command)
+
+    # Handle fix/change manual mode: convert semantic file keys to positional args
+    # and add --manual flag. Both modes use variadic "args" parameter.
+    if command in MANUAL_MODE_FILE_KEYS and args and "args" not in args:
+        # Manual mode detected: has file keys but no "args" key
+        file_keys = MANUAL_MODE_FILE_KEYS[command]
+        # Check if any file keys are present
+        if any(k in args for k in file_keys):
+            # Convert file keys to ordered positional args list (order matters!)
+            positional_values = []
+            for key in file_keys:
+                if key in args and args[key] is not None:
+                    positional_values.append(str(args[key]))
+            # Collect remaining args that aren't file keys (e.g., verification_program)
+            remaining_args = {k: v for k, v in args.items() if k not in file_keys}
+            # Build new args with positional values
+            args = {"args": positional_values}
+            # Move remaining args to cmd_opts (they should be options like --verification-program)
+            for key, value in remaining_args.items():
+                cmd_opts[key] = value
+            # Add --manual flag to command-specific options
+            cmd_opts["manual"] = True
 
     # Get positional arg names for this command
     positional_names = POSITIONAL_ARGS.get(command, [])

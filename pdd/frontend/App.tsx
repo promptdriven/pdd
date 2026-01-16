@@ -21,7 +21,7 @@ import { useJobs, JobInfo } from './hooks/useJobs';
 import { useTaskQueue, TaskQueueItem } from './hooks/useTaskQueue';
 import { useToast } from './components/Toast';
 
-type View = 'architecture' | 'prompts' | 'bug' | 'settings';
+type View = 'architecture' | 'prompts' | 'bug' | 'fix' | 'change' | 'settings';
 
 // Parse URL hash to get initial view and prompt path
 const parseHash = (): { view: View; promptPath?: string } => {
@@ -31,7 +31,7 @@ const parseHash = (): { view: View; promptPath?: string } => {
   const [viewPart, ...promptParts] = hash.split('/');
   const promptPath = promptParts.length > 0 ? promptParts.join('/') : undefined;
 
-  const validViews: View[] = ['architecture', 'prompts', 'bug', 'settings'];
+  const validViews: View[] = ['architecture', 'prompts', 'bug', 'fix', 'change', 'settings'];
   const view = validViews.includes(viewPart as View) ? (viewPart as View) : 'architecture';
 
   return { view, promptPath };
@@ -51,6 +51,12 @@ const App: React.FC = () => {
 
   // Bug command state
   const [bugIssueUrl, setBugIssueUrl] = useState('');
+
+  // Fix command state
+  const [fixPrUrl, setFixPrUrl] = useState('');
+
+  // Change command state
+  const [changeIssueUrl, setChangeIssueUrl] = useState('');
 
   // Batch operation state (for architecture prompt generation)
   const [batchOperation, setBatchOperation] = useState<BatchOperation | null>(null);
@@ -480,6 +486,200 @@ const App: React.FC = () => {
     }
   };
 
+  const handleRunFixCommand = async () => {
+    if (!serverConnected) {
+      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      return;
+    }
+
+    if (!fixPrUrl.trim()) {
+      alert('Please enter a GitHub PR URL');
+      return;
+    }
+
+    setIsExecuting(true);
+    setExecutionStatus('running');
+    const displayCommand = `pdd fix ${fixPrUrl}`;
+    setLastCommand(displayCommand);
+
+    try {
+      // Check if we're in remote mode
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Validate session is not stale before submitting
+        const selectedSession = remoteSessions.find(s => s.sessionId === selectedRemoteSession);
+        if (selectedSession?.status === 'stale') {
+          const shouldContinue = window.confirm(
+            'Warning: The selected session appears to be offline (stale).\n\n' +
+            'The remote machine may not be running or has lost connection.\n' +
+            'The command may not be executed.\n\n' +
+            'Do you want to submit anyway?'
+          );
+          if (!shouldContinue) {
+            setIsExecuting(false);
+            setExecutionStatus('idle');
+            return;
+          }
+        }
+
+        // Submit command to remote session via cloud
+        try {
+          const { commandId } = await api.submitRemoteCommand({
+            sessionId: selectedRemoteSession,
+            type: 'fix',
+            payload: { args: { args: [fixPrUrl] }, options: {} },
+          });
+
+          // Add to job dashboard as a remote job
+          addSpawnedJob(
+            `[Remote] ${displayCommand}`,
+            'fix',
+            commandId,
+            { remote: true, sessionId: selectedRemoteSession }
+          );
+
+          setExecutionStatus('success');
+          addToast(`Command submitted to remote session`, 'success', 3000);
+        } catch (error) {
+          setExecutionStatus('failed');
+          addToast(
+            `Failed to submit remote command: ${error instanceof Error ? error.message : String(error)}`,
+            'error',
+            5000
+          );
+        }
+      } else {
+        // Local execution: Spawn fix command in a new terminal window
+        const result = await api.spawnTerminal({
+          command: 'fix',
+          args: { args: [fixPrUrl] },
+          options: {},
+        });
+
+        if (result.success) {
+          // Add to job dashboard for tracking with server-provided job_id
+          addSpawnedJob(displayCommand, 'fix', result.job_id);
+          setExecutionStatus('success');
+          addToast(`Opened terminal: ${displayCommand}`, 'success', 3000);
+        } else {
+          setExecutionStatus('failed');
+          addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+        }
+      }
+
+      setTimeout(() => {
+        setExecutionStatus('idle');
+        setLastCommand(null);
+      }, 3000);
+    } catch (error: any) {
+      console.error('Failed to execute fix command:', error);
+      setExecutionStatus('failed');
+      addToast(`Error: ${error.message}`, 'error', 5000);
+      setTimeout(() => {
+        setExecutionStatus('idle');
+        setLastCommand(null);
+      }, 5000);
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
+  const handleRunChangeCommand = async () => {
+    if (!serverConnected) {
+      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      return;
+    }
+
+    if (!changeIssueUrl.trim()) {
+      alert('Please enter a GitHub issue URL');
+      return;
+    }
+
+    setIsExecuting(true);
+    setExecutionStatus('running');
+    const displayCommand = `pdd change ${changeIssueUrl}`;
+    setLastCommand(displayCommand);
+
+    try {
+      // Check if we're in remote mode
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Validate session is not stale before submitting
+        const selectedSession = remoteSessions.find(s => s.sessionId === selectedRemoteSession);
+        if (selectedSession?.status === 'stale') {
+          const shouldContinue = window.confirm(
+            'Warning: The selected session appears to be offline (stale).\n\n' +
+            'The remote machine may not be running or has lost connection.\n' +
+            'The command may not be executed.\n\n' +
+            'Do you want to submit anyway?'
+          );
+          if (!shouldContinue) {
+            setIsExecuting(false);
+            setExecutionStatus('idle');
+            return;
+          }
+        }
+
+        // Submit command to remote session via cloud
+        try {
+          const { commandId } = await api.submitRemoteCommand({
+            sessionId: selectedRemoteSession,
+            type: 'change',
+            payload: { args: { args: [changeIssueUrl] }, options: {} },
+          });
+
+          // Add to job dashboard as a remote job
+          addSpawnedJob(
+            `[Remote] ${displayCommand}`,
+            'change',
+            commandId,
+            { remote: true, sessionId: selectedRemoteSession }
+          );
+
+          setExecutionStatus('success');
+          addToast(`Command submitted to remote session`, 'success', 3000);
+        } catch (error) {
+          setExecutionStatus('failed');
+          addToast(
+            `Failed to submit remote command: ${error instanceof Error ? error.message : String(error)}`,
+            'error',
+            5000
+          );
+        }
+      } else {
+        // Local execution: Spawn change command in a new terminal window
+        const result = await api.spawnTerminal({
+          command: 'change',
+          args: { args: [changeIssueUrl] },
+          options: {},
+        });
+
+        if (result.success) {
+          // Add to job dashboard for tracking with server-provided job_id
+          addSpawnedJob(displayCommand, 'change', result.job_id);
+          setExecutionStatus('success');
+          addToast(`Opened terminal: ${displayCommand}`, 'success', 3000);
+        } else {
+          setExecutionStatus('failed');
+          addToast(`Failed to open terminal: ${result.message}`, 'error', 5000);
+        }
+      }
+
+      setTimeout(() => {
+        setExecutionStatus('idle');
+        setLastCommand(null);
+      }, 3000);
+    } catch (error: any) {
+      console.error('Failed to execute change command:', error);
+      setExecutionStatus('failed');
+      addToast(`Error: ${error.message}`, 'error', 5000);
+      setTimeout(() => {
+        setExecutionStatus('idle');
+        setLastCommand(null);
+      }, 5000);
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
   // Handler for PromptSpace command execution
   const handlePromptSpaceCommand = (command: CommandType, options?: Record<string, any>) => {
     if (editingPrompt) {
@@ -629,6 +829,30 @@ const App: React.FC = () => {
                 }`}
               >
                 <BugAntIcon className="hidden sm:inline w-4 h-4 mr-1" />Bug
+              </button>
+              <button
+                onClick={() => setView('fix')}
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                  view === 'fix'
+                    ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
+                    : 'text-surface-300 hover:text-white hover:bg-surface-700'
+                }`}
+              >
+                <svg className="hidden sm:inline w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>Fix
+              </button>
+              <button
+                onClick={() => setView('change')}
+                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
+                  view === 'change'
+                    ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
+                    : 'text-surface-300 hover:text-white hover:bg-surface-700'
+                }`}
+              >
+                <svg className="hidden sm:inline w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                </svg>Change
               </button>
               <button
                 onClick={() => setView('settings')}
@@ -828,6 +1052,11 @@ const App: React.FC = () => {
               onBatchStart={handleBatchOperationStart}
               onBatchProgress={handleBatchOperationProgress}
               onBatchComplete={handleBatchOperationComplete}
+              executionMode={executionMode}
+              selectedRemoteSession={selectedRemoteSession}
+              onRemoteJobSubmitted={(displayCommand, commandType, commandId, sessionId) => {
+                addSpawnedJob(displayCommand, commandType, commandId, { remote: true, sessionId });
+              }}
             />
           </div>
         ) : view === 'prompts' ? (
@@ -848,7 +1077,7 @@ const App: React.FC = () => {
           <div className="animate-fade-in">
             <ProjectSettings />
           </div>
-        ) : (
+        ) : view === 'bug' ? (
           <div className="max-w-6xl mx-auto animate-fade-in">
             {/* Header */}
             <div className="mb-6 text-center sm:text-left">
@@ -948,7 +1177,7 @@ const App: React.FC = () => {
                   <svg className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
-                  Agent Workflow (9 Steps)
+                  Agent Workflow (10 Steps)
                 </h3>
                 <div className="space-y-1">
                   {[
@@ -960,7 +1189,8 @@ const App: React.FC = () => {
                     { step: 6, name: 'Test Plan', desc: 'Design a testing strategy' },
                     { step: 7, name: 'Generate Test', desc: 'Create a failing unit test' },
                     { step: 8, name: 'Verify Test', desc: 'Ensure test correctly detects the bug' },
-                    { step: 9, name: 'Create PR', desc: 'Open a draft pull request' },
+                    { step: 9, name: 'E2E Test', desc: 'Run end-to-end tests to verify fix' },
+                    { step: 10, name: 'Create PR', desc: 'Open a draft pull request' },
                   ].map((item) => (
                     <div key={item.step} className="flex items-start gap-3 py-1.5 px-2 rounded-lg hover:bg-surface-800/30 transition-colors">
                       <div className="w-5 h-5 rounded-full bg-surface-700 flex items-center justify-center text-[10px] font-medium text-surface-300 flex-shrink-0">
@@ -982,7 +1212,284 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
-        )}
+        ) : view === 'fix' ? (
+          <div className="max-w-6xl mx-auto animate-fade-in">
+            {/* Header */}
+            <div className="mb-6 text-center sm:text-left">
+              <h2 className="text-xl sm:text-2xl font-semibold text-white mb-2 flex items-center justify-center sm:justify-start gap-2">
+                <span className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </span>
+                PR Fix Agent
+              </h2>
+              <p className="text-surface-400 text-sm">
+                Automatically fix code issues based on PR review comments with AI-powered analysis.
+              </p>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              {/* Left column: Input and action */}
+              <div className="space-y-4">
+                {/* Main input card */}
+                <div className="glass rounded-2xl p-4 sm:p-6 border border-surface-700/50">
+                  <label className="block text-sm font-medium text-surface-300 mb-2">
+                    GitHub PR URL
+                  </label>
+                  <input
+                    type="url"
+                    value={fixPrUrl}
+                    onChange={(e) => setFixPrUrl(e.target.value)}
+                    placeholder="https://github.com/org/repo/pull/123"
+                    className="w-full px-3 sm:px-4 py-2.5 sm:py-3 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 transition-all text-sm sm:text-base"
+                    disabled={isExecuting}
+                  />
+
+                  <button
+                    onClick={handleRunFixCommand}
+                    disabled={isExecuting || !serverConnected || !fixPrUrl.trim()}
+                    className={`
+                      mt-4 w-full px-4 py-2.5 sm:py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base
+                      ${isExecuting || !serverConnected || !fixPrUrl.trim()
+                        ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40'}
+                    `}
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    <span>Start Fix</span>
+                  </button>
+                </div>
+
+                {/* Prerequisites card */}
+                <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                  <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Prerequisites
+                  </h3>
+                  <ul className="space-y-2 text-xs text-surface-400">
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">1</span>
+                      <span><strong className="text-surface-300">GitHub CLI installed</strong> - Install from <code className="bg-surface-800 px-1 rounded text-accent-300">brew install gh</code> or <a href="https://cli.github.com" target="_blank" rel="noopener noreferrer" className="text-accent-400 hover:underline">cli.github.com</a></span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">2</span>
+                      <span><strong className="text-surface-300">Authenticated with GitHub</strong> - Run <code className="bg-surface-800 px-1 rounded text-accent-300">gh auth login</code> if needed</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">3</span>
+                      <span><strong className="text-surface-300">PR has review comments</strong> - The agent analyzes review comments to understand what needs fixing</span>
+                    </li>
+                  </ul>
+                </div>
+
+                {/* After fix card */}
+                <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                  <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    After Fix
+                  </h3>
+                  <ul className="space-y-2 text-xs text-surface-400">
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">1.</span>
+                      <span><strong className="text-surface-300">Review the changes</strong> - The agent commits fixes addressing review comments</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">2.</span>
+                      <span><strong className="text-surface-300">Run tests</strong> - Verify the fixes don't break existing functionality</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">3.</span>
+                      <span><strong className="text-surface-300">Push changes</strong> - Push the fix commits to update the PR</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Right column: Workflow steps */}
+              <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Agent Workflow
+                </h3>
+                <div className="space-y-1">
+                  {[
+                    { step: 1, name: 'Fetch PR Details', desc: 'Get PR information and review comments' },
+                    { step: 2, name: 'Analyze Comments', desc: 'Understand what changes are requested' },
+                    { step: 3, name: 'Locate Code', desc: 'Find the relevant code sections to fix' },
+                    { step: 4, name: 'Plan Changes', desc: 'Design the fix approach' },
+                    { step: 5, name: 'Apply Fixes', desc: 'Make the necessary code changes' },
+                    { step: 6, name: 'Verify Changes', desc: 'Ensure fixes address the comments' },
+                    { step: 7, name: 'Commit', desc: 'Create commits with fix descriptions' },
+                  ].map((item) => (
+                    <div key={item.step} className="flex items-start gap-3 py-1.5 px-2 rounded-lg hover:bg-surface-800/30 transition-colors">
+                      <div className="w-5 h-5 rounded-full bg-surface-700 flex items-center justify-center text-[10px] font-medium text-surface-300 flex-shrink-0">
+                        {item.step}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-white font-medium">{item.name}</div>
+                        <p className="text-[11px] text-surface-500">{item.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 pt-3 border-t border-surface-700/50">
+                  <p className="text-xs text-surface-500">
+                    <strong className="text-surface-400">Note:</strong> The agent focuses on addressing review comments.
+                    Progress is shown in the terminal.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : view === 'change' ? (
+          <div className="max-w-6xl mx-auto animate-fade-in">
+            {/* Header */}
+            <div className="mb-6 text-center sm:text-left">
+              <h2 className="text-xl sm:text-2xl font-semibold text-white mb-2 flex items-center justify-center sm:justify-start gap-2">
+                <span className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                  </svg>
+                </span>
+                Change Request Agent
+              </h2>
+              <p className="text-surface-400 text-sm">
+                Automatically implement feature requests and changes from GitHub issues with AI-powered analysis.
+              </p>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              {/* Left column: Input and action */}
+              <div className="space-y-4">
+                {/* Main input card */}
+                <div className="glass rounded-2xl p-4 sm:p-6 border border-surface-700/50">
+                  <label className="block text-sm font-medium text-surface-300 mb-2">
+                    GitHub Issue URL
+                  </label>
+                  <input
+                    type="url"
+                    value={changeIssueUrl}
+                    onChange={(e) => setChangeIssueUrl(e.target.value)}
+                    placeholder="https://github.com/org/repo/issues/123"
+                    className="w-full px-3 sm:px-4 py-2.5 sm:py-3 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 transition-all text-sm sm:text-base"
+                    disabled={isExecuting}
+                  />
+
+                  <button
+                    onClick={handleRunChangeCommand}
+                    disabled={isExecuting || !serverConnected || !changeIssueUrl.trim()}
+                    className={`
+                      mt-4 w-full px-4 py-2.5 sm:py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base
+                      ${isExecuting || !serverConnected || !changeIssueUrl.trim()
+                        ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-500 hover:to-purple-400 text-white shadow-lg shadow-purple-500/25 hover:shadow-purple-500/40'}
+                    `}
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                    </svg>
+                    <span>Start Implementation</span>
+                  </button>
+                </div>
+
+                {/* Prerequisites card */}
+                <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                  <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Prerequisites
+                  </h3>
+                  <ul className="space-y-2 text-xs text-surface-400">
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">1</span>
+                      <span><strong className="text-surface-300">GitHub CLI installed</strong> - Install from <code className="bg-surface-800 px-1 rounded text-accent-300">brew install gh</code> or <a href="https://cli.github.com" target="_blank" rel="noopener noreferrer" className="text-accent-400 hover:underline">cli.github.com</a></span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">2</span>
+                      <span><strong className="text-surface-300">Authenticated with GitHub</strong> - Run <code className="bg-surface-800 px-1 rounded text-accent-300">gh auth login</code> if needed</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-surface-700 flex items-center justify-center text-[10px] text-surface-300 flex-shrink-0 mt-0.5">3</span>
+                      <span><strong className="text-surface-300">Clear requirements</strong> - The issue should describe the desired change clearly</span>
+                    </li>
+                  </ul>
+                </div>
+
+                {/* After change card */}
+                <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                  <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    After Implementation
+                  </h3>
+                  <ul className="space-y-2 text-xs text-surface-400">
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">1.</span>
+                      <span><strong className="text-surface-300">Review the draft PR</strong> - The agent creates a draft PR with the implementation</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">2.</span>
+                      <span><strong className="text-surface-300">Test the changes</strong> - Verify the implementation works as expected</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-green-400">3.</span>
+                      <span><strong className="text-surface-300">Mark PR ready</strong> - Convert from draft to ready for review</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Right column: Workflow steps */}
+              <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
+                <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Agent Workflow
+                </h3>
+                <div className="space-y-1">
+                  {[
+                    { step: 1, name: 'Fetch Issue', desc: 'Get issue details and requirements' },
+                    { step: 2, name: 'Analyze Requirements', desc: 'Understand what needs to be implemented' },
+                    { step: 3, name: 'Explore Codebase', desc: 'Find relevant code and patterns' },
+                    { step: 4, name: 'Plan Implementation', desc: 'Design the approach and changes needed' },
+                    { step: 5, name: 'Implement Changes', desc: 'Write the code for the feature' },
+                    { step: 6, name: 'Add Tests', desc: 'Create tests for the new functionality' },
+                    { step: 7, name: 'Verify', desc: 'Run tests and verify implementation' },
+                    { step: 8, name: 'Create PR', desc: 'Open a draft pull request' },
+                  ].map((item) => (
+                    <div key={item.step} className="flex items-start gap-3 py-1.5 px-2 rounded-lg hover:bg-surface-800/30 transition-colors">
+                      <div className="w-5 h-5 rounded-full bg-surface-700 flex items-center justify-center text-[10px] font-medium text-surface-300 flex-shrink-0">
+                        {item.step}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-white font-medium">{item.name}</div>
+                        <p className="text-[11px] text-surface-500">{item.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 pt-3 border-t border-surface-700/50">
+                  <p className="text-xs text-surface-500">
+                    <strong className="text-surface-400">Note:</strong> The agent analyzes the issue and implements the requested changes.
+                    Progress is shown in the terminal.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </main>
 
       {/* Job Dashboard - shows active and completed jobs */}
