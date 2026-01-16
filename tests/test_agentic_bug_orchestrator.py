@@ -599,7 +599,8 @@ def test_state_save_after_each_step(mock_dependencies, default_args, tmp_path):
     """
     Test that state is saved after each step completes.
     """
-    from pdd.agentic_bug_orchestrator import _get_state_file_path, _load_state
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
 
     mock_run, mock_load, _ = mock_dependencies
     default_args["cwd"] = tmp_path
@@ -622,13 +623,14 @@ def test_state_save_after_each_step(mock_dependencies, default_args, tmp_path):
     assert success is False
     assert "Step 3" in msg
 
-    # State file should exist with last_completed_step = 2
-    # (step 3 failed so it shouldn't be marked completed)
-    # Actually, state is saved AFTER each step, and step 3 returned early
-    # So state should have step 2 as last completed
-    state = _load_state(tmp_path, default_args["issue_number"])
+    # State file should exist with last_completed_step = 2 (hard stop returns BEFORE saving)
+    state_dir = _get_state_dir(tmp_path)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+    assert state_file.exists(), f"State file not found at {state_file}"
+    with open(state_file) as f:
+        state = json.load(f)
     assert state is not None
-    assert state["last_completed_step"] == 2
+    assert state["last_completed_step"] == 2  # Hard stop at step 3 returns before saving step 3
     assert "1" in state["step_outputs"]
     assert "2" in state["step_outputs"]
 
@@ -638,17 +640,18 @@ def test_resume_skips_completed_steps(mock_dependencies, default_args, tmp_path)
     Test that resuming from step 5 skips steps 1-4.
     """
     import json
-    from pdd.agentic_bug_orchestrator import _get_state_file_path
+    from pdd.agentic_bug_orchestrator import _get_state_dir
 
     mock_run, mock_load, _ = mock_dependencies
     default_args["cwd"] = tmp_path
 
-    # Create state file with last_completed_step=4
-    state_dir = tmp_path / ".pdd" / "bug-state"
-    state_dir.mkdir(parents=True)
-    state_file = state_dir / f"issue-{default_args['issue_number']}.json"
+    # Create state file with last_completed_step=4 using new naming convention
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
 
     state = {
+        "workflow": "bug",
         "issue_number": default_args["issue_number"],
         "issue_url": default_args["issue_url"],
         "last_completed_step": 4,
@@ -697,17 +700,18 @@ def test_state_cleared_on_success(mock_dependencies, default_args, tmp_path):
     Test that state file is deleted on successful completion.
     """
     import json
-    from pdd.agentic_bug_orchestrator import _get_state_file_path
+    from pdd.agentic_bug_orchestrator import _get_state_dir
 
     mock_run, mock_load, _ = mock_dependencies
     default_args["cwd"] = tmp_path
 
-    # Create initial state file
-    state_dir = tmp_path / ".pdd" / "bug-state"
-    state_dir.mkdir(parents=True)
-    state_file = state_dir / f"issue-{default_args['issue_number']}.json"
+    # Create initial state file using new naming convention
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
 
     state = {
+        "workflow": "bug",
         "issue_number": default_args["issue_number"],
         "last_completed_step": 0,
         "step_outputs": {},
@@ -741,16 +745,18 @@ def test_resume_restores_context(mock_dependencies, default_args, tmp_path):
     Test that resumed runs have access to previous step outputs in context.
     """
     import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
 
     mock_run, mock_load, _ = mock_dependencies
     default_args["cwd"] = tmp_path
 
-    # Create state file with step outputs
-    state_dir = tmp_path / ".pdd" / "bug-state"
-    state_dir.mkdir(parents=True)
-    state_file = state_dir / f"issue-{default_args['issue_number']}.json"
+    # Create state file with step outputs using new naming convention
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
 
     state = {
+        "workflow": "bug",
         "issue_number": default_args["issue_number"],
         "issue_url": default_args["issue_url"],
         "last_completed_step": 2,

@@ -35,11 +35,6 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 }
 
 
-def _get_state_dir(cwd: Path) -> Path:
-    """Return path to state directory relative to git root."""
-    return Path(".pdd/bug-state")
-
-
 def _get_git_root(cwd: Path) -> Optional[Path]:
     """Get the root directory of the git repository."""
     try:
@@ -53,6 +48,12 @@ def _get_git_root(cwd: Path) -> Optional[Path]:
         return Path(result.stdout.strip())
     except subprocess.CalledProcessError:
         return None
+
+
+def _get_state_dir(cwd: Path) -> Path:
+    """Return path to state directory relative to git root."""
+    root = _get_git_root(cwd) or cwd
+    return root / ".pdd" / "bug-state"
 
 
 def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
@@ -234,7 +235,7 @@ def run_agentic_bug_orchestrator(
 
     # Resume: Load existing state if available
     state_dir = _get_state_dir(cwd)
-    state = load_workflow_state(
+    state, loaded_gh_id = load_workflow_state(
         cwd=cwd,
         issue_number=issue_number,
         workflow_type="bug",
@@ -247,7 +248,7 @@ def run_agentic_bug_orchestrator(
     step_outputs: Dict[str, str] = {}
     last_completed_step = 0
 
-    if state:
+    if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
         if not quiet:
             console.print(f"[yellow]Resuming from step {last_completed_step + 1} (steps 1-{last_completed_step} cached)[/yellow]")
@@ -256,7 +257,7 @@ def run_agentic_bug_orchestrator(
         last_model_used = state.get("model_used", "unknown")
         step_outputs = state.get("step_outputs", {})
         changed_files = state.get("changed_files", [])
-        github_comment_id = state.get("github_comment_id")
+        github_comment_id = loaded_gh_id  # Use the ID returned by load_workflow_state
 
         # Restore worktree path
         wt_path_str = state.get("worktree_path")
