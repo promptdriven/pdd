@@ -929,8 +929,7 @@
     "description": "Multi-step bug investigation: checks for duplicates, reviews docs, triages, reproduces, finds root cause, and creates PR.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
-      "agentic_common_python.prompt",
-      "bug_main_python.prompt"
+      "agentic_common_python.prompt"
     ],
     "priority": 19,
     "filename": "agentic_bug_python.prompt",
@@ -1661,7 +1660,6 @@
     "reason": "Orchestrates the 9-step agentic bug investigation workflow.",
     "description": "Coordinates duplicate checking, documentation review, triage, reproduction, root cause analysis, test planning, test generation, verification, and PR creation.",
     "dependencies": [
-      "agentic_bug_python.prompt",
       "agentic_common_python.prompt",
       "load_prompt_template_python.prompt"
     ],
