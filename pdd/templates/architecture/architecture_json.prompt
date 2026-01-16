@@ -140,56 +140,51 @@ INSTRUCTIONS:
   - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` and `source` (e.g., URL or identifier). The `kind` field MUST be exactly one of: `"api"`, `"query"`, `"stream"`, `"file"`, `"cache"`, `"message"`, `"job"`, or `"other"`. Do not invent new values like `"api/mutation"`; instead, use `"api"` (for any HTTP/REST/GraphQL endpoint) or `"other"` and describe details such as queries vs. mutations in `description` or `notes`. Provide `method`, `description`, and any other useful metadata when known.
 - Valid JSON only. No comments or trailing commas.
 
-OUTPUT FORMAT (authoritative):
+OUTPUT FORMAT - CRITICAL: Return a raw JSON array, NOT an object with "items" or "data" wrapper:
 ```json
-{
-  "type": "array",
-  "items": {
-    "type": "object",
-    "required": ["reason", "description", "dependencies", "priority", "filename", "filepath"],
-    "properties": {
-      "reason": {"type": "string"},
-      "description": {"type": "string"},
-      "dependencies": {"type": "array", "items": {"type": "string"}},
-      "priority": {"type": "integer", "minimum": 1},
-      "filename": {"type": "string"},
-      "filepath": {"type": "string"},
-      "tags": {"type": "array", "items": {"type": "string"}},
-      "interface": {
-        "type": "object",
-        "properties": {
-          "type": {"type": "string", "enum": ["component", "page", "module", "api", "graphql", "cli", "job", "message", "config"]},
-          "component": {"type": "object"},
-          "page": {
-            "type": "object",
-            "properties": {
-              "route": {"type": "string"},
-              "params": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "required": ["name", "type"],
-                  "properties": {
-                    "name": {"type": "string"},
-                    "type": {"type": "string"},
-                    "description": {"type": "string"}
-                  }
-                }
-              }
-            }
-          },
-          "module": {"type": "object"},
-          "api": {"type": "object"},
-          "graphql": {"type": "object"},
-          "cli": {"type": "object"},
-          "job": {"type": "object"},
-          "message": {"type": "object"},
-          "config": {"type": "object"}
-        }
+[
+  {
+    "reason": "Core data models needed by all other modules",
+    "description": "Defines Order, User, and Item data models with validation",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "models_Python.prompt",
+    "filepath": "src/models.py",
+    "tags": ["backend", "data"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "Order", "signature": "class Order(BaseModel)", "returns": "Order instance"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoints for order management",
+    "description": "REST API for creating, reading, updating orders",
+    "dependencies": ["models_Python.prompt"],
+    "priority": 2,
+    "filename": "orders_api_Python.prompt",
+    "filepath": "src/api/orders.py",
+    "tags": ["backend", "api"],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {"method": "POST", "path": "/orders", "auth": "jwt"},
+          {"method": "GET", "path": "/orders/{id}", "auth": "jwt"}
+        ]
       }
     }
   }
-}
+]
+```
+WRONG (do NOT do this):
+```json
+{"items": [...]}  // WRONG - no wrapper objects!
+{"data": [...]}   // WRONG - no wrapper objects!
+{"type": "array", "items": [...]}  // WRONG - this is schema, not output!
 ```
 
 INTERFACE TYPES (emit only applicable):

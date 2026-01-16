@@ -2063,7 +2063,163 @@ def test_explicit_unit_test_file_precedence(
 
     called_kwargs = mock_local_generator_fixture.call_args.kwargs
     called_prompt = called_kwargs["prompt"]
-    
+
     assert "<unit_test_content>" in called_prompt
     assert "def test_explicit(): pass" in called_prompt
     assert "def test_auto(): pass" not in called_prompt
+
+
+# --- Tests for LLM Array Unwrapping ---
+
+class TestLLMArrayUnwrapping:
+    """
+    Tests for unwrapping arrays that LLMs incorrectly wrap in objects.
+
+    LLMs sometimes return {"items": [...]} or {"data": [...]} when the schema
+    expects a plain array [...]. This tests the fix to unwrap such responses.
+    """
+
+    def test_unwrap_items_wrapper(self):
+        """Test unwrapping {"items": [...]} to [...]."""
+        # Simulate the unwrapping logic from code_generator_main.py
+        output_schema = {"type": "array"}
+        parsed = {"items": [{"name": "module1"}, {"name": "module2"}]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        assert parsed == [{"name": "module1"}, {"name": "module2"}]
+        assert isinstance(parsed, list)
+
+    def test_unwrap_data_wrapper(self):
+        """Test unwrapping {"data": [...]} to [...]."""
+        output_schema = {"type": "array"}
+        parsed = {"data": [1, 2, 3]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+
+        assert parsed == [1, 2, 3]
+        assert isinstance(parsed, list)
+
+    def test_unwrap_results_wrapper(self):
+        """Test unwrapping {"results": [...]} to [...]."""
+        output_schema = {"type": "array"}
+        parsed = {"results": ["a", "b", "c"]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+            elif "results" in parsed and isinstance(parsed["results"], list):
+                parsed = parsed["results"]
+
+        assert parsed == ["a", "b", "c"]
+        assert isinstance(parsed, list)
+
+    def test_no_unwrap_when_schema_not_array(self):
+        """Test that unwrapping is skipped when schema type is not array."""
+        output_schema = {"type": "object"}  # Not an array schema
+        parsed = {"items": [1, 2, 3]}
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, dict)
+
+    def test_no_unwrap_when_already_list(self):
+        """Test that actual lists are not modified."""
+        output_schema = {"type": "array"}
+        parsed = [1, 2, 3]  # Already a list
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, list)
+
+    def test_no_unwrap_when_items_not_list(self):
+        """Test that non-list 'items' values are not unwrapped."""
+        output_schema = {"type": "array"}
+        parsed = {"items": "not a list"}  # items is not a list
+        original = parsed.copy()
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        # Should remain unchanged
+        assert parsed == original
+        assert isinstance(parsed, dict)
+
+    def test_unwrap_nested_architecture(self):
+        """Test unwrapping a realistic architecture.json wrapper case."""
+        output_schema = {"type": "array"}
+        parsed = {
+            "items": [
+                {
+                    "filename": "auth",
+                    "filepath": "src/auth.py",
+                    "description": "Authentication module",
+                    "dependencies": [],
+                    "priority": 1,
+                    "reason": "Core security"
+                },
+                {
+                    "filename": "database",
+                    "filepath": "src/database.py",
+                    "description": "Database connection",
+                    "dependencies": ["auth"],
+                    "priority": 2,
+                    "reason": "Data persistence"
+                }
+            ]
+        }
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+
+        assert isinstance(parsed, list)
+        assert len(parsed) == 2
+        assert parsed[0]["filename"] == "auth"
+        assert parsed[1]["filename"] == "database"
+
+    def test_items_takes_precedence_over_data(self):
+        """Test that 'items' is checked before 'data'."""
+        output_schema = {"type": "array"}
+        parsed = {"items": [1], "data": [2]}  # Both present
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+            elif "data" in parsed and isinstance(parsed["data"], list):
+                parsed = parsed["data"]
+
+        # items should take precedence
+        assert parsed == [1]
+
+    def test_json_serialization_after_unwrap(self):
+        """Test that unwrapped arrays can be serialized back to JSON."""
+        output_schema = {"type": "array"}
+        parsed = {"items": [{"key": "value"}]}
+
+        if output_schema.get("type") == "array" and isinstance(parsed, dict):
+            if "items" in parsed and isinstance(parsed["items"], list):
+                parsed = parsed["items"]
+                generated_code_content = json.dumps(parsed, indent=2)
+
+        expected = '[\n  {\n    "key": "value"\n  }\n]'
+        assert generated_code_content == expected

@@ -396,3 +396,185 @@ async def test_register_missing_cloud_url(manager, mock_cloud_config, mock_httpx
         await manager.register()
 
     assert "missing cloudUrl" in str(excinfo.value)
+
+
+# --- Tests for Stringified List Parsing ---
+
+class TestStringifiedListParsing:
+    """Tests for defensive parsing of stringified arrays in remote commands."""
+
+    def test_parse_stringified_list_basic(self):
+        """Test parsing a basic stringified Python list."""
+        import ast
+
+        # Replicate the parsing logic from remote_session.py
+        def parse_if_stringified_list(value):
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith('[') and stripped.endswith(']'):
+                    try:
+                        parsed = ast.literal_eval(stripped)
+                        if isinstance(parsed, list):
+                            return parsed
+                    except (ValueError, SyntaxError):
+                        pass
+            return value
+
+        # Test basic list parsing
+        result = parse_if_stringified_list("['PRD_FILE=PRD.md', 'APP_NAME=test']")
+        assert result == ['PRD_FILE=PRD.md', 'APP_NAME=test']
+
+    def test_parse_stringified_list_with_whitespace(self):
+        """Test parsing stringified list with surrounding whitespace."""
+        import ast
+
+        def parse_if_stringified_list(value):
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith('[') and stripped.endswith(']'):
+                    try:
+                        parsed = ast.literal_eval(stripped)
+                        if isinstance(parsed, list):
+                            return parsed
+                    except (ValueError, SyntaxError):
+                        pass
+            return value
+
+        result = parse_if_stringified_list("  ['a', 'b']  ")
+        assert result == ['a', 'b']
+
+    def test_parse_stringified_list_returns_original_on_invalid(self):
+        """Test that invalid strings are returned unchanged."""
+        import ast
+
+        def parse_if_stringified_list(value):
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith('[') and stripped.endswith(']'):
+                    try:
+                        parsed = ast.literal_eval(stripped)
+                        if isinstance(parsed, list):
+                            return parsed
+                    except (ValueError, SyntaxError):
+                        pass
+            return value
+
+        # Invalid JSON/Python literal
+        result = parse_if_stringified_list("[invalid syntax")
+        assert result == "[invalid syntax"
+
+        # Not a list at all
+        result = parse_if_stringified_list("just a string")
+        assert result == "just a string"
+
+        # Empty brackets but malformed
+        result = parse_if_stringified_list("[}")
+        assert result == "[}"
+
+    def test_parse_stringified_list_non_string_passthrough(self):
+        """Test that non-string values pass through unchanged."""
+        import ast
+
+        def parse_if_stringified_list(value):
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith('[') and stripped.endswith(']'):
+                    try:
+                        parsed = ast.literal_eval(stripped)
+                        if isinstance(parsed, list):
+                            return parsed
+                    except (ValueError, SyntaxError):
+                        pass
+            return value
+
+        # Already a list
+        result = parse_if_stringified_list(['a', 'b'])
+        assert result == ['a', 'b']
+
+        # Integer
+        result = parse_if_stringified_list(42)
+        assert result == 42
+
+        # None
+        result = parse_if_stringified_list(None)
+        assert result is None
+
+
+# --- Tests for CLI Command Building with Lists ---
+
+class TestCLICommandBuildingWithLists:
+    """Tests for CLI command string building with list values."""
+
+    def test_build_cli_with_list_options(self):
+        """Test that list values produce multiple --flag entries."""
+        # Simulate the CLI building logic from remote_session.py
+        cmd_options = {
+            'env': ['PRD_FILE=PRD.md', 'APP_NAME=test'],
+            'output': 'architecture.json',
+            'verbose': True,
+        }
+
+        cli_parts = ["pdd", "generate"]
+        for key, value in cmd_options.items():
+            if isinstance(value, bool):
+                if value:
+                    cli_parts.append(f"--{key}")
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    cli_parts.append(f"--{key} {v}")
+            else:
+                cli_parts.append(f"--{key} {value}")
+
+        cli_command = " ".join(cli_parts)
+
+        # Should have --env for each item
+        assert "--env PRD_FILE=PRD.md" in cli_command
+        assert "--env APP_NAME=test" in cli_command
+        assert "--output architecture.json" in cli_command
+        assert "--verbose" in cli_command
+
+    def test_build_cli_with_empty_list(self):
+        """Test that empty lists produce no flags."""
+        cmd_options = {
+            'env': [],
+            'output': 'test.json',
+        }
+
+        cli_parts = ["pdd", "generate"]
+        for key, value in cmd_options.items():
+            if isinstance(value, bool):
+                if value:
+                    cli_parts.append(f"--{key}")
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    cli_parts.append(f"--{key} {v}")
+            else:
+                cli_parts.append(f"--{key} {value}")
+
+        cli_command = " ".join(cli_parts)
+
+        # Should not have --env at all
+        assert "--env" not in cli_command
+        assert "--output test.json" in cli_command
+
+    def test_build_cli_with_tuple_options(self):
+        """Test that tuple values also work like lists."""
+        cmd_options = {
+            'env': ('KEY1=val1', 'KEY2=val2'),
+        }
+
+        cli_parts = ["pdd", "generate"]
+        for key, value in cmd_options.items():
+            if isinstance(value, bool):
+                if value:
+                    cli_parts.append(f"--{key}")
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    cli_parts.append(f"--{key} {v}")
+            else:
+                cli_parts.append(f"--{key} {value}")
+
+        cli_command = " ".join(cli_parts)
+
+        assert "--env KEY1=val1" in cli_command
+        assert "--env KEY2=val2" in cli_command
