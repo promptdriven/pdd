@@ -9,6 +9,7 @@ No external tunnel (ngrok) is required - the cloud hosts everything.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import datetime
 import platform
@@ -474,6 +475,29 @@ class RemoteSessionManager:
         # Build request payload in CommandRequest format
         cmd_args = cmd.payload.get("args", {})
         cmd_options = cmd.payload.get("options", {})
+
+        # Defensive parsing: handle cases where arrays might arrive as stringified JSON
+        # This can happen if the cloud/Firestore serializes arrays incorrectly
+        def parse_if_stringified_list(value):
+            """Parse value if it looks like a stringified Python list."""
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.startswith('[') and stripped.endswith(']'):
+                    try:
+                        # Try to parse as Python literal (e.g., "['a', 'b']")
+                        parsed = ast.literal_eval(stripped)
+                        if isinstance(parsed, list):
+                            return parsed
+                    except (ValueError, SyntaxError):
+                        pass
+            return value
+
+        # Apply defensive parsing to args and options
+        for key in list(cmd_args.keys()):
+            cmd_args[key] = parse_if_stringified_list(cmd_args[key])
+        for key in list(cmd_options.keys()):
+            cmd_options[key] = parse_if_stringified_list(cmd_options[key])
+
         request_payload = {
             "command": cmd.type,
             "args": cmd_args,
@@ -496,6 +520,10 @@ class RemoteSessionManager:
             if isinstance(value, bool):
                 if value:
                     cli_parts.append(f"--{key}")
+            elif isinstance(value, (list, tuple)):
+                # Handle list values (e.g., multiple --env flags)
+                for v in value:
+                    cli_parts.append(f"--{key} {v}")
             elif isinstance(value, str) and " " in value:
                 cli_parts.append(f'--{key} "{value}"')
             else:
@@ -504,6 +532,10 @@ class RemoteSessionManager:
             if isinstance(value, bool):
                 if value:
                     cli_parts.append(f"--{key}")
+            elif isinstance(value, (list, tuple)):
+                # Handle list values (e.g., multiple --env flags)
+                for v in value:
+                    cli_parts.append(f"--{key} {v}")
             else:
                 cli_parts.append(f"--{key} {value}")
         cli_command = " ".join(cli_parts)
