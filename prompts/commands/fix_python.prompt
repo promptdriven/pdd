@@ -1,7 +1,9 @@
 % You are an expert Python engineer. Your goal is to write `pdd/commands/fix.py`.
 
 % Role & Scope
-  This module contains the `fix` command, which attempts to fix code based on unit test errors.
+  This module contains the `fix` command, which supports two modes:
+  - Agentic E2E Fix mode: Takes a GitHub issue URL and orchestrates a 9-step workflow to fix e2e tests across multiple dev units.
+  - Manual mode: Takes explicit file arguments to fix code based on unit test errors for a single dev unit.
 
 <include>context/python_preamble.prompt</include>
 
@@ -11,22 +13,44 @@
     </README.md>
 
 % Requirements
-  - **fix**:
-    - Interface: Match the `fix` command specification in `README.md` (including loop, agentic fallback, etc.).
-    - Logic: Call `fix_main`.
+  - **fix**: Takes either a GitHub issue URL (agentic mode) or `--manual` with file arguments.
+    - Agentic mode (first arg looks like a URL): Call `run_agentic_e2e_fix(issue_url, timeout_adder=..., max_cycles=..., resume=..., force=..., verbose=..., quiet=..., use_github_state=...)`.
+    - Manual mode (`--manual` flag): Call `fix_main(ctx, prompt_file, code_file, unit_test_file, error_file, ...)`.
+    - Use `nargs=-1` for `args` argument to accept variable arguments.
+    - Detect URL by checking if first arg starts with "http" or "github.com".
+    - In manual mode, validate that exactly 4+ arguments are provided (prompt, code, unit_test(s), error).
+    - Options:
+      - `--manual`: Use manual mode with explicit file arguments.
+      - `--timeout-adder FLOAT`: (Agentic) Additional seconds per step timeout (default: 0.0).
+      - `--max-cycles INT`: (Agentic) Maximum outer loop cycles (default: 5).
+      - `--resume/--no-resume`: (Agentic) Resume from saved state (default: True).
+      - `--force`: (Agentic) Override branch mismatch safety check (default: False).
+      - `--no-github-state`: (Agentic) Disable GitHub issue comment-based state persistence (default: enabled).
+      - `--output-test`, `--output-code`, `--output-results`: (Manual) Output locations.
+      - `--loop`, `--verification-program`, `--max-attempts`, `--budget`: (Manual) Loop options.
+      - `--auto-submit`: (Manual) Auto-submit on success.
+      - `--agentic-fallback/--no-agentic-fallback`: (Manual) Enable agentic fallback in loop mode.
     - Track cost.
-    - Return a dict with results.
+    - Return appropriate result tuple.
 
 % Dependencies
   <fix_main_example>
-  <include>context/fix_main_example.py</include>
+  <pdd.fix_main><include>context/fix_main_example.py</include></pdd.fix_main>
   </fix_main_example>
+  <run_agentic_e2e_fix_example>
+  <pdd.agentic_e2e_fix><include>context/agentic_e2e_fix_example.py</include></pdd.agentic_e2e_fix>
+  </run_agentic_e2e_fix_example>
   <track_cost_example>
-  <include>context/track_cost_example.py</include>
+  <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
   </track_cost_example>
 
 % Instructions
-  - Use `handle_error` for exceptions.
+  - Use `handle_error` for all exceptions except `click.Abort`.
+  - Re-raise `click.Abort` to allow user cancellation to propagate.
+  - Apply `@track_cost` decorator.
+  - Access context flags via `ctx.obj.get("key", default)`.
+  - Return `Optional[Tuple[result, float, str]]` where float is cost and str is model name.
+  - Return `None` when an error is handled.
 
 % Deliverables
   - Code: `pdd/commands/fix.py`
