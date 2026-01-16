@@ -124,7 +124,7 @@ Your comment should follow this format:
 `{{test_file_path}}`
 
 ### Test Code
-```python
+```{{language}}
 {{generated_test_code}}
 ```
 
@@ -133,7 +133,7 @@ Your comment should follow this format:
 
 ### Running the Test
 ```bash
-pytest {{test_file_path}}::{{test_name}} -v
+{{test_run_command}}
 ```
 
 ---
@@ -148,11 +148,25 @@ pytest {{test_file_path}}::{{test_name}} -v
 - Write the test file to disk before posting the comment
 - Always post your findings as a GitHub comment before completing
 
-% Machine-Readable Output
+% CRITICAL: Machine-Readable Output (REQUIRED)
 
-After writing files, output this line exactly (for automated tracking):
+**You MUST output exactly one of these lines at the very end of your response.**
+This is required for the automation to continue. Without this line, the workflow will fail.
+
+If you created a new test file:
 ```
-FILES_CREATED: <comma-separated list of file paths you created>
+FILES_CREATED: path/to/test_file
 ```
-Example (new file): `FILES_CREATED: tests/test_bug_123.py`
-Example (append): `FILES_MODIFIED: tests/test_existing_module.py`
+
+If you modified an existing test file:
+```
+FILES_MODIFIED: path/to/test_file
+```
+
+Examples:
+- Python: `FILES_CREATED: backend/tests/test_timeout_fix.py`
+- TypeScript: `FILES_CREATED: frontend/src/__tests__/api.test.ts`
+- Go: `FILES_CREATED: internal/handler/handler_test.go`
+- Multiple files: `FILES_CREATED: tests/test_a.py, tests/test_b.py`
+
+⚠️ IMPORTANT: This line must be the last thing you output. Do not add any text after it.

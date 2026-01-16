@@ -10,8 +10,8 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
 1. **split**: Call `split_main` with arguments: input_prompt, input_code, example_code, output_sub, output_modified
 
 2. **change**: Two modes determined by `--manual` flag:
-   - **Agentic mode (default)**: Takes single GitHub issue URL argument, calls `run_agentic_change(issue_url, verbose, quiet)`. Returns 5-tuple: (success, message, cost, model, changed_files). Display success status, cost, model used, and list of changed files using click.echo.
-   - **Manual mode (`--manual` flag)**: Legacy behavior. Validate csv-vs-file mode, call `change_main`. Options: `--budget` (float, default 5.0), `--output`, `--csv` flag
+   - **Agentic mode (default)**: Takes single GitHub issue URL argument, calls `run_agentic_change(issue_url, verbose, quiet, timeout_adder, use_github_state)`. Returns 5-tuple: (success, message, cost, model, changed_files). Display success status, cost, model used, and list of changed files using click.echo.
+   - **Manual mode (`--manual` flag)**: Legacy behavior. Validate csv-vs-file mode, call `change_main`. Options: `--budget` (float, default 5.0), `--output`, `--csv` flag, `--timeout-adder` (float, default 0.0, agentic mode only), `--no-github-state` (flag, disables GitHub state persistence, agentic mode only)
    - Agentic mode: exactly 1 arg (issue URL)
    - Manual mode: 2-3 args (change_prompt_file, input_code, [input_prompt_file])
 

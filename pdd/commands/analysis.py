@@ -111,6 +111,18 @@ def conflicts(
     default="Python",
     help="Programming language for the unit test (Manual mode only).",
 )
+@click.option(
+    "--timeout-adder",
+    type=float,
+    default=0.0,
+    help="Additional seconds to add to each step's timeout (agentic mode only).",
+)
+@click.option(
+    "--no-github-state",
+    is_flag=True,
+    default=False,
+    help="Disable GitHub state persistence (agentic mode only).",
+)
 @click.pass_context
 @track_cost
 def bug(
@@ -119,6 +131,8 @@ def bug(
     args: Tuple[str, ...],
     output: Optional[str],
     language: str,
+    timeout_adder: float,
+    no_github_state: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """Generate a unit test (manual) or investigate a bug (agentic).
 
@@ -167,6 +181,8 @@ def bug(
                 issue_url=issue_url,
                 verbose=ctx.obj.get("verbose", False),
                 quiet=ctx.obj.get("quiet", False),
+                timeout_adder=timeout_adder,
+                use_github_state=not no_github_state,
             )
             
             result_str = f"Success: {success}\nMessage: {message}\nChanged Files: {changed_files}"
@@ -230,7 +246,7 @@ def crash(
 ) -> Optional[Tuple[str, float, str]]:
     """Analyze a crash and fix the code and program."""
     try:
-        # crash_main returns: success, final_code, final_program, attempts, cost, model
+        # crash_main returns: success, final_code, final_program, attempts, total_cost, model_name
         success, final_code, final_program, attempts, total_cost, model_name = crash_main(
             ctx=ctx,
             prompt_file=prompt_file,

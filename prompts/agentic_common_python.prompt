@@ -53,26 +53,10 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 - Returns (success, output, cost, provider_used)
 - Optional `timeout` parameter overrides environment variable and default
 
-% Environment Variables
-- `PDD_AGENTIC_TIMEOUT`: Agent CLI timeout in seconds (default: 240)
+% Default Timeout
+Export `DEFAULT_TIMEOUT_SECONDS: float = 240.0` as fallback for orchestrators that don't specify step-specific timeouts.
 
-% Per-Step Timeouts (Issue #256, #239)
-
-Export workflow-specific timeout dictionaries:
-
-`BUG_STEP_TIMEOUTS: Dict[int, float]` - For 9-step agentic bug workflow:
-- Simple steps (1-3, 9): 240 seconds (setup, review, plan, final verify)
-- Medium step (6): 340 seconds (verify fix plan)
-- Complex steps (4, 5, 8): 600 seconds (reproduce, root cause, verify)
-- Most complex step (7): 1000 seconds (generate fix)
-
-`CHANGE_STEP_TIMEOUTS: Dict[int, float]` - For 12-step agentic change workflow:
-- Simple steps (1, 2): 240 seconds (duplicate check, docs comparison)
-- Medium steps (3, 4, 5, 6, 7, 10, 12): 340 seconds (research, clarify, docs changes, identify dev units, architecture review, identify issues, create PR)
-- Complex steps (8, 11): 600 seconds (analyze prompt changes, fix issues)
-- Most complex step (9): 1000 seconds (implement changes)
-
-`STEP_TIMEOUTS: Dict[int, float]` - Alias for `BUG_STEP_TIMEOUTS` (backward compatibility)
+Note: Per-step timeout dictionaries (BUG_STEP_TIMEOUTS, CHANGE_STEP_TIMEOUTS, E2E_FIX_STEP_TIMEOUTS) are defined in their respective orchestrator modules, not here. This keeps workflow-specific configuration with the workflow.
 
 % False Positive Detection (Issue #261)
 Export `MIN_VALID_OUTPUT_LENGTH: int = 50`
@@ -107,6 +91,87 @@ Notes:
 - Return `(False, "{provider} error: {message}", 0.0, provider)` on subprocess failure
 - Try next provider in preference order on failure; return failure only if all providers fail
 - Log false positive detection at error level before trying next provider
+
+% GitHub State Persistence (Cross-Machine Resume)
+
+Shared infrastructure for storing workflow state in GitHub issue comments using hidden HTML markers.
+This enables workflows to resume from any machine with access to the repository.
+
+Constants:
+- `GITHUB_STATE_MARKER_START = "<!-- PDD_WORKFLOW_STATE:"`
+- `GITHUB_STATE_MARKER_END = "-->"`
+
+State Comment Format:
+```html
+<!-- PDD_WORKFLOW_STATE:change:issue-123
+{
+  "workflow": "change",
+  "last_completed_step": 7,
+  "step_outputs": {...},
+  "total_cost": 0.45,
+  "github_comment_id": 12345678
+}
+-->
+```
+
+Low-Level Functions:
+
+`_build_state_marker(workflow_type: str, issue_number: int) -> str`
+- Build unique marker prefix: `<!-- PDD_WORKFLOW_STATE:{workflow_type}:issue-{issue_number}`
+
+`_serialize_state_comment(workflow_type: str, issue_number: int, state: Dict) -> str`
+- Serialize state dict to hidden HTML comment format
+- Include newline after marker, JSON body, then closing marker
+
+`_parse_state_from_comment(body: str, workflow_type: str, issue_number: int) -> Optional[Dict]`
+- Extract state JSON from comment body if marker matches
+- Return None if marker not found or JSON parse fails
+
+GitHub API Functions (use `gh` CLI):
+
+`_find_state_comment(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> Optional[Tuple[int, Dict]]`
+- List comments via `gh api repos/{owner}/{repo}/issues/{number}/comments`
+- Search for comment containing matching state marker
+- Return (comment_id, state_dict) or None
+- Handle missing `gh` CLI gracefully (return None, log warning)
+
+`github_save_state(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None) -> Optional[int]`
+- If comment_id provided: PATCH existing comment via `gh api -X PATCH repos/{owner}/{repo}/issues/comments/{comment_id} -f body=...`
+- If no comment_id: POST new comment via `gh api -X POST repos/{owner}/{repo}/issues/{number}/comments -f body=...`
+- Return comment_id on success, None on failure (log warning, never crash)
+
+`github_load_state(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> Tuple[Optional[Dict], Optional[int]]`
+- Call `_find_state_comment` to load state from GitHub
+- Return (state_dict, comment_id) or (None, None)
+
+`github_clear_state(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> bool`
+- Find state comment, DELETE via `gh api -X DELETE repos/{owner}/{repo}/issues/comments/{comment_id}`
+- Return True on success or if no comment found, False on error
+
+High-Level Wrapper Functions (used by orchestrators):
+
+`load_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]`
+- If `use_github_state` and `_should_use_github_state()`: fetch from GitHub first
+- If GitHub returns state: cache locally for fast subsequent reads, return (state, comment_id)
+- If GitHub fails or disabled: try local file fallback
+- Return (state, github_comment_id) or (None, None)
+- Gracefully handle: missing gh CLI, API errors, permission errors
+
+`save_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None) -> Optional[int]`
+- Always write to local file first (fast, reliable)
+- If `use_github_state` and `_should_use_github_state()`: write to GitHub
+- On GitHub failure: log warning, continue (local write succeeded)
+- Return new/updated github_comment_id or None
+
+`clear_workflow_state(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None`
+- Clear local state file
+- If `use_github_state` and `_should_use_github_state()`: delete GitHub comment
+- Log any errors but never raise (workflow completed successfully)
+
+`_should_use_github_state(use_github_state: bool) -> bool`
+- Return False if `use_github_state` parameter is False
+- Return False if `PDD_NO_GITHUB_STATE=1` environment variable is set
+- Return True otherwise
 
 % Dependencies
 <pdd.llm_invoke><include>context/llm_invoke_example.py</include></pdd.llm_invoke>

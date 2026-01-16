@@ -1,191 +1,167 @@
-import json
+"""
+Orchestrator for the 12-step agentic change workflow.
+Runs each step as a separate agentic task, accumulates context, tracks progress/cost,
+and supports resuming from saved state. Includes a review loop (steps 10-11).
+"""
+
 import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Tuple, List, Optional, Dict, Any, Union
+from typing import Dict, List, Optional, Tuple, Any
 
 from rich.console import Console
-from rich.panel import Panel
+from rich.markup import escape
 
-# Internal imports
-try:
-    from .agentic_common import run_agentic_task, CHANGE_STEP_TIMEOUTS
-    from .load_prompt_template import load_prompt_template
-except ImportError:
-    # Fallback for development/testing if relative imports fail
-    from pdd.agentic_common import run_agentic_task, CHANGE_STEP_TIMEOUTS
-    from pdd.load_prompt_template import load_prompt_template
+from pdd.agentic_common import (
+    run_agentic_task,
+    load_workflow_state,
+    save_workflow_state,
+    clear_workflow_state,
+)
+from pdd.load_prompt_template import load_prompt_template
 
+# Initialize console for rich output
 console = Console()
 
-# -----------------------------------------------------------------------------
-# Constants & Configuration
-# -----------------------------------------------------------------------------
-
-STATE_DIR = Path(".pdd/change-state")
-WORKTREE_DIR = Path(".pdd/worktrees")
-
-STEPS_METADATA = {
-    1: ("agentic_change_step1_duplicate_LLM", "Searching for duplicate issues"),
-    2: ("agentic_change_step2_docs_LLM", "Checking if already implemented"),
-    3: ("agentic_change_step3_research_LLM", "Researching specifications"),
-    4: ("agentic_change_step4_clarify_LLM", "Verifying requirements"),
-    5: ("agentic_change_step5_docs_change_LLM", "Analyzing documentation changes"),
-    6: ("agentic_change_step6_devunits_LLM", "Identifying dev units"),
-    7: ("agentic_change_step7_architecture_LLM", "Reviewing architecture"),
-    8: ("agentic_change_step8_analyze_LLM", "Analyzing prompt changes"),
-    9: ("agentic_change_step9_implement_LLM", "Implementing changes"),
-    10: ("agentic_change_step10_identify_issues_LLM", "Identifying issues"),
-    11: ("agentic_change_step11_fix_issues_LLM", "Fixing issues"),
-    12: ("agentic_change_step12_create_pr_LLM", "Creating Pull Request"),
+# Per-Step Timeouts (Workflow specific)
+CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 240.0,   # Docs Comparison
+    3: 340.0,   # Research
+    4: 340.0,   # Clarify
+    5: 340.0,   # Docs Changes
+    6: 340.0,   # Identify Dev Units
+    7: 340.0,   # Architecture Review
+    8: 600.0,   # Analyze Prompt Changes (Complex)
+    9: 1000.0,  # Implement Changes (Most Complex)
+    10: 340.0,  # Identify Issues
+    11: 600.0,  # Fix Issues (Complex)
+    12: 340.0,  # Create PR
 }
 
-# -----------------------------------------------------------------------------
-# State Management Helpers
-# -----------------------------------------------------------------------------
-
-def _json_serializer(obj):
-    """JSON serializer for objects not serializable by default json code"""
-    if isinstance(obj, Path):
-        return str(obj)
-    raise TypeError(f"Type {type(obj)} not serializable")
-
-def _get_state_file_path(cwd: Path, issue_number: int) -> Path:
-    return cwd / STATE_DIR / f"issue-{issue_number}.json"
-
-def _load_state(cwd: Path, issue_number: int) -> Optional[Dict[str, Any]]:
-    path = _get_state_file_path(cwd, issue_number)
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            console.print(f"[yellow]Warning: Failed to load state file: {e}[/yellow]")
-    return None
-
-def _save_state(cwd: Path, issue_number: int, state: Dict[str, Any]) -> None:
-    path = _get_state_file_path(cwd, issue_number)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, default=_json_serializer)
-    except Exception as e:
-        console.print(f"[yellow]Warning: Failed to save state file: {e}[/yellow]")
-
-def _clear_state(cwd: Path, issue_number: int) -> None:
-    path = _get_state_file_path(cwd, issue_number)
-    if path.exists():
-        try:
-            os.remove(path)
-        except Exception as e:
-            console.print(f"[yellow]Warning: Failed to clear state file: {e}[/yellow]")
-
-# -----------------------------------------------------------------------------
-# Git Worktree Helpers
-# -----------------------------------------------------------------------------
+MAX_REVIEW_ITERATIONS = 5
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
+    """Get repo root via git rev-parse."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd, capture_output=True, text=True, check=True
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True
         )
         return Path(result.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError:
         return None
 
-def _branch_exists(cwd: Path, branch: str) -> bool:
-    try:
-        subprocess.run(
-            ["git", "show-ref", "--verify", f"refs/heads/{branch}"],
-            cwd=cwd, capture_output=True, check=True
-        )
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]:
+def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]:
     """
-    Sets up an isolated git worktree for the issue.
+    Create an isolated git worktree for the issue.
     Returns (worktree_path, error_message).
-    
-    Args:
-        cwd: Current working directory
-        issue_number: The issue number
-        quiet: Suppress output
-        resume_existing: If True, attempts to reuse existing branch if worktree is missing.
     """
     git_root = _get_git_root(cwd)
     if not git_root:
         return None, "Not a git repository"
 
     branch_name = f"change/issue-{issue_number}"
-    # Worktree path relative to git root
-    worktree_rel_path = WORKTREE_DIR / f"change-issue-{issue_number}"
-    worktree_abs_path = git_root / worktree_rel_path
+    worktree_rel_path = Path(".pdd") / "worktrees" / f"change-issue-{issue_number}"
+    worktree_path = git_root / worktree_rel_path
 
-    # 1. Clean up existing worktree at path if it exists
-    if worktree_abs_path.exists():
-        # Try to remove via git first
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(worktree_abs_path)],
-            cwd=git_root, capture_output=True, check=False
-        )
-        # If directory still exists (e.g. not a valid worktree or git failed), force remove
-        if worktree_abs_path.exists():
-            try:
-                shutil.rmtree(worktree_abs_path)
-            except Exception as e:
-                return None, f"Failed to clean up existing directory {worktree_abs_path}: {e}"
+    # Clean up existing directory if it exists but isn't a valid worktree
+    if worktree_path.exists():
+        # Check if it's a valid worktree
+        is_worktree = False
+        try:
+            wt_list = subprocess.run(
+                ["git", "worktree", "list", "--porcelain"],
+                cwd=git_root,
+                capture_output=True,
+                text=True
+            ).stdout
+            if str(worktree_path) in wt_list:
+                is_worktree = True
+        except Exception:
+            pass
 
-    # 2. Handle existing branch
-    branch_exists = _branch_exists(git_root, branch_name)
-    
-    if branch_exists:
-        if resume_existing:
-            # If we are resuming and the branch exists, we want to checkout that branch
-            # into the new worktree, NOT delete it.
-            if not quiet:
-                console.print(f"[blue]Resuming with existing branch: {branch_name}[/blue]")
+        if is_worktree:
+            # Remove existing worktree to start fresh or ensure clean state
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", str(worktree_path)],
+                cwd=git_root,
+                capture_output=True
+            )
         else:
-            # Standard behavior: delete existing branch to start fresh
-            try:
-                subprocess.run(
-                    ["git", "branch", "-D", branch_name],
-                    cwd=git_root, capture_output=True, check=True
-                )
-                branch_exists = False # It's gone now
-            except subprocess.CalledProcessError as e:
-                return None, f"Failed to delete existing branch {branch_name}: {e.stderr}"
+            # Just a directory
+            shutil.rmtree(worktree_path)
 
-    # 3. Create new worktree
+    # Clean up branch if it exists
     try:
-        worktree_abs_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        cmd = ["git", "worktree", "add"]
-        if branch_exists and resume_existing:
-            # Checkout existing branch
-            cmd.extend([str(worktree_abs_path), branch_name])
-        else:
-            # Create new branch from origin/main (not HEAD) to avoid inheriting
-            # commits from the current branch that shouldn't be in the PR
-            cmd.extend(["-b", branch_name, str(worktree_abs_path), "origin/main"])
-            
         subprocess.run(
-            cmd,
-            cwd=git_root, capture_output=True, text=True, check=True
+            ["git", "branch", "-D", branch_name],
+            cwd=git_root,
+            capture_output=True
         )
+    except Exception:
+        pass
+
+    # Create worktree
+    try:
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+            cwd=git_root,
+            capture_output=True,
+            check=True
+        )
+        if not quiet:
+            console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
+        return worktree_path, None
     except subprocess.CalledProcessError as e:
-        return None, f"Failed to create worktree: {e.stderr}"
+        return None, f"Git worktree creation failed: {e}"
 
-    return worktree_abs_path, None
+def _parse_changed_files(output: str) -> List[str]:
+    """Extract file paths from FILES_CREATED or FILES_MODIFIED lines."""
+    files = []
+    # Look for FILES_CREATED: path, path
+    created_match = re.search(r"FILES_CREATED:\s*(.*)", output)
+    if created_match:
+        files.extend([f.strip() for f in created_match.group(1).split(",") if f.strip()])
+    
+    # Look for FILES_MODIFIED: path, path
+    modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", output)
+    if modified_match:
+        files.extend([f.strip() for f in modified_match.group(1).split(",") if f.strip()])
+        
+    return list(set(files)) # Deduplicate
 
-# -----------------------------------------------------------------------------
-# Orchestrator Logic
-# -----------------------------------------------------------------------------
+def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
+    """Check output for hard stop conditions."""
+    if step_num == 1 and "Duplicate of #" in output:
+        return "Issue is a duplicate"
+    if step_num == 2 and "Already Implemented" in output:
+        return "Already implemented"
+    if step_num == 4 and "Clarification Needed" in output:
+        return "Clarification needed"
+    if step_num == 6 and "No Dev Units Found" in output:
+        return "No dev units found"
+    if step_num == 7 and "Architectural Decision Needed" in output:
+        return "Architectural decision needed"
+    if step_num == 8 and "No Changes Required" in output:
+        return "No changes needed"
+    if step_num == 9:
+        if "FAIL:" in output:
+            return "Implementation failed"
+        # Note: Missing FILES_... check is handled in logic, not just string match
+    return None
+
+def _get_state_dir(cwd: Path) -> Path:
+    """Get the state directory relative to git root."""
+    root = _get_git_root(cwd) or cwd
+    return root / ".pdd" / "change-state"
 
 def run_agentic_change_orchestrator(
     issue_url: str,
@@ -198,401 +174,338 @@ def run_agentic_change_orchestrator(
     *,
     cwd: Path,
     verbose: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    timeout_adder: float = 0.0,
+    use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 12-step agentic change workflow.
+    
+    Returns:
+        (success, final_message, total_cost, model_used, changed_files)
     """
     
-    # Initial Setup
     if not quiet:
-        console.print(Panel(f"Implementing change for issue #{issue_number}: \"{issue_title}\"", style="bold blue"))
+        console.print(f"Implementing change for issue #{issue_number}: \"{issue_title}\"")
 
-    # Load State
-    state = _load_state(cwd, issue_number)
-    
+    state_dir = _get_state_dir(cwd)
+
+    # Load state
+    state, loaded_gh_id = load_workflow_state(
+        cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
+    )
+
     # Initialize variables from state or defaults
-    if state:
-        if not quiet:
-            console.print(f"[yellow]Resuming from step {state.get('last_completed_step', 0) + 1} (steps 1-{state.get('last_completed_step', 0)} cached)[/yellow]")
-        
+    if state is not None:
+        last_completed_step = state.get("last_completed_step", 0)
+        step_outputs = state.get("step_outputs", {})
         total_cost = state.get("total_cost", 0.0)
         model_used = state.get("model_used", "unknown")
-        step_outputs = state.get("step_outputs", {})
-        last_completed_step = state.get("last_completed_step", 0)
+        github_comment_id = loaded_gh_id  # Use the ID returned by load_workflow_state
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
-        review_iteration = state.get("review_iteration", 0)
-        previous_fixes = state.get("previous_fixes", "")
-        files_to_stage_str = state.get("files_to_stage", "")
-
-        # Verify worktree existence on resume
-        if worktree_path and not worktree_path.exists():
-            if not quiet:
-                console.print(f"[yellow]Worktree path {worktree_path} not found. Attempting to recreate...[/yellow]")
-            # Pass resume_existing=True to avoid deleting the branch if it contains our work
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
-            if not wt_path:
-                return False, f"Failed to recreate worktree on resume: {err}", total_cost, model_used, []
-            worktree_path = wt_path
-            # Update state with new worktree path if it changed (though it should be same path)
-            if str(worktree_path) != worktree_path_str:
-                _save_state(cwd, issue_number, {
-                    **state,
-                    "worktree_path": str(worktree_path)
-                })
-
     else:
+        # Initialize fresh state dict for new workflow
+        state = {"step_outputs": {}}
+        last_completed_step = 0
+        step_outputs = state["step_outputs"]
         total_cost = 0.0
         model_used = "unknown"
-        step_outputs = {}
-        last_completed_step = 0
+        github_comment_id = None
         worktree_path = None
-        review_iteration = 0
-        previous_fixes = ""
-        files_to_stage_str = ""
-
-    # Context dictionary to pass to templates
+    
+    # Context accumulation dictionary
     context = {
         "issue_url": issue_url,
         "issue_content": issue_content,
         "repo_owner": repo_owner,
         "repo_name": repo_name,
-        "issue_number": str(issue_number),
+        "issue_number": issue_number,
         "issue_author": issue_author,
         "issue_title": issue_title,
-        "files_to_stage": files_to_stage_str,
-        "worktree_path": str(worktree_path) if worktree_path else "",
-        "review_iteration": str(review_iteration),
-        "previous_fixes": previous_fixes
     }
     
-    # Populate context with loaded step outputs
-    for k, v in step_outputs.items():
-        context[f"step{k}_output"] = v
+    # Populate context with cached outputs
+    for s_num, s_out in step_outputs.items():
+        context[f"step{s_num}_output"] = s_out
 
-    # Determine current working directory for agents
-    # If we resumed after step 9, we should be in the worktree
-    current_agent_cwd = worktree_path if (worktree_path and last_completed_step >= 9) else cwd
-
-    # -------------------------------------------------------------------------
-    # Main Execution Loop
-    # -------------------------------------------------------------------------
+    # Determine start step
+    start_step = last_completed_step + 1
     
-    # We iterate through steps 1 to 12. 
-    # Steps 10 and 11 are handled specially as a loop block when we hit step 10.
+    if last_completed_step > 0 and not quiet:
+        console.print(f"Resuming change workflow for issue #{issue_number}")
+        console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
+        console.print(f"   Starting from Step {start_step}")
+
+    # --- Steps 1 through 9 ---
     
-    step_sequence = list(range(1, 13))
-    start_index = last_completed_step
+    # Step definitions for 1-9
+    steps_config = [
+        (1, "duplicate", "Search for duplicate issues"),
+        (2, "docs", "Check if already implemented"),
+        (3, "research", "Research to clarify specifications"),
+        (4, "clarify", "Verify requirements are clear"),
+        (5, "docs_change", "Analyze documentation changes needed"),
+        (6, "devunits", "Identify dev units involved"),
+        (7, "architecture", "Review architecture"),
+        (8, "analyze", "Analyze prompt changes"),
+        (9, "implement", "Implement the prompt changes"),
+    ]
 
-    for i in range(start_index, 12):
-        step_num = step_sequence[i]
-        template_name, description = STEPS_METADATA[step_num]
-        
-        # ---------------------------------------------------------------------
-        # Special Handling: Step 9 (Worktree Setup)
-        # ---------------------------------------------------------------------
-        if step_num == 9:
-            # Only setup worktree if we haven't already (or if we lost it)
-            if not worktree_path or not worktree_path.exists():
-                if not quiet:
-                    console.print(f"[Step {step_num}/12] Setting up isolated worktree...")
-                
-                # Standard setup (resume_existing=False) because we are just reaching step 9
-                wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
-                if not wt_path:
-                    return False, f"Failed to create worktree: {err}", total_cost, model_used, []
-                
-                worktree_path = wt_path
-                current_agent_cwd = worktree_path
-                context["worktree_path"] = str(worktree_path)
-                
-                # Update state with worktree path immediately
-                # Note: Use step_num - 1 (not the stale last_completed_step variable)
-                # because steps up to step_num - 1 have completed successfully
-                _save_state(cwd, issue_number, {
-                    "issue_url": issue_url,
-                    "issue_number": issue_number,
-                    "last_completed_step": step_num - 1,
-                    "step_outputs": step_outputs,
-                    "total_cost": total_cost,
-                    "model_used": model_used,
-                    "worktree_path": str(worktree_path),
-                    "files_to_stage": files_to_stage_str
-                })
-                
-                if not quiet:
-                    console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
+    current_work_dir = cwd
+    changed_files = []
 
-        # ---------------------------------------------------------------------
-        # Special Handling: Steps 10 & 11 (Review Loop)
-        # ---------------------------------------------------------------------
-        if step_num == 10:
-            # Enter the review loop
-            MAX_REVIEW_ITERATIONS = 5
-            
-            # If we are resuming at step 10, review_iteration might be > 0 from state
-            # If we are resuming at step 11, we need to jump into the loop but skip step 10 logic for this iteration
-            
-            while review_iteration < MAX_REVIEW_ITERATIONS:
-                # If we are just starting the loop or finished a full iteration (step 11 done), increment
-                # If we are resuming at step 11 (last_completed_step=10), we are still in the same iteration
-                if last_completed_step != 10:
-                    review_iteration += 1
-                
-                context["review_iteration"] = str(review_iteration)
-                context["previous_fixes"] = previous_fixes
+    # If we are resuming at step 9 or later, we need to ensure the worktree exists/is active
+    if start_step >= 9:
+        # If we have a path in state, verify it exists, otherwise recreate
+        if worktree_path and worktree_path.exists():
+             if not quiet:
+                console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")
+             current_work_dir = worktree_path
+        else:
+            # Re-create worktree if missing
+            wt_path, err = _setup_worktree(cwd, issue_number, quiet)
+            if not wt_path:
+                return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
+            worktree_path = wt_path
+            current_work_dir = worktree_path
+            # Update state with new path
+            state["worktree_path"] = str(worktree_path)
 
-                # --- Run Step 10: Identify Issues ---
-                # Only run step 10 if we haven't completed it for this iteration yet
-                if last_completed_step != 10:
-                    if not quiet:
-                        console.print(f"[Step 10/12] Identifying issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
-                    
-                    s10_template = load_prompt_template(STEPS_METADATA[10][0])
-                    if not s10_template:
-                        return False, f"Missing template for step 10", total_cost, model_used, []
-                    
-                    s10_prompt = s10_template.format(**context)
-                    
-                    success, s10_output, cost, model = run_agentic_task(
-                        s10_prompt, 
-                        cwd=current_agent_cwd, 
-                        verbose=verbose, 
-                        quiet=quiet,
-                        label="step10",
-                        timeout=CHANGE_STEP_TIMEOUTS.get(10, 300)
-                    )
-                    
-                    total_cost += cost
-                    model_used = model or model_used
-                    step_outputs["10"] = s10_output
-                    context["step10_output"] = s10_output
-                    
-                    # Save state inside loop
-                    _save_state(cwd, issue_number, {
-                        "issue_url": issue_url,
-                        "issue_number": issue_number,
-                        "last_completed_step": 10, # Mark 10 as done for this iteration
-                        "step_outputs": step_outputs,
-                        "total_cost": total_cost,
-                        "model_used": model_used,
-                        "worktree_path": str(worktree_path),
-                        "review_iteration": review_iteration,
-                        "previous_fixes": previous_fixes,
-                        "files_to_stage": files_to_stage_str
-                    })
-
-                    if "No Issues Found" in s10_output:
-                        if not quiet:
-                            console.print("  -> No issues found. Proceeding.")
-                        break # Exit review loop, proceed to Step 12
-                    
-                    if not quiet:
-                        console.print("  -> Issues found. Proceeding to fix.")
-                else:
-                    # If we skipped step 10 because last_completed_step was 10, we need to ensure context has output
-                    # The output should be in step_outputs from state load
-                    context["step10_output"] = step_outputs.get("10", "")
-                    # Reset last_completed_step so next iteration runs step 10 normally
-                    last_completed_step = 0 
-
-                # --- Run Step 11: Fix Issues ---
-                if not quiet:
-                    console.print(f"[Step 11/12] Fixing issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
-                
-                s11_template = load_prompt_template(STEPS_METADATA[11][0])
-                if not s11_template:
-                    return False, f"Missing template for step 11", total_cost, model_used, []
-                
-                s11_prompt = s11_template.format(**context)
-                
-                success, s11_output, cost, model = run_agentic_task(
-                    s11_prompt, 
-                    cwd=current_agent_cwd, 
-                    verbose=verbose, 
-                    quiet=quiet,
-                    label="step11",
-                    timeout=CHANGE_STEP_TIMEOUTS.get(11, 300)
-                )
-                
-                total_cost += cost
-                model_used = model or model_used
-                step_outputs["11"] = s11_output
-                
-                # Accumulate fixes
-                previous_fixes += f"\n\nIteration {review_iteration}:\n{s11_output}"
-                context["previous_fixes"] = previous_fixes
-                
-                # Save state after fix
-                _save_state(cwd, issue_number, {
-                    "issue_url": issue_url,
-                    "issue_number": issue_number,
-                    "last_completed_step": 11,
-                    "step_outputs": step_outputs,
-                    "total_cost": total_cost,
-                    "model_used": model_used,
-                    "worktree_path": str(worktree_path),
-                    "review_iteration": review_iteration,
-                    "previous_fixes": previous_fixes,
-                    "files_to_stage": files_to_stage_str
-                })
-                
-                if not quiet:
-                    console.print("  -> Fixes applied.")
-
-            if review_iteration >= MAX_REVIEW_ITERATIONS:
-                console.print("[yellow]Warning: Maximum review iterations reached. Proceeding to PR creation.[/yellow]")
-            
-            # Skip the standard loop iteration for step 11, as we handled it inside step 10 block
-            continue 
-        
-        if step_num == 11:
-            # Handled inside step 10 block
+    for step_num, name, description in steps_config:
+        # Skip if already done
+        if step_num < start_step:
             continue
 
-        # ---------------------------------------------------------------------
-        # Standard Step Execution (1-9, 12)
-        # ---------------------------------------------------------------------
-        
-        if not quiet:
-            console.print(f"[Step {step_num}/12] {description}...")
+        # Special handling before Step 9: Create Worktree
+        if step_num == 9:
+            wt_path, err = _setup_worktree(cwd, issue_number, quiet)
+            if not wt_path:
+                return False, f"Failed to create worktree: {err}", total_cost, model_used, []
+            worktree_path = wt_path
+            current_work_dir = worktree_path
+            state["worktree_path"] = str(worktree_path)
+            context["worktree_path"] = str(worktree_path)
 
-        # Load Template
-        template = load_prompt_template(template_name)
-        if not template:
-            return False, f"Failed to load template: {template_name}", total_cost, model_used, []
+        if not quiet:
+            console.print(f"[bold][Step {step_num}/12][/bold] {description}...")
+
+        # Load Prompt
+        template_name = f"agentic_change_step{step_num}_{name}_LLM"
+        prompt_template = load_prompt_template(template_name)
+        if not prompt_template:
+            return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
         # Format Prompt
         try:
-            prompt = template.format(**context)
+            formatted_prompt = prompt_template.format(**context)
         except KeyError as e:
-            return False, f"Missing context key for step {step_num}: {e}", total_cost, model_used, []
+            return False, f"Context missing key for step {step_num}: {e}", total_cost, model_used, []
 
-        # Run Agent
-        success, output, cost, model = run_agentic_task(
-            prompt,
-            cwd=current_agent_cwd,
+        # Run Task
+        timeout = CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
+        step_success, step_output, step_cost, step_model = run_agentic_task(
+            instruction=formatted_prompt,
+            cwd=current_work_dir,
             verbose=verbose,
             quiet=quiet,
-            label=f"step{step_num}",
-            timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 300)
+            timeout=timeout,
+            label=f"step{step_num}"
         )
 
-        # Update Metrics
-        total_cost += cost
-        if model:
-            model_used = model
-        
-        # Store Output
-        step_outputs[str(step_num)] = output
-        context[f"step{step_num}_output"] = output
+        # Update tracking
+        total_cost += step_cost
+        model_used = step_model
+        state["total_cost"] = total_cost
+        state["model_used"] = model_used
 
-        # ---------------------------------------------------------------------
-        # Post-Step Processing & Stop Conditions
-        # ---------------------------------------------------------------------
-
-        # Step 9: Parse Changed Files
-        if step_num == 9:
-            # Look for FILES_CREATED: a, b or FILES_MODIFIED: a, b
-            files_found = []
-            # Improved regex: case insensitive, handles spaces better
-            for match in re.finditer(r"FILES_(?:CREATED|MODIFIED):\s*(.*)", output, re.IGNORECASE):
-                file_list = match.group(1).strip()
-                if file_list and file_list.lower() != "none":
-                    files_found.extend([f.strip() for f in file_list.split(",")])
+        if not step_success:
+            # Check if it's a hard stop condition that caused \"failure\" or just agent error
+            stop_reason = _check_hard_stop(step_num, step_output)
+            if stop_reason:
+                if not quiet:
+                    console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
+                # Save state so we don't re-run previous steps
+                state["last_completed_step"] = step_num
+                state["step_outputs"][str(step_num)] = step_output
+                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
             
-            # Deduplicate and store
-            unique_files = list(set(files_found))
-            files_to_stage_str = ", ".join(unique_files)
-            context["files_to_stage"] = files_to_stage_str
-            
-            # Fix: Stop if no files found OR "FAIL:" in output
-            if not unique_files or "FAIL:" in output:
-                 return False, f"Stopped at step 9: Implementation failed (no files changed or explicit fail)", total_cost, model_used, []
+            # Soft failure
+            console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
-        # Hard Stop Conditions
-        stop_reason = None
-        if step_num == 1 and "Duplicate of #" in output:
-            stop_reason = "Issue is a duplicate"
-        elif step_num == 2 and "Already Implemented" in output:
-            stop_reason = "Feature already implemented"
-        elif step_num == 4 and "Clarification Needed" in output:
-            stop_reason = "Clarification needed from user"
-        elif step_num == 6 and "No Dev Units Found" in output:
-            stop_reason = "No relevant dev units found"
-        elif step_num == 7 and "STOP_CONDITION: Architectural decision needed" in output:
-            stop_reason = "Architectural decision needed"
-        elif step_num == 8 and "No Changes Required" in output:
-            stop_reason = "Analysis determined no changes required"
-
+        # Check hard stops on success too
+        stop_reason = _check_hard_stop(step_num, step_output)
         if stop_reason:
             if not quiet:
-                console.print(f"[bold red]Investigation stopped at Step {step_num}: {stop_reason}[/bold red]")
-            
-            # Save state so we can resume later if needed (e.g. after clarification)
-            _save_state(cwd, issue_number, {
-                "issue_url": issue_url,
-                "issue_number": issue_number,
-                "last_completed_step": step_num,
-                "step_outputs": step_outputs,
-                "total_cost": total_cost,
-                "model_used": model_used,
-                "worktree_path": str(worktree_path) if worktree_path else None,
-                "files_to_stage": files_to_stage_str
-            })
-            
+                console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
+            state["last_completed_step"] = step_num
+            state["step_outputs"][str(step_num)] = step_output
+            save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
 
-        # Save State after successful step
-        _save_state(cwd, issue_number, {
-            "issue_url": issue_url,
-            "issue_number": issue_number,
-            "last_completed_step": step_num,
-            "step_outputs": step_outputs,
-            "total_cost": total_cost,
-            "model_used": model_used,
-            "worktree_path": str(worktree_path) if worktree_path else None,
-            "files_to_stage": files_to_stage_str
-        })
+        # Step 9 specific: Parse files
+        if step_num == 9:
+            extracted_files = _parse_changed_files(step_output)
+            changed_files = extracted_files
+            context["files_to_stage"] = ", ".join(changed_files)
 
-        # Console Feedback
+            if not changed_files:
+                # Hard stop if implementation produced no file changes
+                return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
+
+        # Update Context & State
+        context[f"step{step_num}_output"] = step_output
+        state["step_outputs"][str(step_num)] = step_output
+        state["last_completed_step"] = step_num
+        
+        # Save State
+        save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+        if save_result:
+            github_comment_id = save_result
+            state["github_comment_id"] = github_comment_id
+
         if not quiet:
-            brief = "Completed"
-            if step_num == 1: brief = "No duplicates found"
-            elif step_num == 6: brief = "Dev units identified"
-            elif step_num == 9: brief = f"Changes applied ({len(files_to_stage_str.split(',')) if files_to_stage_str else 0} files)"
-            elif step_num == 12: brief = "PR Created"
-            console.print(f"  -> {brief}")
+            # Brief result summary
+            lines = step_output.strip().split('\n')
+            brief = lines[-1] if lines else "Done"
+            if len(brief) > 80: brief = brief[:77] + "..."
+            console.print(f"   -> {escape(brief)}")
 
-    # -------------------------------------------------------------------------
-    # Finalization
-    # -------------------------------------------------------------------------
+    # --- Review Loop (Steps 10-11) ---
     
-    # Extract PR URL from Step 12 output if available
-    pr_url = "Unknown"
-    s12_out = step_outputs.get("12", "")
-    pr_match = re.search(r"(https://github\.com/[^\s]+/pull/\d+)", s12_out)
-    if pr_match:
-        pr_url = pr_match.group(1)
+    # Ensure we have files_to_stage if we resumed after step 9
+    if "files_to_stage" not in context:
+        # Try to recover from step 9 output
+        s9_out = context.get("step9_output", "")
+        c_files = _parse_changed_files(s9_out)
+        changed_files = c_files
+        context["files_to_stage"] = ", ".join(c_files)
 
-    changed_files_list = [f.strip() for f in files_to_stage_str.split(",")] if files_to_stage_str else []
+    review_iteration = state.get("review_iteration", 0)
+    previous_fixes = state.get("previous_fixes", "")
+    
+    # If we haven't finished the review loop (i.e., we haven't reached step 12 yet)
+    if last_completed_step < 12:
+        while review_iteration < MAX_REVIEW_ITERATIONS:
+            review_iteration += 1
+            state["review_iteration"] = review_iteration
+            
+            # --- Step 10: Identify Issues ---
+            if not quiet:
+                console.print(f"[bold][Step 10/12][/bold] Identifying issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
+            
+            s10_template = load_prompt_template("agentic_change_step10_identify_issues_LLM")
+            context["review_iteration"] = review_iteration
+            context["previous_fixes"] = previous_fixes
+            
+            s10_prompt = s10_template.format(**context)
+            
+            timeout10 = CHANGE_STEP_TIMEOUTS.get(10, 340.0) + timeout_adder
+            s10_success, s10_output, s10_cost, s10_model = run_agentic_task(
+                instruction=s10_prompt,
+                cwd=current_work_dir,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout10,
+                label=f"step10_iter{review_iteration}"
+            )
+            
+            total_cost += s10_cost
+            model_used = s10_model
+            state["total_cost"] = total_cost
+            
+            if "No Issues Found" in s10_output:
+                if not quiet:
+                    console.print("   -> No issues found. Proceeding to PR.")
+                break
+            
+            if not quiet:
+                console.print("   -> Issues found. Proceeding to fix.")
 
-    if not quiet:
-        summary = f"""
-Change workflow complete
-   Total cost: ${total_cost:.4f}
-   Files changed: {files_to_stage_str}
-   PR: {pr_url}
-   Review iterations: {review_iteration}
+            # --- Step 11: Fix Issues ---
+            if not quiet:
+                console.print(f"[bold][Step 11/12][/bold] Fixing issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
+                
+            s11_template = load_prompt_template("agentic_change_step11_fix_issues_LLM")
+            context["step10_output"] = s10_output
+            
+            s11_prompt = s11_template.format(**context)
+            
+            timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 600.0) + timeout_adder
+            s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
+                instruction=s11_prompt,
+                cwd=current_work_dir,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout11,
+                label=f"step11_iter{review_iteration}"
+            )
+            
+            total_cost += s11_cost
+            model_used = s11_model
+            state["total_cost"] = total_cost
+            
+            previous_fixes += f"\n\nIteration {review_iteration}:\n{s11_output}"
+            state["previous_fixes"] = previous_fixes
+            
+            # Save state inside loop
+            save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
 
-Next steps:
-   1. Review and merge the PR
-   2. Run `pdd sync <module>` after merge
-"""
-        console.print(Panel(summary, title="Summary", style="green"))
+        if review_iteration >= MAX_REVIEW_ITERATIONS:
+            console.print("[yellow]Warning: Maximum review iterations reached. Proceeding to PR creation.[/yellow]")
 
-    # Clear state on success
-    _clear_state(cwd, issue_number)
+    # --- Step 12: Create PR ---
+    if last_completed_step < 12:
+        if not quiet:
+            console.print("[bold][Step 12/12][/bold] Create PR and link to issue...")
+            
+        s12_template = load_prompt_template("agentic_change_step12_create_pr_LLM")
+        s12_prompt = s12_template.format(**context)
+        
+        timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 340.0) + timeout_adder
+        s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
+            instruction=s12_prompt,
+            cwd=current_work_dir,
+            verbose=verbose,
+            quiet=quiet,
+            timeout=timeout12,
+            label="step12"
+        )
+        
+        total_cost += s12_cost
+        model_used = s12_model
+        state["total_cost"] = total_cost
+        
+        if not s12_success:
+             console.print("[red]Step 12 (PR Creation) failed.[/red]")
+             # Save state to allow retry
+             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+             return False, "PR Creation failed", total_cost, model_used, changed_files
 
-    return True, f"Workflow complete. PR: {pr_url}", total_cost, model_used, changed_files_list
+        # Extract PR URL if possible (simple heuristic)
+        pr_url = "Unknown"
+        url_match = re.search(r"https://github.com/\S+/pull/\d+", s12_output)
+        if url_match:
+            pr_url = url_match.group(0)
+
+        # Final Success
+        if not quiet:
+            console.print("\n[green]Change workflow complete[/green]")
+            console.print(f"   Total cost: ${total_cost:.4f}")
+            console.print(f"   Files changed: {', '.join(changed_files)}")
+            console.print(f"   PR: {pr_url}")
+            console.print(f"   Review iterations: {review_iteration}")
+            console.print("\nNext steps:")
+            console.print("   1. Review and merge the PR")
+            console.print("   2. Run `pdd sync <module>` after merge")
+
+        # Clear state on success
+        clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
+        
+        return True, f"PR Created: {pr_url}", total_cost, model_used, changed_files
+
+    return True, "Workflow already completed", total_cost, model_used, changed_files

@@ -1,0 +1,116 @@
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to verify that the unit tests detect the bugs.
+
+% Context
+
+You are working on step 7 of 9 in an agentic e2e fix workflow. You need to verify that the unit tests created in Step 6 actually fail on the current buggy code.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Cycle: {cycle_number}/{max_cycles}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+% Your Task
+
+1. **Run the newly created unit tests**
+   - Parse Step 6 output for FILES_CREATED/FILES_MODIFIED
+   - Execute pytest with the test files from Step 6's FILES_CREATED output
+   - Capture the test output
+
+2. **Verify tests fail as expected**
+   - Each test should FAIL on the current buggy code
+   - The failure message should relate to the bug being detected
+   - If a test passes, it's not detecting the bug correctly
+
+3. **Handle unexpected results**
+   - If tests pass instead of fail: the test is not detecting the bug
+   - If tests error (not assert fail): test setup issue
+   - Report issues and suggest fixes
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+**If tests properly detect bugs:**
+```markdown
+## Step 7: Verify Tests Detect Bugs (Cycle {cycle_number})
+
+**Status:** Tests Correctly Detect Bugs
+
+### Test Results
+| Test | Status | Error |
+|------|--------|-------|
+| `test_{{name}}` | FAIL (expected) | {{assertion_error}} |
+
+### Verification Summary
+- {{N}} tests correctly fail on buggy code
+- Tests will pass once bugs are fixed via `pdd fix`
+
+---
+*Proceeding to Step 8: Run pdd fix*
+```
+
+**If tests don't detect bugs:**
+```markdown
+## Step 7: Verify Tests Detect Bugs (Cycle {cycle_number})
+
+**Status:** TESTS_NOT_DETECTING_BUGS
+
+### Problem
+| Test | Issue |
+|------|-------|
+| `test_{{name}}` | Passes when it should fail |
+
+### Analysis
+{{explanation of why tests aren't detecting the bug}}
+
+### Fix Applied
+{{description of how tests were corrected}}
+
+FILES_MODIFIED: {{comma_separated_list}}
+
+---
+*Proceeding to Step 8: Run pdd fix*
+```
+
+% Important
+
+- Tests MUST fail on current code to be valid bug-detecting tests
+- If tests pass, either the bug is already fixed or the test is wrong
+- Always fix invalid tests before proceeding
+- Always post your findings as a GitHub comment before completing
