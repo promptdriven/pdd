@@ -65,10 +65,15 @@ def fix_error_loop(
     error_log_file: str = "error_log.txt",
     verbose: bool = False,
     time: float = DEFAULT_TIME,
-    agentic_fallback: bool = True
+    agentic_fallback: bool = True,
+    protect_tests: bool = False
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
+
+    Args:
+        protect_tests: When True, prevents the LLM from modifying test files. The LLM will
+                      only fix code, treating tests as read-only specifications. Default is False.
     """
 ```
 
@@ -192,8 +197,9 @@ Notes:
     *   **Initial Check**: Run pytest (or verification for non-Python). If initially passing, exit early per the output contract.
     *   **The Loop**:
         *   Create timestamped backups in `.pdd/backups/{code_basename}/{timestamp}/` with format: `test_{iter}_{errors}_{fails}_{warnings}.py` and `code_{iter}_{errors}_{fails}_{warnings}.py`
-        *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context.
+        *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context, passing through the `protect_tests` parameter.
         *   Update files, run verification, and re-run pytest to update the state.
+        *   When `protect_tests=True`, skip writing the fixed unit test (only write the fixed code).
     *   **Finalization**: Compare final state to the best iteration and restore if necessary. Print a `rich` summary of improvements including percentage reduction.
 5.  **Agentic Fallback Logic**: Implement `_safe_run_agentic_fix` which calls the agent and passes the result through `_normalize_agentic_result`.
     * Pass `cwd=None` to `run_agentic_fix` to use project root, NOT the prompt file's parent directory.
