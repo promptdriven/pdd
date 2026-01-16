@@ -358,23 +358,76 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     setGenerationError(null);
 
     try {
-      const result = await api.generateArchitecture({
-        prdPath: prdPath || undefined,
-        prdContent: prdPath ? undefined : prdContent,
-        techStackPath: techStackPath || undefined,
-        techStackContent: techStackPath ? undefined : (techStackContent || undefined),
-        appName: appName || undefined,
-        globalOptions,
-      });
+      // Check if we're in remote mode
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // For remote execution, we need file paths (not inline content)
+        // If user provided inline content, warn them
+        if (!prdPath && prdContent.trim()) {
+          setGenerationError('Remote execution requires PRD to be loaded from a file. Please use "Load PRD" to select a file.');
+          setIsGenerating(false);
+          return;
+        }
 
-      if (result.success) {
-        // Reload architecture
-        const modules = await api.getArchitecture();
-        setArchitecture(modules);
-        setMode('graph');
-        setSidebarCollapsed(true);
+        // Build environment variables for the generate command
+        const envArgs: string[] = [];
+        if (prdPath) envArgs.push(`PRD_FILE=${prdPath}`);
+        if (techStackPath) envArgs.push(`TECH_STACK_FILE=${techStackPath}`);
+        if (appName) envArgs.push(`APP_NAME=${appName}`);
+
+        // Build options object
+        const options: Record<string, any> = {
+          output: 'architecture.json',
+          template: 'architecture/architecture_json',
+          env: envArgs,
+        };
+
+        // Add global options if provided
+        if (globalOptions) {
+          const { strength, temperature, time, verbose, quiet, force } = globalOptions;
+          if (strength !== undefined) options.strength = strength;
+          if (temperature !== undefined) options.temperature = temperature;
+          if (time !== undefined) options.time = time;
+          if (verbose) options.verbose = true;
+          if (quiet) options.quiet = true;
+          if (force) options.force = true;
+        }
+
+        // Submit to remote session
+        try {
+          await api.submitRemoteCommand({
+            sessionId: selectedRemoteSession,
+            type: 'generate',
+            payload: { args: {}, options },
+          });
+
+          // For remote, we can't immediately reload architecture
+          // Show success message and let user know to check remote
+          setGenerationError(null);
+          setIsGenerating(false);
+          alert('Architecture generation command submitted to remote session. Check the remote machine for results.');
+        } catch (error) {
+          setGenerationError(`Failed to submit remote command: ${error instanceof Error ? error.message : String(error)}`);
+        }
       } else {
-        setGenerationError(result.message || 'Generation failed');
+        // Local execution
+        const result = await api.generateArchitecture({
+          prdPath: prdPath || undefined,
+          prdContent: prdPath ? undefined : prdContent,
+          techStackPath: techStackPath || undefined,
+          techStackContent: techStackPath ? undefined : (techStackContent || undefined),
+          appName: appName || undefined,
+          globalOptions,
+        });
+
+        if (result.success) {
+          // Reload architecture
+          const modules = await api.getArchitecture();
+          setArchitecture(modules);
+          setMode('graph');
+          setSidebarCollapsed(true);
+        } else {
+          setGenerationError(result.message || 'Generation failed');
+        }
       }
     } catch (e: any) {
       console.error('Failed to generate architecture:', e);
