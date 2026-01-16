@@ -150,13 +150,18 @@ def _build_subprocess_command_args(
         file_keys = MANUAL_MODE_FILE_KEYS[command]
         # Check if any file keys are present
         if any(k in args for k in file_keys):
-            # Convert file keys to ordered positional args list
+            # Convert file keys to ordered positional args list (order matters!)
             positional_values = []
             for key in file_keys:
                 if key in args and args[key] is not None:
                     positional_values.append(str(args[key]))
-            # Replace args with converted positional args
+            # Collect remaining args that aren't file keys (e.g., verification_program)
+            remaining_args = {k: v for k, v in args.items() if k not in file_keys}
+            # Build new args with positional values
             args = {"args": positional_values}
+            # Move remaining args to cmd_opts (they should be options like --verification-program)
+            for key, value in remaining_args.items():
+                cmd_opts[key] = value
             # Add --manual flag to command-specific options
             cmd_opts["manual"] = True
 
