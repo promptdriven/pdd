@@ -347,15 +347,12 @@ def run_agentic_change_orchestrator(
         # Step 9 specific: Parse files
         if step_num == 9:
             extracted_files = _parse_changed_files(step_output)
-            if not extracted_files and "FAIL:" not in step_output:
-                # If no files found but no explicit fail, might be an issue
-                console.print("[yellow]Warning: No changed files detected in Step 9 output.[/yellow]")
             changed_files = extracted_files
             context["files_to_stage"] = ", ".join(changed_files)
-            
+
             if not changed_files:
-                 # Treat as hard stop if implementation claimed success but no files changed
-                 return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
+                # Hard stop if implementation produced no file changes
+                return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
         # Update Context & State
         context[f"step{step_num}_output"] = step_output
