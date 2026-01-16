@@ -45,7 +45,7 @@ You are working on step 7 of 9 in an agentic e2e fix workflow. You need to verif
 
 1. **Run the newly created unit tests**
    - Parse Step 6 output for FILES_CREATED/FILES_MODIFIED
-   - Execute: `pytest {test_files} -v`
+   - Execute pytest with the test files from Step 6's FILES_CREATED output
    - Capture the test output
 
 2. **Verify tests fail as expected**
@@ -75,10 +75,10 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ### Test Results
 | Test | Status | Error |
 |------|--------|-------|
-| `test_{name}` | FAIL (expected) | {assertion_error} |
+| `test_{{name}}` | FAIL (expected) | {{assertion_error}} |
 
 ### Verification Summary
-- {N} tests correctly fail on buggy code
+- {{N}} tests correctly fail on buggy code
 - Tests will pass once bugs are fixed via `pdd fix`
 
 ---
@@ -94,15 +94,15 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ### Problem
 | Test | Issue |
 |------|-------|
-| `test_{name}` | Passes when it should fail |
+| `test_{{name}}` | Passes when it should fail |
 
 ### Analysis
-{explanation of why tests aren't detecting the bug}
+{{explanation of why tests aren't detecting the bug}}
 
 ### Fix Applied
-{description of how tests were corrected}
+{{description of how tests were corrected}}
 
-FILES_MODIFIED: {comma_separated_list}
+FILES_MODIFIED: {{comma_separated_list}}
 
 ---
 *Proceeding to Step 8: Run pdd fix*
