@@ -208,7 +208,7 @@ async def test_heartbeat_lifecycle(manager, mock_cloud_config, mock_httpx_client
 @pytest.mark.asyncio
 async def test_heartbeat_execution_logic(manager, mock_cloud_config, mock_httpx_client):
     """
-    Test the internal logic of _heartbeat_loop by invoking it directly 
+    Test the internal logic of _heartbeat_loop by invoking it directly
     (or mocking the wait mechanism).
     """
     manager.session_id = "sess-1"
@@ -216,8 +216,29 @@ async def test_heartbeat_execution_logic(manager, mock_cloud_config, mock_httpx_
     mock_response.status_code = 200
     mock_httpx_client.post.return_value = mock_response
 
-    # We patch asyncio.wait_for to raise TimeoutError immediately, simulating the 60s timer expiring
-    with patch("asyncio.wait_for", side_effect=[asyncio.TimeoutError(), asyncio.CancelledError()]):
+    # Create a minimal mock event class that won't produce unawaited coroutine warnings
+    class MockEvent:
+        def __init__(self):
+            self._call_count = 0
+
+        def is_set(self):
+            return False  # Always return False so loop continues
+
+        async def wait(self):
+            pass
+
+    manager._stop_event = MockEvent()
+
+    # Track iterations
+    iteration = [0]
+    async def mock_wait_for(coro, timeout):
+        coro.close()  # Properly close the coroutine to avoid warnings
+        iteration[0] += 1
+        if iteration[0] == 1:
+            raise asyncio.TimeoutError()  # First: timeout, send heartbeat
+        raise asyncio.CancelledError()  # Second: cancel, exit loop
+
+    with patch("asyncio.wait_for", side_effect=mock_wait_for):
         try:
             # Run the loop, it should send one heartbeat then crash/stop on second iteration
             await manager._heartbeat_loop()
@@ -237,19 +258,30 @@ async def test_heartbeat_error_handling(manager, mock_cloud_config, mock_httpx_c
     # First call raises exception, second call works (simulated by stopping loop)
     mock_httpx_client.post.side_effect = Exception("Network blip")
 
-    # Initialize the stop event before patching
-    manager._stop_event = asyncio.Event()
+    # Create a minimal mock event class that won't produce unawaited coroutine warnings
+    class MockEvent:
+        def __init__(self):
+            self._call_count = 0
 
-    # We want the loop to run once (fail) then stop.
-    # We can set the stop event from within the side effect or just run one iteration logic.
+        def is_set(self):
+            self._call_count += 1
+            # First call returns False (loop continues), second returns True (loop exits)
+            return self._call_count > 1
 
-    # Let's just test the inner logic block manually to avoid infinite loops in tests
-    # if we can't easily control the while loop.
-    # Alternatively, we can patch `_stop_event.is_set` to return False once then True.
+        async def wait(self):
+            # This coroutine will be properly awaited or closed by our mock_wait_for
+            pass
 
-    with patch.object(manager._stop_event, "is_set", side_effect=[False, True]):
-        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
-             await manager._heartbeat_loop()
+    manager._stop_event = MockEvent()
+
+    # Patch wait_for to timeout immediately (simulates the 60s wait expiring)
+    async def mock_wait_for(coro, timeout):
+        # Properly close the coroutine to avoid warnings
+        coro.close()
+        raise asyncio.TimeoutError()
+
+    with patch("asyncio.wait_for", side_effect=mock_wait_for):
+        await manager._heartbeat_loop()
 
     # Should have attempted post
     mock_httpx_client.post.assert_called()

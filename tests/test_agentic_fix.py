@@ -156,7 +156,7 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     # Keep local verification off (agents may run on remote infra)
     monkeypatch.setenv("PDD_AGENTIC_VERIFY", "0")
     monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
-    monkeypatch.setenv("PDD_AGENTIC_TIMEOUT", "120")
+    # Note: PDD_AGENTIC_TIMEOUT removed - timeout now configured via --timeout-adder CLI option
     monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", "60")
 
     p_prompt, p_code, p_test, p_err = _mk_files(tmp_path)

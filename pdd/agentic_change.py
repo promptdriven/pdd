@@ -129,7 +129,9 @@ def run_agentic_change(
     issue_url: str,
     *,
     verbose: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    timeout_adder: float = 0.0,
+    use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     CLI entry point for the agentic change workflow.
@@ -141,6 +143,8 @@ def run_agentic_change(
         issue_url: The full URL of the GitHub issue.
         verbose: If True, enables detailed logging.
         quiet: If True, suppresses standard output.
+        timeout_adder: Additional time to add to step timeouts.
+        use_github_state: If True, persists state to GitHub comments.
 
     Returns:
         Tuple containing:
@@ -221,5 +225,7 @@ def run_agentic_change(
         issue_title=title,
         cwd=work_dir,
         verbose=verbose,
-        quiet=quiet
+        quiet=quiet,
+        timeout_adder=timeout_adder,
+        use_github_state=use_github_state
     )
