@@ -110,6 +110,7 @@ Before Step 7, create an isolated git worktree for test generation and PR creati
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
 2. In orchestrator loop, before Step 7:
+   - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
    - Call `_setup_worktree(cwd, issue_number, quiet)`
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
    - Switch working directory to worktree path for Steps 7-10
