@@ -1,3 +1,24 @@
+## v0.0.118 (2026-01-16)
+
+### Feat
+
+- Add warning for worktree creation from non-main/master branches and document behavior.
+- Add remote mode support to Generate Architecture button
+- Add Fix and Change pages, remote mode for Architecture, update bug workflow to 10 steps
+
+### Fix
+
+- Make language suffix detection case-insensitive in prompts.py
+- Preserve non-file args in fix/change manual mode conversion
+- Properly handle fix/change manual mode with --manual flag
+- Support both manual and agentic modes for fix/change commands
+- Fix remote execution of fix and change commands
+- Update Gemini CLI npm package name from `@anthropic-ai/gemini` to `@google/gemini-cli` in installation instructions.
+- Make parse_prompt_stem case-insensitive for language suffix
+- Add proper job dashboard tracking for remote prompt generation
+- Unwrap arrays wrapped in objects by LLMs
+- Handle list values in remote command display and add defensive parsing
+
 ## v0.0.117 (2026-01-15)
 
 ### Feat
