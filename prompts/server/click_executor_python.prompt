@@ -9,12 +9,13 @@ Click command executor providing programmatic execution of PDD CLI commands with
 % Requirements
 1. **Headless Environment Setup**:
    - `_setup_headless_environment()`: Set CI=1, PDD_FORCE=1, TERM=dumb
-   - Called at module load to ensure commands run non-interactively
+   - Called by ClickCommandExecutor.execute(), NOT at module import time
+   - Idempotent (skip if CI already set)
 
 2. **CapturedOutput dataclass**:
    - stdout: str, stderr: str, exit_code: int
    - exception: Optional[Exception]
-   - cost: float (default 0.0, for compatibility)
+   - cost: float (default 0.0)
 
 3. **StreamingWriter class**:
    - Wraps StringIO buffer with callback for real-time streaming
@@ -26,25 +27,33 @@ Click command executor providing programmatic execution of PDD CLI commands with
    - Uses StreamingWriter when callback provided, direct StringIO otherwise
 
 5. **create_isolated_context(command, obj, color) -> click.Context**:
-   - Creates Click context with hardcoded PDD defaults (strength=0.5, temperature=0.1, time=0.25)
+   - Creates Click context with PDD defaults (strength=0.5, temperature=0.1, time=0.25, verbose=False, force=False, quiet=False, output_cost=None, review_examples=False, local=False, context=None)
    - Mocks get_parameter_source to return DEFAULT
 
 6. **Option Type Conversion**:
    - INTEGER_OPTIONS: max_attempts, target_coverage, depth, limit, max_tokens, timeout, retries, iterations
    - FLOAT_OPTIONS: strength, temperature, time, threshold, budget
    - BOOLEAN_OPTIONS: verbose, quiet, force, loop, skip_verify, skip_tests, local, dry_run, auto_submit, recursive
-   - `_convert_option_type(key, value)`: Convert value based on option name
+   - `_convert_option_type(key, value)`: Convert value based on option name, normalizes hyphens to underscores
 
-7. **ClickCommandExecutor class**:
+7. **Parameter Introspection Helpers**:
+   - `_get_command_positional_args(command)`: Extract positional argument names from Click command
+   - `_is_variadic_argument(command, param_name)`: Check if argument has nargs=-1
+   - `_is_multiple_option(command, param_name)`: Check if option has multiple=True
+
+8. **ClickCommandExecutor class**:
    - __init__(base_context_obj, output_callback)
    - execute(command, args, options, capture_output) -> CapturedOutput
+   - Separates GLOBAL_OPTIONS (force, strength, temperature, time, verbose, quiet, output_cost, review_examples, local, context, list_contexts, core_dump) into ctx.obj
+   - Command-specific options passed as params with type conversion
+   - Handles variadic arguments (list->tuple) and multiple options
+   - Special case: "args" key with list for variadic commands (bug, change)
+   - Normalizes hyphens to underscores in option keys
    - `capture_output=True`: redirects to StringIO for capture
    - `capture_output=False`: outputs directly to terminal
-   - Normalizes hyphens to underscores in option keys
-   - Converts string values to appropriate types using _convert_option_type
    - Handles click.Abort, click.ClickException, general Exception
 
-8. **get_pdd_command(command_name) -> Optional[click.Command]**:
+9. **get_pdd_command(command_name) -> Optional[click.Command]**:
    - Uses module-level `_command_cache` dict for lazy caching
    - Individual lazy imports to avoid circular dependencies
    - Supports: sync, update, generate, test, fix, example, bug, crash, verify
