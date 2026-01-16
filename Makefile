@@ -101,7 +101,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -190,20 +190,25 @@ run-examples: $(EXAMPLE_FILES)
 	)
 	@echo "All examples ran successfully"
 
+# Ensure dev dependencies are installed before running tests
+ensure-dev-deps:
+	@echo "Updating pdd conda environment with dev dependencies"
+	@conda run -n pdd --no-capture-output pip install -e '.[dev]'
+
 # Run tests
-test:
+test: ensure-dev-deps
 	@echo "Running staging tests"
 	@cd $(STAGING_DIR)
 	@conda run -n pdd --no-capture-output PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
 
 # Run tests with coverage
-coverage:
+coverage: ensure-dev-deps
 	@echo "Running tests with coverage"
 	@cd $(STAGING_DIR)
 	@conda run -n pdd --no-capture-output PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
 
 # Run pylint
-lint:
+lint: ensure-dev-deps
 	@echo "Running pylint"
 	@conda run -n pdd --no-capture-output pylint pdd tests
 
@@ -467,7 +472,7 @@ production:
 	@cp -r $(TESTS_DIR) .
 	@cp $(MAKEFILE_OUTPUT) .
 
-regression:
+regression: ensure-dev-deps
 	@echo "Running regression tests"
 	@mkdir -p staging/regression
 	@find staging/regression -type f ! -name ".*" -delete
@@ -480,7 +485,7 @@ endif
 
 SYNC_PARALLEL ?= 1
 
-sync-regression:
+sync-regression: ensure-dev-deps
 	@echo "Running sync regression tests"
 ifdef TEST_NUM
 	@echo "Running specific sync test: $(TEST_NUM)"
@@ -495,10 +500,10 @@ else
 endif
 endif
 
-all-regression: regression sync-regression cloud-regression
+all-regression: ensure-dev-deps regression sync-regression cloud-regression
 	@echo "All regression test suites completed."
 
-cloud-regression:
+cloud-regression: ensure-dev-deps
 	@echo "Running cloud regression tests"
 	@mkdir -p staging/cloud_regression
 ifdef TEST_NUM
@@ -510,7 +515,7 @@ endif
 
 # Automated test runner with Infisical for CI/CD
 .PHONY: test-all-ci
-test-all-ci:
+test-all-ci: ensure-dev-deps
 	@echo "Running all test suites with result capture for CI/CD"
 	@mkdir -p test_results
 ifdef PR_NUMBER
@@ -525,7 +530,7 @@ endif
 
 # Run all tests with Infisical (for local development and CI)
 .PHONY: test-all-with-infisical
-test-all-with-infisical:
+test-all-with-infisical: ensure-dev-deps
 	@echo "Running all test suites with Infisical"
 	@if ! command -v infisical &> /dev/null; then \
 		echo "Error: Infisical CLI not found. Please install it:"; \
