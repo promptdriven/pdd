@@ -1,3 +1,25 @@
+## v0.0.117 (2026-01-15)
+
+### Feat
+
+- Add tests for agentic e2e fix prompt formatting and update prompt examples to use double curly braces.
+- Implement cross-machine workflow resume via GitHub issue comments and add `--no-github-state` option.
+- Implement per-step timeout configurations for agentic workflows
+- Introduce safety check for branch mismatch in agentic E2E fix workflow
+- Add agentic e2e fix workflow for multi-dev-unit test fixing (#295)
+- add PDD_JWT_TOKEN to the 'hello' example's CI environment variables
+- Introduce a test generation benchmark for comparing code-based and example-based test generation strategies, including analysis, results, and an email validator example.
+
+### Fix
+
+- Consistently stop agent execution if Step 9 produces no file changes by simplifying the check and removing a conditional warning.
+- Strengthen FILES_CREATED marker instruction in Step 7 prompt
+- Update prompts to log errors during pdd fix execution
+
+### Refactor
+
+- Streamline agentic common utilities, remove redundant code, and introduce GitHub state markers for workflow management.
+
 ## v0.0.116 (2026-01-15)
 
 ### Feat
