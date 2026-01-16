@@ -23,6 +23,8 @@ interface ArchitectureViewProps {
   // Remote execution support
   executionMode: 'local' | 'remote';
   selectedRemoteSession: string | null;
+  // Callback to add remote jobs to job dashboard
+  onRemoteJobSubmitted?: (displayCommand: string, commandType: string, commandId: string, sessionId: string) => void;
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
@@ -128,6 +130,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   onBatchComplete,
   executionMode,
   selectedRemoteSession,
+  onRemoteJobSubmitted,
 }) => {
   // Architecture state
   const [architecture, setArchitecture] = useState<ArchitectureModule[] | null>(null);
@@ -543,15 +546,24 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
             }
 
             // Submit to remote session
-            await api.submitRemoteCommand({
+            const { commandId } = await api.submitRemoteCommand({
               sessionId: selectedRemoteSession,
               type: 'generate',
               payload: { args: {}, options },
             });
 
+            // Add to job dashboard for tracking
+            const displayCommand = `pdd generate --template generic/generate_prompt -o prompts/${module}_${langOrFramework}.prompt`;
+            onRemoteJobSubmitted?.(
+              `[Remote] ${displayCommand}`,
+              'generate',
+              commandId,
+              selectedRemoteSession
+            );
+
             results.push({
               module: `${module}_${langOrFramework}`,
-              success: true,
+              success: true, // Submission succeeded - actual completion tracked in job dashboard
             });
           } catch (e) {
             results.push({
@@ -563,8 +575,9 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
         }
 
         setPromptGenerationResults(results);
-        const allSucceeded = results.every(r => r.success);
-        onBatchComplete?.(allSucceeded);
+        // For remote mode, "success" means successfully submitted, not completed
+        const allSubmitted = results.every(r => r.success);
+        onBatchComplete?.(allSubmitted);
       } else {
         // Local execution: use existing batch generation
         const results = await api.batchGeneratePrompts(
@@ -600,7 +613,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       setIsGeneratingPrompts(false);
       setPromptGenerationProgress(null);
     }
-  }, [prdPath, techStackPath, globalOptions, onBatchStart, onBatchProgress, onBatchComplete, executionMode, selectedRemoteSession]);
+  }, [prdPath, techStackPath, globalOptions, onBatchStart, onBatchProgress, onBatchComplete, executionMode, selectedRemoteSession, onRemoteJobSubmitted]);
 
   // Cancel prompt generation and current running command
   const handleCancelPromptGeneration = useCallback(async () => {

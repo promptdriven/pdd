@@ -1054,6 +1054,9 @@ const App: React.FC = () => {
               onBatchComplete={handleBatchOperationComplete}
               executionMode={executionMode}
               selectedRemoteSession={selectedRemoteSession}
+              onRemoteJobSubmitted={(displayCommand, commandType, commandId, sessionId) => {
+                addSpawnedJob(displayCommand, commandType, commandId, { remote: true, sessionId });
+              }}
             />
           </div>
         ) : view === 'prompts' ? (
