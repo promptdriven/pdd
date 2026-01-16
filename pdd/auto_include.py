@@ -249,6 +249,9 @@ def _detect_circular_dependencies(
         else:
             base_dir = Path('prompts')
 
+    # Extract current prompt filename for cycle reporting
+    current_prompt_name = Path(current_prompt).name
+
     # For each module we're about to depend on, check if it depends on us
     for dep_module in new_dep_modules:
         # Find the prompt file for this module (try common patterns)
@@ -267,10 +270,11 @@ def _detect_circular_dependencies(
                     dep_modules = _extract_example_modules(content)
                     if current_module in dep_modules:
                         # Found circular dependency!
+                        # Use actual prompt filenames, not hardcoded suffixes
                         cycles.append([
-                            f"{current_module}_python.prompt",
-                            f"{dep_module}_python.prompt",
-                            f"{current_module}_python.prompt"
+                            current_prompt_name,
+                            pattern,
+                            current_prompt_name
                         ])
                 except Exception:
                     pass
@@ -296,10 +300,10 @@ def _filter_circular_dependencies(dependencies: str, cycles: List[List[str]]) ->
     problematic_modules: Set[str] = set()
     for cycle in cycles:
         for prompt_name in cycle:
-            # Extract module name from prompt filename
-            match = re.search(r'([^/]+)_[^_]+\.prompt$', prompt_name)
-            if match:
-                problematic_modules.add(match.group(1))
+            # Extract module name from prompt filename using shared helper
+            module_name = _extract_module_name(prompt_name)
+            if module_name:
+                problematic_modules.add(module_name)
 
     if not problematic_modules:
         return dependencies
