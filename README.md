@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.115-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.116-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -285,7 +285,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.115
+Current version: 0.0.116
 
 To check your installed version, run:
 ```
@@ -1308,12 +1308,12 @@ Test organization:
 - New tests accumulate in that same file over time rather than being regenerated from scratch. When augmenting tests, PDD can merge additions into the existing file (see `--merge`).
 
 ```
-pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_FILE
+pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_OR_EXAMPLE_FILE
 ```
 
 Arguments:
 - `PROMPT_FILE`: The filename of the prompt file that generated the code.
-- `CODE_FILE`: The filename of the code file to be tested.
+- `CODE_OR_EXAMPLE_FILE`: The filename of the code implementation or example file. Files ending with `_example` are treated as example files for TDD-style test generation.
 
 Options:
 - `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_1.py`) will be created instead of overwriting.
@@ -1348,12 +1348,17 @@ could influence the output of the `pdd test` command when run in the same direct
 pdd [GLOBAL OPTIONS] test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
-2. Generate additional tests to improve coverage (with multiple existing test files):
+2. Generate tests from an example file (TDD-style):
+```
+pdd [GLOBAL OPTIONS] test --output tests/test_calculator.py calculator_python.prompt examples/calculator_example.py
+```
+
+3. Generate additional tests to improve coverage (with multiple existing test files):
 ```
 pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --existing-tests tests/test_calculator_edge_cases.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
 ```
 
-3. Improve coverage and merge with existing tests:
+4. Improve coverage and merge with existing tests:
 ```
 pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --merge --target-coverage 95.0 calculator_python.prompt src/calculator.py
 ```

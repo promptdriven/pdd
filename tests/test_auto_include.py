@@ -403,3 +403,213 @@ def test_auto_include_filters_self_referential_example_in_subdirectory(
 
     # The self-referential include should be filtered out even with subdirectory
     assert "credit_helpers_example.py" not in deps
+
+
+# ============================================================================
+# Circular Dependency Detection Tests
+# ============================================================================
+
+def test_extract_example_modules_basic():
+    """
+    Test that _extract_example_modules correctly extracts module names from example includes.
+    """
+    from pdd.auto_include import _extract_example_modules
+
+    content = """
+    Some text here
+    <include>context/agentic_bug_example.py</include>
+    <include>context/regular_file.py</include>
+    <include>context/bug_main_example.py</include>
+    More text
+    """
+    result = _extract_example_modules(content)
+
+    # Should extract module names from _example.py files
+    assert "agentic_bug" in result
+    assert "bug_main" in result
+    # Should NOT include regular files
+    assert "regular_file" not in result
+    assert len(result) == 2
+
+
+def test_extract_example_modules_empty():
+    """
+    Test that _extract_example_modules returns empty set for no example includes.
+    """
+    from pdd.auto_include import _extract_example_modules
+
+    content = "No includes here"
+    result = _extract_example_modules(content)
+    assert result == set()
+
+
+def test_extract_example_modules_with_subdirectory():
+    """
+    Test that _extract_example_modules handles subdirectories.
+    """
+    from pdd.auto_include import _extract_example_modules
+
+    content = "<include>context/backend/credit_helpers_example.py</include>"
+    result = _extract_example_modules(content)
+    assert "credit_helpers" in result
+
+
+def test_detect_circular_dependencies_self_reference():
+    """
+    Test that self-references (module including its own example) are handled.
+
+    Note: Self-references are primarily handled by _filter_self_references,
+    not by circular dependency detection. This test verifies the function
+    returns empty when no cross-module cycles exist.
+    """
+    from pdd.auto_include import _detect_circular_dependencies
+
+    current_prompt = "prompts/module_a_python.prompt"
+    # Module A tries to include its own example - this is a self-reference,
+    # not a cross-module circular dependency
+    new_dependencies = "<wrapper><include>context/module_a_example.py</include></wrapper>"
+
+    cycles = _detect_circular_dependencies(current_prompt, new_dependencies)
+
+    # Self-references are handled by _filter_self_references, not here
+    # This function only detects cross-module cycles (A -> B -> A)
+    # Since there's no cross-module dependency, no cycles detected
+    assert cycles == []
+
+
+def test_detect_circular_dependencies_direct_cycle(tmp_path):
+    """
+    Test detection of direct circular dependency: A includes B's example, B includes A's example.
+    """
+    from pdd.auto_include import _detect_circular_dependencies
+
+    # Create temporary prompt files
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+
+    # module_b's prompt includes module_a's example (creates cycle when module_a includes module_b's example)
+    (prompts_dir / "module_b_python.prompt").write_text(
+        "<pdd.module_a><include>context/module_a_example.py</include></pdd.module_a>"
+    )
+
+    current_prompt = str(prompts_dir / "module_a_python.prompt")
+    # module_a wants to include module_b's example
+    new_dependencies = "<wrapper><include>context/module_b_example.py</include></wrapper>"
+
+    cycles = _detect_circular_dependencies(
+        current_prompt, new_dependencies, prompts_dir=str(prompts_dir)
+    )
+
+    # Should detect the A -> B -> A cycle
+    assert len(cycles) >= 1
+
+
+def test_detect_circular_dependencies_no_cycle(tmp_path):
+    """
+    Test that valid dependencies without cycles return empty list.
+    """
+    from pdd.auto_include import _detect_circular_dependencies
+
+    # Create temporary prompt files
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+
+    # module_b has no includes that reference module_a (no cycle possible)
+    (prompts_dir / "module_b_python.prompt").write_text(
+        "<pdd.other><include>context/other_example.py</include></pdd.other>"
+    )
+
+    current_prompt = str(prompts_dir / "module_a_python.prompt")
+    new_dependencies = "<wrapper><include>context/module_b_example.py</include></wrapper>"
+
+    cycles = _detect_circular_dependencies(
+        current_prompt, new_dependencies, prompts_dir=str(prompts_dir)
+    )
+
+    # Should not detect any cycles
+    assert cycles == []
+
+
+def test_filter_circular_dependencies_removes_problematic():
+    """
+    Test that _filter_circular_dependencies removes example includes that create cycles.
+    """
+    from pdd.auto_include import _filter_circular_dependencies
+
+    dependencies = (
+        "<wrapper1><include>context/module_b_example.py</include></wrapper1>"
+        "<wrapper2><include>context/module_c_example.py</include></wrapper2>"
+    )
+    cycles = [["module_a_python.prompt", "module_b_python.prompt", "module_a_python.prompt"]]
+
+    result = _filter_circular_dependencies(dependencies, cycles)
+
+    # module_b should be filtered out (it's in the cycle)
+    assert "module_b_example.py" not in result
+    # module_c should remain (it's not in the cycle)
+    assert "module_c_example.py" in result
+
+
+def test_filter_circular_dependencies_empty_cycles():
+    """
+    Test that _filter_circular_dependencies returns original when no cycles.
+    """
+    from pdd.auto_include import _filter_circular_dependencies
+
+    dependencies = "<wrapper><include>context/module_b_example.py</include></wrapper>"
+    cycles = []
+
+    result = _filter_circular_dependencies(dependencies, cycles)
+
+    # Should return original dependencies unchanged
+    assert result == dependencies
+
+
+def test_auto_include_filters_circular_dependency(
+    mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke, tmp_path
+):
+    """
+    Integration test: auto_include filters out circular dependencies.
+
+    Scenario: Processing module_a_python.prompt, LLM suggests including
+    module_a_example.py (self-reference through example file).
+    """
+    mock_load_prompt_template.side_effect = lambda name: f"{name} content"
+
+    mock_summarize_directory.return_value = (
+        "full_path,file_summary,date\n"
+        "context/module_a_example.py,Module A example,2023-02-02",
+        0.25,
+        "mock-summary-model",
+    )
+
+    # LLM suggests including the module's own example (self-reference)
+    mock_llm_invoke.side_effect = [
+        {
+            "result": "Include module_a example",
+            "cost": 0.5,
+            "model_name": "mock-model-1",
+        },
+        {
+            "result": MagicMock(
+                string_of_includes=(
+                    "<pdd.module_a><include>context/module_a_example.py</include></pdd.module_a>"
+                )
+            ),
+            "cost": 0.75,
+            "model_name": "mock-model-2",
+        },
+    ]
+
+    deps, _, _, _ = auto_include(
+        input_prompt="Write module A...",
+        directory_path="context/*.py",
+        csv_file=None,
+        prompt_filename="prompts/module_a_python.prompt",
+        strength=0.7,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    # The self-referential circular dependency should be filtered out
+    assert "module_a_example.py" not in deps
