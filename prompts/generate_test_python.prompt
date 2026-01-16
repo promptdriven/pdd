@@ -5,13 +5,14 @@
 % Here are the inputs and outputs of the function:
     Inputs:
         'prompt' - A string containing the prompt that generated the code file to be processed.
-        'code' - A string containing the code to generate a unit test from.
+        'code' - Optional string containing the code to generate a unit test from. Default is None. Mutually exclusive with 'example'.
+        'example' - Optional string containing an example showing how the module should be used. Default is None. Mutually exclusive with 'code'.
         'strength' - A float between 0 and 1 that is the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.0.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'language' - A string that is the language of the unit test to be generated. Default is 'python'.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
-        'source_file_path' - Optional string. Absolute or relative path to the code under test. Default is None.
+        'source_file_path' - Optional string. Absolute or relative path to the code under test or example file. Default is None.
         'test_file_path' - Optional string. Destination path for the generated test file. Default is None.
         'module_name' - Optional string. Module name (without extension) for proper imports. Default is None.
         'existing_tests' - Optional string. Content of existing tests to append to (for merge mode). Default is None.
@@ -54,12 +55,18 @@
     </internal_modules>
 
 % This program will do the following:
-    Step 1. Load the 'generate_test_LLM' prompt template.
+    Step 1. Determine which prompt template to use:
+        - If 'example' is provided (not None): Load the 'generate_test_from_example_LLM' prompt template.
+        - Otherwise: Load the 'generate_test_LLM' prompt template.
+        - Validate that exactly one of 'code' or 'example' is provided (both None or both provided should raise an error).
     Step 2. Preprocess both the Step 1 prompt template and the original 'prompt' using the preprocess function without recursion or doubling of the curly brackets.
     Step 3. Run the inputs through the model using llm_invoke, passing the 'time' parameter to the llm_invoke function.
         3a. Pass the following string parameters to the prompt during invoke:
             - 'prompt_that_generated_code': preprocess the original prompt using the preprocess function without recursion or doubling of the curly brackets.
-            - 'code'
+            - If using example mode (example is not None):
+                - 'example': the example content
+            - If using code mode (example is None):
+                - 'code': the code content
             - 'language'
             - 'source_file_path': use empty string if None
             - 'test_file_path': use empty string if None
