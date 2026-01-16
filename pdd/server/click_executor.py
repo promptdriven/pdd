@@ -532,6 +532,11 @@ def get_pdd_command(command_name: str) -> Optional[click.Command]:
             _command_cache[command_name] = bug
             return bug
 
+        elif command_name == "change":
+            from pdd.commands.modify import change
+            _command_cache[command_name] = change
+            return change
+
         elif command_name == "crash":
             from pdd.commands.analysis import crash
             _command_cache[command_name] = crash

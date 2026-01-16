@@ -48,18 +48,19 @@ GLOBAL_OPTIONS = {
 }
 
 # Commands where specific args should be positional (not --options)
+# Note: fix, change, bug all use agentic mode by default with variadic "args" argument
 POSITIONAL_ARGS = {
     "sync": ["basename"],
     "generate": ["prompt_file"],
     "test": ["prompt_file", "code_file"],
     "example": ["prompt_file", "code_file"],
-    "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
+    "fix": ["args"],  # Agentic mode: pdd fix <GITHUB_ISSUE_URL>
     "bug": ["args"],
     "update": ["args"],
     "crash": ["prompt_file", "code_file", "program_file", "error_file"],
     "verify": ["prompt_file", "code_file", "verification_program"],
     "split": ["input_prompt", "input_code", "example_code"],
-    "change": ["change_prompt_file", "input_code", "input_prompt_file"],
+    "change": ["args"],  # Agentic mode: pdd change <GITHUB_ISSUE_URL>
     "detect": ["args"],
     "auto-deps": ["prompt_file", "directory_path"],
     "conflicts": ["prompt_file", "prompt2"],
