@@ -20,6 +20,9 @@ interface ArchitectureViewProps {
   onBatchStart?: (name: string, total: number) => void;
   onBatchProgress?: (current: number, total: number, currentItem: string) => void;
   onBatchComplete?: (success: boolean) => void;
+  // Remote execution support
+  executionMode: 'local' | 'remote';
+  selectedRemoteSession: string | null;
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
@@ -123,6 +126,8 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   onBatchStart,
   onBatchProgress,
   onBatchComplete,
+  executionMode,
+  selectedRemoteSession,
 }) => {
   // Architecture state
   const [architecture, setArchitecture] = useState<ArchitectureModule[] | null>(null);
@@ -445,25 +450,90 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     onBatchStart?.('Generating Prompts', moduleRequests.length);
 
     try {
-      const results = await api.batchGeneratePrompts(
-        {
-          modules: moduleRequests,
-          architectureFile: 'architecture.json',
-          prdFile: prdPath || undefined,
-          techStackFile: techStackPath || undefined,
-          globalOptions,
-        },
-        (current, total, module) => {
-          setPromptGenerationProgress({ current, total, currentModule: module });
-          // Also notify parent for job dashboard
-          onBatchProgress?.(current, total, module);
-        },
-        () => cancelRequestedRef.current
-      );
-      setPromptGenerationResults(results);
-      // Notify parent that batch completed successfully
-      const allSucceeded = results.every(r => r.success);
-      onBatchComplete?.(allSucceeded);
+      // Check if we're in remote mode
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Remote execution: submit each prompt generation command to remote session
+        const results: PromptGenerationResult[] = [];
+
+        for (let i = 0; i < moduleRequests.length; i++) {
+          if (cancelRequestedRef.current) break;
+
+          const { module, langOrFramework } = moduleRequests[i];
+          setPromptGenerationProgress({ current: i + 1, total: moduleRequests.length, currentModule: module });
+          onBatchProgress?.(i + 1, moduleRequests.length, module);
+
+          try {
+            // Build the same options structure as generatePromptFromArchitecture
+            const envArgs: string[] = [
+              `MODULE=${module}`,
+              `LANG_OR_FRAMEWORK=${langOrFramework}`,
+              `ARCHITECTURE_FILE=architecture.json`,
+            ];
+            if (prdPath) envArgs.push(`PRD_FILE=${prdPath}`);
+            if (techStackPath) envArgs.push(`TECH_STACK_FILE=${techStackPath}`);
+
+            const options: Record<string, any> = {
+              template: 'generic/generate_prompt',
+              env: envArgs,
+              output: `prompts/${module}_${langOrFramework}.prompt`,
+            };
+
+            // Add global options if provided
+            if (globalOptions) {
+              const { strength, temperature, time, verbose, quiet, force } = globalOptions;
+              if (strength !== undefined) options.strength = strength;
+              if (temperature !== undefined) options.temperature = temperature;
+              if (time !== undefined) options.time = time;
+              if (verbose) options.verbose = true;
+              if (quiet) options.quiet = true;
+              if (force) options.force = true;
+            }
+
+            // Submit to remote session
+            await api.submitRemoteCommand({
+              sessionId: selectedRemoteSession,
+              type: 'generate',
+              payload: { args: {}, options },
+            });
+
+            results.push({
+              module: `${module}_${langOrFramework}`,
+              success: true,
+            });
+          } catch (e) {
+            results.push({
+              module: `${module}_${langOrFramework}`,
+              success: false,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
+
+        setPromptGenerationResults(results);
+        const allSucceeded = results.every(r => r.success);
+        onBatchComplete?.(allSucceeded);
+      } else {
+        // Local execution: use existing batch generation
+        const results = await api.batchGeneratePrompts(
+          {
+            modules: moduleRequests,
+            architectureFile: 'architecture.json',
+            prdFile: prdPath || undefined,
+            techStackFile: techStackPath || undefined,
+            globalOptions,
+          },
+          (current, total, module) => {
+            setPromptGenerationProgress({ current, total, currentModule: module });
+            // Also notify parent for job dashboard
+            onBatchProgress?.(current, total, module);
+          },
+          () => cancelRequestedRef.current
+        );
+        setPromptGenerationResults(results);
+        // Notify parent that batch completed successfully
+        const allSucceeded = results.every(r => r.success);
+        onBatchComplete?.(allSucceeded);
+      }
     } catch (e: any) {
       console.error('Failed to generate prompts:', e);
       setPromptGenerationResults([{
@@ -477,7 +547,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       setIsGeneratingPrompts(false);
       setPromptGenerationProgress(null);
     }
-  }, [prdPath, techStackPath, globalOptions, onBatchStart, onBatchProgress, onBatchComplete]);
+  }, [prdPath, techStackPath, globalOptions, onBatchStart, onBatchProgress, onBatchComplete, executionMode, selectedRemoteSession]);
 
   // Cancel prompt generation and current running command
   const handleCancelPromptGeneration = useCallback(async () => {
