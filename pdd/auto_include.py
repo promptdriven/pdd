@@ -4,7 +4,8 @@ insert dependencies into a prompt.
 """
 import re
 from io import StringIO
-from typing import Callable, Tuple, Optional
+from pathlib import Path
+from typing import Callable, List, Optional, Set, Tuple
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -184,6 +185,138 @@ def _fix_malformed_includes(dependencies: str) -> str:
     return fixed
 
 
+def _extract_example_modules(content: str) -> Set[str]:
+    """Extract module names from _example.py includes.
+
+    Args:
+        content: The string content to search for include tags.
+
+    Returns:
+        A set of module names extracted from _example.py paths.
+        E.g., 'context/agentic_bug_example.py' -> 'agentic_bug'
+    """
+    pattern = r'<include>(.*?)</include>'
+    matches = re.findall(pattern, content, re.DOTALL)
+    modules = set()
+    for match in matches:
+        path = match.strip()
+        # Match pattern: context/[subdirs/]module_name_example.py
+        example_match = re.search(r'context/(?:[^/]+/)*([^/]+)_example\.py$', path)
+        if example_match:
+            modules.add(example_match.group(1))
+    return modules
+
+
+def _detect_circular_dependencies(
+    current_prompt: str,
+    new_dependencies: str,
+    prompts_dir: Optional[str] = None
+) -> List[List[str]]:
+    """Detect circular dependencies through example file includes.
+
+    Detects module-level circular dependencies where:
+    - Module A's prompt includes module B's example file
+    - Module B's prompt includes module A's example file
+
+    Args:
+        current_prompt: The current prompt file being processed.
+        new_dependencies: The new dependencies string to check.
+        prompts_dir: Optional base directory for resolving prompt paths.
+
+    Returns:
+        List of cycles found, where each cycle is a list of module names.
+    """
+    # Extract current module name from prompt filename
+    current_module = _extract_module_name(current_prompt)
+    if not current_module:
+        return []
+
+    # Extract module names from example includes in new dependencies
+    new_dep_modules = _extract_example_modules(new_dependencies)
+    if not new_dep_modules:
+        return []
+
+    cycles: List[List[str]] = []
+
+    # Determine base directory for prompts
+    if prompts_dir:
+        base_dir = Path(prompts_dir)
+    else:
+        # Try to find prompts directory relative to current prompt
+        current_path = Path(current_prompt)
+        if current_path.parent.name == 'prompts' or 'prompts' in str(current_path):
+            base_dir = current_path.parent
+        else:
+            base_dir = Path('prompts')
+
+    # For each module we're about to depend on, check if it depends on us
+    for dep_module in new_dep_modules:
+        # Find the prompt file for this module (try common patterns)
+        prompt_patterns = [
+            f"{dep_module}_python.prompt",
+            f"{dep_module}_LLM.prompt",
+            f"{dep_module}.prompt",
+        ]
+
+        for pattern in prompt_patterns:
+            prompt_path = base_dir / pattern
+            if prompt_path.exists():
+                try:
+                    content = prompt_path.read_text(encoding='utf-8')
+                    # Check if this prompt includes our example file
+                    dep_modules = _extract_example_modules(content)
+                    if current_module in dep_modules:
+                        # Found circular dependency!
+                        cycles.append([
+                            f"{current_module}_python.prompt",
+                            f"{dep_module}_python.prompt",
+                            f"{current_module}_python.prompt"
+                        ])
+                except Exception:
+                    pass
+                break
+
+    return cycles
+
+
+def _filter_circular_dependencies(dependencies: str, cycles: List[List[str]]) -> str:
+    """Remove include tags that would create circular dependencies.
+
+    Args:
+        dependencies: The dependencies string containing include tags.
+        cycles: List of cycles, where each cycle is a list of prompt filenames.
+
+    Returns:
+        The dependencies string with circular dependency includes removed.
+    """
+    if not cycles:
+        return dependencies
+
+    # Extract module names from cycles (e.g., 'agentic_bug_python.prompt' -> 'agentic_bug')
+    problematic_modules: Set[str] = set()
+    for cycle in cycles:
+        for prompt_name in cycle:
+            # Extract module name from prompt filename
+            match = re.search(r'([^/]+)_[^_]+\.prompt$', prompt_name)
+            if match:
+                problematic_modules.add(match.group(1))
+
+    if not problematic_modules:
+        return dependencies
+
+    # Pattern to match include tags with _example.py files
+    # Matches: <wrapper><include>context/[subdirs/]module_example.py</include></wrapper>
+    # Using a simpler approach: find each include and check if it's problematic
+    result = dependencies
+    for module in problematic_modules:
+        # Remove includes for this module's example file
+        # Pattern: <wrapper><include>context/[subdirs/]module_example.py</include></wrapper>
+        pattern = rf'<[^>]+><include>context/(?:[^/]+/)*{re.escape(module)}_example\.py</include></[^>]+>\s*'
+        result = re.sub(pattern, '', result)
+
+    return result
+
+
 def auto_include(
     input_prompt: str,
     directory_path: str,
@@ -256,6 +389,20 @@ def auto_include(
 
         # Fix any malformed [File:] patterns from LLM output
         dependencies = _fix_malformed_includes(dependencies)
+
+        # Detect and filter circular dependencies in prompt includes
+        if prompt_filename:
+            cycles = _detect_circular_dependencies(
+                current_prompt=prompt_filename,
+                new_dependencies=dependencies
+            )
+            if cycles:
+                dependencies = _filter_circular_dependencies(dependencies, cycles)
+                for cycle in cycles:
+                    console.print(
+                        f"[yellow]Warning: Filtered circular dependency: "
+                        f"{' -> '.join(cycle)}[/yellow]"
+                    )
 
         total_cost = summary_cost + llm_cost
         model_name = llm_model_name or summary_model
