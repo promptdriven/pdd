@@ -2,23 +2,39 @@
 
 ### Feat
 
-- Add tests for agentic e2e fix prompt formatting and update prompt examples to use double curly braces.
-- Implement cross-machine workflow resume via GitHub issue comments and add `--no-github-state` option.
-- Implement per-step timeout configurations for agentic workflows
-- Introduce safety check for branch mismatch in agentic E2E fix workflow
-- Add agentic e2e fix workflow for multi-dev-unit test fixing (#295)
-- add PDD_JWT_TOKEN to the 'hello' example's CI environment variables
-- Introduce a test generation benchmark for comparing code-based and example-based test generation strategies, including analysis, results, and an email validator example.
+- **Agentic E2E Fix Workflow:** New 9-step iterative workflow (`pdd fix <github_issue_url>`) for fixing end-to-end tests spanning multiple dev units. Steps: run unit tests, run e2e tests, root cause analysis, fix e2e tests, identify dev units, create unit tests, verify tests detect bugs, run pdd fix, verify all. Supports `--max-cycles`, `--timeout-adder`, and `--force` options. Includes 11 new LLM prompts and orchestrator modules (`agentic_e2e_fix.py`, `agentic_e2e_fix_orchestrator.py`).
+
+- **Cross-Machine Workflow Resume:** Workflow state for `pdd bug`, `pdd change`, and `pdd fix` is now persisted as hidden comments on GitHub issues, enabling resume from any machine. Use `--no-github-state` or `PDD_NO_GITHUB_STATE=1` to disable.
+
+- **TDD-Style Test Generation from Examples:** `pdd test` now accepts example files (`*_example.py`) as input instead of implementation code, generating tests from usage patterns. New `generate_test_from_example_LLM.prompt` template supports this TDD workflow. Thanks Serhan Asad for your example to test contribution!!
+
+- **Test Generation Benchmark:** New `examples/test_generation_benchmark/` comparing code-based vs example-based test generation strategies with analysis, results, and email validator example. 
+
+- **Prompt Version History & Diff:** New `/api/v1/prompts/git-history` and `/api/v1/prompts/prompt-diff` endpoints for viewing prompt version history and LLM-powered linguistic diff analysis between versions. Frontend PromptCodeDiffModal updated with version comparison UI.
+
+- **Enhanced Prompt-Code Diff Analysis:** Diff analysis now includes test content, detects "hidden knowledge" (undocumented code that would be lost on regeneration), and provides regeneration risk assessment with `canRegenerate` and `regenerationRisk` fields.
+
+- **Per-Step Timeout Configuration:** Agentic workflows (`pdd bug`, `pdd change`, `pdd fix`) now have per-step timeout configurations allowing fine-grained control over complex steps.
+
+- **Branch Mismatch Safety Check:** Agentic E2E fix workflow aborts if current git branch doesn't match the expected branch from the issue, preventing accidental modifications to wrong codebase. Use `--force` to override.
+
+- **Circular Dependency Detection in Auto-Include:** `auto_include` now detects and filters circular dependencies when adding example file includes to prompts.
+
+- **Frontend Improvements:** File picker inputs for diff modal, improved remote job polling, queue support in PromptSpace, and command builder refactoring.
 
 ### Fix
 
-- Consistently stop agent execution if Step 9 produces no file changes by simplifying the check and removing a conditional warning.
-- Strengthen FILES_CREATED marker instruction in Step 7 prompt
-- Update prompts to log errors during pdd fix execution
+- Consistently stop agent execution if Step 9 produces no file changes.
+- Strengthen FILES_CREATED marker instruction in Step 7 prompt to improve file tracking.
+- Update prompts to log errors during `pdd fix` execution for better debugging.
+- Fix circular dependency detection for hardcoded prompt suffixes.
+- Fix `pdd update` command arguments in frontend.
 
 ### Refactor
 
-- Streamline agentic common utilities, remove redundant code, and introduce GitHub state markers for workflow management.
+- **Agentic Common Utilities:** Major refactor reducing `agentic_common.py` from ~1000 to ~600 lines. Consolidated workflow state management with `load_workflow_state`/`save_workflow_state`/`clear_workflow_state` functions. Introduced GitHub state markers for cross-machine workflow management.
+
+- Standardize workflow state loading, saving, and file naming conventions across orchestrators and tests.
 
 ## v0.0.116 (2026-01-15)
 
