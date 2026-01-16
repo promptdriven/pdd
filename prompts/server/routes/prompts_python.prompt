@@ -80,19 +80,32 @@
 
 % Dependencies
   <fastapi_example>
-  <server.main><include>context/fastapi_example.py</include></server.main>
+    <include>context/fastapi_example.py</include>
   </fastapi_example>
-  <security_note>
-  Use PathValidator from pdd/server/security.py via dependency injection
-  <server.security><include>context/server/security_example.py</include></server.security>
-  </security_note>
-  Use pdd.sync_determine_operation for fingerprint and hash utilities
-  <include>context/sync_determine_operation_example.py</include>
-  Use pdd.llm_invoke for LLM-based analysis:
-  <include>context/llm_invoke_example.py</include>
-  Use pdd.load_prompt_template for loading LLM prompt templates
-  Use pdd.construct_paths for .pddrc config and test file discovery
-  Use pdd.code_generator_main._find_default_test_files for test detection
+
+  <server_security_example>
+    <include>context/server/security_example.py</include>
+  </server_security_example>
+
+  <sync_determine_operation_example>
+    <include>context/sync_determine_operation_example.py</include>
+  </sync_determine_operation_example>
+
+  <llm_invoke_example>
+    <include>context/llm_invoke_example.py</include>
+  </llm_invoke_example>
+
+  <load_prompt_template_example>
+    <include>context/load_prompt_template_example.py</include>
+  </load_prompt_template_example>
+
+  <construct_paths_example>
+    <include>context/construct_paths_example.py</include>
+  </construct_paths_example>
+
+  <code_generator_main_example>
+    <include>context/code_generator_main_example.py</include>
+  </code_generator_main_example>
 
 % Instructions
   - Create router with prefix="/api/v1/prompts", tags=["prompts"]
