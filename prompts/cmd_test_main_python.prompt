@@ -34,7 +34,10 @@
 %      Also pass `confirm_callback=ctx.obj.get('confirm_callback')` for TUI confirmation support.
 %  - When `existing_tests` is provided, read all files and concatenate their content into `input_strings["existing_tests"]`.
 %  - If 'coverage_report' is NOT provided: use Cloud vs Local Execution Strategy (see below) to generate tests.
-%      For local execution, call `generate_test(prompt, code, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name, existing_tests)`.
+%      Detect if the code_file is an example file by checking if the filename stem ends with '_example'.
+%      For local execution:
+%      • If code_file ends with '_example': call `generate_test(prompt, code=None, example=<code_content>, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name, existing_tests)`.
+%      • Otherwise: call `generate_test(prompt, code=<code_content>, example=None, strength, temperature, time, language, verbose, source_file_path, test_file_path, module_name, existing_tests)`.
 %      The additional parameters are computed as:
 %      • `source_file_path = str(Path(code_file).expanduser().resolve())`
 %      • `test_file_path = str(Path(output_file).expanduser().resolve())` where `output_file` is the resolved output path
