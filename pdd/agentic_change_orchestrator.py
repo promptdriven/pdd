@@ -189,20 +189,30 @@ def run_agentic_change_orchestrator(
         console.print(f"Implementing change for issue #{issue_number}: \"{issue_title}\"")
 
     state_dir = _get_state_dir(cwd)
-    
+
     # Load state
-    state = load_workflow_state(
+    state, loaded_gh_id = load_workflow_state(
         cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
     )
-    
+
     # Initialize variables from state or defaults
-    last_completed_step = state.get("last_completed_step", 0)
-    step_outputs = state.get("step_outputs", {})
-    total_cost = state.get("total_cost", 0.0)
-    model_used = state.get("model_used", "unknown")
-    github_comment_id = state.get("github_comment_id")
-    worktree_path_str = state.get("worktree_path")
-    worktree_path = Path(worktree_path_str) if worktree_path_str else None
+    if state is not None:
+        last_completed_step = state.get("last_completed_step", 0)
+        step_outputs = state.get("step_outputs", {})
+        total_cost = state.get("total_cost", 0.0)
+        model_used = state.get("model_used", "unknown")
+        github_comment_id = loaded_gh_id  # Use the ID returned by load_workflow_state
+        worktree_path_str = state.get("worktree_path")
+        worktree_path = Path(worktree_path_str) if worktree_path_str else None
+    else:
+        # Initialize fresh state dict for new workflow
+        state = {"step_outputs": {}}
+        last_completed_step = 0
+        step_outputs = state["step_outputs"]
+        total_cost = 0.0
+        model_used = "unknown"
+        github_comment_id = None
+        worktree_path = None
     
     # Context accumulation dictionary
     context = {

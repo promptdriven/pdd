@@ -320,7 +320,7 @@ def run_agentic_e2e_fix_orchestrator(
                     "github_comment_id": github_comment_id
                 }
                 
-                saved_path, new_gh_id = save_workflow_state(
+                new_gh_id = save_workflow_state(
                     cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
                 )
                 if new_gh_id:
