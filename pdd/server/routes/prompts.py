@@ -679,9 +679,11 @@ async def analyze_diff(request: DiffAnalysisRequest):
                 # e.g., prompts/hello_python.prompt -> pdd/hello.py
                 prompt_path = pathlib.Path(request.prompt_path)
                 prompt_name = prompt_path.stem
-                # Remove language suffix (e.g., _python, _typescript)
-                for suffix in ['_python', '_typescript', '_javascript', '_rust', '_go']:
-                    if prompt_name.endswith(suffix):
+                # Remove language suffix (e.g., _python, _Python, _typescript)
+                # Case-insensitive matching
+                prompt_name_lower = prompt_name.lower()
+                for suffix in ['_python', '_typescript', '_javascript', '_rust', '_go', '_java', '_cpp', '_c', '_csharp', '_ruby', '_swift', '_kotlin']:
+                    if prompt_name_lower.endswith(suffix):
                         prompt_name = prompt_name[:-len(suffix)]
                         break
                 # This is a best-effort heuristic; may not always work
