@@ -74,7 +74,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Add output line to a job, respecting max lines limit.
    */
   const addJobOutput = useCallback((jobId: string, line: string) => {
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       const job = updated.get(jobId);
       if (job) {
@@ -93,7 +93,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Update job progress.
    */
   const updateJobProgress = useCallback((jobId: string, current: number, total: number, message: string) => {
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       const job = updated.get(jobId);
       if (job) {
@@ -111,7 +111,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Mark job as completed.
    */
   const completeJob = useCallback((jobId: string, success: boolean, cost: number, result?: any) => {
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       const job = updated.get(jobId);
       if (job) {
@@ -167,7 +167,7 @@ export function useJobs(options: UseJobsOptions = {}) {
     // SAFETY CHECK: Limit total jobs to prevent resource exhaustion
     const currentJobs = jobsRef.current;
     const activeCount = Array.from(currentJobs.values()).filter(
-      j => j.status === 'queued' || j.status === 'running'
+      (j: JobInfo) => j.status === 'queued' || j.status === 'running'
     ).length;
 
     if (activeCount >= MAX_QUEUED_JOBS) {
@@ -198,7 +198,7 @@ export function useJobs(options: UseJobsOptions = {}) {
       };
 
       // Add to jobs map
-      setJobs((prev) => {
+      setJobs((prev: Map<string, JobInfo>) => {
         const updated = new Map(prev);
         updated.set(jobId, jobInfo);
         return updated;
@@ -258,7 +258,7 @@ export function useJobs(options: UseJobsOptions = {}) {
         });
 
         // Update local state
-        setJobs((prev) => {
+        setJobs((prev: Map<string, JobInfo>) => {
           const updated = new Map(prev);
           const job = updated.get(jobId);
           if (job) {
@@ -283,7 +283,7 @@ export function useJobs(options: UseJobsOptions = {}) {
       await api.cancelJob(jobId);
 
       // Update local state
-      setJobs((prev) => {
+      setJobs((prev: Map<string, JobInfo>) => {
         const updated = new Map(prev);
         const job = updated.get(jobId);
         if (job) {
@@ -306,7 +306,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Used for remote job polling to update job state when status changes.
    */
   const updateSpawnedJobStatus = useCallback((jobId: string, updates: Partial<JobInfo>) => {
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       const job = updated.get(jobId);
       if (job) {
@@ -320,7 +320,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Remove a job from the list (for cleanup).
    */
   const removeJob = useCallback((jobId: string) => {
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       updated.delete(jobId);
       return updated;
@@ -341,7 +341,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Clear all completed/failed jobs.
    */
   const clearCompletedJobs = useCallback(() => {
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       for (const [id, job] of updated.entries()) {
         if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
@@ -387,7 +387,7 @@ export function useJobs(options: UseJobsOptions = {}) {
       metadata,
     };
 
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       updated.set(jobId, jobInfo);
       return updated;
@@ -401,7 +401,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Mark a spawned job as completed (user confirms it's done).
    */
   const markSpawnedJobDone = useCallback((jobId: string, success: boolean = true) => {
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       const job = updated.get(jobId);
       if (job) {
@@ -424,7 +424,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    * Useful for remote jobs when automatic status detection isn't working.
    */
   const markJobStatus = useCallback((jobId: string, status: 'completed' | 'failed' | 'cancelled') => {
-    setJobs((prev) => {
+    setJobs((prev: Map<string, JobInfo>) => {
       const updated = new Map(prev);
       const job = updated.get(jobId);
       if (job) {
@@ -453,7 +453,7 @@ export function useJobs(options: UseJobsOptions = {}) {
    */
   useEffect(() => {
     // Get spawned jobs that are still running
-    const spawnedRunningJobs = Array.from(jobs.values()).filter(
+    const spawnedRunningJobs = (Array.from(jobs.values()) as JobInfo[]).filter(
       (j) => j.id.startsWith('spawned-') && j.status === 'running'
     );
 
@@ -466,7 +466,7 @@ export function useJobs(options: UseJobsOptions = {}) {
           if (status.status === 'completed' || status.status === 'failed') {
             // Auto-update job status
             const success = status.status === 'completed';
-            setJobs((prev) => {
+            setJobs((prev: Map<string, JobInfo>) => {
               const updated = new Map(prev);
               const currentJob = updated.get(job.id);
               if (currentJob && currentJob.status === 'running') {
@@ -507,16 +507,17 @@ export function useJobs(options: UseJobsOptions = {}) {
    */
   useEffect(() => {
     // Check if there are any remote running jobs
-    const hasRemoteRunningJobs = Array.from(jobs.values()).some(
-      (j) => j.metadata?.remote && j.status === 'running'
+    const remoteJobs = Array.from(jobs.values()).filter(
+      (j: JobInfo) => j.metadata?.remote
     );
+    const hasRemoteRunningJobs = remoteJobs.some(j => j.status === 'running');
 
     if (!hasRemoteRunningJobs) return;
 
     const pollInterval = setInterval(async () => {
       // Use jobsRef to get the LATEST jobs state (avoid stale closure)
       const currentJobs = jobsRef.current;
-      const remoteRunningJobs = Array.from(currentJobs.values()).filter(
+      const remoteRunningJobs = (Array.from(currentJobs.values()) as JobInfo[]).filter(
         (j) => j.metadata?.remote && j.status === 'running'
       );
 
@@ -531,12 +532,9 @@ export function useJobs(options: UseJobsOptions = {}) {
 
           if (!status) continue;
 
-          // Debug logging for remote job polling
-          console.log(`[RemotePoll] Job ${job.id}:`, status.status, status.response?.success);
-
           // Update output if streaming - parse line by line
           if (status.status === 'processing' && status.response?.streaming) {
-            setJobs((prev) => {
+            setJobs((prev: Map<string, JobInfo>) => {
               const updated = new Map(prev);
               const currentJob = updated.get(job.id);
               if (currentJob && currentJob.status === 'running') {
@@ -573,12 +571,10 @@ export function useJobs(options: UseJobsOptions = {}) {
             const success = status.status === 'completed';
             const cancelled = status.status === 'cancelled';
 
-            console.log(`[RemotePoll] Job ${job.id} transitioning to:`, status.status);
-
             // Store completed job info to call callback outside setState
             let completedJobForCallback: { job: JobInfo; success: boolean } | null = null;
 
-            setJobs((prev) => {
+            setJobs((prev: Map<string, JobInfo>) => {
               const updated = new Map(prev);
               const currentJob = updated.get(job.id);
               // Allow update from running or queued status
@@ -638,10 +634,10 @@ export function useJobs(options: UseJobsOptions = {}) {
 
   // Derived state
   const activeJobs = Array.from(jobs.values()).filter(
-    (j) => j.status === 'queued' || j.status === 'running'
+    (j: JobInfo) => j.status === 'queued' || j.status === 'running'
   );
   const completedJobs = Array.from(jobs.values()).filter(
-    (j) => j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled'
+    (j: JobInfo) => j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled'
   );
   const selectedJob = selectedJobId ? jobs.get(selectedJobId) || null : null;
   const isAnyJobRunning = activeJobs.length > 0;

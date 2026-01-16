@@ -13,7 +13,7 @@
      - Fields: session_id, cloud_url, project_name, project_path,
        created_at, last_heartbeat, status, metadata
      - Factory method `from_dict()` to parse cloud API responses
-     - Handle ISO datetime strings with timezone
+     - Handle ISO datetime strings with timezone (including 'Z' suffix)
      - cloud_url is the URL users access in browser (e.g., https://pdd.dev/connect/{session_id})
 
   2. **RemoteSessionError**:
@@ -22,8 +22,8 @@
 
   3. **CommandInfo dataclass**:
      - Fields: command_id, type, payload, status, created_at, response
-     - Represents a command from the Firestore message bus
-     - Status: "pending" | "processing" | "completed" | "failed"
+     - Factory method `from_dict()` to parse cloud API responses
+     - Status: "pending" | "processing" | "completed" | "failed" | "cancelled"
 
   4. **RemoteSessionManager class**:
      - Constructor takes `jwt_token: str` and `project_path: Path`
@@ -34,58 +34,53 @@
        - Returns the cloud_url for display to user
      - `start_heartbeat()`: Start async background task sending heartbeats every 60 seconds
      - `stop_heartbeat()`: Stop heartbeat task gracefully
-     - `start_command_listener(handler)`: Start polling Firestore for pending commands
-       - handler: Callable that takes CommandInfo and returns response
-       - Poll interval: 500ms (Firestore message bus approach)
-     - `stop_command_listener()`: Stop command listener gracefully
-     - `deregister()`: Call DELETE to `deregisterSession` endpoint on shutdown
+     - `start_command_polling()`: Start polling cloud for pending commands
+     - `stop_command_polling()`: Stop command polling gracefully
+     - `deregister()`: Call POST to `deregisterSession` endpoint on shutdown
      - Static `list_sessions(jwt_token)`: GET `listSessions` endpoint, return List[SessionInfo]
 
-  5. **Command Listener behavior**:
-     - Poll cloud for pending commands every 500ms
-     - When command found: set status="processing", execute handler, set status="completed"
+  5. **Command Polling behavior**:
+     - Poll cloud for pending commands every 5 seconds via `getCommands` endpoint
+     - When command found: set status="processing", execute via local server, update status
      - Use asyncio.Event for clean shutdown
-     - Handle errors gracefully (set status="failed" with error message)
-     - Support cancellation detection via `_get_command_status()` using getCommandStatus endpoint
-     - Check for cancellation during command execution and abort if cancelled
+     - Commands execute via local FastAPI server at http://127.0.0.1:9876
 
-  6. **Heartbeat behavior**:
+  6. **Command Execution**:
+     - Execute commands via POST to local `/api/v1/commands/execute` endpoint
+     - Poll job status at `/api/v1/commands/jobs/{job_id}` until completion
+     - Stream output updates to cloud during execution via `updateCommand` endpoint
+     - Support cancellation: check `getCommandStatus` during execution, abort if cancelled
+     - Cancel local job via `/api/v1/commands/jobs/{job_id}/cancel` when cancelled
+
+  7. **Command Update with retry**:
+     - `update_command()` uses retry logic: 3 attempts with exponential backoff (1s, 2s, 4s)
+     - Handle transient failures gracefully
+
+  8. **Heartbeat behavior**:
      - Send heartbeat to `heartbeatSession` endpoint every 60 seconds
      - Use asyncio.Event for clean shutdown
      - Log warnings on heartbeat failures but don't crash
 
-  7. **Module-level state**:
+  9. **Module-level state**:
      - `_active_session_manager` global for server access
      - `get_active_session_manager()` and `set_active_session_manager()` accessors
 
 % Dependencies
-  <cloud_config_example>
-  <include>context/cloud_example.py</include>
-  </cloud_config_example>
-
   <pdd.core.cloud><include>context/cloud_example.py</include></pdd.core.cloud>
-  <pdd.commands.connect><include>context/commands/connect_example.py</include></pdd.commands.connect>
 
 % Technical Constraints
-  - Use httpx.AsyncClient for async HTTP (timeout 30s)
+  - Use httpx.AsyncClient for async HTTP (timeout 30s default, shorter for heartbeat/status)
   - Use CloudConfig.get_endpoint_url() for endpoint URLs
   - Include metadata: hostname, platform, python_version
   - Handle HTTP errors gracefully with RemoteSessionError
-  - Cloud endpoints needed:
-    - registerSession: POST to register, returns { sessionId, cloudUrl }
-    - heartbeatSession: POST to send heartbeat
-    - deregisterSession: POST/DELETE to deregister
-    - listSessions: GET to list sessions
-    - getCommands: GET to poll pending commands
-    - getCommandStatus: GET to check specific command status (for cancellation detection)
-    - updateCommand: POST to update command status/response
-    - cancelCommand: POST to cancel a command
+  - Cloud endpoints: registerSession, heartbeatSession, deregisterSession, listSessions,
+    getCommands, getCommandStatus, updateCommand
 
 % Instructions
   - Follow existing cloud API patterns in the codebase
   - Use rich.console.Console for status messages
   - Make deregister() idempotent (don't raise on failure during shutdown)
-  - Command listener runs alongside heartbeat as separate async task
+  - Command polling runs alongside heartbeat as separate async task
 
 % Deliverables
   - Code: `pdd/remote_session.py`

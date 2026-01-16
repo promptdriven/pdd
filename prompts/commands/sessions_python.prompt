@@ -13,33 +13,27 @@
 
   2. **sessions list command**:
      - Lists all active remote sessions for the authenticated user
-     - Options:
-       - `--json`: Output as JSON instead of table
+     - Options: `--json` for JSON output instead of table
      - Display columns: SESSION ID (truncated to 8 chars), PROJECT, CLOUD URL, STATUS, LAST SEEN
      - Color-code status: green for "active", yellow for "stale"
-     - Handle unauthenticated state with error message
      - Use RemoteSessionManager.list_sessions() static method
 
   3. **sessions info command**:
      - Takes session_id as argument
      - Displays detailed information about a specific session
      - Format as key-value table (snake_case converted to Title Case)
-     - Handle session not found gracefully
      - Use RemoteSessionManager.get_session() static method
 
   4. **sessions cleanup command**:
-     - Options:
-       - `--all`: Cleanup all sessions (including active)
-       - `--stale`: Cleanup only stale sessions
-       - `--force`: Skip confirmation prompt
+     - Options: `--all`, `--stale`, `--force`
      - Interactive mode (no flags): Show sessions with numbers, let user select
      - User can enter: session numbers (comma-separated), "stale", "all", or empty to cancel
      - Confirm before cleanup (unless --force)
      - Show progress and summary (success/fail counts)
-     - Use RemoteSessionManager.deregister() to cleanup each session
+     - Cleanup by creating RemoteSessionManager instance with session_id set, then call deregister()
 
 % Dependencies
-  <pdd.core.cloud><include>context/cloud_example.py</include></pdd.core.cloud>
+  <pdd.core.cloud><include>context/core/cloud_example.py</include></pdd.core.cloud>
   <pdd.remote_session><include>context/remote_session_example.py</include></pdd.remote_session>
 
 % Technical Constraints

@@ -1,422 +1,13 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState, useEffect, useMemo } from 'react';
 import { api, PromptInfo } from '../api';
-import { CommandType, CommandConfig, CommandOption } from '../types';
-import { COMMANDS } from '../constants';
 import CreatePromptModal from './CreatePromptModal';
 
 interface PromptSelectorProps {
   onSelectPrompt: (prompt: PromptInfo) => void;
-  onRunCommand: (command: CommandType, prompt: PromptInfo, options?: Record<string, any>) => void;
   onEditPrompt: (prompt: PromptInfo) => void;
   onCreatePrompt?: (prompt: PromptInfo) => void;
-  onAddToQueue?: (prompt: PromptInfo) => void;
   selectedPrompt: PromptInfo | null;
-  isExecuting: boolean;
 }
-
-// Options Modal Component - Modern glass design
-const CommandOptionsModal: React.FC<{
-  command: CommandConfig;
-  prompt: PromptInfo;
-  onRun: (options: Record<string, any>) => void;
-  onCancel: () => void;
-}> = ({ command, prompt, onRun, onCancel }) => {
-  const [optionValues, setOptionValues] = useState<Record<string, any>>(() => {
-    // Initialize with default values
-    const defaults: Record<string, any> = {};
-    command.options.forEach(opt => {
-      if (opt.defaultValue !== undefined) {
-        if (opt.type === 'checkbox') {
-          defaults[opt.name] = opt.defaultValue === 'true' || opt.defaultValue === true;
-        } else if (opt.type === 'number') {
-          defaults[opt.name] = opt.defaultValue;
-        } else {
-          defaults[opt.name] = opt.defaultValue;
-        }
-      }
-    });
-    return defaults;
-  });
-
-  const handleValueChange = (optionName: string, value: any) => {
-    setOptionValues(prev => ({ ...prev, [optionName]: value }));
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Filter out empty/undefined values
-    const cleanedOptions: Record<string, any> = {};
-    Object.entries(optionValues).forEach(([key, value]) => {
-      if (value !== '' && value !== undefined && value !== null) {
-        cleanedOptions[key] = value;
-      }
-    });
-    onRun(cleanedOptions);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={onCancel}>
-      <div
-        className="glass rounded-2xl border border-surface-600/50 shadow-2xl w-full max-w-md animate-scale-in"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-4 sm:px-6 py-4 border-b border-surface-700/50">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-accent-500/20 flex items-center justify-center">
-              <span className="text-xl">{command.icon}</span>
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold text-white">{command.shortDescription}</h3>
-              <p className="text-xs sm:text-sm text-surface-400 line-clamp-1">{command.description}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmit}>
-          <div className="px-4 sm:px-6 py-4 space-y-4 max-h-[50vh] sm:max-h-[60vh] overflow-y-auto">
-            {/* Target prompt info */}
-            <div className="bg-surface-800/50 rounded-xl px-3 py-2.5 border border-surface-700/50">
-              <div className="text-xs text-surface-400 mb-0.5">Target</div>
-              <div className="text-sm text-white font-mono truncate">{prompt.sync_basename}</div>
-            </div>
-
-            {/* Command options */}
-            {command.options.length > 0 ? (
-              command.options.map(opt => (
-                <OptionInput
-                  key={opt.name}
-                  option={opt}
-                  value={optionValues[opt.name]}
-                  onChange={(val) => handleValueChange(opt.name, val)}
-                />
-              ))
-            ) : (
-              <p className="text-surface-400 text-sm">No additional options for this command.</p>
-            )}
-          </div>
-
-          {/* Footer */}
-          <div className="px-4 sm:px-6 py-4 border-t border-surface-700/50 flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium bg-surface-700/50 text-surface-300 hover:bg-surface-600 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25 transition-all flex items-center justify-center gap-2"
-            >
-              <span>{command.icon}</span>
-              <span>Run {command.shortDescription}</span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-};
-
-// Individual option input component - Modern styling
-const OptionInput: React.FC<{
-  option: CommandOption;
-  value: any;
-  onChange: (value: any) => void;
-}> = ({ option, value, onChange }) => {
-  const inputId = `option-${option.name}`;
-
-  if (option.type === 'checkbox') {
-    return (
-      <label htmlFor={inputId} className="flex items-start gap-3 p-3 rounded-xl bg-surface-800/30 hover:bg-surface-800/50 transition-colors cursor-pointer group">
-        <input
-          type="checkbox"
-          id={inputId}
-          checked={!!value}
-          onChange={(e) => onChange(e.target.checked)}
-          className="w-4 h-4 mt-0.5 rounded bg-surface-700 border-surface-600 text-accent-500 focus:ring-accent-500 focus:ring-offset-surface-800"
-        />
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-white group-hover:text-accent-300 transition-colors">{formatOptionName(option.name)}</div>
-          <div className="text-xs text-surface-400 mt-0.5">{option.description}</div>
-        </div>
-      </label>
-    );
-  }
-
-  return (
-    <div>
-      <label htmlFor={inputId} className="block text-sm font-medium text-white mb-1.5">
-        {formatOptionName(option.name)}
-        {option.required && <span className="text-red-400 ml-1">*</span>}
-      </label>
-      <p className="text-xs text-surface-400 mb-2">{option.description}</p>
-      {option.type === 'textarea' ? (
-        <textarea
-          id={inputId}
-          value={value || ''}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={option.placeholder}
-          required={option.required}
-          rows={3}
-          className="w-full px-3 py-2.5 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all resize-none"
-        />
-      ) : (
-        <input
-          type={option.type === 'number' ? 'number' : 'text'}
-          id={inputId}
-          value={value || ''}
-          onChange={(e) => onChange(option.type === 'number' ? (e.target.value ? Number(e.target.value) : '') : e.target.value)}
-          placeholder={option.placeholder}
-          required={option.required}
-          className="w-full px-3 py-2.5 bg-surface-900/50 border border-surface-600 rounded-xl text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/50 text-sm transition-all"
-        />
-      )}
-    </div>
-  );
-};
-
-// Helper to format option names for display
-function formatOptionName(name: string): string {
-  return name
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
-const CommandButton: React.FC<{
-  config: CommandConfig;
-  prompt: PromptInfo;
-  onClick: () => void;
-  disabled: boolean;
-}> = ({ config, prompt, onClick, disabled }) => {
-  // Check if this command can run with the current prompt
-  const canRun = () => {
-    if (config.requiresCode && !prompt.code) return false;
-    if (config.requiresTest && !prompt.test) return false;
-    return true;
-  };
-
-  const isDisabled = disabled || !canRun();
-  const missingFile = config.requiresCode && !prompt.code ? 'code' :
-                     config.requiresTest && !prompt.test ? 'test' : null;
-
-  return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      disabled={isDisabled}
-      className={`
-        flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-lg sm:rounded-xl text-xs sm:text-sm font-medium transition-all duration-200
-        ${isDisabled
-          ? 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
-          : 'bg-accent-600/90 hover:bg-accent-500 text-white shadow-md hover:shadow-lg hover:shadow-accent-500/20'}
-      `}
-      title={missingFile ? `Missing ${missingFile} file` : config.description}
-    >
-      <span className="text-sm">{config.icon}</span>
-      <span>{config.shortDescription}</span>
-    </button>
-  );
-};
-
-// Dropdown button for grouped commands (e.g., Sync/Update)
-// Uses Portal to render menu at body level, avoiding any parent overflow clipping
-const CommandDropdown: React.FC<{
-  commands: CommandConfig[];
-  prompt: PromptInfo;
-  onRunCommand: (command: CommandType) => void;
-  disabled: boolean;
-}> = ({ commands, prompt, onRunCommand, disabled }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [selectedCommand, setSelectedCommand] = useState(commands[0]);
-  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, openUpward: false });
-  const buttonRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Calculate menu position when opening
-  const updateMenuPosition = useCallback(() => {
-    if (!buttonRef.current) return;
-
-    const rect = buttonRef.current.getBoundingClientRect();
-    const menuHeight = 280; // max-h-[280px]
-    const menuWidth = 220; // min-w-[220px]
-    const padding = 8;
-
-    // Check if there's enough space below
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const spaceAbove = rect.top;
-    const openUpward = spaceBelow < menuHeight + padding && spaceAbove > spaceBelow;
-
-    // Calculate left position, keeping menu within viewport
-    let left = rect.left;
-    if (left + menuWidth > window.innerWidth - padding) {
-      left = window.innerWidth - menuWidth - padding;
-    }
-    if (left < padding) {
-      left = padding;
-    }
-
-    setMenuPosition({
-      top: openUpward ? rect.top - padding : rect.bottom + padding,
-      left,
-      openUpward,
-    });
-  }, []);
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (
-        buttonRef.current && !buttonRef.current.contains(target) &&
-        menuRef.current && !menuRef.current.contains(target)
-      ) {
-        setIsOpen(false);
-      }
-    };
-
-    const handleScroll = () => {
-      updateMenuPosition();
-    };
-
-    const handleResize = () => {
-      setIsOpen(false);
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    window.addEventListener('scroll', handleScroll, true);
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('scroll', handleScroll, true);
-      window.removeEventListener('resize', handleResize);
-    };
-  }, [isOpen, updateMenuPosition]);
-
-  // Update position when opening
-  useEffect(() => {
-    if (isOpen) {
-      updateMenuPosition();
-    }
-  }, [isOpen, updateMenuPosition]);
-
-  const canRun = (config: CommandConfig) => {
-    if (config.requiresCode && !prompt.code) return false;
-    if (config.requiresTest && !prompt.test) return false;
-    return true;
-  };
-
-  const isMainDisabled = disabled || !canRun(selectedCommand);
-
-  const handleToggle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setIsOpen(!isOpen);
-  };
-
-  // Dropdown menu content
-  const menuContent = isOpen ? (
-    <div
-      ref={menuRef}
-      className="fixed bg-surface-800 rounded-xl border border-surface-600 shadow-2xl min-w-[220px] max-h-[280px] overflow-y-auto animate-fade-in"
-      style={{
-        top: menuPosition.openUpward ? 'auto' : menuPosition.top,
-        bottom: menuPosition.openUpward ? window.innerHeight - menuPosition.top : 'auto',
-        left: menuPosition.left,
-        zIndex: 9999,
-        boxShadow: '0 10px 50px rgba(0, 0, 0, 0.6)',
-      }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      {commands.map((cmd, idx) => {
-        const cmdDisabled = !canRun(cmd);
-        return (
-          <button
-            key={cmd.name}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedCommand(cmd);
-              setIsOpen(false);
-              if (!cmdDisabled) {
-                onRunCommand(cmd.name);
-              }
-            }}
-            disabled={cmdDisabled}
-            className={`
-              w-full flex items-center gap-2.5 px-4 py-3 text-sm text-left transition-colors
-              ${cmdDisabled
-                ? 'text-surface-500 cursor-not-allowed'
-                : 'text-white hover:bg-surface-700'}
-              ${selectedCommand.name === cmd.name ? 'bg-accent-600/20' : ''}
-              ${idx !== commands.length - 1 ? 'border-b border-surface-700' : ''}
-            `}
-          >
-            <span className="text-base">{cmd.icon}</span>
-            <div className="flex-1 min-w-0">
-              <div className="font-medium text-sm">{cmd.shortDescription}</div>
-              <div className="text-xs text-surface-400">{cmd.description.slice(0, 50)}...</div>
-            </div>
-            {selectedCommand.name === cmd.name && (
-              <svg className="w-4 h-4 text-accent-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  ) : null;
-
-  return (
-    <div className="relative inline-flex" ref={buttonRef} onClick={(e) => e.stopPropagation()}>
-      {/* Main button */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!isMainDisabled) onRunCommand(selectedCommand.name);
-        }}
-        disabled={isMainDisabled}
-        className={`
-          flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-l-lg sm:rounded-l-xl text-xs sm:text-sm font-medium transition-all duration-200
-          ${isMainDisabled
-            ? 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
-            : 'bg-accent-600/90 hover:bg-accent-500 text-white shadow-md'}
-        `}
-        title={selectedCommand.description}
-      >
-        <span className="text-sm">{selectedCommand.icon}</span>
-        <span>{selectedCommand.shortDescription}</span>
-      </button>
-
-      {/* Dropdown toggle */}
-      <button
-        onClick={handleToggle}
-        disabled={disabled}
-        className={`
-          px-1.5 sm:px-2 py-1.5 sm:py-2 rounded-r-lg sm:rounded-r-xl text-sm font-medium transition-all duration-200 border-l border-accent-700/50
-          ${disabled
-            ? 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
-            : 'bg-accent-600/90 hover:bg-accent-500 text-white'}
-        `}
-      >
-        <svg className={`w-3.5 h-3.5 sm:w-4 sm:h-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-
-      {/* Portal-based dropdown menu - renders at document body level */}
-      {menuContent && createPortal(menuContent, document.body)}
-    </div>
-  );
-};
 
 // Language badge colors - Modern gradient approach
 const LANGUAGE_COLORS: Record<string, string> = {
@@ -432,33 +23,11 @@ const PromptCard: React.FC<{
   prompt: PromptInfo;
   isSelected: boolean;
   onSelect: () => void;
-  onRunCommand: (command: CommandType, options?: Record<string, any>) => void;
   onEditPrompt: () => void;
-  onAddToQueue?: () => void;
-  isExecuting: boolean;
-}> = ({ prompt, isSelected, onSelect, onRunCommand, onEditPrompt, onAddToQueue, isExecuting }) => {
-  const [modalCommand, setModalCommand] = useState<CommandConfig | null>(null);
-
+}> = ({ prompt, isSelected, onSelect, onEditPrompt }) => {
   const languageColor = prompt.language
     ? LANGUAGE_COLORS[prompt.language] || 'bg-surface-700/50 text-surface-300 border-surface-600'
     : 'bg-surface-700/50 text-surface-300 border-surface-600';
-
-  const handleCommandClick = (command: CommandType) => {
-    const config = COMMANDS[command];
-    // Show modal for commands with options, otherwise run directly
-    if (config.options && config.options.length > 0) {
-      setModalCommand(config);
-    } else {
-      onRunCommand(command);
-    }
-  };
-
-  const handleRunWithOptions = (options: Record<string, any>) => {
-    if (modalCommand) {
-      onRunCommand(modalCommand.name, options);
-      setModalCommand(null);
-    }
-  };
 
   const handleCardClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -468,11 +37,6 @@ const PromptCard: React.FC<{
   const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onEditPrompt();
-  };
-
-  const handleAddToQueueClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onAddToQueue?.();
   };
 
   return (
@@ -497,19 +61,6 @@ const PromptCard: React.FC<{
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              {/* Add to Queue button */}
-              {onAddToQueue && (
-                <button
-                  onClick={handleAddToQueueClick}
-                  className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-1.5 transition-all duration-200 bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600 hover:text-white border border-emerald-600/30 hover:border-emerald-500/50"
-                  title="Add to task queue"
-                >
-                  <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
-                  <span className="hidden sm:inline">Queue</span>
-                </button>
-              )}
               {/* Edit button to open full-screen PromptSpace */}
               <button
                 onClick={handleEditClick}
@@ -539,63 +90,7 @@ const PromptCard: React.FC<{
           </div>
         </div>
 
-        {/* Command buttons - only show when selected */}
-        {isSelected && (
-          <div className="flex gap-1.5 sm:gap-2 flex-wrap px-3 sm:px-4 pb-3 sm:pb-4 pt-2 sm:pt-3 border-t border-surface-700/50 bg-surface-800/30 animate-fade-in overflow-visible relative">
-            {(() => {
-              const commands = Object.values(COMMANDS).filter(cmd => cmd.requiresPrompt);
-              const groups: Record<string, CommandConfig[]> = {};
-              const ungrouped: CommandConfig[] = [];
-
-              // Separate grouped and ungrouped commands
-              commands.forEach(cmd => {
-                if (cmd.group) {
-                  if (!groups[cmd.group]) groups[cmd.group] = [];
-                  groups[cmd.group].push(cmd);
-                } else {
-                  ungrouped.push(cmd);
-                }
-              });
-
-              return (
-                <>
-                  {/* Render grouped commands as dropdowns */}
-                  {Object.entries(groups).map(([groupName, groupCommands]) => (
-                    <CommandDropdown
-                      key={groupName}
-                      commands={groupCommands}
-                      prompt={prompt}
-                      onRunCommand={handleCommandClick}
-                      disabled={isExecuting}
-                    />
-                  ))}
-
-                  {/* Render ungrouped commands as regular buttons */}
-                  {ungrouped.map(cmd => (
-                    <CommandButton
-                      key={cmd.name}
-                      config={cmd}
-                      prompt={prompt}
-                      onClick={() => handleCommandClick(cmd.name)}
-                      disabled={isExecuting}
-                    />
-                  ))}
-                </>
-              );
-            })()}
-          </div>
-        )}
       </div>
-
-      {/* Options Modal */}
-      {modalCommand && (
-        <CommandOptionsModal
-          command={modalCommand}
-          prompt={prompt}
-          onRun={handleRunWithOptions}
-          onCancel={() => setModalCommand(null)}
-        />
-      )}
     </>
   );
 };
@@ -626,12 +121,9 @@ const FileTag: React.FC<{
 
 const PromptSelector: React.FC<PromptSelectorProps> = ({
   onSelectPrompt,
-  onRunCommand,
   onEditPrompt,
   onCreatePrompt,
-  onAddToQueue,
   selectedPrompt,
-  isExecuting,
 }) => {
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -833,10 +325,7 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
               prompt={prompt}
               isSelected={selectedPrompt?.prompt === prompt.prompt}
               onSelect={() => onSelectPrompt(prompt)}
-              onRunCommand={(cmd, options) => onRunCommand(cmd, prompt, options)}
               onEditPrompt={() => onEditPrompt(prompt)}
-              onAddToQueue={onAddToQueue ? () => onAddToQueue(prompt) : undefined}
-              isExecuting={isExecuting}
             />
           ))}
         </div>

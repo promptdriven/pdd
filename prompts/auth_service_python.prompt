@@ -11,7 +11,7 @@
 % Requirements
   1. **Constants**:
      - JWT_CACHE_FILE: Path to ~/.pdd/jwt_cache
-     - KEYRING_SERVICE_NAME: "firebase-auth-pdd"
+     - KEYRING_SERVICE_NAME: "firebase-auth-PDD CLI"
      - KEYRING_USER_NAME: "refresh_token"
 
   2. **get_jwt_cache_info**:
