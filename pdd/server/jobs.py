@@ -48,24 +48,30 @@ GLOBAL_OPTIONS = {
 }
 
 # Commands where specific args should be positional (not --options)
-# Note: fix, change, bug all use agentic mode by default with variadic "args" argument
+# Note: fix and change support BOTH manual mode (file-based) and agentic mode (URL-based)
 POSITIONAL_ARGS = {
     "sync": ["basename"],
     "generate": ["prompt_file"],
     "test": ["prompt_file", "code_file"],
     "example": ["prompt_file", "code_file"],
-    "fix": ["args"],  # Agentic mode: pdd fix <GITHUB_ISSUE_URL>
+    # fix: manual mode uses file args, agentic mode uses "args" (detected dynamically)
+    "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
     "bug": ["args"],
     "update": ["args"],
     "crash": ["prompt_file", "code_file", "program_file", "error_file"],
     "verify": ["prompt_file", "code_file", "verification_program"],
     "split": ["input_prompt", "input_code", "example_code"],
-    "change": ["args"],  # Agentic mode: pdd change <GITHUB_ISSUE_URL>
+    # change: manual mode uses file args, agentic mode uses "args" (detected dynamically)
+    "change": ["change_prompt_file", "input_code", "input_prompt_file"],
     "detect": ["args"],
     "auto-deps": ["prompt_file", "directory_path"],
     "conflicts": ["prompt_file", "prompt2"],
     "preprocess": ["prompt_file"],
 }
+
+# Commands that support agentic mode with variadic "args" argument
+# When "args" key is present in the payload, use "args" as positional instead of file-based args
+AGENTIC_MODE_COMMANDS = {"fix", "change"}
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +143,13 @@ def _build_subprocess_command_args(
     cmd_args.append(command)
 
     # Get positional arg names for this command
-    positional_names = POSITIONAL_ARGS.get(command, [])
+    # For fix/change: detect agentic mode (has "args" key) vs manual mode (has file args)
+    if command in AGENTIC_MODE_COMMANDS and args and "args" in args:
+        # Agentic mode: use variadic "args" as positional
+        positional_names = ["args"]
+    else:
+        # Manual mode or other commands: use default positional args
+        positional_names = POSITIONAL_ARGS.get(command, [])
 
     if args:
         # First, add positional arguments in order

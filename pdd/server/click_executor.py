@@ -361,7 +361,7 @@ class ClickCommandExecutor:
 
         # Handle args dict
         if args:
-            # Special case: "args" key with list (for bug, change commands)
+            # Special case: "args" key with list (for bug, fix, change agentic mode)
             # These commands have @click.argument("args", nargs=-1)
             if "args" in args and isinstance(args["args"], list):
                 # This is a variadic positional - pass as tuple
