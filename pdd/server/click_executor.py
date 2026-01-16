@@ -359,9 +359,39 @@ class ClickCommandExecutor:
         # 2. Build params dict for command execution
         params = {}
 
+        # Manual mode file key mappings for fix/change commands
+        # These commands use variadic "args" for BOTH modes, but the frontend sends semantic keys
+        # for manual mode which we need to convert to ordered positional arguments
+        MANUAL_MODE_FILE_KEYS = {
+            "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
+            "change": ["change_prompt_file", "input_code", "input_prompt_file"],
+        }
+
+        # Handle fix/change manual mode: convert semantic file keys to positional args
+        command_name = command.name if hasattr(command, 'name') else str(command)
+        if command_name in MANUAL_MODE_FILE_KEYS and args and "args" not in args:
+            file_keys = MANUAL_MODE_FILE_KEYS[command_name]
+            if any(k in args for k in file_keys):
+                # Convert file keys to ordered positional args list (order matters!)
+                positional_values = []
+                for key in file_keys:
+                    if key in args and args[key] is not None:
+                        positional_values.append(str(args[key]))
+                # Collect remaining args that aren't file keys (e.g., verification_program)
+                remaining_args = {k: v for k, v in args.items() if k not in file_keys}
+                # Build new args with positional values
+                args = {"args": positional_values}
+                # Add --manual flag to options
+                if options is None:
+                    options = {}
+                options["manual"] = True
+                # Move remaining args to options (they should be CLI options like --verification-program)
+                for key, value in remaining_args.items():
+                    options[key] = value
+
         # Handle args dict
         if args:
-            # Special case: "args" key with list (for bug, change commands)
+            # Special case: "args" key with list (for bug, fix, change)
             # These commands have @click.argument("args", nargs=-1)
             if "args" in args and isinstance(args["args"], list):
                 # This is a variadic positional - pass as tuple
@@ -531,6 +561,11 @@ def get_pdd_command(command_name: str) -> Optional[click.Command]:
             from pdd.commands.analysis import bug
             _command_cache[command_name] = bug
             return bug
+
+        elif command_name == "change":
+            from pdd.commands.modify import change
+            _command_cache[command_name] = change
+            return change
 
         elif command_name == "crash":
             from pdd.commands.analysis import crash

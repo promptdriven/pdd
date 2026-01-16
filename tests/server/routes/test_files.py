@@ -405,3 +405,77 @@ def test_z3_binary_extension_logic():
     s.add(ext == 1)
     s.add(z3.Not(is_binary(ext)))
     assert s.check() == z3.unsat
+
+
+# ============================================================================
+# Tests for parse_prompt_stem function
+# ============================================================================
+
+class TestParsePromptStem:
+    """Tests for the parse_prompt_stem function that extracts basename and language."""
+
+    @pytest.fixture
+    def parse_func(self):
+        """Import the parse_prompt_stem function."""
+        from pdd.server.routes.files import parse_prompt_stem
+        return parse_prompt_stem
+
+    def test_lowercase_python(self, parse_func):
+        """Test parsing lowercase python suffix."""
+        basename, lang = parse_func("calculator_python")
+        assert basename == "calculator"
+        assert lang == "python"
+
+    def test_uppercase_python(self, parse_func):
+        """Test parsing uppercase Python suffix (case-insensitive)."""
+        basename, lang = parse_func("database_Python")
+        assert basename == "database"
+        assert lang == "python"
+
+    def test_mixed_case_typescript(self, parse_func):
+        """Test parsing mixed case TypeScript suffix."""
+        basename, lang = parse_func("components_TypeScript")
+        assert basename == "components"
+        assert lang == "typescript"
+
+    def test_underscore_in_basename(self, parse_func):
+        """Test basename with underscores preserves correctly."""
+        basename, lang = parse_func("simple_math_calculator_python")
+        assert basename == "simple_math_calculator"
+        assert lang == "python"
+
+    def test_no_language_suffix(self, parse_func):
+        """Test stem without known language suffix."""
+        basename, lang = parse_func("unknown_module")
+        assert basename == "unknown_module"
+        assert lang is None
+
+    def test_javascript(self, parse_func):
+        """Test javascript suffix."""
+        basename, lang = parse_func("app_javascript")
+        assert basename == "app"
+        assert lang == "javascript"
+
+    def test_go_suffix(self, parse_func):
+        """Test go suffix."""
+        basename, lang = parse_func("server_go")
+        assert basename == "server"
+        assert lang == "go"
+
+    def test_rust_suffix(self, parse_func):
+        """Test rust suffix."""
+        basename, lang = parse_func("engine_rust")
+        assert basename == "engine"
+        assert lang == "rust"
+
+    def test_empty_basename_with_language(self, parse_func):
+        """Test edge case: just the language suffix with underscore prefix."""
+        basename, lang = parse_func("_python")
+        assert basename == ""
+        assert lang == "python"
+
+    def test_all_caps_python(self, parse_func):
+        """Test all caps PYTHON suffix."""
+        basename, lang = parse_func("module_PYTHON")
+        assert basename == "module"
+        assert lang == "python"
