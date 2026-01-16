@@ -352,13 +352,17 @@ def parse_prompt_stem(stem: str) -> tuple:
     """
     Parse sync_basename and language from prompt stem.
 
-    Example: "calculator_python" -> ("calculator", "python")
-    Example: "simple_math_typescript" -> ("simple_math", "typescript")
-    Example: "unknown" -> ("unknown", None)
+    Case-insensitive language matching to handle both:
+    - "calculator_python" -> ("calculator", "python")
+    - "calculator_Python" -> ("calculator", "python")
+    - "simple_math_TypeScript" -> ("simple_math", "typescript")
+    - "unknown" -> ("unknown", None)
     """
+    stem_lower = stem.lower()
     for lang in KNOWN_LANGUAGES:
         suffix = f"_{lang}"
-        if stem.endswith(suffix):
+        if stem_lower.endswith(suffix):
+            # Return the basename portion and normalized lowercase language
             return stem[:-len(suffix)], lang
     return stem, None
 
