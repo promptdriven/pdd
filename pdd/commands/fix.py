@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import click
 from typing import Optional, Tuple, Any
@@ -97,17 +98,31 @@ def fix(
         # --- Manual Mode ---
         else:
             # Validate arguments for manual mode
-            # Expected structure: PROMPT_FILE CODE_FILE UNIT_TEST_FILE [UNIT_TEST_FILE...] ERROR_FILE
-            if len(args) < 4:
-                raise click.UsageError(
-                    "Manual mode requires at least 4 arguments: PROMPT_FILE CODE_FILE UNIT_TEST_FILE... ERROR_FILE"
-                )
+            # Expected structure:
+            # - Loop mode: PROMPT_FILE CODE_FILE UNIT_TEST_FILE [UNIT_TEST_FILE...]
+            # - Non-loop mode: PROMPT_FILE CODE_FILE UNIT_TEST_FILE [UNIT_TEST_FILE...] ERROR_FILE
+            min_args = 3 if loop else 4
+            if len(args) < min_args:
+                if loop:
+                    raise click.UsageError(
+                        "Loop mode requires at least 3 arguments: PROMPT_FILE CODE_FILE UNIT_TEST_FILE..."
+                    )
+                else:
+                    raise click.UsageError(
+                        "Non-loop mode requires at least 4 arguments: PROMPT_FILE CODE_FILE UNIT_TEST_FILE... ERROR_FILE"
+                    )
 
             prompt_file = args[0]
             code_file = args[1]
-            error_file = args[-1]
-            # All arguments between code file and error file are treated as unit test files
-            unit_test_files = args[2:-1]
+
+            # In loop mode, error_file is optional (generated during loop)
+            # In non-loop mode, last argument is the error_file
+            if loop:
+                error_file = None
+                unit_test_files = args[2:]  # All remaining args are test files
+            else:
+                error_file = args[-1]
+                unit_test_files = args[2:-1]  # All args between code file and error file
 
             total_cost = 0.0
             last_model = "unknown"
@@ -156,8 +171,9 @@ def fix(
             else:
                 return f"Some files failed to fix.\n{summary_str}", total_cost, last_model
 
-    except click.Abort:
+    except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
-        handle_error(e)
-        return None
+        quiet = ctx.obj.get("quiet", False) if ctx.obj else False
+        handle_error(e, "fix", quiet)
+        sys.exit(1)
