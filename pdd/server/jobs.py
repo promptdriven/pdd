@@ -48,30 +48,31 @@ GLOBAL_OPTIONS = {
 }
 
 # Commands where specific args should be positional (not --options)
-# Note: fix and change support BOTH manual mode (file-based) and agentic mode (URL-based)
 POSITIONAL_ARGS = {
     "sync": ["basename"],
     "generate": ["prompt_file"],
     "test": ["prompt_file", "code_file"],
     "example": ["prompt_file", "code_file"],
-    # fix: manual mode uses file args, agentic mode uses "args" (detected dynamically)
-    "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
+    "fix": ["args"],  # Always uses variadic "args" (both agentic and manual modes)
     "bug": ["args"],
     "update": ["args"],
     "crash": ["prompt_file", "code_file", "program_file", "error_file"],
     "verify": ["prompt_file", "code_file", "verification_program"],
     "split": ["input_prompt", "input_code", "example_code"],
-    # change: manual mode uses file args, agentic mode uses "args" (detected dynamically)
-    "change": ["change_prompt_file", "input_code", "input_prompt_file"],
+    "change": ["args"],  # Always uses variadic "args" (both agentic and manual modes)
     "detect": ["args"],
     "auto-deps": ["prompt_file", "directory_path"],
     "conflicts": ["prompt_file", "prompt2"],
     "preprocess": ["prompt_file"],
 }
 
-# Commands that support agentic mode with variadic "args" argument
-# When "args" key is present in the payload, use "args" as positional instead of file-based args
-AGENTIC_MODE_COMMANDS = {"fix", "change"}
+# Manual mode file key mappings for fix/change commands
+# These commands use variadic "args" for BOTH modes, but the frontend sends semantic keys
+# for manual mode which we need to convert to ordered positional arguments
+MANUAL_MODE_FILE_KEYS = {
+    "fix": ["prompt_file", "code_file", "unit_test_files", "error_file"],
+    "change": ["change_prompt_file", "input_code", "input_prompt_file"],
+}
 
 logger = logging.getLogger(__name__)
 
@@ -142,14 +143,25 @@ def _build_subprocess_command_args(
     # Add the command
     cmd_args.append(command)
 
+    # Handle fix/change manual mode: convert semantic file keys to positional args
+    # and add --manual flag. Both modes use variadic "args" parameter.
+    if command in MANUAL_MODE_FILE_KEYS and args and "args" not in args:
+        # Manual mode detected: has file keys but no "args" key
+        file_keys = MANUAL_MODE_FILE_KEYS[command]
+        # Check if any file keys are present
+        if any(k in args for k in file_keys):
+            # Convert file keys to ordered positional args list
+            positional_values = []
+            for key in file_keys:
+                if key in args and args[key] is not None:
+                    positional_values.append(str(args[key]))
+            # Replace args with converted positional args
+            args = {"args": positional_values}
+            # Add --manual flag to command-specific options
+            cmd_opts["manual"] = True
+
     # Get positional arg names for this command
-    # For fix/change: detect agentic mode (has "args" key) vs manual mode (has file args)
-    if command in AGENTIC_MODE_COMMANDS and args and "args" in args:
-        # Agentic mode: use variadic "args" as positional
-        positional_names = ["args"]
-    else:
-        # Manual mode or other commands: use default positional args
-        positional_names = POSITIONAL_ARGS.get(command, [])
+    positional_names = POSITIONAL_ARGS.get(command, [])
 
     if args:
         # First, add positional arguments in order
