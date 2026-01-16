@@ -52,6 +52,11 @@
     Step 6. Post-process 'dependencies':
         6a. If prompt_filename is provided, filter out includes that reference the module's own example file (e.g., for 'agentic_fix_python.prompt', remove any include of 'context/[subdirs/]agentic_fix_example.py').
         6b. Fix any malformed '[File: path]' patterns to proper '<include>path</include>' format.
+        6c. Detect and filter circular dependencies through example file includes:
+            - Use _extract_example_modules() to get module names from _example.py includes in dependencies
+            - Use _detect_circular_dependencies() to find any module-level cycles (A includes B's example, B includes A's example)
+            - Use _filter_circular_dependencies() to remove problematic example includes
+            - Print warning for each filtered circular dependency using console.print with yellow color
     Step 7. Return the tuple containing 'dependencies', 'csv_output', 'total_cost', and 'model_name'.
 
 % Error Handling:
@@ -59,3 +64,23 @@
     - Handle failures in prompt loading gracefully (raise ValueError if templates cannot be loaded)
     - If extraction fails, return empty string for dependencies with error message
     - Propagate exceptions with meaningful error messages for debugging
+
+% Helper functions to implement for circular dependency detection:
+    _extract_example_modules(content: str) -> Set[str]:
+        - Extract module names from _example.py includes in the content
+        - Use regex pattern r'<include>(.*?)</include>' with re.DOTALL flag
+        - For each match, check if path matches 'context/[subdirs/]module_name_example.py'
+        - Return a set of module names (e.g., 'agentic_bug' from 'context/agentic_bug_example.py')
+
+    _detect_circular_dependencies(current_prompt: str, new_dependencies: str, prompts_dir: Optional[str] = None) -> List[List[str]]:
+        - Extract current module name from prompt_filename using _extract_module_name
+        - Extract module names from example includes in new_dependencies using _extract_example_modules
+        - For each dependent module, find its prompt file and check if it includes current module's example
+        - If module B's prompt includes module A's example and A is about to include B's example, that's a cycle
+        - Return list of cycles found (each cycle is list of prompt filenames like ['a_python.prompt', 'b_python.prompt', 'a_python.prompt'])
+
+    _filter_circular_dependencies(dependencies: str, cycles: List[List[str]]) -> str:
+        - Extract module names from cycles (e.g., 'agentic_bug' from 'agentic_bug_python.prompt')
+        - For each problematic module, use regex to remove its example include:
+          pattern r'<[^>]+><include>context/(?:[^/]+/)*{module}_example\.py</include></[^>]+>\s*'
+        - Return the filtered dependencies string
