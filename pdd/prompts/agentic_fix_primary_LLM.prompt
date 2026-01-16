@@ -17,6 +17,13 @@
     {test_abs}
 </test_file>
 
+% TEST PROTECTION MODE: {protect_tests}
+% If protect_tests is "true":
+%   - The test_file is PROTECTED and MUST NOT be modified
+%   - You can READ the test to understand expected behavior, but you can ONLY edit the code_module
+%   - The test file represents the correct specification; the bug is in the code
+%   - Do NOT use your file editing tools on the test file
+
 
 % ORIGINAL SPECIFICATION:
 <prompt_content> 
