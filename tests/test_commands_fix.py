@@ -365,3 +365,55 @@ def test_cli_fix_multiple_test_files(tmp_path):
             strength=None,
             temperature=None,
         )
+
+@pytest.mark.parametrize("num_test_files", [1, 2])
+def test_cli_fix_loop_mode_no_error_file(tmp_path, num_test_files):
+    """Test --loop mode doesn't require ERROR_FILE (Issue #233)."""
+    runner = CliRunner()
+
+    # Setup files
+    prompt_file = tmp_path / "prompt.prompt"
+    prompt_file.write_text("prompt content")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("code content")
+    verify_file = tmp_path / "verify.py"
+    verify_file.write_text("import sys; sys.exit(0)")
+
+    test_files = [tmp_path / f"test_{i}.py" for i in range(num_test_files)]
+    for tf in test_files:
+        tf.write_text("test content")
+
+    with patch('pdd.commands.fix.fix_main') as mock_fix_main:
+        mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
+        result = runner.invoke(cli.cli, [
+            'fix', '--manual', '--loop', '--verification-program', str(verify_file),
+            str(prompt_file), str(code_file), *[str(tf) for tf in test_files]
+        ])
+
+        assert result.exit_code == 0, f"Command failed: {result.output}"
+        assert mock_fix_main.call_count == num_test_files
+        # Verify error_file=None and loop=True for all calls
+        for call in mock_fix_main.call_args_list:
+            assert call[1]['error_file'] is None, "error_file should be None in loop mode"
+            assert call[1]['loop'] is True, "loop should be True"
+
+
+def test_cli_fix_non_loop_mode_requires_error_file(tmp_path):
+    """Test non-loop mode fails without ERROR_FILE (Issue #233)."""
+    runner = CliRunner()
+
+    prompt_file = tmp_path / "prompt.prompt"
+    prompt_file.write_text("prompt content")
+    code_file = tmp_path / "code.py"
+    code_file.write_text("code content")
+    test_file = tmp_path / "test.py"
+    test_file.write_text("test content")
+
+    # Non-loop mode requires ERROR_FILE as the last argument
+    result = runner.invoke(cli.cli, [
+        'fix', '--manual', str(prompt_file), str(code_file), str(test_file)
+    ])
+
+    # Should fail because ERROR_FILE is missing
+    assert result.exit_code != 0, "Should fail without ERROR_FILE in non-loop mode"
+    assert "requires at least 4 arguments" in result.output or "ERROR_FILE" in result.output
