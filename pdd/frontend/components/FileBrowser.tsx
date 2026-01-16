@@ -7,6 +7,7 @@ interface FileBrowserProps {
   onClose?: () => void;  // For modal mode - called when clicking outside or pressing escape
   filter?: string | string[];  // File extensions to show, e.g., '.md' or ['.prompt', '.py']
   title?: string;
+  directoryMode?: boolean;  // If true, only allow selecting directories
 }
 
 interface TreeNodeProps {
@@ -14,6 +15,7 @@ interface TreeNodeProps {
   onSelect: (path: string) => void;
   filter?: string[];  // Normalized to array internally
   depth: number;
+  directoryMode?: boolean;  // If true, directories are selectable
 }
 
 const FileIcon = ({ type, name }: { type: 'file' | 'directory'; name: string }) => {
@@ -32,7 +34,7 @@ const FileIcon = ({ type, name }: { type: 'file' | 'directory'; name: string }) 
   return <DocumentIcon className="w-4 h-4 text-surface-400 mr-2 flex-shrink-0" />;
 };
 
-const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth }) => {
+const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth, directoryMode }) => {
   const [isExpanded, setIsExpanded] = useState(depth < 2);
 
   const isDirectory = node.type === 'directory';
@@ -40,6 +42,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth }) =>
   // Filter check for files
   const shouldShow = () => {
     if (isDirectory) return true;
+    // In directory mode, don't show files
+    if (directoryMode) return false;
     if (!filter || filter.length === 0) return true;
     return filter.some(ext => node.name.endsWith(ext));
   };
@@ -49,12 +53,14 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth }) =>
   // For directories, check if any children would be visible
   const visibleChildren = node.children?.filter(child => {
     if (child.type === 'directory') return true;
+    // In directory mode, don't show files
+    if (directoryMode) return false;
     if (!filter || filter.length === 0) return true;
     return filter.some(ext => child.name.endsWith(ext));
   }) || [];
 
-  // Hide empty directories when filtering
-  if (isDirectory && filter && filter.length > 0 && visibleChildren.length === 0) {
+  // Hide empty directories when filtering (but not in directory mode)
+  if (isDirectory && !directoryMode && filter && filter.length > 0 && visibleChildren.length === 0) {
     return null;
   }
 
@@ -64,6 +70,11 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth }) =>
     } else {
       onSelect(node.path);
     }
+  };
+
+  const handleSelectDirectory = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelect(node.path);
   };
 
   return (
@@ -85,9 +96,17 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth }) =>
           </span>
         )}
         <FileIcon type={node.type} name={node.name} />
-        <span className={`text-sm ${isDirectory ? 'text-surface-200' : 'text-surface-300'}`}>
+        <span className={`text-sm flex-1 ${isDirectory ? 'text-surface-200' : 'text-surface-300'}`}>
           {node.name}
         </span>
+        {directoryMode && isDirectory && (
+          <button
+            onClick={handleSelectDirectory}
+            className="ml-2 px-2 py-0.5 text-xs bg-accent-600/20 hover:bg-accent-600/40 text-accent-400 rounded transition-colors"
+          >
+            Select
+          </button>
+        )}
       </div>
 
       {isDirectory && isExpanded && visibleChildren.map((child, i) => (
@@ -97,13 +116,14 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth }) =>
           onSelect={onSelect}
           filter={filter}
           depth={depth + 1}
+          directoryMode={directoryMode}
         />
       ))}
     </div>
   );
 };
 
-const FileBrowser: React.FC<FileBrowserProps> = ({ onSelect, onClose, filter, title = 'Select File' }) => {
+const FileBrowser: React.FC<FileBrowserProps> = ({ onSelect, onClose, filter, title = 'Select File', directoryMode = false }) => {
   const [tree, setTree] = useState<FileTreeNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -172,11 +192,15 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ onSelect, onClose, filter, ti
           onChange={(e) => setSearchQuery(e.target.value)}
           className="w-full px-3 py-1.5 bg-surface-900 border border-surface-600 rounded text-sm text-surface-200 placeholder-surface-500 focus:outline-none focus:border-accent-500"
         />
-        {normalizedFilter && normalizedFilter.length > 0 && (
+        {directoryMode ? (
+          <div className="mt-2 text-xs text-surface-500">
+            Showing directories only
+          </div>
+        ) : normalizedFilter && normalizedFilter.length > 0 ? (
           <div className="mt-2 text-xs text-surface-500">
             Showing: {normalizedFilter.join(', ')}
           </div>
-        )}
+        ) : null}
       </div>
 
       <div className="max-h-80 overflow-y-auto p-2">
@@ -186,6 +210,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({ onSelect, onClose, filter, ti
             onSelect={handleSelect}
             filter={normalizedFilter}
             depth={0}
+            directoryMode={directoryMode}
           />
         ) : (
           <div className="text-surface-500 text-center py-4">No files found</div>

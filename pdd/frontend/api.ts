@@ -221,13 +221,21 @@ export interface DiffSection {
   status: 'matched' | 'partial' | 'missing' | 'extra';
   matchConfidence: number;
   semanticLabel: string;
-  notes?: string;
+  notes: string;  // Required explanation of WHY this status exists
 }
 
 export interface LineMapping {
   promptLine: number;
   codeLines: number[];
   matchType: 'exact' | 'semantic' | 'partial' | 'none';
+}
+
+export interface HiddenKnowledge {
+  type: 'magic_value' | 'algorithm_choice' | 'edge_case' | 'error_handling' | 'api_contract' | 'optimization' | 'business_logic' | 'assumption';
+  location: { startLine: number; endLine: number };
+  description: string;           // What the code knows that the prompt doesn't say
+  regenerationImpact: 'would_differ' | 'would_fail' | 'might_work';
+  suggestedPromptAddition: string;  // What to add to the prompt to capture this
 }
 
 export interface DiffStats {
@@ -239,20 +247,25 @@ export interface DiffStats {
   undocumentedFeatures: number;
   promptToCodeCoverage: number;  // % of prompt implemented in code
   codeToPromptCoverage: number;  // % of code documented in prompt
+  hiddenKnowledgeCount: number;  // Number of hidden knowledge items found
+  criticalGaps: number;          // Number of critical gaps that would cause regeneration failure
 }
 
 export interface DiffAnalysisResult {
-  overallScore: number;           // Overall bidirectional match score
+  overallScore: number;           // Overall regeneration capability score 0-100
+  canRegenerate: boolean;         // Conservative: could this prompt produce working code?
+  regenerationRisk: 'low' | 'medium' | 'high' | 'critical';
   promptToCodeScore: number;      // How well code implements prompt
   codeToPromptScore: number;      // How well prompt describes code
-  summary: string;
+  summary: string;                // Summary of regeneration viability
   sections: DiffSection[];        // Prompt requirements → code mappings
   codeSections: DiffSection[];    // Code features → prompt mappings
+  hiddenKnowledge: HiddenKnowledge[];  // Undocumented code knowledge
   lineMappings: LineMapping[];
   stats: DiffStats;
   missing: string[];              // Requirements in prompt but not in code
-  extra: string[];                // Code features not documented in prompt
-  suggestions: string[];
+  extra: string[];                // Code features that would be LOST on regeneration
+  suggestions: string[];          // Specific additions to enable regeneration
 }
 
 export interface DiffAnalysisRequest {
@@ -260,6 +273,9 @@ export interface DiffAnalysisRequest {
   code_content: string;
   strength?: number;
   mode?: 'quick' | 'detailed';
+  include_tests?: boolean;        // Include test content in analysis
+  prompt_path?: string;           // Prompt path for auto-detecting tests
+  code_path?: string;             // Code path for finding associated tests
 }
 
 export interface DiffAnalysisResponse {
@@ -268,6 +284,59 @@ export interface DiffAnalysisResponse {
   model: string;
   analysisMode: string;
   cached: boolean;
+  tests_included: boolean;        // Whether tests were included in analysis
+  test_files: string[];           // Test files included in analysis
+}
+
+// Prompt Version History types
+export interface PromptVersionInfo {
+  commit_hash: string;
+  commit_date: string;
+  commit_message: string;
+  author: string;
+  prompt_content: string;
+}
+
+export interface PromptHistoryRequest {
+  prompt_path: string;
+  limit?: number;
+}
+
+export interface PromptHistoryResponse {
+  versions: PromptVersionInfo[];
+  current_content: string;
+  has_uncommitted_changes: boolean;
+}
+
+export interface LinguisticChange {
+  change_type: 'added' | 'removed' | 'modified';
+  category: 'requirement' | 'constraint' | 'behavior' | 'format';
+  description: string;
+  old_text?: string;
+  new_text?: string;
+  impact: 'breaking' | 'enhancement' | 'clarification';
+}
+
+export interface PromptDiffRequest {
+  prompt_path: string;
+  version_a: string;  // commit hash, 'HEAD', or 'working'
+  version_b: string;
+  code_path?: string;
+  strength?: number;  // Model strength 0-1 for analysis quality
+}
+
+export interface PromptDiffResponse {
+  prompt_a_content: string;
+  prompt_b_content: string;
+  text_diff: string;
+  linguistic_changes: LinguisticChange[];
+  code_diff?: string;
+  summary: string;
+  cost: number;
+  model: string;
+  version_a_label: string;  // Label for the older version
+  version_b_label: string;  // Label for the newer version
+  versions_swapped: boolean;  // Whether versions were auto-swapped to ensure old→new
 }
 
 // Architecture types (re-exported for convenience)
@@ -704,6 +773,36 @@ class PDDApiClient {
    */
   async analyzeDiff(request: DiffAnalysisRequest): Promise<DiffAnalysisResponse> {
     return this.request<DiffAnalysisResponse>('/api/v1/prompts/diff-analysis', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Get git history for a prompt file.
+   * Returns a list of versions with their content and commit info.
+   *
+   * @param request.prompt_path - Path to the prompt file
+   * @param request.limit - Maximum number of versions to retrieve (default 10)
+   */
+  async getPromptHistory(request: PromptHistoryRequest): Promise<PromptHistoryResponse> {
+    return this.request<PromptHistoryResponse>('/api/v1/prompts/git-history', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Compare two prompt versions with LLM-powered linguistic analysis.
+   * Analyzes semantic differences and categorizes changes by type and impact.
+   *
+   * @param request.prompt_path - Path to the prompt file
+   * @param request.version_a - First version: commit hash, 'HEAD', or 'working'
+   * @param request.version_b - Second version: commit hash, 'HEAD', or 'working'
+   * @param request.code_path - Optional code path for related code diff
+   */
+  async getPromptDiff(request: PromptDiffRequest): Promise<PromptDiffResponse> {
+    return this.request<PromptDiffResponse>('/api/v1/prompts/prompt-diff', {
       method: 'POST',
       body: JSON.stringify(request),
     });

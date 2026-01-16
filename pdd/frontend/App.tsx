@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { CommandType } from './types';
 import { COMMANDS } from './constants';
+import { buildCommandRequest, buildDisplayCommand } from './lib/commandBuilder';
 import PromptSelector from './components/PromptSelector';
 import PromptSpace from './components/PromptSpace';
 import ArchitectureView from './components/ArchitectureView';
@@ -17,7 +18,7 @@ import DeviceIndicator from './components/DeviceIndicator';
 import { api, PromptInfo, RunResult, CommandRequest, RemoteSessionInfo } from './api';
 import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './components/Icon';
 import { useJobs, JobInfo } from './hooks/useJobs';
-import { useTaskQueue } from './hooks/useTaskQueue';
+import { useTaskQueue, TaskQueueItem } from './hooks/useTaskQueue';
 import { useToast } from './components/Toast';
 
 type View = 'architecture' | 'prompts' | 'bug' | 'settings';
@@ -117,34 +118,45 @@ const App: React.FC = () => {
   } = useJobs({ onJobComplete: handleJobComplete });
 
   // Create a job runner for the task queue that respects execution mode
-  // Matches handleRunCommand behavior - routes to remote or local based on mode
-  const spawnTerminalJob = useCallback(async (
-    request: CommandRequest,
-    displayCommand: string
+  // Rebuilds the command from raw inputs to match handleRunCommand behavior exactly
+  const executeQueuedTask = useCallback(async (
+    task: TaskQueueItem
   ): Promise<string | null> => {
     try {
+      // Rebuild the command using the same centralized builder as handleRunCommand
+      // This ensures queue execution uses identical logic to direct execution
+      const { args, options, displayCommand, backendName } = buildCommandRequest(
+        task.commandType,
+        task.prompt,
+        task.rawOptions
+      );
+
       // Check if we're in remote mode with a selected session
       if (executionMode === 'remote' && selectedRemoteSession) {
         // Submit to remote session via cloud
         const { commandId } = await api.submitRemoteCommand({
           sessionId: selectedRemoteSession,
-          type: request.command,
-          payload: { args: request.args, options: request.options },
+          type: backendName,
+          payload: { args, options },
         });
         // Add to job dashboard as remote job
         addSpawnedJob(
           `[Remote] ${displayCommand}`,
-          request.command,
+          backendName,
           commandId,
           { remote: true, sessionId: selectedRemoteSession }
         );
         return commandId;
       } else {
         // Local execution - spawn in new terminal window
-        const result = await api.spawnTerminal(request);
+        const result = await api.spawnTerminal({
+          command: backendName,
+          args,
+          options,
+        });
         if (result.success && result.job_id) {
           // Add to job dashboard for tracking
-          addSpawnedJob(displayCommand, request.command, result.job_id);
+          addSpawnedJob(displayCommand, backendName, result.job_id);
           return result.job_id;
         } else {
           console.error('Failed to spawn terminal:', result.message);
@@ -157,19 +169,20 @@ const App: React.FC = () => {
     }
   }, [addSpawnedJob, executionMode, selectedRemoteSession]);
 
-  // Connect the spawnTerminal job runner to the task queue
+  // Connect the task queue job runner
   useEffect(() => {
-    taskQueue.setSubmitJob(spawnTerminalJob);
-  }, [taskQueue, spawnTerminalJob]);
+    taskQueue.setSubmitJob(executeQueuedTask);
+  }, [taskQueue, executeQueuedTask]);
 
   // Handler to add task to queue
+  // Now stores raw inputs (commandType, prompt, rawOptions) for reconstruction at execution time
   const handleAddToQueue = useCallback((
-    command: string,
-    prompt: PromptInfo | null,
-    request: CommandRequest,
+    commandType: CommandType,
+    prompt: PromptInfo,
+    rawOptions: Record<string, any>,
     displayCommand: string
   ) => {
-    taskQueue.addTask(command, prompt, request, displayCommand);
+    taskQueue.addTask(commandType, prompt, rawOptions, displayCommand);
     addToast(`Added to queue: ${displayCommand}`, 'info', 3000);
   }, [taskQueue, addToast]);
 
@@ -272,168 +285,15 @@ const App: React.FC = () => {
     setIsExecuting(true);
     setExecutionStatus('running');
 
-    // Extract file paths from modal options (prefixed with _)
-    // These override the auto-detected prompt.code and prompt.test
-    const rawOptions = commandOptions || {};
-    const codeFile = rawOptions['_code'] || prompt.code;
-    const testFile = rawOptions['_test'] || prompt.test;
-
-    // Build clean options for CLI:
-    // 1. Remove internal prefixed keys (_code, _test)
-    // 2. Transform _global_* keys to their actual flag names (e.g., _global_strength -> strength)
-    const options: Record<string, any> = {};
-    for (const [key, value] of Object.entries(rawOptions)) {
-      if (key === '_code' || key === '_test') {
-        // Skip internal file path keys - these are used for positional args
-        continue;
-      } else if (key.startsWith('_global_')) {
-        // Strip _global_ prefix for CLI flags
-        const actualKey = key.replace('_global_', '');
-        options[actualKey] = value;
-      } else {
-        options[key] = value;
-      }
-    }
-
-    // For sync, show basename; for others, show prompt path
-    const displayArg = command === CommandType.SYNC ? prompt.sync_basename : prompt.prompt;
-    // Build display command with options (for UI display only)
-    const optionsStr = Object.keys(options).length > 0
-      ? ' ' + Object.entries(options).map(([k, v]) => {
-          if (typeof v === 'boolean') return v ? `--${k.replace(/_/g, '-')}` : '';
-          return `--${k.replace(/_/g, '-')} ${v}`;
-        }).filter(Boolean).join(' ')
-      : '';
-    const fullDisplayCommand = `pdd ${config.backendName} ${displayArg}${optionsStr}`;
+    // Use centralized command builder for consistent argument handling
+    const { args, options, displayCommand: fullDisplayCommand } = buildCommandRequest(
+      command,
+      prompt,
+      commandOptions || {}
+    );
     setLastCommand(fullDisplayCommand);
 
     try {
-      // Build the command request based on command type
-      const args: Record<string, any> = {};
-
-      // For sync command, use sync_basename (without language suffix)
-      // e.g., "calculator" not "calculator_python"
-      if (command === CommandType.SYNC) {
-        args.basename = prompt.sync_basename;
-        // Pass context to ensure sync finds the prompt in the correct location
-        if (prompt.context) {
-          options['context'] = prompt.context;
-        }
-      } else if (command === CommandType.UPDATE) {
-        // Update command: pdd update [PROMPT_FILE] <CODE_FILE> [ORIGINAL_CODE_FILE]
-        // - If only code: generates new prompt for the code
-        // - If prompt + code: updates prompt based on code changes
-        // Pass as positional args tuple
-        if (codeFile) {
-          args.args = [prompt.prompt, codeFile];
-        } else {
-          // No code file - run in repo-wide mode (no file arguments)
-          // This scans the entire repo and updates all prompts
-          args.args = [];
-        }
-      } else if (command === CommandType.GENERATE) {
-        args.prompt_file = prompt.prompt;
-      } else if (command === CommandType.TEST) {
-        args.prompt_file = prompt.prompt;
-        args.code_file = codeFile;
-      } else if (command === CommandType.EXAMPLE) {
-        args.prompt_file = prompt.prompt;
-        args.code_file = codeFile;
-      } else if (command === CommandType.FIX) {
-        args.prompt_file = prompt.prompt;
-        args.code_file = codeFile;
-        args.unit_test_files = testFile;
-        // error_file is entered in options modal but is a positional arg
-        if (options['error-file']) {
-          args.error_file = options['error-file'];
-          delete options['error-file'];
-        }
-      } else if (command === CommandType.SPLIT) {
-        // Split command: pdd split INPUT_PROMPT INPUT_CODE EXAMPLE_CODE [--output-sub] [--output-modified]
-        // - INPUT_PROMPT: selected prompt file
-        // - INPUT_CODE: code file from _code field (codeFile)
-        // - EXAMPLE_CODE: from example-code option
-        args.input_prompt = prompt.prompt;
-        args.input_code = codeFile;
-        if (options['example-code']) {
-          args.example_code = options['example-code'];
-          delete options['example-code'];
-        }
-      } else if (command === CommandType.CHANGE) {
-        // Change command: pdd change CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE] [--budget] [--output]
-        // - CHANGE_PROMPT_FILE: from change-prompt option
-        // - INPUT_CODE: code file from _code field (codeFile)
-        // - INPUT_PROMPT_FILE: selected prompt file (the prompt being modified)
-        if (options['change-prompt']) {
-          args.change_prompt_file = options['change-prompt'];
-          delete options['change-prompt'];
-        }
-        args.input_code = codeFile;
-        args.input_prompt_file = prompt.prompt;
-      } else if (command === CommandType.DETECT) {
-        // Detect command: pdd detect [PROMPT_FILES...] CHANGE_FILE [--output]
-        // This command doesn't use the selected prompt (requiresPrompt: false)
-        // All args come from modal options
-        const promptFilesStr = options['prompt-files'] || '';
-        const changeFile = options['change-file'] || '';
-        // Parse comma-separated prompt files and add change file at the end
-        const promptFiles = promptFilesStr.split(',').map((f: string) => f.trim()).filter(Boolean);
-        args.args = [...promptFiles, changeFile].filter(Boolean);
-        delete options['prompt-files'];
-        delete options['change-file'];
-      } else if (command === CommandType.AUTO_DEPS) {
-        // Auto-deps command: pdd auto-deps PROMPT_FILE DIRECTORY_PATH [--output] [--csv] [--force-scan]
-        args.prompt_file = prompt.prompt;
-        if (options['directory-path']) {
-          args.directory_path = options['directory-path'];
-          delete options['directory-path'];
-        }
-      } else if (command === CommandType.CONFLICTS) {
-        // Conflicts command: pdd conflicts PROMPT1 PROMPT2 [--output]
-        args.prompt_file = prompt.prompt;
-        if (options['prompt2']) {
-          args.prompt2 = options['prompt2'];
-          delete options['prompt2'];
-        }
-      } else if (command === CommandType.PREPROCESS) {
-        // Preprocess command: pdd preprocess PROMPT_FILE [--output] [--xml] [--recursive] [--double]
-        args.prompt_file = prompt.prompt;
-      } else if (command === CommandType.CRASH) {
-        // Crash command: pdd crash PROMPT_FILE CODE_FILE PROGRAM_FILE ERROR_FILE [options]
-        args.prompt_file = prompt.prompt;
-        args.code_file = codeFile;
-        if (options['program-file']) {
-          args.program_file = options['program-file'];
-          delete options['program-file'];
-        }
-        if (options['error-file']) {
-          args.error_file = options['error-file'];
-          delete options['error-file'];
-        }
-      } else if (command === CommandType.VERIFY) {
-        // Verify command: pdd verify PROMPT_FILE CODE_FILE VERIFICATION_PROGRAM [options]
-        args.prompt_file = prompt.prompt;
-        args.code_file = codeFile;
-        if (options['verification-program']) {
-          args.verification_program = options['verification-program'];
-          delete options['verification-program'];
-        }
-      } else if (command === CommandType.SUBMIT_EXAMPLE) {
-        // Submit Example uses fix --loop --auto-submit under the hood
-        args.prompt_file = prompt.prompt;
-        args.code_file = codeFile;
-        args.unit_test_files = testFile;
-        // Create a placeholder error file path (loop mode doesn't require existing error file)
-        args.error_file = '.pdd/submit_example_errors.log';
-        // Force loop and auto-submit flags
-        options['loop'] = true;
-        options['auto-submit'] = true;
-        // Move verification-program from options to args
-        if (options['verification-program']) {
-          args.verification_program = options['verification-program'];
-          delete options['verification-program'];
-        }
-      }
 
       // Check if we're in remote mode
       if (executionMode === 'remote' && selectedRemoteSession) {
@@ -627,6 +487,15 @@ const App: React.FC = () => {
     }
   };
 
+  // Handler for PromptSpace add to queue
+  const handlePromptSpaceAddToQueue = (command: CommandType, options?: Record<string, any>) => {
+    if (editingPrompt) {
+      const rawOptions = options || {};
+      const displayCommand = buildDisplayCommand(command, editingPrompt, rawOptions);
+      handleAddToQueue(command, editingPrompt, rawOptions, displayCommand);
+    }
+  };
+
   // Cancel command handler for PromptSpace
   const handleCancelCommand = async () => {
     try {
@@ -688,6 +557,7 @@ const App: React.FC = () => {
         prompt={editingPrompt}
         onBack={() => setEditingPrompt(null)}
         onRunCommand={handlePromptSpaceCommand}
+        onAddToQueue={handlePromptSpaceAddToQueue}
         isExecuting={isExecuting}
         executionStatus={executionStatus}
         lastCommand={lastCommand}
@@ -969,12 +839,9 @@ const App: React.FC = () => {
             </div>
             <PromptSelector
               onSelectPrompt={setSelectedPrompt}
-              onRunCommand={handleRunCommand}
               onEditPrompt={setEditingPrompt}
               onCreatePrompt={setEditingPrompt}
-              onAddToQueue={handleOpenAddToQueueModal}
               selectedPrompt={selectedPrompt}
-              isExecuting={isExecuting}
             />
           </div>
         ) : view === 'settings' ? (

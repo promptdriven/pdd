@@ -3,6 +3,7 @@ import { api, AuthStatus } from '../api';
 import { PddrcConfig, PddrcContext, PddrcContextDefaults } from '../types';
 import { Cog6ToothIcon, ChevronDownIcon, ChevronUpIcon, TrashIcon, PlusIcon, FolderIcon, SpinnerIcon } from './Icon';
 import Tooltip from './Tooltip';
+import FilePickerInput from './FilePickerInput';
 
 // Available languages for dropdown
 const LANGUAGES = [
@@ -217,42 +218,33 @@ const ContextCard: React.FC<ContextCardProps> = ({
 
           {/* Output paths */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-surface-300 mb-1">
-                {FIELD_LABELS.generate_output_path.label}
-              </label>
-              <input
-                type="text"
-                value={defaults.generate_output_path || ''}
-                onChange={e => handleDefaultsChange('generate_output_path', e.target.value)}
-                placeholder={FIELD_LABELS.generate_output_path.placeholder}
-                className="w-full px-3 py-2 bg-surface-900/50 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-surface-300 mb-1">
-                {FIELD_LABELS.test_output_path.label}
-              </label>
-              <input
-                type="text"
-                value={defaults.test_output_path || ''}
-                onChange={e => handleDefaultsChange('test_output_path', e.target.value)}
-                placeholder={FIELD_LABELS.test_output_path.placeholder}
-                className="w-full px-3 py-2 bg-surface-900/50 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-surface-300 mb-1">
-                {FIELD_LABELS.example_output_path.label}
-              </label>
-              <input
-                type="text"
-                value={defaults.example_output_path || ''}
-                onChange={e => handleDefaultsChange('example_output_path', e.target.value)}
-                placeholder={FIELD_LABELS.example_output_path.placeholder}
-                className="w-full px-3 py-2 bg-surface-900/50 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 text-sm"
-              />
-            </div>
+            <FilePickerInput
+              label={FIELD_LABELS.generate_output_path.label}
+              value={defaults.generate_output_path || ''}
+              onChange={(path) => handleDefaultsChange('generate_output_path', path)}
+              placeholder={FIELD_LABELS.generate_output_path.placeholder}
+              description={FIELD_LABELS.generate_output_path.description}
+              directoryMode
+              title="Select Code Output Directory"
+            />
+            <FilePickerInput
+              label={FIELD_LABELS.test_output_path.label}
+              value={defaults.test_output_path || ''}
+              onChange={(path) => handleDefaultsChange('test_output_path', path)}
+              placeholder={FIELD_LABELS.test_output_path.placeholder}
+              description={FIELD_LABELS.test_output_path.description}
+              directoryMode
+              title="Select Test Output Directory"
+            />
+            <FilePickerInput
+              label={FIELD_LABELS.example_output_path.label}
+              value={defaults.example_output_path || ''}
+              onChange={(path) => handleDefaultsChange('example_output_path', path)}
+              placeholder={FIELD_LABELS.example_output_path.placeholder}
+              description={FIELD_LABELS.example_output_path.description}
+              directoryMode
+              title="Select Example Output Directory"
+            />
             <div>
               <label className="block text-sm font-medium text-surface-300 mb-1">
                 {FIELD_LABELS.default_language.label}
@@ -288,18 +280,15 @@ const ContextCard: React.FC<ContextCardProps> = ({
           {/* Advanced options */}
           {showAdvanced && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-3 bg-surface-800/30 rounded-lg">
-              <div>
-                <label className="block text-sm font-medium text-surface-300 mb-1">
-                  {FIELD_LABELS.prompts_dir.label}
-                </label>
-                <input
-                  type="text"
-                  value={defaults.prompts_dir || ''}
-                  onChange={e => handleDefaultsChange('prompts_dir', e.target.value)}
-                  placeholder={FIELD_LABELS.prompts_dir.placeholder}
-                  className="w-full px-3 py-2 bg-surface-900/50 border border-surface-600 rounded-lg text-white placeholder-surface-500 focus:outline-none focus:border-accent-500 text-sm"
-                />
-              </div>
+              <FilePickerInput
+                label={FIELD_LABELS.prompts_dir.label}
+                value={defaults.prompts_dir || ''}
+                onChange={(path) => handleDefaultsChange('prompts_dir', path)}
+                placeholder={FIELD_LABELS.prompts_dir.placeholder}
+                description={FIELD_LABELS.prompts_dir.description}
+                directoryMode
+                title="Select Prompts Directory"
+              />
               <div>
                 <label className="block text-sm font-medium text-surface-300 mb-1">
                   {FIELD_LABELS.strength.label}
@@ -486,7 +475,7 @@ const ProjectSettings: React.FC = () => {
       return;
     }
     const newContexts: Record<string, PddrcContext> = {};
-    for (const [key, value] of Object.entries(config.contexts)) {
+    for (const [key, value] of Object.entries(config.contexts) as [string, PddrcContext][]) {
       if (key === oldName) {
         newContexts[newName] = value;
       } else {
