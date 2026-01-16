@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 from rich.console import Console
 from pdd import DEFAULT_STRENGTH
 from pdd.generate_test import generate_test, _validate_inputs
@@ -185,3 +186,35 @@ class TestContextFileExists:
         for source, keywords in pollution_sources.items():
             found = any(kw in content for kw in keywords)
             assert found, f"Context file must cover {source} pollution."
+
+
+# Tests for Issue #212: Example file support
+def test_generate_test_with_example_parameter(monkeypatch):
+    """Test that generate_test works with example parameter instead of code."""
+    def _stub_continue(formatted_input_prompt, llm_output, strength, temperature, time=0.25, language=None, verbose=False):
+        return (llm_output, 0.0, "stub-model")
+    monkeypatch.setattr("pdd.generate_test.continue_generation", _stub_continue)
+
+    result = generate_test(
+        prompt='Write a calculator',
+        code=None,
+        example='from calculator import add\nresult = add(1, 2)',
+        strength=0.5,
+        temperature=0.0
+    )
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+
+
+@patch("pdd.generate_test.load_prompt_template")
+@patch("pdd.generate_test.llm_invoke")
+@patch("pdd.generate_test.postprocess")
+def test_generate_test_uses_example_template(mock_postprocess, mock_llm_invoke, mock_load_template):
+    """Test that generate_test_from_example_LLM template is loaded for example parameter."""
+    mock_load_template.return_value = "template content"
+    mock_llm_invoke.return_value = {"result": "test code", "cost": 0.01, "model_name": "test-model"}
+    mock_postprocess.return_value = ("test code", 0.0, "test-model")
+
+    generate_test(prompt="test prompt", code=None, example="example content", verbose=False)
+
+    mock_load_template.assert_called_once_with("generate_test_from_example_LLM")
