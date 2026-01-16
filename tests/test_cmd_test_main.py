@@ -1279,3 +1279,120 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     # Verify cloud was actually used by checking for "Cloud Success" in output
     assert "Cloud Success" in captured.out, \
         f"Expected 'Cloud Success' in output, got: {captured.out[:500]}"
+def test_cmd_test_main_example_file_detection(mock_ctx_fixture, mock_files_fixture):
+    """
+    Test that cmd_test_main detects example files (ending with _example)
+    and calls generate_test with example parameter instead of code parameter.
+    """
+    # Use an example file
+    mock_files_fixture["code_file"] = "calculator_example.py"
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("pdd.cmd_test_main.resolve_effective_config") as mock_resolve_config, \
+         patch("builtins.open", mock_open()):
+
+        # Mock construct_paths to return test data
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {
+                "prompt_file": "prompt content",
+                "code_file": "example content showing how to use the module",
+            },
+            {"output": "test_output.py"},
+            "python"
+        )
+
+        # Mock resolve_effective_config
+        mock_resolve_config.return_value = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "time": 0.25
+        }
+
+        # Mock generate_test to return success
+        mock_generate_test.return_value = (DEFAULT_MOCK_GENERATED_TEST, DEFAULT_MOCK_COST, DEFAULT_MOCK_MODEL_NAME)
+
+        # Call cmd_test_main
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=mock_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify generate_test was called with example parameter (not code)
+        mock_generate_test.assert_called_once()
+        call_kwargs = mock_generate_test.call_args[1]
+        assert call_kwargs["example"] is not None, "Should pass example parameter"
+        assert call_kwargs["code"] is None, "Should not pass code parameter"
+        assert "example content" in call_kwargs["example"], "Should contain example content"
+
+        # Verify result
+        generated_test, cost, _ = result
+        assert generated_test == DEFAULT_MOCK_GENERATED_TEST
+        assert cost == DEFAULT_MOCK_COST
+
+
+def test_cmd_test_main_non_example_file_uses_code(mock_ctx_fixture, mock_files_fixture):
+    """
+    Test that cmd_test_main uses code parameter for non-example files.
+    """
+    # Use a regular code file (not ending with _example)
+    mock_files_fixture["code_file"] = "calculator.py"
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("pdd.cmd_test_main.resolve_effective_config") as mock_resolve_config, \
+         patch("builtins.open", mock_open()):
+
+        # Mock construct_paths to return test data
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {
+                "prompt_file": "prompt content",
+                "code_file": "def add(a, b): return a + b",
+            },
+            {"output": "test_output.py"},
+            "python"
+        )
+
+        # Mock resolve_effective_config
+        mock_resolve_config.return_value = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "time": 0.25
+        }
+
+        # Mock generate_test to return success
+        mock_generate_test.return_value = (DEFAULT_MOCK_GENERATED_TEST, DEFAULT_MOCK_COST, DEFAULT_MOCK_MODEL_NAME)
+
+        # Call cmd_test_main
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=mock_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        # Verify generate_test was called with code parameter (not example)
+        mock_generate_test.assert_called_once()
+        call_kwargs = mock_generate_test.call_args[1]
+        assert call_kwargs["code"] is not None, "Should pass code parameter"
+        assert call_kwargs["example"] is None, "Should not pass example parameter"
+        assert "def add" in call_kwargs["code"], "Should contain code content"
+
+        # Verify result
+        generated_test, cost, _ = result
+        assert generated_test == DEFAULT_MOCK_GENERATED_TEST
+        assert cost == DEFAULT_MOCK_COST
