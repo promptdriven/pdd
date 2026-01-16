@@ -4,13 +4,32 @@
 
 ## Introduction
 
-PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
+PDD (Prompt-Driven Development) is a toolkit for AI-powered code generation and maintenance.
+
+**Getting started is simple:**
+
+```bash
+# Install and run
+uv tool install pdd-cli
+pdd setup
+pdd connect
+```
+
+This launches a web interface at `localhost:9876` where you can:
+- Implement GitHub issues automatically
+- Generate and test code from prompts
+- Manage your PDD projects visually
 
 <p align="center">
   <img src="docs/videos/handpaint_demo.gif" alt="PDD Handpaint Demo" />
 </p>
 
-The primary command is **`sync`**, which automatically executes the complete PDD workflow loop with intelligent decision-making, real-time visual feedback, and sophisticated state management. It analyzes your project files, determines what operations are needed, and executes them with live progress animation while maintaining detailed logs of all decisions and changes. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order. Make sure the `generate` command is run first to ensure the LLM API keys work.
+For CLI users, PDD also offers powerful **agentic commands** that implement GitHub issues automatically:
+- `pdd change <issue-url>` - Implement feature requests (12-step workflow)
+- `pdd bug <issue-url>` - Create failing tests for bugs
+- `pdd fix <issue-url>` - Fix the failing tests
+
+For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
 ## Whitepaper
 
@@ -111,9 +130,70 @@ pip install pdd-cli
 
 
 
+## Getting Started
+
+### Option 1: Web Interface (Recommended)
+
+The easiest way to use PDD is through the web interface:
+
+```bash
+# 1. Install PDD
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install pdd-cli
+
+# 2. Run setup (API keys, shell completion)
+pdd setup
+
+# 3. Launch the web interface
+pdd connect
+```
+
+This opens a browser-based interface where you can:
+- **Run Commands**: Execute `pdd change`, `pdd bug`, `pdd fix`, `pdd sync` etc. visually
+- **Browse Files**: View and edit prompts, code, and tests in your project
+- **Remote Access**: Access your session from any browser via PDD Cloud (use `--local-only` to disable)
+
+### Option 2: Issue-Driven CLI
+
+For CLI enthusiasts, implement GitHub issues directly:
+
+**Prerequisites:**
+1. **GitHub CLI** - Required for issue access:
+   ```bash
+   brew install gh && gh auth login
+   ```
+
+2. **One Agentic CLI** - Required to run the workflows (install at least one):
+   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
+   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
+   - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+
+**Usage:**
+```bash
+# Implement a feature request
+pdd change https://github.com/owner/repo/issues/123
+
+# Or fix a bug
+pdd bug https://github.com/owner/repo/issues/456
+pdd fix https://github.com/owner/repo/issues/456
+```
+
+### Option 3: Manual Prompt Workflow
+
+For learning PDD fundamentals or working with existing prompt files:
+
+```bash
+cd your-project
+pdd sync module_name  # Full automated workflow
+```
+
+See the [Hello Example](#-quickstart-hello-example) below for a step-by-step introduction.
+
+---
+
 ## 🚀 Quickstart (Hello Example)
 
-If you’re brand new to PDD, follow these steps to see it in action.
+If you want to understand PDD fundamentals, follow this manual example to see it in action.
 
 1. **Install prerequisites** (macOS/Linux):
    ```bash
@@ -445,24 +525,35 @@ pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 
 Here is a brief overview of the main commands provided by PDD. Click the command name to jump to its detailed section:
 
-- **[`sync`](#1-sync)**: **[PRIMARY COMMAND]** Automatically executes the complete PDD workflow loop for a given basename - from dependency injection through code generation, testing, and verification.
-- **[`generate`](#2-generate)**: Creates runnable code from a prompt file; supports parameterized prompts via `-e/--env`.
-- **[`example`](#3-example)**: Generates a compact example showing how to use functionality defined in a prompt.
-- **[`test`](#4-test)**: Generates or enhances unit tests for a code file and its prompt.
-- **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives.
-- **[`fix`](#6-fix)**: Fixes errors in code and unit tests based on error messages and the original prompt.
-- **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones.
-- **[`change`](#8-change)**: Modifies a prompt file based on instructions in a change prompt.
-- **[`update`](#9-update)**: Updates the original prompt file based on modified code.
-- **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description.
-- **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
-- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash. Includes an agentic fallback mode for complex errors.
-- **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line.
-- **[`bug`](#14-bug)**: Generates a unit test from a GitHub issue via an agentic workflow that analyzes, reproduces, and creates failing tests.
-- **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
-- **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
-- **[`connect`](#17-connect)**: Launches a local REST server with a web frontend for interacting with PDD through a browser-based interface.
-- **[`auth`](#18-auth)**: Manages authentication with PDD Cloud, including login, logout, status, and token retrieval.
+### Getting Started
+- **[`connect`](#17-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction
+- **[`setup`](#post-installation-setup-required-first-step-after-installation)**: Configure API keys and shell completion
+
+### Agentic Commands (Issue-Driven)
+- **[`change`](#8-change)**: Implement feature requests from GitHub issues (12-step workflow)
+- **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
+- **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
+
+### Core Commands (Prompt-Based)
+- **[`sync`](#1-sync)**: **[PRIMARY FOR PROMPT WORKFLOWS]** Automated prompt-to-code cycle
+- **[`generate`](#2-generate)**: Creates runnable code from a prompt file; supports parameterized prompts via `-e/--env`
+- **[`example`](#3-example)**: Generates a compact example showing how to use functionality defined in a prompt
+- **[`test`](#4-test)**: Generates or enhances unit tests for a code file and its prompt
+- **[`update`](#9-update)**: Updates the original prompt file based on modified code
+- **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging output against intent
+- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash
+
+### Prompt Management
+- **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives
+- **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
+- **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
+- **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
+- **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
+- **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
+
+### Utility Commands
+- **[`auth`](#18-auth)**: Manages authentication with PDD Cloud
+- **[`sessions`](#19-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
 
 ## Global Options
 
@@ -1669,6 +1760,12 @@ The 12-step workflow:
 
 **Review Loop**: Steps 10-11 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
+**Worktree Branching Behavior**: When running `pdd change` or `pdd bug`, a new git worktree is created based on your current HEAD:
+- **From main/master**: Branch is based on latest main - creates independent PR
+- **From feature branch**: Branch inherits commits from that branch - useful for stacked/dependent PRs
+
+If you want independent changes, run the command from the main branch. A warning will be displayed when running from a non-main branch.
+
 Example (agentic mode):
 ```bash
 pdd change https://github.com/myorg/myrepo/issues/239
@@ -2035,7 +2132,13 @@ pdd verify --max-attempts 5 --budget 2.5 --output-code src/calc_verified.py --ou
 
 ### 17. connect
 
-Launches a local REST server that exposes PDD functionality via a REST API and serves a web-based frontend interface. This allows you to interact with PDD through your browser instead of the command line.
+**[RECOMMENDED ENTRY POINT]** Launches a web-based interface for PDD at `localhost:9876`.
+
+The web interface provides:
+- **Command Execution**: Run any PDD command (`pdd change`, `pdd bug`, `pdd fix`, `pdd sync`, etc.) with visual feedback
+- **File Browser**: View and edit prompts, code, and tests in your project
+- **Remote Access**: Access your session from any browser via PDD Cloud
+- **Session Management**: Run multiple sessions with custom names
 
 ```bash
 pdd [GLOBAL OPTIONS] connect [OPTIONS]
@@ -2051,10 +2154,9 @@ Options:
 - `--local-only`: Skip cloud registration and run in local-only mode. The session will not be accessible remotely via PDD Cloud.
 - `--session-name TEXT`: Custom session name for identification. Useful when running multiple sessions.
 
-The command starts a FastAPI server and automatically opens the web interface in your default browser. The server provides:
+The command starts a FastAPI server and automatically opens the web interface in your default browser. The server also provides:
 - A REST API for programmatic access to PDD commands
 - API documentation at `http://localhost:9876/docs`
-- A web-based frontend for interactive use
 
 **Remote Session Registration:**
 By default, `pdd connect` registers with PDD Cloud, allowing you to access your session remotely from any browser. The session is automatically deregistered on graceful shutdown (Ctrl+C).

@@ -306,6 +306,22 @@ def run_agentic_bug_orchestrator(
         if step_num == 7:
             # Only create worktree if not already set (from resume)
             if worktree_path is None:
+                # Check current branch before creating worktree
+                try:
+                    branch_res = subprocess.run(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=cwd,
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    current_branch = branch_res.stdout.strip()
+                    if current_branch not in ["main", "master"] and not quiet:
+                        console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
+                except subprocess.CalledProcessError:
+                    # If we can't determine branch, proceed anyway (might be detached HEAD)
+                    pass
+
                 wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
                 if not wt_path:
                     return False, f"Failed to create worktree: {err}", total_cost, last_model_used, changed_files
