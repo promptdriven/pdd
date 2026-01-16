@@ -507,9 +507,10 @@ export function useJobs(options: UseJobsOptions = {}) {
    */
   useEffect(() => {
     // Check if there are any remote running jobs
-    const hasRemoteRunningJobs = Array.from(jobs.values()).some(
-      (j: JobInfo) => j.metadata?.remote && j.status === 'running'
+    const remoteJobs = Array.from(jobs.values()).filter(
+      (j: JobInfo) => j.metadata?.remote
     );
+    const hasRemoteRunningJobs = remoteJobs.some(j => j.status === 'running');
 
     if (!hasRemoteRunningJobs) return;
 
@@ -530,9 +531,6 @@ export function useJobs(options: UseJobsOptions = {}) {
           );
 
           if (!status) continue;
-
-          // Debug logging for remote job polling
-          console.log(`[RemotePoll] Job ${job.id}:`, status.status, status.response?.success);
 
           // Update output if streaming - parse line by line
           if (status.status === 'processing' && status.response?.streaming) {
@@ -572,8 +570,6 @@ export function useJobs(options: UseJobsOptions = {}) {
           if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
             const success = status.status === 'completed';
             const cancelled = status.status === 'cancelled';
-
-            console.log(`[RemotePoll] Job ${job.id} transitioning to:`, status.status);
 
             // Store completed job info to call callback outside setState
             let completedJobForCallback: { job: JobInfo; success: boolean } | null = null;

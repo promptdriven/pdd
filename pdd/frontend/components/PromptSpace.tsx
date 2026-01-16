@@ -158,8 +158,9 @@ const CommandOptionsModal: React.FC<{
   command: CommandConfig;
   prompt: PromptInfo;
   onRun: (options: Record<string, any>) => void;
+  onAddToQueue?: (options: Record<string, any>) => void;
   onCancel: () => void;
-}> = ({ command, prompt, onRun, onCancel }) => {
+}> = ({ command, prompt, onRun, onAddToQueue, onCancel }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [optionValues, setOptionValues] = useState<Record<string, any>>(() => {
@@ -227,6 +228,29 @@ const CommandOptionsModal: React.FC<{
     });
 
     onRun(cleanedOptions);
+  };
+
+  const handleAddToQueue = () => {
+    const cleanedOptions: Record<string, any> = {};
+
+    // Add command-specific options
+    Object.entries(optionValues).forEach(([key, value]) => {
+      if (key.startsWith('_global_')) return;
+      if (value !== '' && value !== undefined && value !== null) {
+        cleanedOptions[key] = value;
+      }
+    });
+
+    // Add global options (only if different from defaults)
+    GLOBAL_OPTIONS.forEach(opt => {
+      const value = optionValues[`_global_${opt.name}`];
+      const defaultVal = opt.defaultValue;
+      if (value !== defaultVal && value !== undefined && value !== null) {
+        cleanedOptions[`_global_${opt.name}`] = value;
+      }
+    });
+
+    onAddToQueue?.(cleanedOptions);
   };
 
   // Check if any global options differ from defaults
@@ -375,6 +399,18 @@ const CommandOptionsModal: React.FC<{
             >
               Cancel
             </button>
+            {onAddToQueue && (
+              <button
+                type="button"
+                onClick={handleAddToQueue}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600 hover:text-white border border-emerald-600/30 hover:border-emerald-500/50 transition-all flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                <span>Add to Queue</span>
+              </button>
+            )}
             <button
               type="submit"
               className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25 transition-all flex items-center justify-center gap-2"
@@ -393,6 +429,7 @@ interface PromptSpaceProps {
   prompt: PromptInfo;
   onBack: () => void;
   onRunCommand: (command: CommandType, options?: Record<string, any>) => void;
+  onAddToQueue?: (command: CommandType, options?: Record<string, any>) => void;
   isExecuting: boolean;
   executionStatus?: 'idle' | 'running' | 'success' | 'failed';
   lastCommand?: string | null;
@@ -404,6 +441,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   prompt,
   onBack,
   onRunCommand,
+  onAddToQueue,
   isExecuting,
   executionStatus = 'idle',
   lastCommand = null,
@@ -1004,6 +1042,13 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     }
   };
 
+  const handleAddToQueueWithOptions = (options: Record<string, any>) => {
+    if (modalCommand && onAddToQueue) {
+      onAddToQueue(modalCommand.name, options);
+      setModalCommand(null);
+    }
+  };
+
   // Check if command has missing required files (for visual indication only)
   const getMissingFiles = (cmd: CommandConfig): string[] => {
     const missing: string[] = [];
@@ -1579,6 +1624,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
           command={modalCommand}
           prompt={prompt}
           onRun={handleRunWithOptions}
+          onAddToQueue={onAddToQueue ? handleAddToQueueWithOptions : undefined}
           onCancel={() => setModalCommand(null)}
         />
       )}

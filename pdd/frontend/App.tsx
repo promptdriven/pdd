@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { CommandType } from './types';
 import { COMMANDS } from './constants';
-import { buildCommandRequest } from './lib/commandBuilder';
+import { buildCommandRequest, buildDisplayCommand } from './lib/commandBuilder';
 import PromptSelector from './components/PromptSelector';
 import PromptSpace from './components/PromptSpace';
 import ArchitectureView from './components/ArchitectureView';
@@ -487,6 +487,15 @@ const App: React.FC = () => {
     }
   };
 
+  // Handler for PromptSpace add to queue
+  const handlePromptSpaceAddToQueue = (command: CommandType, options?: Record<string, any>) => {
+    if (editingPrompt) {
+      const rawOptions = options || {};
+      const displayCommand = buildDisplayCommand(command, editingPrompt, rawOptions);
+      handleAddToQueue(command, editingPrompt, rawOptions, displayCommand);
+    }
+  };
+
   // Cancel command handler for PromptSpace
   const handleCancelCommand = async () => {
     try {
@@ -548,6 +557,7 @@ const App: React.FC = () => {
         prompt={editingPrompt}
         onBack={() => setEditingPrompt(null)}
         onRunCommand={handlePromptSpaceCommand}
+        onAddToQueue={handlePromptSpaceAddToQueue}
         isExecuting={isExecuting}
         executionStatus={executionStatus}
         lastCommand={lastCommand}
@@ -831,7 +841,6 @@ const App: React.FC = () => {
               onSelectPrompt={setSelectedPrompt}
               onEditPrompt={setEditingPrompt}
               onCreatePrompt={setEditingPrompt}
-              onAddToQueue={handleOpenAddToQueueModal}
               selectedPrompt={selectedPrompt}
             />
           </div>
