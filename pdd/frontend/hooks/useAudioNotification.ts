@@ -13,7 +13,7 @@ let sharedAudioContext: AudioContext | null = null;
 
 function getAudioContext(): AudioContext {
   if (!sharedAudioContext) {
-    sharedAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    sharedAudioContext = new AudioContext();
   }
   return sharedAudioContext;
 }
@@ -65,7 +65,7 @@ function playTone(
   // Envelope for smooth sound - louder volume
   const now = audioContext.currentTime;
   gainNode.gain.setValueAtTime(0, now + startTime);
-  gainNode.gain.linearRampToValueAtTime(0.5, now + startTime + 0.02);  // Increased from 0.3
+  gainNode.gain.linearRampToValueAtTime(0.5, now + startTime + 0.02);  // Peak volume for clear but non-intrusive notification
   gainNode.gain.exponentialRampToValueAtTime(0.01, now + startTime + duration);
 
   oscillator.start(now + startTime);
