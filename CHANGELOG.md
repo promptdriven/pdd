@@ -2,14 +2,19 @@
 
 ### Feat
 
-- Introduce 'hello' example with unit tests covering output, return value, multiple calls, and signature, removing Z3 formal verification.
-- introduce a new `hello.py` example, update `README.md` with a PDD command relationship diagram, and refactor the `hello` example and test files.
-- Add smart port detection and frontend improvements
-- Add a new 'hello' example and update the changelog with recent features, fixes, and documentation.
+- **Smart Port Detection:** `pdd connect` automatically detects when the default port (9876) is in use and finds the next available port in range 9876-9899. User-specified ports (`--port`) show a clear error if unavailable instead of auto-switching.
+- **Audio Notifications:** New `useAudioNotification` hook plays Web Audio API sounds on job completion (ascending chime for success, descending for failure). Toggle via sound icon in header; preference persisted to localStorage.
+- **Command Relationship Diagram:** README now includes a Mermaid flowchart showing how PDD commands interact (entry points → issue-driven commands → sync workflow).
+
+### Fix
+
+- **`pdd fix --loop` Without ERROR_FILE:** Loop mode (`--loop`) no longer requires ERROR_FILE argument; error output is generated during the loop. Non-loop mode still requires ERROR_FILE as the last positional argument. Thanks Serhan Asad for your help with this fix!
+- **Nested Project Test Isolation:** `_execute_tests_and_create_run_report()` now sets `--rootdir`, `PYTHONPATH`, and `cwd` based on the project's `.pddrc` marker, preventing pytest from using parent directory configs and causing infinite fix loops.
+- **Click Exception Handling:** `pdd fix` now properly re-raises Click exceptions (`Abort`, `UsageError`, etc.) instead of swallowing them with generic error handling.
 
 ### Refactor
 
-- Address PR review feedback for audio notifications
+- **PromptSpace Code Panel Layout:** Sidebar hides when code panel is open; commands displayed in vertical bar between prompt and code panels for better space utilization.
 
 ## v0.0.118 (2026-01-16)
 
