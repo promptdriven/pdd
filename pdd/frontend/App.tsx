@@ -20,6 +20,7 @@ import { Squares2X2Icon, DocumentTextIcon, BugAntIcon, Cog6ToothIcon } from './c
 import { useJobs, JobInfo } from './hooks/useJobs';
 import { useTaskQueue, TaskQueueItem } from './hooks/useTaskQueue';
 import { useToast } from './components/Toast';
+import { useAudioNotification } from './hooks/useAudioNotification';
 
 type View = 'architecture' | 'prompts' | 'bug' | 'fix' | 'change' | 'settings';
 
@@ -71,6 +72,19 @@ const App: React.FC = () => {
   // Toast notifications
   const { addToast } = useToast();
 
+  // Audio notifications for job completion
+  const { audioEnabled, setAudioEnabled, playNotification, testSound } = useAudioNotification();
+
+  // Toggle audio with confirmation sound
+  const handleToggleAudio = useCallback(() => {
+    const newEnabled = !audioEnabled;
+    setAudioEnabled(newEnabled);
+    if (newEnabled) {
+      // Play test sound when enabling to confirm it works
+      testSound(true);
+    }
+  }, [audioEnabled, setAudioEnabled, testSound]);
+
   // Remote session state
   const [executionMode, setExecutionMode] = useState<'local' | 'remote'>('local');
   const [remoteSessions, setRemoteSessions] = useState<RemoteSessionInfo[]>([]);
@@ -89,9 +103,11 @@ const App: React.FC = () => {
         success ? 'success' : 'error',
         5000
       );
+      playNotification(success);
     },
     onQueueComplete: () => {
       addToast('Task queue completed', 'success', 3000);
+      playNotification(true);
     },
   });
 
@@ -102,9 +118,11 @@ const App: React.FC = () => {
       success ? 'success' : 'error',
       5000
     );
+    // Play audio notification
+    playNotification(success);
     // Notify task queue if this job was part of the queue
     taskQueue.handleJobComplete(job.id, success);
-  }, [addToast, taskQueue]);
+  }, [addToast, playNotification, taskQueue]);
 
   const {
     activeJobs,
@@ -901,6 +919,25 @@ const App: React.FC = () => {
               <span className="hidden xs:inline">{serverConnected ? 'Connected' : 'Offline'}</span>
             </div>
 
+            {/* Audio notification toggle (compact) */}
+            <button
+              onClick={handleToggleAudio}
+              className={`p-1.5 rounded-lg transition-colors ${
+                audioEnabled
+                  ? 'text-accent-400 hover:bg-accent-500/20'
+                  : 'text-surface-500 hover:bg-surface-700/50'
+              }`}
+              title={audioEnabled ? 'Sound notifications on' : 'Sound notifications off'}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {audioEnabled ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zm11.707-6.707l4 4m0-4l-4 4" />
+                )}
+              </svg>
+            </button>
+
             {/* Cloud auth status */}
             <AuthStatusIndicator onReauth={() => setShowReauthModal(true)} />
           </div>
@@ -920,6 +957,26 @@ const App: React.FC = () => {
                   onModeChange={setExecutionMode}
                 />
               </div>
+
+              {/* Audio notification toggle */}
+              <button
+                onClick={handleToggleAudio}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  audioEnabled
+                    ? 'bg-accent-500/20 text-accent-300 hover:bg-accent-500/30'
+                    : 'bg-surface-700/50 text-surface-400 hover:bg-surface-700'
+                }`}
+                title={audioEnabled ? 'Audio notifications enabled - click to disable' : 'Audio notifications disabled - click to enable'}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {audioEnabled ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zm11.707-6.707l4 4m0-4l-4 4" />
+                  )}
+                </svg>
+                <span className="hidden sm:inline">{audioEnabled ? 'Sound On' : 'Sound Off'}</span>
+              </button>
 
               {/* Remote session selector - only shown in remote mode */}
               {executionMode === 'remote' && (
