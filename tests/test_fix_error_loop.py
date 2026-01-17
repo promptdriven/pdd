@@ -112,8 +112,8 @@ def test_successful_fix(setup_files):
         with open(code_file, "r") as f:
             final_code = f.read()
 
-        # Always return success and 1 attempt
-        return True, final_unit_test, final_code, 1, cost, model
+        # Always return success and 1 attempt (8 values including modification flags)
+        return True, final_unit_test, final_code, 1, cost, model, updated_unit_test, updated_code
 
     try:
         # Replace the original function with our patched version
@@ -133,16 +133,16 @@ def test_successful_fix(setup_files):
             # Write the fixed code to the file before calling fix_error_loop
             files["code_file"].write_text(fixed_code)
 
-            success, final_test, final_code, attempts, cost, model = (
+            success, final_test, final_code, attempts, cost, model, test_modified, code_modified = (
                 pdd.fix_error_loop.fix_error_loop(
                     unit_test_file=str(files["test_file"]),
                     code_file=str(files["code_file"]),
                     prompt_file="dummy_prompt.txt",
                     prompt="Test prompt",
                     verification_program=str(files["verify_file"]),
-                    strength=0.5, 
-                    temperature=0.0, 
-                    max_attempts=3, 
+                    strength=0.5,
+                    temperature=0.0,
+                    max_attempts=3,
                     budget=10.0,
                     error_log_file=str(files["error_log"]),
                     agentic_fallback=False
@@ -179,7 +179,7 @@ def test_add():
     assert add(-1, 1) == 0
 """)
     # Call fix_code_loop
-    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+    success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
             prompt_file="dummy_prompt.txt",
@@ -234,7 +234,7 @@ def test_max_attempts_exceeded(setup_files):
                 False, False, "", "", "No analysis", 0.0, "mock-model"
             )
 
-            success, final_test, final_code, attempts, cost, model = fix_error_loop(
+            success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
                 unit_test_file=str(files["test_file"]),
                 code_file=str(files["code_file"]),
                 prompt_file="dummy_prompt.txt",
@@ -297,7 +297,7 @@ def test_verification_failure(setup_files):
                     "mock-model"
                 )
 
-                success, final_test, final_code, attempts, cost, model = (
+                success, final_test, final_code, attempts, cost, model, test_modified, code_modified = (
                     fix_error_loop(
                         unit_test_file=str(files["test_file"]),
                         code_file=str(files["code_file"]),
@@ -352,9 +352,9 @@ def test_backup_creation(setup_files):
                 prompt_file="dummy_prompt.txt",
                 prompt="Test prompt",
                 verification_program=str(files["verify_file"]),
-                strength=0.5, 
-                temperature=0.0, 
-                max_attempts=1, 
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=1,
                 budget=10.0,
                 error_log_file=str(files["error_log"]),
                 agentic_fallback=False
@@ -382,9 +382,9 @@ def test_missing_files():
         prompt_file="dummy_prompt.txt",
         prompt="prompt",
         verification_program="verify.py",
-        strength=0.5, 
-        temperature=0.0, 
-        max_attempts=3, 
+        strength=0.5,
+        temperature=0.0,
+        max_attempts=3,
         budget=10.0,
         agentic_fallback=False
     )
@@ -414,7 +414,7 @@ def test_non_python_triggers_agentic_fallback_success(tmp_path):
          patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
         mock_agent.return_value = (True, "ok")
         # Act
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(unit_test_file),
             code_file=str(code_file),
             prompt_file="dummy_prompt.txt",
@@ -462,7 +462,7 @@ def test_non_python_triggers_agentic_fallback_failure(tmp_path):
     with patch("pdd.fix_error_loop.run_agentic_fix") as mock_agent, \
          patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest:
         mock_agent.return_value = (False, "not ok")
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(unit_test_file),
             code_file=str(code_file),
             prompt_file="dummy_prompt.txt",
@@ -490,23 +490,23 @@ def test_non_python_triggers_agentic_fallback_failure(tmp_path):
 class BrokenStdin:
     def fileno(self):
         raise ValueError("redirected stdin is pseudofile, has no fileno()")
-    
+
     def read(self, size=-1):
         return ""
 
 
 def test_subprocess_safe_stdin_in_run_pytest_on_file(tmp_path):
     """
-    Regression test ensuring the fix propagates to the higher-level helper 
+    Regression test ensuring the fix propagates to the higher-level helper
     used by fix_error_loop.
     """
-    # We need to import run_pytest_on_file locally if not exposed, 
+    # We need to import run_pytest_on_file locally if not exposed,
     # but it is available from pdd.fix_error_loop
     from pdd.fix_error_loop import run_pytest_on_file
-    
+
     test_file = tmp_path / "test_dummy_2.py"
     test_file.write_text("def test_pass(): assert True", encoding="utf-8")
-    
+
     with patch('sys.stdin', BrokenStdin()):
         try:
             fails, errors, warnings, logs = run_pytest_on_file(str(test_file))
@@ -528,7 +528,7 @@ def test_fix_loop_reloading(tmp_path):
     # 1. Create the module
     module_file = tmp_path / "target_module.py"
     module_file.write_text("def target_func(): return 1\n", encoding="utf-8")
-    
+
     # 2. Create the test that expects return value 2 (so it fails initially)
     test_file = tmp_path / "test_target.py"
     test_file.write_text("""
@@ -541,17 +541,17 @@ from target_module import target_func
 def test_func():
     assert target_func() == 2
 """, encoding="utf-8")
-    
+
     # 3. Run first time -> SHOULD FAIL
     # run_pytest_on_file returns (fails, errors, warnings, logs)
     fails, errors, warnings, logs = run_pytest_on_file(str(test_file))
     assert fails == 1, "Test should have failed initially"
-    
+
     # 4. Modify the module on disk to pass the test
     # Wait a tiny bit to ensure filesystem timestamp update if needed (usually fine)
-    time.sleep(0.1) 
+    time.sleep(0.1)
     module_file.write_text("def target_func(): return 2\n", encoding="utf-8")
-    
+
     # 5. Run second time -> SHOULD PASS
     # If module caching was active (old behavior), this would fail again.
     fails_2, errors_2, warnings_2, logs_2 = run_pytest_on_file(str(test_file))
@@ -669,7 +669,7 @@ def test_run_report_discrepancy_causes_infinite_loop_bug(setup_files):
         # (even though sync_orchestration's run_report showed 3 failures)
         mock_pytest.return_value = (0, 0, 0, "All tests passed")
 
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
             prompt_file="dummy_prompt.txt",
@@ -789,7 +789,7 @@ def test_agentic_fallback_cwd_is_project_root_not_prompt_parent(tmp_path, monkey
         # Mock subprocess for verification program
         mock_subprocess.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(test_file),
             code_file=str(code_file),
             prompt_file=str(prompt_file),
@@ -818,6 +818,124 @@ def test_agentic_fallback_cwd_is_project_root_not_prompt_parent(tmp_path, monkey
     assert cwd_value is None or cwd_value == tmp_path, \
         f"BUG: cwd should be None or project root, but got {cwd_value}. " \
         f"This causes path resolution failures when prompt is in a subdirectory!"
+
+
+# ============================================================================
+# Bug Fix Tests - Issue #232: Modification Detection
+# ============================================================================
+
+def test_fix_error_loop_returns_modification_flags_only_test_modified(setup_files):
+    """
+    TEST (Issue #232): fix_error_loop should return test_file_was_modified=True
+    and code_file_was_modified=False when only the test file is modified.
+
+    This ensures the modification detection correctly identifies which files changed.
+    """
+    files = setup_files
+
+    # Set original content (both files exist)
+    original_test = "def test_add():\n    assert add(2, 3) == 6  # WRONG\n"
+    original_code = "def add(a, b): return a + b  # CORRECT\n"
+
+    files["test_file"].write_text(original_test)
+    files["code_file"].write_text(original_code)
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+
+        # Initial test fails
+        # After fix, test passes
+        mock_pytest.side_effect = [
+            (1, 0, 0, "test failed"),  # Initial run
+            (0, 0, 0, "test passed"),  # After fix
+        ]
+
+        # Mock fix_errors_from_unit_tests to modify ONLY test file
+        fixed_test = "def test_add():\n    assert add(2, 3) == 5  # FIXED\n"
+        mock_fix.return_value = (
+            True,   # update_unit_test - test was modified
+            False,  # update_code - code was NOT modified
+            fixed_test,
+            original_code,  # Code unchanged
+            "Fixed test assertion",
+            0.1,
+            "mock-model"
+        )
+
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=False
+        )
+
+    # Assert: Only test file was modified
+    assert test_modified is True, "Test file should be detected as modified"
+    assert code_modified is False, "Code file should NOT be detected as modified"
+    assert success is True
+
+
+def test_fix_error_loop_returns_modification_flags_only_code_modified(setup_files):
+    """
+    TEST (Issue #232): fix_error_loop should return test_file_was_modified=False
+    and code_file_was_modified=True when only the code file is modified.
+    """
+    files = setup_files
+
+    # Set original content (both files exist)
+    original_test = "def test_add():\n    assert add(2, 3) == 5\n"
+    original_code = "def add(a, b): return a + b + 1  # BUG\n"
+
+    files["test_file"].write_text(original_test)
+    files["code_file"].write_text(original_code)
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+
+        mock_pytest.side_effect = [
+            (1, 0, 0, "test failed"),  # Initial run
+            (0, 0, 0, "test passed"),  # After fix
+        ]
+
+        # Mock fix_errors_from_unit_tests to modify ONLY code file
+        fixed_code = "def add(a, b): return a + b  # FIXED\n"
+        mock_fix.return_value = (
+            False,  # update_unit_test - test was NOT modified
+            True,   # update_code - code was modified
+            original_test,  # Test unchanged
+            fixed_code,
+            "Fixed code bug",
+            0.1,
+            "mock-model"
+        )
+
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
+            unit_test_file=str(files["test_file"]),
+            code_file=str(files["code_file"]),
+            prompt_file="dummy_prompt.txt",
+            prompt="Test prompt",
+            verification_program=str(files["verify_file"]),
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=3,
+            budget=10.0,
+            error_log_file=str(files["error_log"]),
+            verbose=False,
+            agentic_fallback=False
+        )
+
+    # Assert: Only code file was modified
+    assert test_modified is False, "Test file should NOT be detected as modified"
+    assert code_modified is True, "Code file should be detected as modified"
+    assert success is True
 
 
 # ============================================================================
@@ -861,7 +979,7 @@ def test_pytest_exception_triggers_agentic_fallback(setup_files):
         # Agentic fallback should succeed
         mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
 
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
             prompt_file="dummy_prompt.txt",
@@ -907,7 +1025,7 @@ def test_backup_creation_error_triggers_agentic_fallback(setup_files, monkeypatc
         # Agentic fallback should succeed
         mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
 
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
             prompt_file="dummy_prompt.txt",
@@ -960,7 +1078,7 @@ def test_file_read_error_triggers_agentic_fallback(setup_files):
         # Agentic fallback should succeed
         mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
 
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
             prompt_file="dummy_prompt.txt",
@@ -999,7 +1117,7 @@ def test_agentic_fallback_not_called_when_disabled(setup_files):
         mock_pytest.return_value = (1, 0, 0, "Test failure")
         mock_fix.return_value = (False, False, "", "", "No fix", 0.1, "mock-model")
 
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
             prompt_file="dummy_prompt.txt",
@@ -1040,7 +1158,7 @@ def test_agentic_fallback_success_after_loop_failure(setup_files):
         # Agentic fallback succeeds
         mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", ["code.py"])
 
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
             prompt_file="dummy_prompt.txt",
@@ -1087,7 +1205,7 @@ def test_initial_test_exception_triggers_agentic_fallback(setup_files):
         # Agentic fallback should succeed
         mock_agentic.return_value = (True, "Fixed by agentic", 0.5, "claude-cli", [])
 
-        success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        success, final_test, final_code, attempts, cost, model, test_modified, code_modified = fix_error_loop(
             unit_test_file=str(files["test_file"]),
             code_file=str(files["code_file"]),
             prompt_file="dummy_prompt.txt",

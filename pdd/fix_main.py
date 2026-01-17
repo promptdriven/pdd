@@ -307,7 +307,7 @@ def fix_main(
                 mode_desc = "hybrid (local tests + cloud LLM)" if use_cloud_for_loop else "local"
                 console.print(Panel(f"Performing {mode_desc} fix loop...", title="[blue]Mode[/blue]", expand=False))
 
-            success, fixed_unit_test, fixed_code, attempts, total_cost, model_name = fix_error_loop(
+            success, fixed_unit_test, fixed_code, attempts, total_cost, model_name, test_modified, code_modified = fix_error_loop(
                 unit_test_file=unit_test_file,
                 code_file=code_file,
                 prompt_file=prompt_file,
@@ -417,8 +417,22 @@ def fix_main(
                     rprint(f"[bold red]Error printing analysis preview: {e}[/bold red]")
             if success:
                 rprint("[bold green]Fixed files saved:[/bold green]")
-                rprint(f"  Test file: {output_file_paths['output_test']}")
-                rprint(f"  Code file: {output_file_paths['output_code']}")
+
+                # Issue #232: Print file paths based on mode and modification/update flags
+                if loop:
+                    # Loop mode: Only print files that were actually modified
+                    if test_modified and fixed_unit_test:
+                        rprint(f"  Test file: {output_file_paths['output_test']}")
+                    if code_modified and fixed_code:
+                        rprint(f"  Code file: {output_file_paths['output_code']}")
+                else:
+                    # Non-loop mode: Print files where update flag is True AND content exists
+                    if update_unit_test and fixed_unit_test:
+                        rprint(f"  Test file: {output_file_paths['output_test']}")
+                    if update_code and fixed_code:
+                        rprint(f"  Code file: {output_file_paths['output_code']}")
+
+                # Always print results file if it exists
                 if output_file_paths.get("output_results"):
                     rprint(f"  Results file: {output_file_paths['output_results']}")
 

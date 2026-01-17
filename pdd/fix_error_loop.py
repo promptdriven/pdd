@@ -310,10 +310,21 @@ def fix_error_loop(unit_test_file: str,
     # Check if unit_test_file and code_file exist.
     if not os.path.isfile(unit_test_file):
         rprint(f"[red]Error:[/red] Unit test file '{unit_test_file}' does not exist.")
-        return False, "", "", 0, 0.0, ""
+        return False, "", "", 0, 0.0, "", False, False
     if not os.path.isfile(code_file):
         rprint(f"[red]Error:[/red] Code file '{code_file}' does not exist.")
-        return False, "", "", 0, 0.0, ""
+        return False, "", "", 0, 0.0, "", False, False
+
+    # Read original file contents at the START for modification detection (Issue #232)
+    try:
+        with open(unit_test_file, "r") as f:
+            original_test_content = f.read()
+        with open(code_file, "r") as f:
+            original_code_content = f.read()
+    except Exception as e:
+        rprint(f"[red]Error:[/red] Could not read original file contents: {e}")
+        return False, "", "", 0, 0.0, "", False, False
+
     if verbose:
         rprint("[cyan]Starting fix error loop process.[/cyan]")
 
@@ -325,7 +336,7 @@ def fix_error_loop(unit_test_file: str,
                 rprint(f"[green]Removed old error log file:[/green] {error_log_file}")
         except Exception as e:
             rprint(f"[red]Error:[/red] Could not remove error log file: {e}")
-            return False, "", "", 0, 0.0, ""
+            return False, "", "", 0, 0.0, "", False, False
 
     # Initialize structured log
     log_structure = {
@@ -401,7 +412,10 @@ def fix_error_loop(unit_test_file: str,
                         final_code = f.read()
                 except Exception:
                     pass
-                return success, final_unit_test, final_code, 1, agent_cost, agent_model
+                # Detect modifications by comparing with original content
+                test_modified = (final_unit_test != original_test_content) if final_unit_test else False
+                code_modified = (final_code != original_code_content) if final_code else False
+                return success, final_unit_test, final_code, 1, agent_cost, agent_model, test_modified, code_modified
 
             verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL)
             pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
@@ -456,10 +470,13 @@ def fix_error_loop(unit_test_file: str,
                     final_code = f.read()
             except Exception:
                 pass
-            return success, final_unit_test, final_code, 1, agent_cost, agent_model
+            # Detect modifications by comparing with original content
+            test_modified = (final_unit_test != original_test_content) if final_unit_test else False
+            code_modified = (final_code != original_code_content) if final_code else False
+            return success, final_unit_test, final_code, 1, agent_cost, agent_model, test_modified, code_modified
         else:
             # Agentic fallback disabled, return failure
-            return False, "", "", fix_attempts, total_cost, model_name
+            return False, "", "", fix_attempts, total_cost, model_name, False, False
 
     # If target is not a Python file, trigger agentic fallback if tests fail
     if not is_python:
@@ -496,7 +513,10 @@ def fix_error_loop(unit_test_file: str,
                     final_code = f.read()
             except Exception:
                 pass
-            return success, final_unit_test, final_code, 1, agent_cost, agent_model
+            # Detect modifications by comparing with original content
+            test_modified = (final_unit_test != original_test_content) if final_unit_test else False
+            code_modified = (final_code != original_code_content) if final_code else False
+            return success, final_unit_test, final_code, 1, agent_cost, agent_model, test_modified, code_modified
         else:
             # Non-python tests passed, so we are successful.
             rprint("[green]Non-Python tests passed. No fix needed.[/green]")
@@ -507,7 +527,8 @@ def fix_error_loop(unit_test_file: str,
                     final_code = f.read()
             except Exception as e:
                 rprint(f"[yellow]Warning: Could not read final files: {e}[/yellow]")
-            return True, final_unit_test, final_code, 0, 0.0, "N/A"
+            # No modifications since tests already passed
+            return True, final_unit_test, final_code, 0, 0.0, "N/A", False, False
 
     fails, errors, warnings = initial_fails, initial_errors, initial_warnings
     
@@ -916,7 +937,11 @@ def fix_error_loop(unit_test_file: str,
                 rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
             success = True
 
-    return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
+    # Detect modifications by comparing with original content (Issue #232)
+    test_modified = (final_unit_test != original_test_content) if final_unit_test else False
+    code_modified = (final_code != original_code_content) if final_code else False
+
+    return success, final_unit_test, final_code, fix_attempts, total_cost, model_name, test_modified, code_modified
 
 # If this module is run directly for testing purposes:
 if __name__ == "__main__":
@@ -932,9 +957,10 @@ if __name__ == "__main__":
     error_log_file = "error_log.txt"
     verbose = True
 
-    success, final_unit_test, final_code, attempts, total_cost, model_name = fix_error_loop(
+    success, final_unit_test, final_code, attempts, total_cost, model_name, test_modified, code_modified = fix_error_loop(
         unit_test_file,
         code_file,
+        "dummy_prompt.txt",
         prompt,
         verification_program,
         strength,
@@ -950,4 +976,6 @@ if __name__ == "__main__":
     rprint(f"Attempts: {attempts}")
     rprint(f"Total cost: ${total_cost:.6f}")
     rprint(f"Model used: {model_name}")
+    rprint(f"Test file modified: {test_modified}")
+    rprint(f"Code file modified: {code_modified}")
     rprint(f"Final unit test contents:\n{final_unit_test}")
