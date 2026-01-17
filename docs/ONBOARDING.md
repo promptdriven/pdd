@@ -159,6 +159,57 @@ This is the most robust method to ensure `PDD_PATH` is always set correctly when
 
 ---
 
+## Using PDD
+
+### Web Interface (Recommended)
+
+After installation, the easiest way to use PDD is through the web interface:
+
+```bash
+pdd connect
+```
+
+This opens a browser-based dashboard where you can:
+- Run PDD commands visually (including `pdd change`, `pdd bug`, `pdd fix`)
+- Browse and edit prompts, code, and tests
+- Access your session remotely via PDD Cloud
+
+### Issue-Driven CLI
+
+For command-line users, implement GitHub issues directly:
+
+```bash
+# Feature requests
+pdd change https://github.com/owner/repo/issues/123
+
+# Bug reports
+pdd bug https://github.com/owner/repo/issues/456
+pdd fix https://github.com/owner/repo/issues/456
+```
+
+**Prerequisites for Issue-Driven CLI:**
+
+1. **GitHub CLI** - Required for issue access:
+   ```bash
+   brew install gh && gh auth login
+   ```
+
+2. **One Agentic CLI** - Required to run the workflows (install at least one):
+   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
+   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
+   - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+
+### Manual Prompt Workflow
+
+For working with existing prompt files:
+```bash
+pdd sync module_name
+```
+
+See [README.md](../README.md) for complete command documentation.
+
+---
+
 ## Testing Prompts with `prompt_tester.py`
 
 A key part of developing with PDD is ensuring your prompts are robust and reliable. The repository includes a powerful tool, `tests/prompt_tester.py`, designed for this purpose. It allows you to test a prompt against a suite of test cases defined in a CSV file and evaluate its performance.
@@ -247,6 +298,28 @@ If you have repository permissions, also assign yourself to the issue. Otherwise
 - Post progress updates if your timeline changes
 - If you can no longer work on an issue, comment to release it for others
 - Maintainers may reassign stale issues on a case-by-case basis
+
+### Implementing Issues with PDD
+
+After claiming an issue, use PDD to implement it:
+
+**Using the Web Interface:**
+```bash
+pdd connect
+# Then run `pdd change <url>` or `pdd bug <url>` through the command interface
+```
+
+**Using CLI:**
+```bash
+# For feature requests
+pdd change https://github.com/gltanaka/pdd/issues/XXX
+
+# For bug reports
+pdd bug https://github.com/gltanaka/pdd/issues/XXX
+pdd fix https://github.com/gltanaka/pdd/issues/XXX
+```
+
+PDD will create an isolated worktree, implement changes, and generate a PR automatically. Review the PR, refine if needed, then request human review.
 
 ## Pull Request Completeness Checklist
 
@@ -364,9 +437,11 @@ Fixes #123
 
 ## Next Steps
 
-- Join the PDD community on Discord
-- Review example projects in the `examples/` directory
-- Start with the basic tutorials in the [Tutorials](./TUTORIALS.md) documentation
+1. **Launch the web interface**: `pdd connect` to explore PDD visually
+2. **Try implementing an issue**: Pick one from [GitHub Issues](https://github.com/gltanaka/pdd/issues)
+3. Join the PDD community on Discord
+4. For manual workflows, see examples in `examples/` directory
+5. Read the [Issue-Driven Development Tutorial](./TUTORIALS.md#issue-driven-development-tutorial)
 
 ---
 

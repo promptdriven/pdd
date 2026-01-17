@@ -1052,6 +1052,23 @@ def code_generator_main(
                                 raise click.UsageError(f"LLM generation failed: {generated_code_content}")
                                 
                             parsed = json.loads(generated_code_content)
+
+                            # Fix common LLM mistake: unwrap arrays wrapped in objects
+                            # LLMs often return {"items": [...]} or {"type": "array", "items": [...]}
+                            # when the schema expects a plain array [...]
+                            output_schema = fm_meta.get("output_schema", {})
+                            if output_schema.get("type") == "array" and isinstance(parsed, dict):
+                                # Check for common wrapper patterns
+                                if "items" in parsed and isinstance(parsed["items"], list):
+                                    parsed = parsed["items"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+                                elif "data" in parsed and isinstance(parsed["data"], list):
+                                    parsed = parsed["data"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+                                elif "results" in parsed and isinstance(parsed["results"], list):
+                                    parsed = parsed["results"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+
                             if _is_architecture_template(fm_meta):
                                 parsed, repaired = _repair_architecture_interface_types(parsed)
                                 if repaired:
