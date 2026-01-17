@@ -40,17 +40,7 @@ The decorator must:
 - Log pre-execution (for crash resilience) and post-execution results
 
 % Dependencies
-<pdd>This module imports from sync_determine_operation for constants and helper types.</pdd>
 <module_dependencies>
-  <track_cost_example>
-    <include>context/track_cost_example.py</include>
-  </track_cost_example>
-  <sync_determine_operation_example>
-    <include>context/sync_determine_operation_example.py</include>
-  </sync_determine_operation_example>
-  <operation_log_example>
-    <include>context/operation_log_example.py</include>
-  </operation_log_example>
 </module_dependencies>
 
 % Deliverables
