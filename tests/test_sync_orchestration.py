@@ -4267,3 +4267,212 @@ def test_greet():
             f"Expected -c /dev/null in pytest args to prevent parent config discovery. "
             f"Got args: {captured_args['value']}"
         )
+
+
+class TestFixOperationProjectRootConfig:
+    """
+    Regression tests for pytest project root configuration in the fix operation.
+
+    Bug: When the fix operation runs pytest to capture error output (line 1481),
+    it didn't set proper pytest configuration (PYTHONPATH, --rootdir, cwd).
+    For nested projects (e.g., examples/hello/) with their own .pddrc marker,
+    this caused:
+    1. Import errors because PYTHONPATH wasn't set to include the nested project's src/
+    2. Wrong error output captured (import failures instead of real test failures)
+    3. fix_main() trying to fix non-existent issues based on wrong errors
+
+    Fix: The fix operation subprocess must set --rootdir, PYTHONPATH, and cwd
+    based on the project root (found by looking for .pddrc), matching the fix
+    already applied to _execute_tests_and_create_run_report().
+    """
+
+    def test_fix_operation_subprocess_sets_project_root_config(self, tmp_path, monkeypatch):
+        """
+        Regression test: Verify the fix operation subprocess (line 1481) sets correct
+        --rootdir, PYTHONPATH, and cwd for nested projects.
+
+        The fix operation runs pytest to capture error output BEFORE calling fix_main().
+        This test verifies that subprocess call uses proper pytest configuration.
+
+        Key distinction: Fix operation subprocess has NO --cov flag,
+        while _execute_tests_and_create_run_report() subprocess HAS --cov flag.
+        """
+        import subprocess
+        from unittest.mock import MagicMock, patch
+        from pdd.sync_orchestration import sync_orchestration
+        from pdd.sync_determine_operation import SyncDecision
+
+        # Create parent directory with pytest.ini (simulates pdd repo root)
+        parent_dir = tmp_path / "repo_root"
+        parent_dir.mkdir()
+        (parent_dir / "pytest.ini").write_text("[pytest]\n")
+
+        # Create nested project (simulates examples/hello/)
+        nested_project = parent_dir / "examples" / "hello"
+        nested_project.mkdir(parents=True)
+
+        # Add .pddrc marker to nested project (this is how we identify project root)
+        (nested_project / ".pddrc").write_text("")
+
+        # Create prompts/ with a prompt file
+        prompts_dir = nested_project / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "hello_python.prompt"
+        prompt_file.write_text("Create a hello function.")
+
+        # Create src/ with a module
+        src_dir = nested_project / "src"
+        src_dir.mkdir()
+        (src_dir / "hello.py").write_text('''
+def greet(name):
+    return f"Hello, {name}!"
+''')
+
+        # Create tests/ with a test that has a deliberate failure
+        tests_dir = nested_project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_hello.py"
+        test_file.write_text('''
+import hello
+
+def test_greet():
+    # Deliberate failure to trigger fix operation
+    assert hello.greet("World") == "Wrong expected value"
+''')
+
+        # Create examples/ with example file
+        examples_dir = nested_project / "examples"
+        examples_dir.mkdir()
+        example_file = examples_dir / "hello_example.py"
+        example_file.write_text("# Example file")
+
+        # Create .pdd/meta directory
+        pdd_meta = nested_project / ".pdd" / "meta"
+        pdd_meta.mkdir(parents=True)
+
+        # Change cwd to parent (simulates being in repo root)
+        monkeypatch.chdir(parent_dir)
+
+        # Capture all subprocess.run calls to find the fix operation one
+        subprocess_calls = []
+        original_run = subprocess.run
+
+        def capture_subprocess_run(cmd, **kwargs):
+            cmd_list = [str(c) for c in cmd] if not isinstance(cmd, str) else [cmd]
+            subprocess_calls.append({
+                'cmd': cmd_list,
+                'kwargs': kwargs
+            })
+            # Return a mock result for pytest calls
+            if '-m' in cmd_list and 'pytest' in cmd_list:
+                mock_result = MagicMock()
+                mock_result.returncode = 1
+                mock_result.stdout = "1 failed"
+                mock_result.stderr = ""
+                return mock_result
+            return original_run(cmd, **kwargs)
+
+        # Set up mocks to trigger fix operation
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_subprocess_run), \
+             patch("pdd.sync_orchestration.sync_determine_operation") as mock_determine, \
+             patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+             patch("pdd.sync_orchestration.SyncApp") as mock_sync_app_class, \
+             patch("pdd.sync_orchestration.fix_main") as mock_fix, \
+             patch("pdd.sync_orchestration._save_operation_fingerprint"), \
+             patch("pdd.sync_orchestration.get_pdd_file_paths") as mock_get_paths, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure SyncApp to run worker synchronously
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.worker_func = worker_func
+
+                def mock_run():
+                    try:
+                        return worker_func()
+                    except Exception as e:
+                        return {"success": False, "error": str(e)}
+                instance.run = mock_run
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure paths to point to nested project
+            mock_get_paths.return_value = {
+                'prompt': prompt_file,
+                'code': src_dir / 'hello.py',
+                'example': example_file,
+                'test': test_file,
+                'test_files': [test_file],
+            }
+
+            # Configure sync_determine_operation to return 'fix' once, then 'all_synced'
+            call_count = [0]
+            def determine_side_effect(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return SyncDecision(operation='fix', reason='Tests failing', confidence=0.9)
+                return SyncDecision(operation='all_synced', reason='Complete', confidence=1.0)
+            mock_determine.side_effect = determine_side_effect
+
+            # Configure fix_main to succeed
+            mock_fix.return_value = {'success': True, 'cost': 0.1, 'model': 'mock-model'}
+
+            # Run sync_orchestration to trigger fix operation
+            sync_orchestration(
+                basename="hello",
+                language="python",
+                skip_verify=True,
+                budget=10.0
+            )
+
+        # Find the fix operation subprocess call
+        # Key: Fix operation call has NO --cov flag, _execute_tests call HAS --cov flag
+        fix_operation_calls = [
+            call for call in subprocess_calls
+            if '-m' in call['cmd'] and 'pytest' in call['cmd']
+            and not any('--cov' in arg for arg in call['cmd'])
+        ]
+
+        assert len(fix_operation_calls) >= 1, (
+            f"Expected at least one fix operation subprocess call (pytest without --cov). "
+            f"All subprocess calls: {subprocess_calls}"
+        )
+
+        # Check the fix operation call has proper config
+        fix_call = fix_operation_calls[0]
+        fix_cmd = fix_call['cmd']
+        fix_kwargs = fix_call['kwargs']
+
+        # Verify --rootdir is set
+        has_rootdir = any('--rootdir=' in arg for arg in fix_cmd)
+        assert has_rootdir, (
+            f"Fix operation subprocess should have --rootdir flag. "
+            f"Got args: {fix_cmd}"
+        )
+
+        # Verify -c /dev/null is set
+        has_config_null = '-c' in fix_cmd or any('/dev/null' in arg for arg in fix_cmd)
+        assert has_config_null, (
+            f"Fix operation subprocess should have -c /dev/null to isolate pytest config. "
+            f"Got args: {fix_cmd}"
+        )
+
+        # Verify PYTHONPATH is set in env
+        env = fix_kwargs.get('env', {})
+        pythonpath = env.get('PYTHONPATH', '')
+        assert str(src_dir) in pythonpath or str(nested_project) in pythonpath, (
+            f"Fix operation subprocess should have PYTHONPATH including project src/. "
+            f"Got PYTHONPATH: {pythonpath}"
+        )
+
+        # Verify cwd is set to project root
+        cwd = fix_kwargs.get('cwd')
+        assert cwd is not None, (
+            f"Fix operation subprocess should have cwd set to project root. "
+            f"Got kwargs: {fix_kwargs}"
+        )
