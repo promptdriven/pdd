@@ -35,34 +35,49 @@
        - --local-only (flag): Skip cloud registration (local access only)
        - --session-name (optional): Custom session name for identification
 
-  2. **Security warnings**:
+  2. **Smart port detection**:
+     - Before binding, check if the port is available using socket.bind()
+     - If default port (9876) is in use:
+       - Automatically find next available port in range 9876-9899
+       - Display message: "Port {port} is in use, looking for an available port..."
+       - Display message: "Using port {available_port} instead."
+     - If user explicitly specified --port and it's unavailable:
+       - Show error: "Error: Port {port} is already in use."
+       - Exit with code 1 (don't auto-detect, respect user's explicit choice)
+     - If no ports in range are available:
+       - Show error and exit with code 1
+     - Helper functions:
+       - is_port_available(port, host) -> bool: Try to bind socket
+       - find_available_port(start, end, host) -> Optional[int]: Scan range
+
+  3. **Security warnings**:
      - If --allow-remote without --token: Warn and confirm
      - Print security reminder about localhost-only default
 
-  3. **Server startup**:
+  4. **Server startup**:
      - Create ServerConfig from options
      - Call create_app(project_root, config)
      - Print server URL and API docs URL
      - Open browser if not --no-browser
 
-  4. **Browser opening**:
+  5. **Browser opening**:
      - Default: Open frontend at http://localhost:{port}
      - If --frontend-url: Open that URL instead
      - Use webbrowser.open()
 
-  5. **Output messages**:
+  6. **Output messages**:
      - "Starting PDD server on http://{host}:{port}"
      - "API Documentation: http://{host}:{port}/docs"
      - "Frontend: http://{host}:{port}" (or custom URL)
      - "Press Ctrl+C to stop the server"
 
-  6. **Graceful shutdown**:
+  7. **Graceful shutdown**:
      - Handle KeyboardInterrupt
      - Print shutdown message
      - Clean up server resources
      - If remote session registered: stop command listener, stop heartbeat, deregister
 
-  7. **Cloud registration** (automatic for authenticated users):
+  8. **Cloud registration** (automatic for authenticated users):
      - Check if user is authenticated via CloudConfig.get_jwt_token()
      - If authenticated AND not --local-only:
        - Create RemoteSessionManager with jwt_token and project_path
