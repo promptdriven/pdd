@@ -1,3 +1,16 @@
+## v0.0.119 (2026-01-16)
+
+### Feat
+
+- Introduce 'hello' example with unit tests covering output, return value, multiple calls, and signature, removing Z3 formal verification.
+- introduce a new `hello.py` example, update `README.md` with a PDD command relationship diagram, and refactor the `hello` example and test files.
+- Add smart port detection and frontend improvements
+- Add a new 'hello' example and update the changelog with recent features, fixes, and documentation.
+
+### Refactor
+
+- Address PR review feedback for audio notifications
+
 ## v0.0.118 (2026-01-16)
 
 ### Feat
