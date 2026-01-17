@@ -9,11 +9,37 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import webbrowser
 from pathlib import Path
 from typing import Optional
 
 import click
+
+
+# Default port and range for auto-assignment
+DEFAULT_PORT = 9876
+PORT_RANGE_START = 9876
+PORT_RANGE_END = 9899  # Try up to 24 ports
+
+
+def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
+    """Check if a port is available for binding."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def find_available_port(start_port: int, end_port: int, host: str = "127.0.0.1") -> Optional[int]:
+    """Find an available port in the given range."""
+    for port in range(start_port, end_port + 1):
+        if is_port_available(port, host):
+            return port
+    return None
 
 # Handle optional dependencies - uvicorn may not be installed
 try:
@@ -129,6 +155,43 @@ def connect(
                 f"Warning: Binding to {host} without --allow-remote flag. "
                 "External connections may be blocked or insecure.",
                 fg="yellow"
+            ))
+
+    # 2.5 Smart Port Detection
+    # Check if user explicitly specified a port
+    port_source = ctx.get_parameter_source("port")
+    user_specified_port = port_source == click.core.ParameterSource.COMMANDLINE
+
+    # For port checking, use the effective bind host
+    check_host = "0.0.0.0" if host == "0.0.0.0" else "127.0.0.1"
+
+    if not is_port_available(port, check_host):
+        if user_specified_port:
+            # User explicitly requested this port, show error
+            click.echo(click.style(
+                f"Error: Port {port} is already in use.",
+                fg="red", bold=True
+            ))
+            click.echo("Please specify a different port with --port or stop the process using this port.")
+            ctx.exit(1)
+        else:
+            # Auto-detect an available port
+            click.echo(click.style(
+                f"Port {port} is in use, looking for an available port...",
+                fg="yellow"
+            ))
+            available_port = find_available_port(PORT_RANGE_START, PORT_RANGE_END, check_host)
+            if available_port is None:
+                click.echo(click.style(
+                    f"Error: No available ports found in range {PORT_RANGE_START}-{PORT_RANGE_END}.",
+                    fg="red", bold=True
+                ))
+                click.echo("Please specify a port manually with --port or free up a port in this range.")
+                ctx.exit(1)
+            port = available_port
+            click.echo(click.style(
+                f"Using port {port} instead.",
+                fg="green"
             ))
 
     # 3. Determine URLs

@@ -4,15 +4,20 @@ Test Plan for pdd/commands/connect.py
 1.  **Unit Tests (Pytest)**:
     The `connect` command is primarily an orchestration layer that configures and launches a Uvicorn server.
     The logic involves parsing CLI arguments, applying security checks, configuring the environment, and invoking external libraries (`uvicorn`, `webbrowser`).
-    
+
     We will test the following scenarios using `click.testing.CliRunner` and `unittest.mock`:
-    
+
     -   **Dependency Check**: Verify the command fails gracefully if `uvicorn` is not installed.
     -   **Default Execution**: Verify correct default values (port 9876, localhost), browser opening, and successful server startup.
     -   **Configuration Options**:
         -   `--no-browser`: Verify browser does not open.
         -   `--frontend-url`: Verify custom URL is used for browser and CORS.
         -   `--port` / `--host`: Verify arguments passed to Uvicorn.
+    -   **Smart Port Detection**:
+        -   **Port Available**: Verify command uses the requested port when available.
+        -   **Default Port In Use**: Verify auto-detection finds next available port.
+        -   **User-Specified Port In Use**: Verify error and exit when user explicitly specifies an unavailable port.
+        -   **All Ports In Range Unavailable**: Verify error when no ports are available.
     -   **Security Logic**:
         -   **Remote with Token**: Verify allowing remote connections with a token proceeds without confirmation and binds to 0.0.0.0 if host was default.
         -   **Remote without Token (Confirmed)**: Verify warning is displayed and user confirmation allows proceeding.
@@ -96,36 +101,38 @@ def test_connect_defaults(mock_dependencies):
     """Test execution with default arguments."""
     runner = CliRunner()
     with runner.isolated_filesystem():
-        result = runner.invoke(connect)
+        with patch("pdd.commands.connect.is_port_available", return_value=True):
+            result = runner.invoke(connect)
 
-        assert result.exit_code == 0
-        assert "Starting PDD server on http://127.0.0.1:9876" in result.output
+            assert result.exit_code == 0
+            assert "Starting PDD server on http://127.0.0.1:9876" in result.output
 
-        # Verify create_app called with current directory
-        mock_dependencies["create_app"].assert_called_once()
+            # Verify create_app called with current directory
+            mock_dependencies["create_app"].assert_called_once()
 
-        # Verify browser opened
-        mock_dependencies["webbrowser"].open.assert_called_with("http://127.0.0.1:9876")
+            # Verify browser opened
+            mock_dependencies["webbrowser"].open.assert_called_with("http://127.0.0.1:9876")
 
-        # Verify uvicorn run
-        mock_dependencies["uvicorn"].run.assert_called_once()
-        call_kwargs = mock_dependencies["uvicorn"].run.call_args[1]
-        assert call_kwargs["host"] == "127.0.0.1"
-        assert call_kwargs["port"] == 9876
+            # Verify uvicorn run
+            mock_dependencies["uvicorn"].run.assert_called_once()
+            call_kwargs = mock_dependencies["uvicorn"].run.call_args[1]
+            assert call_kwargs["host"] == "127.0.0.1"
+            assert call_kwargs["port"] == 9876
 
 
 def test_connect_local_only_flag(mock_dependencies):
     """Test --local-only flag skips cloud registration."""
     runner = CliRunner()
     with runner.isolated_filesystem():
-        result = runner.invoke(connect, ["--local-only"])
+        with patch("pdd.commands.connect.is_port_available", return_value=True):
+            result = runner.invoke(connect, ["--local-only"])
 
-        assert result.exit_code == 0
-        assert "Running in local-only mode (--local-only flag set)" in result.output
-        assert "Starting PDD server on http://127.0.0.1:9876" in result.output
+            assert result.exit_code == 0
+            assert "Running in local-only mode (--local-only flag set)" in result.output
+            assert "Starting PDD server on http://127.0.0.1:9876" in result.output
 
-        # Should still run the server
-        mock_dependencies["uvicorn"].run.assert_called_once()
+            # Should still run the server
+            mock_dependencies["uvicorn"].run.assert_called_once()
 
 def test_connect_no_browser(mock_dependencies):
     """Test --no-browser flag."""
@@ -252,10 +259,126 @@ def test_connect_uvicorn_failure(mock_dependencies):
 def test_connect_keyboard_interrupt(mock_dependencies):
     """Test graceful shutdown on KeyboardInterrupt."""
     mock_dependencies["uvicorn"].run.side_effect = KeyboardInterrupt()
-    
+
     runner = CliRunner()
     result = runner.invoke(connect)
-    
+
     assert result.exit_code == 0
     assert "Server stopping..." in result.output
     assert "Goodbye!" in result.output
+
+
+# =============================================================================
+# Smart Port Detection Tests
+# =============================================================================
+
+from pdd.commands.connect import is_port_available, find_available_port
+
+
+def test_is_port_available_free_port():
+    """Test is_port_available returns True for a free port."""
+    # Use a high port that's unlikely to be in use
+    with patch("pdd.commands.connect.socket.socket") as mock_socket:
+        mock_sock_instance = MagicMock()
+        mock_socket.return_value.__enter__.return_value = mock_sock_instance
+        mock_sock_instance.bind.return_value = None  # No exception = success
+
+        result = is_port_available(59999)
+        assert result is True
+
+
+def test_is_port_available_port_in_use():
+    """Test is_port_available returns False when port is in use."""
+    with patch("pdd.commands.connect.socket.socket") as mock_socket:
+        mock_sock_instance = MagicMock()
+        mock_socket.return_value.__enter__.return_value = mock_sock_instance
+        mock_sock_instance.bind.side_effect = OSError("Address already in use")
+
+        result = is_port_available(9876)
+        assert result is False
+
+
+def test_find_available_port_first_available():
+    """Test find_available_port returns first available port."""
+    def mock_is_available(port, host="127.0.0.1"):
+        # Simulate: 9876 in use, 9877 available
+        return port != 9876
+
+    with patch("pdd.commands.connect.is_port_available", side_effect=mock_is_available):
+        result = find_available_port(9876, 9880)
+        assert result == 9877
+
+
+def test_find_available_port_none_available():
+    """Test find_available_port returns None when all ports in use."""
+    with patch("pdd.commands.connect.is_port_available", return_value=False):
+        result = find_available_port(9876, 9880)
+        assert result is None
+
+
+def test_connect_default_port_in_use_auto_detect(mock_dependencies):
+    """Test auto-detection of available port when default is in use."""
+    def mock_is_available(port, host="127.0.0.1"):
+        # Default port 9876 in use, 9877 available
+        return port != 9876
+
+    with patch("pdd.commands.connect.is_port_available", side_effect=mock_is_available):
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(connect)
+
+            assert result.exit_code == 0
+            assert "Port 9876 is in use" in result.output
+            assert "Using port 9877 instead" in result.output
+
+            # Verify uvicorn called with detected port
+            call_kwargs = mock_dependencies["uvicorn"].run.call_args[1]
+            assert call_kwargs["port"] == 9877
+
+
+def test_connect_user_specified_port_in_use_error(mock_dependencies):
+    """Test error when user explicitly specifies a port that's in use."""
+    with patch("pdd.commands.connect.is_port_available", return_value=False):
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            # User explicitly specifies --port
+            result = runner.invoke(connect, ["--port", "8080"])
+
+            assert result.exit_code == 1
+            assert "Error: Port 8080 is already in use" in result.output
+            assert "Please specify a different port" in result.output
+
+            # Should NOT run uvicorn
+            mock_dependencies["uvicorn"].run.assert_not_called()
+
+
+def test_connect_all_ports_in_range_unavailable(mock_dependencies):
+    """Test error when no ports in the auto-detection range are available."""
+    with patch("pdd.commands.connect.is_port_available", return_value=False), \
+         patch("pdd.commands.connect.find_available_port", return_value=None):
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(connect)
+
+            assert result.exit_code == 1
+            assert "No available ports found" in result.output
+
+            # Should NOT run uvicorn
+            mock_dependencies["uvicorn"].run.assert_not_called()
+
+
+def test_connect_port_available_uses_requested(mock_dependencies):
+    """Test that available port is used without auto-detection message."""
+    with patch("pdd.commands.connect.is_port_available", return_value=True):
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(connect)
+
+            assert result.exit_code == 0
+            # Should NOT show port detection messages
+            assert "Port 9876 is in use" not in result.output
+            assert "Using port" not in result.output
+
+            # Verify uvicorn called with default port
+            call_kwargs = mock_dependencies["uvicorn"].run.call_args[1]
+            assert call_kwargs["port"] == 9876
