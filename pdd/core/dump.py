@@ -209,7 +209,7 @@ def _write_core_dump(
         garbage_collect_core_dumps(keep=keep_core_dumps)
 
         if not ctx.obj.get("quiet"):
-            # Check if the dump still exists after GC (may be deleted if keep=0)
+            # Check if the dump still exists after GC (it will be deleted if keep=0)
             if dump_path.exists():
                 console.print(
                     f"[info]Core dump written to [path]{dump_path}[/path]. "
