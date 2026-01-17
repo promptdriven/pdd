@@ -4126,3 +4126,144 @@ class TestHeadlessModeDetection:
             "This makes headless mode the default in interactive terminals, breaking the TUI. "
             "Fix: Change 'sys.stdout.isatty()' to 'not sys.stdout.isatty()' in the headless detection."
         )
+
+
+class TestExecuteTestsProjectRootConfig:
+    """
+    Regression tests for pytest project root configuration in _execute_tests_and_create_run_report().
+
+    Bug: When running tests in a nested project (e.g., examples/hello/) that has its own
+    .pddrc marker, pytest would find a parent pytest.ini (in the repo root) and use that
+    as the rootdir. This caused:
+    1. Import errors because PYTHONPATH wasn't set to include the nested project's src/
+    2. Wrong test collection due to incorrect rootdir
+    3. Infinite fix loops because tests always failed with exit_code=2
+
+    Fix: _execute_tests_and_create_run_report() must set --rootdir, PYTHONPATH, and cwd
+    based on the project root (found by looking for .pddrc), matching pytest_output.py.
+    """
+
+    def test_execute_tests_sets_rootdir_for_nested_project(self, tmp_path, monkeypatch):
+        """
+        Regression test: Verify _execute_tests_and_create_run_report() sets correct
+        --rootdir and PYTHONPATH for nested projects.
+
+        Scenario:
+        - Parent dir has pytest.ini (like pdd repo root)
+        - Nested project has .pddrc (like examples/hello/)
+        - Test file imports from nested project's src/
+
+        Before fix: exit_code=2 (import error, wrong rootdir)
+        After fix: exit_code=0 (tests pass with correct config)
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Create parent directory with pytest.ini (simulates pdd repo root)
+        parent_dir = tmp_path / "repo_root"
+        parent_dir.mkdir()
+        (parent_dir / "pytest.ini").write_text("[pytest]\n")
+
+        # Create nested project (simulates examples/hello/)
+        nested_project = parent_dir / "examples" / "hello"
+        nested_project.mkdir(parents=True)
+
+        # Add .pddrc marker to nested project (this is how we identify project root)
+        (nested_project / ".pddrc").write_text("")
+
+        # Create src/ with a module
+        src_dir = nested_project / "src"
+        src_dir.mkdir()
+        (src_dir / "hello.py").write_text('''
+def greet(name):
+    return f"Hello, {name}!"
+''')
+
+        # Create tests/ with a test that imports from src/
+        tests_dir = nested_project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_hello.py"
+        test_file.write_text('''
+import hello
+
+def test_greet():
+    assert hello.greet("World") == "Hello, World!"
+''')
+
+        # Create .pdd/meta directory for run report
+        pdd_meta = nested_project / ".pdd" / "meta"
+        pdd_meta.mkdir(parents=True)
+
+        # Change cwd to parent (simulates being in repo root)
+        # This is important because it's how the bug manifests - pytest finds parent's pytest.ini
+        monkeypatch.chdir(parent_dir)
+
+        # Call the production function
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="hello_python",
+            language="python",
+            target_coverage=0.0
+        )
+
+        # KEY ASSERTION: Test should pass because:
+        # 1. --rootdir is set to nested_project (not parent_dir)
+        # 2. PYTHONPATH includes nested_project/src
+        # 3. cwd is nested_project
+        #
+        # Before fix: exit_code=2 (ModuleNotFoundError: No module named 'hello')
+        # After fix: exit_code=0 (test passes)
+        assert report.exit_code == 0, (
+            f"Test should pass with correct project root config. "
+            f"Got exit_code={report.exit_code}, tests_passed={report.tests_passed}, "
+            f"tests_failed={report.tests_failed}. "
+            f"If exit_code=2, pytest likely used wrong rootdir and couldn't import 'hello' module."
+        )
+        assert report.tests_passed >= 1, f"Expected at least 1 test to pass, got {report.tests_passed}"
+        assert report.tests_failed == 0, f"Expected 0 failures, got {report.tests_failed}"
+
+    def test_execute_tests_uses_parent_config_flag_to_isolate_pytest(self, tmp_path, monkeypatch):
+        """
+        Verify that -c /dev/null is used to prevent pytest from finding parent config.
+
+        This ensures pytest doesn't accidentally pick up configuration from parent
+        directories that could interfere with the nested project's tests.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        # Create structure with .pddrc
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".pddrc").write_text("")
+        (project / "src").mkdir()
+        tests_dir = project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_simple.py"
+        test_file.write_text("def test_pass(): assert True")
+        (project / ".pdd" / "meta").mkdir(parents=True)
+
+        monkeypatch.chdir(tmp_path)
+
+        # Capture the actual pytest args used
+        captured_args = {"value": None}
+
+        original_run = subprocess.run
+        def capture_run(cmd, **kwargs):
+            if '-m' in [str(c) for c in cmd] and 'pytest' in [str(c) for c in cmd]:
+                captured_args["value"] = [str(c) for c in cmd]
+            return original_run(cmd, **kwargs)
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_run):
+            _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="test_simple",
+                language="python",
+                target_coverage=0.0
+            )
+
+        # Verify -c /dev/null is in the args (prevents parent config discovery)
+        assert captured_args["value"] is not None, "subprocess.run was not called with pytest"
+        assert "-c" in captured_args["value"] or any("/dev/null" in arg for arg in captured_args["value"]), (
+            f"Expected -c /dev/null in pytest args to prevent parent config discovery. "
+            f"Got args: {captured_args['value']}"
+        )
