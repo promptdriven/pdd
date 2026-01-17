@@ -1475,14 +1475,37 @@ def sync_orchestration(
                                             # Bug #156: Run pytest on ALL matching test files
                                             test_files = pdd_files.get('test_files', [pdd_files['test']])
                                             pytest_args = [python_executable, '-m', 'pytest'] + [str(f) for f in test_files] + ['-v', '--tb=short']
-                                            # Bug fix: Run from project root (no cwd), matching _run_tests_and_report pattern
-                                            # Using cwd=test.parent with paths like 'backend/tests/test_foo.py' causes
-                                            # pytest to look for 'backend/tests/backend/tests/test_foo.py' (not found)
-                                            test_result = subprocess.run(
-                                                pytest_args,
-                                                capture_output=True, text=True, timeout=300,
-                                                stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
-                                            )
+
+                                            # Bug fix: Find project root for proper pytest configuration
+                                            # This matches the fix in _execute_tests_and_create_run_report()
+                                            project_root = _find_project_root(pdd_files['test'])
+
+                                            # Set up subprocess kwargs
+                                            subprocess_kwargs = {
+                                                'capture_output': True,
+                                                'text': True,
+                                                'timeout': 300,
+                                                'stdin': subprocess.DEVNULL,
+                                                'env': clean_env,
+                                                'start_new_session': True
+                                            }
+
+                                            if project_root is not None:
+                                                # Add PYTHONPATH to include project root and src/ directory
+                                                paths_to_add = [str(project_root)]
+                                                src_dir = project_root / "src"
+                                                if src_dir.is_dir():
+                                                    paths_to_add.insert(0, str(src_dir))
+                                                existing_pythonpath = clean_env.get("PYTHONPATH", "")
+                                                if existing_pythonpath:
+                                                    paths_to_add.append(existing_pythonpath)
+                                                clean_env["PYTHONPATH"] = os.pathsep.join(paths_to_add)
+
+                                                # Add --rootdir and -c /dev/null to prevent parent config discovery
+                                                pytest_args.extend([f'--rootdir={project_root}', '-c', '/dev/null'])
+                                                subprocess_kwargs['cwd'] = str(project_root)
+
+                                            test_result = subprocess.run(pytest_args, **subprocess_kwargs)
                                         else:
                                             # Use shell command for non-Python
                                             test_result = subprocess.run(
