@@ -1243,9 +1243,10 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
           <div className="lg:hidden fixed inset-0 bg-black/50 z-40 animate-fade-in" onClick={() => setSidebarOpen(false)} />
         )}
 
-        {/* Sidebar with commands - responsive slide-out on mobile */}
+        {/* Sidebar with commands - responsive slide-out on mobile, hidden when comparing code */}
         <aside className={`
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          ${showCodePanel ? 'lg:hidden' : ''}
           fixed lg:relative z-50 lg:z-auto
           w-56 sm:w-52 lg:w-48 h-full
           glass lg:bg-surface-800/30 border-r border-surface-700/50
@@ -1516,7 +1517,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
               {/* Editor or Preview with optional Code Panel */}
               <div className="flex-1 flex overflow-hidden">
                 {/* Main Editor / Preview Panel */}
-                <div className={`flex-1 flex flex-col overflow-hidden ${showCodePanel ? 'w-1/2' : 'w-full'}`}>
+                <div className={`flex-1 flex flex-col overflow-hidden ${showCodePanel ? 'flex-1' : 'w-full'}`}>
                   {showPreview ? (
                     <div className="flex-1 overflow-auto bg-surface-900/50 p-4 sm:p-6 lg:p-8">
                       <div
@@ -1529,9 +1530,42 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                   )}
                 </div>
 
+                {/* Vertical Command Bar - between prompt and code when comparing */}
+                {showCodePanel && (
+                  <div className="flex flex-col items-center justify-center py-4 px-1 bg-surface-800/50 border-x border-surface-700/50">
+                    <div className="flex flex-col gap-1.5">
+                      {regularCommands.map(cmd => {
+                        const missingFiles = getMissingFiles(cmd);
+                        const hasMissingFiles = missingFiles.length > 0;
+                        return (
+                          <button
+                            key={cmd.name}
+                            onClick={() => { if (!isExecuting) handleCommandClick(cmd.name); }}
+                            disabled={isExecuting}
+                            className={`flex flex-col items-center gap-1 p-2 rounded-lg text-xs font-medium transition-all duration-200 min-w-[52px] ${
+                              isExecuting
+                                ? 'text-surface-500 cursor-not-allowed'
+                                : 'text-surface-400 hover:bg-surface-700/70 hover:text-white'
+                            }`}
+                            title={hasMissingFiles ? `${cmd.description} (${missingFiles.join(', ')} file${missingFiles.length > 1 ? 's' : ''} not auto-detected)` : cmd.description}
+                          >
+                            <span className="text-lg relative">
+                              {cmd.icon}
+                              {hasMissingFiles && (
+                                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-yellow-500/80"></span>
+                              )}
+                            </span>
+                            <span className="text-[10px] leading-tight text-center">{cmd.shortDescription}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {/* Code Panel - Side by Side */}
                 {showCodePanel && (
-                  <div className="w-1/2 flex flex-col border-l border-surface-700/50 bg-surface-900/50">
+                  <div className="flex-1 flex flex-col bg-surface-900/50">
                     {/* Code panel header */}
                     <div className="px-3 py-2 bg-surface-800/50 border-b border-surface-700/50 flex items-center justify-between">
                       <div className="flex items-center gap-2 min-w-0">
@@ -1610,6 +1644,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
             </>
           )}
         </main>
+
 
         {/* Guidance Sidebar */}
         <GuidanceSidebar
