@@ -50,7 +50,7 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
-from .pytest_output import extract_failing_files_from_output
+from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
 
 
@@ -717,6 +717,10 @@ def _execute_tests_and_create_run_report(
             if not cov_target:
                 cov_target = basename or module_name
 
+            # Find project root for proper pytest configuration (Bug fix: infinite fix loop)
+            # This matches the logic in pytest_output.py to ensure consistent behavior
+            project_root = _find_project_root(test_file)
+
             # Bug #156: Run pytest on ALL test files
             pytest_args = [
                 python_executable, '-m', 'pytest',
@@ -726,10 +730,37 @@ def _execute_tests_and_create_run_report(
                 f'--cov={cov_target}',
                 '--cov-report=term-missing'
             ]
-            result = subprocess.run(
-                pytest_args,
-                capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
-            )
+
+            # Set up project root configuration to prevent parent config interference
+            subprocess_cwd = None
+            if project_root is not None:
+                # Add PYTHONPATH to include project root and src/ directory
+                paths_to_add = [str(project_root)]
+                src_dir = project_root / "src"
+                if src_dir.is_dir():
+                    paths_to_add.insert(0, str(src_dir))
+                existing_pythonpath = clean_env.get("PYTHONPATH", "")
+                if existing_pythonpath:
+                    paths_to_add.append(existing_pythonpath)
+                clean_env["PYTHONPATH"] = os.pathsep.join(paths_to_add)
+
+                # Add --rootdir and -c /dev/null to prevent parent config discovery
+                pytest_args.extend([f'--rootdir={project_root}', '-c', '/dev/null'])
+                subprocess_cwd = str(project_root)
+
+            # Build subprocess kwargs - only include cwd if project root was found
+            subprocess_kwargs = {
+                'capture_output': True,
+                'text': True,
+                'timeout': 300,
+                'stdin': subprocess.DEVNULL,
+                'env': clean_env,
+                'start_new_session': True,
+            }
+            if subprocess_cwd is not None:
+                subprocess_kwargs['cwd'] = subprocess_cwd
+
+            result = subprocess.run(pytest_args, **subprocess_kwargs)
 
             exit_code = result.returncode
             stdout = result.stdout + (result.stderr or '')
