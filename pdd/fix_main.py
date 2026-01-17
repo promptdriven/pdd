@@ -417,8 +417,10 @@ def fix_main(
                     rprint(f"[bold red]Error printing analysis preview: {e}[/bold red]")
             if success:
                 rprint("[bold green]Fixed files saved:[/bold green]")
-                rprint(f"  Test file: {output_file_paths['output_test']}")
-                rprint(f"  Code file: {output_file_paths['output_code']}")
+                if fixed_unit_test:
+                    rprint(f"  Test file: {output_file_paths['output_test']}")
+                if fixed_code:
+                    rprint(f"  Code file: {output_file_paths['output_code']}")
                 if output_file_paths.get("output_results"):
                     rprint(f"  Results file: {output_file_paths['output_results']}")
 
