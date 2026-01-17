@@ -16,10 +16,11 @@ from pdd.core.cli import cli as cli_command, process_commands
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
+@pytest.mark.skip(reason="Issue #231: --core-dump is now on by default. See test_cli_core_dump_on_by_default_issue_231")
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 def test_cli_core_dump_default_flag_false(mock_main, mock_auto_update, runner, create_dummy_files):
-    """By default, core_dump flag in context should be False (or missing)."""
+    """DEPRECATED: By default, core_dump flag was False. Now it's True per issue #231."""
     files = create_dummy_files("test_core_default.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
 
@@ -530,3 +531,457 @@ def test_process_commands_handles_none_results_issue_253(mock_write_dump, mock_p
         process_commands(results=None)
 
     # If we reach here without exception, the test passes
+
+
+# =============================================================================
+# Issue #231: --core-dump on by default, garbage collection, --no-core-dump
+# =============================================================================
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_core_dump_on_by_default_issue_231(mock_main, mock_auto_update, runner, create_dummy_files):
+    """
+    Issue #231: By default, core_dump flag in context should be True.
+
+    This is a feature change from the original behavior where core_dump
+    was off by default. Now we gather all info by default.
+    """
+    files = create_dummy_files("test_core_default_on.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(cli.cli, ["generate", str(files["test_core_default_on.prompt"])])
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    mock_main.assert_called_once()
+    ctx = mock_main.call_args.kwargs.get("ctx")
+    assert ctx is not None
+    # Issue #231: core_dump should be True by default
+    assert ctx.obj.get("core_dump") is True, \
+        "Issue #231: --core-dump should be on by default"
+    mock_auto_update.assert_called_once_with()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_no_core_dump_flag_issue_231(mock_main, mock_auto_update, runner, create_dummy_files):
+    """
+    Issue #231: --no-core-dump should disable core dump collection.
+
+    For certain automation cases, users need to disable core dumps.
+    """
+    files = create_dummy_files("test_no_core_dump.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--no-core-dump",
+            "generate",
+            str(files["test_no_core_dump.prompt"]),
+        ],
+    )
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    mock_main.assert_called_once()
+    ctx = mock_main.call_args.kwargs.get("ctx")
+    assert ctx is not None
+    # Issue #231: --no-core-dump should set core_dump to False
+    assert ctx.obj.get("core_dump") is False, \
+        "Issue #231: --no-core-dump should disable core dump"
+    mock_auto_update.assert_called_once_with()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_no_core_dump_does_not_create_file_issue_231(
+    mock_main, mock_auto_update, tmp_path, runner, monkeypatch
+):
+    """
+    Issue #231: --no-core-dump should actually prevent dump file creation.
+
+    This is a regression test to ensure the flag doesn't just set context
+    but actually prevents file I/O.
+    """
+    # Create a test prompt file
+    test_prompt = tmp_path / "test.prompt"
+    test_prompt.write_text("Test prompt for no-core-dump verification")
+
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    # Change to temp directory
+    monkeypatch.chdir(tmp_path)
+
+    # Ensure no core dumps exist before
+    core_dump_dir = tmp_path / ".pdd" / "core_dumps"
+    assert not core_dump_dir.exists() or len(list(core_dump_dir.glob("pdd-core-*.json"))) == 0
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--no-core-dump",
+            "generate",
+            str(test_prompt),
+        ],
+    )
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    # Issue #231: No core dump file should be created
+    if core_dump_dir.exists():
+        dumps = list(core_dump_dir.glob("pdd-core-*.json"))
+        assert len(dumps) == 0, \
+            f"Issue #231: --no-core-dump should not create any dump files, found: {dumps}"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_keep_core_dumps_option_issue_231(mock_main, mock_auto_update, runner, create_dummy_files):
+    """
+    Issue #231: --keep-core-dumps N should be available to override default of 10.
+
+    This option controls how many core dumps to keep during garbage collection.
+    """
+    files = create_dummy_files("test_keep_core_dumps.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--keep-core-dumps", "5",
+            "generate",
+            str(files["test_keep_core_dumps.prompt"]),
+        ],
+    )
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    mock_main.assert_called_once()
+    ctx = mock_main.call_args.kwargs.get("ctx")
+    assert ctx is not None
+    # Issue #231: --keep-core-dumps should set the keep count
+    assert ctx.obj.get("keep_core_dumps") == 5, \
+        "Issue #231: --keep-core-dumps should set keep_core_dumps in context"
+    mock_auto_update.assert_called_once_with()
+
+
+def test_garbage_collect_core_dumps_function_exists_issue_231():
+    """
+    Issue #231: garbage_collect_core_dumps function should exist in core/dump.py.
+
+    This function is needed to clean up old core dumps on CLI invocation.
+    """
+    from pdd.core import dump
+
+    assert hasattr(dump, 'garbage_collect_core_dumps'), \
+        "Issue #231: garbage_collect_core_dumps function should exist in core/dump.py"
+
+    # Should be callable
+    assert callable(dump.garbage_collect_core_dumps), \
+        "Issue #231: garbage_collect_core_dumps should be callable"
+
+
+def test_garbage_collect_core_dumps_keeps_last_n_issue_231(tmp_path, monkeypatch):
+    """
+    Issue #231: garbage_collect_core_dumps should delete old core dumps,
+    keeping only the last N files sorted by mtime.
+    """
+    import time
+    from pdd.core.dump import garbage_collect_core_dumps
+
+    monkeypatch.chdir(tmp_path)
+
+    # Create core dump directory
+    core_dump_dir = tmp_path / ".pdd" / "core_dumps"
+    core_dump_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create 15 test core dump files with different mtimes
+    for i in range(15):
+        dump_file = core_dump_dir / f"pdd-core-2024010{i:02d}T120000Z.json"
+        dump_file.write_text(f'{{"index": {i}}}')
+        # Set mtime to ensure ordering (older files have earlier mtime)
+        mtime = time.time() - (15 - i) * 100  # Earlier index = older file
+        os.utime(dump_file, (mtime, mtime))
+
+    # Verify we have 15 files
+    assert len(list(core_dump_dir.glob("pdd-core-*.json"))) == 15
+
+    # Run garbage collection with keep=10 (default)
+    deleted = garbage_collect_core_dumps(keep=10)
+
+    # Should have deleted 5 files
+    assert deleted == 5, f"Expected 5 files deleted, got {deleted}"
+
+    # Should have 10 files remaining
+    remaining = list(core_dump_dir.glob("pdd-core-*.json"))
+    assert len(remaining) == 10, f"Expected 10 files remaining, got {len(remaining)}"
+
+    # The remaining files should be the 10 newest (highest index)
+    remaining_indices = []
+    for f in remaining:
+        import json
+        data = json.loads(f.read_text())
+        remaining_indices.append(data["index"])
+
+    remaining_indices.sort()
+    assert remaining_indices == list(range(5, 15)), \
+        f"Expected indices 5-14 to remain (newest), got {remaining_indices}"
+
+
+def test_garbage_collect_with_custom_keep_count_issue_231(tmp_path, monkeypatch):
+    """
+    Issue #231: garbage_collect_core_dumps should respect custom keep count.
+    """
+    import time
+    from pdd.core.dump import garbage_collect_core_dumps
+
+    monkeypatch.chdir(tmp_path)
+
+    # Create core dump directory
+    core_dump_dir = tmp_path / ".pdd" / "core_dumps"
+    core_dump_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create 10 test core dump files
+    for i in range(10):
+        dump_file = core_dump_dir / f"pdd-core-2024010{i:01d}T120000Z.json"
+        dump_file.write_text(f'{{"index": {i}}}')
+        mtime = time.time() - (10 - i) * 100
+        os.utime(dump_file, (mtime, mtime))
+
+    # Run garbage collection with keep=3
+    deleted = garbage_collect_core_dumps(keep=3)
+
+    # Should have deleted 7 files
+    assert deleted == 7, f"Expected 7 files deleted, got {deleted}"
+
+    # Should have 3 files remaining
+    remaining = list(core_dump_dir.glob("pdd-core-*.json"))
+    assert len(remaining) == 3, f"Expected 3 files remaining, got {len(remaining)}"
+
+
+def test_garbage_collect_no_directory_issue_231(tmp_path, monkeypatch):
+    """
+    Issue #231: garbage_collect_core_dumps should handle missing directory gracefully.
+    """
+    from pdd.core.dump import garbage_collect_core_dumps
+
+    monkeypatch.chdir(tmp_path)
+
+    # Core dump directory does not exist
+    core_dump_dir = tmp_path / ".pdd" / "core_dumps"
+    assert not core_dump_dir.exists()
+
+    # Should not raise, should return 0
+    deleted = garbage_collect_core_dumps(keep=10)
+    assert deleted == 0
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.core.dump.garbage_collect_core_dumps')
+@patch('pdd.commands.generate.code_generator_main')
+def test_garbage_collection_called_on_invocation_issue_231(
+    mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
+):
+    """
+    Issue #231: Garbage collection should be called on every CLI invocation.
+
+    GC runs at CLI startup AND after dump write to ensure:
+    1. Cleanup happens on every invocation (including --no-core-dump)
+    2. At most N dumps are kept after writing (not N+1)
+    """
+    files = create_dummy_files("test_gc_on_invocation.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+    mock_gc.return_value = 0
+
+    result = runner.invoke(cli.cli, ["generate", str(files["test_gc_on_invocation.prompt"])])
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    # Issue #231: GC should be called at least twice (startup + after dump write)
+    assert mock_gc.call_count >= 2, \
+        f"Issue #231: GC should be called at startup and after dump write, got {mock_gc.call_count} calls"
+
+    # All calls should use keep=10 by default
+    for call in mock_gc.call_args_list:
+        assert call.kwargs.get('keep') == 10 or call.args == (10,), \
+            "Issue #231: GC should be called with keep=10 by default"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.core.dump.garbage_collect_core_dumps')
+@patch('pdd.commands.generate.code_generator_main')
+def test_garbage_collection_respects_keep_option_issue_231(
+    mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
+):
+    """
+    Issue #231: Garbage collection should respect --keep-core-dumps option.
+    """
+    files = create_dummy_files("test_gc_with_keep.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+    mock_gc.return_value = 0
+
+    result = runner.invoke(
+        cli.cli,
+        ["--keep-core-dumps", "20", "generate", str(files["test_gc_with_keep.prompt"])]
+    )
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    # Issue #231: GC should be called at least twice with custom keep value
+    assert mock_gc.call_count >= 2, \
+        f"Issue #231: GC should be called at startup and after dump write, got {mock_gc.call_count} calls"
+
+    # All calls should use the custom keep value
+    for call in mock_gc.call_args_list:
+        assert call.kwargs.get('keep') == 20 or call.args == (20,), \
+            "Issue #231: GC should be called with keep=20 when --keep-core-dumps=20"
+
+
+def test_keep_core_dumps_rejects_negative_values_issue_231(runner):
+    """
+    Issue #231: --keep-core-dumps should reject negative values.
+
+    Negative values would cause incorrect slice behavior (e.g., -1 would
+    delete the newest file instead of keeping the last one).
+    """
+    result = runner.invoke(
+        cli.cli,
+        ["--keep-core-dumps", "-1"],
+    )
+
+    # Click's IntRange should reject negative values
+    assert result.exit_code != 0, \
+        "Issue #231: --keep-core-dumps should reject negative values"
+    assert "Invalid value" in result.output or "not in the range" in result.output, \
+        f"Expected error message for negative value, got: {result.output}"
+
+
+def test_garbage_collect_with_keep_zero_clears_all_issue_231(tmp_path, monkeypatch):
+    """
+    Issue #231: garbage_collect_core_dumps(keep=0) should clear all dumps.
+
+    A keep value of 0 means "don't keep any old dumps".
+    """
+    import time
+    from pdd.core.dump import garbage_collect_core_dumps
+
+    monkeypatch.chdir(tmp_path)
+
+    # Create core dump directory
+    core_dump_dir = tmp_path / ".pdd" / "core_dumps"
+    core_dump_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create 5 test core dump files
+    for i in range(5):
+        dump_file = core_dump_dir / f"pdd-core-2024010{i}T120000Z.json"
+        dump_file.write_text(f'{{"index": {i}}}')
+        mtime = time.time() - (5 - i) * 100
+        os.utime(dump_file, (mtime, mtime))
+
+    # Verify we have 5 files
+    assert len(list(core_dump_dir.glob("pdd-core-*.json"))) == 5
+
+    # Run garbage collection with keep=0
+    deleted = garbage_collect_core_dumps(keep=0)
+
+    # Should have deleted all 5 files
+    assert deleted == 5, f"Expected 5 files deleted, got {deleted}"
+
+    # Should have 0 files remaining
+    remaining = list(core_dump_dir.glob("pdd-core-*.json"))
+    assert len(remaining) == 0, f"Expected 0 files remaining, got {len(remaining)}"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.core.dump.garbage_collect_core_dumps')
+@patch('pdd.commands.generate.code_generator_main')
+def test_keep_core_dumps_zero_is_valid_issue_231(
+    mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
+):
+    """
+    Issue #231: --keep-core-dumps 0 should be valid and clear all old dumps.
+    """
+    files = create_dummy_files("test_gc_keep_zero.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+    mock_gc.return_value = 0
+
+    result = runner.invoke(
+        cli.cli,
+        ["--keep-core-dumps", "0", "generate", str(files["test_gc_keep_zero.prompt"])]
+    )
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    # Issue #231: GC should be called at least twice with keep=0
+    assert mock_gc.call_count >= 2, \
+        f"Issue #231: GC should be called at startup and after dump write, got {mock_gc.call_count} calls"
+
+    # All calls should use keep=0
+    for call in mock_gc.call_args_list:
+        assert call.kwargs.get('keep') == 0 or call.args == (0,), \
+            "Issue #231: GC should be called with keep=0 when --keep-core-dumps=0"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.core.dump.garbage_collect_core_dumps')
+@patch('pdd.commands.generate.code_generator_main')
+def test_gc_runs_even_with_no_core_dump_issue_231(
+    mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
+):
+    """
+    Issue #231: GC should run on every invocation, even with --no-core-dump.
+
+    This ensures old dumps are cleaned up regardless of whether new dumps are written.
+    """
+    files = create_dummy_files("test_gc_with_no_dump.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+    mock_gc.return_value = 0
+
+    result = runner.invoke(
+        cli.cli,
+        ["--no-core-dump", "generate", str(files["test_gc_with_no_dump.prompt"])]
+    )
+
+    if result.exit_code != 0:
+        print(f"Unexpected exit code: {result.exit_code}")
+        print(result.output)
+        if result.exception:
+            raise result.exception
+
+    # Issue #231: GC should still be called at CLI startup even with --no-core-dump
+    assert mock_gc.call_count >= 1, \
+        "Issue #231: GC should run on every invocation, including --no-core-dump"
+
+    # Should be called with keep=10 by default
+    call_args = mock_gc.call_args_list[0]
+    assert call_args.kwargs.get('keep') == 10 or call_args.args == (10,), \
+        "Issue #231: GC should be called with keep=10 by default"

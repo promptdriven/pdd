@@ -262,11 +262,17 @@ class PDDCLI(click.Group):
     help="List available contexts from .pddrc and exit.",
 )
 @click.option(
-    "--core-dump",
+    "--core-dump/--no-core-dump",
     "core_dump",
-    is_flag=True,
-    default=False,
-    help="Write a JSON core dump for this run into .pdd/core_dumps (for bug reports).",
+    default=True,
+    help="Write a JSON core dump for this run into .pdd/core_dumps (default: on). Use --no-core-dump to disable.",
+)
+@click.option(
+    "--keep-core-dumps",
+    "keep_core_dumps",
+    type=click.IntRange(min=0),
+    default=10,
+    help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
 )
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
@@ -284,6 +290,7 @@ def cli(
     context_override: Optional[str],
     list_contexts: bool,
     core_dump: bool,
+    keep_core_dumps: int,
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
@@ -317,6 +324,12 @@ def cli(
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump
+    ctx.obj["keep_core_dumps"] = keep_core_dumps
+
+    # Garbage collect old core dumps on every CLI invocation (Issue #231)
+    # This runs regardless of --no-core-dump to ensure cleanup always happens
+    from .dump import garbage_collect_core_dumps
+    garbage_collect_core_dumps(keep=keep_core_dumps)
 
     # Set up terminal output capture if core_dump is enabled
     if core_dump:

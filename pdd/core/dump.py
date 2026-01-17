@@ -16,6 +16,43 @@ import requests
 from .. import __version__
 from .errors import console, get_core_dump_errors
 
+
+def garbage_collect_core_dumps(keep: int = 10) -> int:
+    """Delete old core dumps, keeping only the most recent `keep` files.
+
+    Core dumps are sorted by modification time (mtime), and the oldest
+    files beyond the `keep` limit are deleted.
+
+    Args:
+        keep: Number of core dump files to keep. Default is 10.
+
+    Returns:
+        The number of deleted files.
+    """
+    core_dump_dir = Path.cwd() / ".pdd" / "core_dumps"
+    if not core_dump_dir.exists():
+        return 0
+
+    # Find all core dump files and sort by mtime (newest first)
+    dumps = sorted(
+        core_dump_dir.glob("pdd-core-*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True
+    )
+
+    # Delete files beyond the keep limit
+    deleted = 0
+    for dump_file in dumps[keep:]:
+        try:
+            dump_file.unlink()
+            deleted += 1
+        except OSError:
+            # If we can't delete a file, just skip it
+            pass
+
+    return deleted
+
+
 def _write_core_dump(
     ctx: click.Context,
     normalized_results: List[Any],
@@ -166,11 +203,22 @@ def _write_core_dump(
 
         dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
+        # Garbage collect old core dumps after writing (Issue #231)
+        # This ensures we keep at most N dumps, not N+1
+        keep_core_dumps = ctx.obj.get("keep_core_dumps", 10)
+        garbage_collect_core_dumps(keep=keep_core_dumps)
+
         if not ctx.obj.get("quiet"):
-            console.print(
-                f"[info]Core dump written to [path]{dump_path}[/path]. "
-                "You can attach this file when reporting a bug.[/info]"
-            )
+            # Check if the dump still exists after GC (it will be deleted if keep=0)
+            if dump_path.exists():
+                console.print(
+                    f"[info]Core dump written to [path]{dump_path}[/path]. "
+                    "You can attach this file when reporting a bug.[/info]"
+                )
+            else:
+                console.print(
+                    "[info]Core dump written and immediately cleaned up (--keep-core-dumps=0).[/info]"
+                )
     except Exception as exc:
         # Never let core dumping itself crash the CLI
         if not ctx.obj.get("quiet"):
