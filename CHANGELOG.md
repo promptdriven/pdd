@@ -1,23 +1,38 @@
+## v0.0.119 (2026-01-16)
+
+### Feat
+
+- Introduce 'hello' example with unit tests covering output, return value, multiple calls, and signature, removing Z3 formal verification.
+- introduce a new `hello.py` example, update `README.md` with a PDD command relationship diagram, and refactor the `hello` example and test files.
+- Add smart port detection and frontend improvements
+- Add a new 'hello' example and update the changelog with recent features, fixes, and documentation.
+
+### Refactor
+
+- Address PR review feedback for audio notifications
+
 ## v0.0.118 (2026-01-16)
 
 ### Feat
 
-- Add warning for worktree creation from non-main/master branches and document behavior.
-- Add remote mode support to Generate Architecture button
-- Add Fix and Change pages, remote mode for Architecture, update bug workflow to 10 steps
+- **Fix and Change Web UI Pages:** New dedicated pages in the web interface for `pdd fix` and `pdd change` commands with remote execution support. Added URL hash routing for `#fix` and `#change` views.
+- **Remote Architecture Generation:** Architecture view now supports remote mode execution via selected remote session.
+- **Worktree Branch Warning:** Displays warning when creating git worktrees from non-main/master branches, explaining that PRs will include commits from the current branch.
 
 ### Fix
 
-- Make language suffix detection case-insensitive in prompts.py
-- Preserve non-file args in fix/change manual mode conversion
-- Properly handle fix/change manual mode with --manual flag
-- Support both manual and agentic modes for fix/change commands
-- Fix remote execution of fix and change commands
-- Update Gemini CLI npm package name from `@anthropic-ai/gemini` to `@google/gemini-cli` in installation instructions.
-- Make parse_prompt_stem case-insensitive for language suffix
-- Add proper job dashboard tracking for remote prompt generation
-- Unwrap arrays wrapped in objects by LLMs
-- Handle list values in remote command display and add defensive parsing
+- **Fix/Change Manual Mode Handling:** Commands now properly support both agentic (GitHub URL) and manual (file paths) modes. Manual mode correctly converts semantic file keys to ordered positional arguments and adds `--manual` flag automatically.
+- **LLM Array Unwrapping:** Code generator now automatically unwraps arrays incorrectly wrapped in objects by LLMs (e.g., `{"items": [...]}` → `[...]`) when schema expects an array.
+- **Case-Insensitive Language Suffix Detection:** Language suffixes in prompt names (`_python`, `_Python`, `_PYTHON`, etc.) are now detected case-insensitively in both `prompts.py` and route handlers. Extended supported suffixes to include `_java`, `_cpp`, `_c`, `_csharp`, `_ruby`, `_swift`, `_kotlin`.
+- **Remote Command List Values:** Remote session manager now properly handles list/tuple values in command options (e.g., multiple `--env` flags) and parses stringified arrays that may arrive from cloud serialization.
+- **Remote Job Dashboard Tracking:** Remote prompt generation commands now properly appear in job dashboard with `[Remote]` prefix.
+- **Gemini CLI Package Name:** Updated installation instructions from `@anthropic-ai/gemini` to correct package `@google/gemini-cli`.
+
+### Docs
+
+- **Issue-Driven Development Tutorial:** New tutorial in `docs/TUTORIALS.md` covering the complete workflow for implementing GitHub issues using web interface and CLI methods.
+- **Reorganized README:** Restructured command documentation into logical groups (Getting Started, Agentic Commands, Core Commands, Prompt Management, Utility). Added three "Getting Started" options: Web Interface, Issue-Driven CLI, and Manual Prompt Workflow.
+- **Updated Onboarding Guides:** Enhanced `ONBOARDING.md` and `ONBOARDING_INTERNAL.md` with clearer setup instructions and issue-driven workflow guidance.
 
 ## v0.0.117 (2026-01-15)
 

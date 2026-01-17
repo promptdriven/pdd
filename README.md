@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.118-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.119-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -365,7 +365,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.118
+Current version: 0.0.119
 
 To check your installed version, run:
 ```
@@ -524,6 +524,43 @@ pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 ## Command Overview
 
 Here is a brief overview of the main commands provided by PDD. Click the command name to jump to its detailed section:
+
+### Command Relationships
+
+The following diagram shows how PDD commands interact:
+
+```mermaid
+flowchart TB
+    subgraph entry["Entry Points"]
+        connect["pdd connect<br/>(Web UI - Recommended)"]
+        cli["Direct CLI"]
+    end
+
+    subgraph issue["Issue-Driven Commands"]
+        change["pdd change &lt;url&gt;"]
+        bug["pdd bug &lt;url&gt;"]
+        fix_url["pdd fix &lt;url&gt;"]
+    end
+
+    sync["pdd sync"]
+
+    subgraph sync_flow["sync workflow"]
+        direction LR
+        generate["generate"] --> test["test"] --> fix["fix"] --> update["update"]
+    end
+
+    connect --> issue
+    connect --> sync
+    cli --> issue
+    cli --> sync
+
+    sync --> sync_flow
+```
+
+**Key concepts:**
+- **Entry points**: Use `pdd connect` (web UI) or run commands directly via CLI
+- **Issue-driven**: `change`, `bug`, `fix <url>` automate GitHub issue workflows
+- **`pdd sync`**: Orchestrates generate → test → fix → update for prompt-based development
 
 ### Getting Started
 - **[`connect`](#17-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction
