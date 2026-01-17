@@ -279,6 +279,21 @@ def run_agentic_change_orchestrator(
 
         # Special handling before Step 9: Create Worktree
         if step_num == 9:
+            # Check current branch before creating worktree
+            try:
+                current_branch = subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                ).stdout.strip()
+                
+                if current_branch not in ["main", "master"] and not quiet:
+                    console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
+            except subprocess.CalledProcessError:
+                pass # Ignore if git command fails, worktree setup will likely catch issues
+
             wt_path, err = _setup_worktree(cwd, issue_number, quiet)
             if not wt_path:
                 return False, f"Failed to create worktree: {err}", total_cost, model_used, []
