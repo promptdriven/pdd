@@ -15,6 +15,7 @@ from .agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    DEFAULT_MAX_RETRIES,
 )
 from .load_prompt_template import load_prompt_template
 
@@ -273,21 +274,30 @@ def run_agentic_e2e_fix_orchestrator(
                 # 3. Run Task
                 base_timeout = E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0)
                 timeout = base_timeout + timeout_adder
-                
+
                 step_success, step_output, step_cost, step_model = run_agentic_task(
                     instruction=formatted_prompt,
                     cwd=cwd,
                     verbose=verbose,
                     quiet=quiet,
                     timeout=timeout,
-                    label=f"cycle{current_cycle}_step{step_num}"
+                    label=f"cycle{current_cycle}_step{step_num}",
+                    max_retries=DEFAULT_MAX_RETRIES,
                 )
 
                 # 4. Store Output & Accumulate
-                step_outputs[str(step_num)] = step_output
+                # Only mark step completed if it succeeded; failed steps get "FAILED:" prefix
+                # and last_completed_step stays at previous step (ensures resume re-runs failed step)
+                if step_success:
+                    step_outputs[str(step_num)] = step_output
+                    last_completed_step = step_num
+                else:
+                    step_outputs[str(step_num)] = f"FAILED: {step_output}"
+                    # Don't update last_completed_step - keep it at previous value
+
                 total_cost += step_cost
                 model_used = step_model if step_model else model_used
-                
+
                 # Parse changed files
                 new_files = _parse_changed_files(step_output)
                 for f in new_files:
@@ -301,10 +311,12 @@ def run_agentic_e2e_fix_orchestrator(
                     dev_unit_states = _update_dev_unit_states(step_output, dev_unit_states, dev_units_str)
 
                 # Print brief result
-                console.print(f"  -> Step {step_num} complete. Cost: ${step_cost:.4f}")
+                if step_success:
+                    console.print(f"  -> Step {step_num} complete. Cost: ${step_cost:.4f}")
+                else:
+                    console.print(f"  -> Step {step_num} [red]failed[/red]. Cost: ${step_cost:.4f}")
 
                 # 5. Save State
-                last_completed_step = step_num
                 state_data = {
                     "workflow": workflow_name,
                     "issue_url": issue_url,

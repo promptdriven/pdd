@@ -1010,8 +1010,139 @@ def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_ru
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
     mock_subprocess_run.return_value.stdout = json.dumps({"result": "ok"})
-    
+
     run_agentic_task("Instruction", tmp_path, timeout=999.0)
-    
+
     kwargs = mock_subprocess_run.call_args[1]
     assert kwargs['timeout'] == 999.0
+
+
+# ---------------------------------------------------------------------------
+# Issue #190: Retry Logic Tests
+# ---------------------------------------------------------------------------
+
+
+def test_run_agentic_task_retries_on_failure(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """
+    Issue #190: Provider should be retried before moving to next provider.
+
+    When max_retries > 1, the same provider should be retried on failure
+    before falling back to the next provider in the preference list.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+
+    # Fail twice, succeed on third attempt
+    fail_response = MagicMock()
+    fail_response.returncode = 1
+    fail_response.stdout = ""
+    fail_response.stderr = "Transient error"
+
+    success_response = MagicMock()
+    success_response.returncode = 0
+    success_response.stdout = json.dumps({
+        "result": "Success after retry. This response is long enough to pass the false positive check.",
+        "total_cost_usd": 0.01
+    })
+
+    mock_subprocess_run.side_effect = [fail_response, fail_response, success_response]
+
+    with patch("pdd.agentic_common.time.sleep"):  # Don't actually sleep
+        success, msg, cost, provider = run_agentic_task("Do work", tmp_path, max_retries=3)
+
+    assert success
+    assert provider == "anthropic"
+    assert mock_subprocess_run.call_count == 3  # Retried twice before success
+
+
+def test_run_agentic_task_retry_backoff(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """
+    Issue #190: Retries should use exponential backoff.
+
+    The delay between retries should increase: retry_delay * attempt_number.
+    For retry_delay=5, the delays should be 5s, then 10s.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+
+    fail_response = MagicMock()
+    fail_response.returncode = 1
+    fail_response.stdout = ""
+    fail_response.stderr = "Error"
+
+    success_response = MagicMock()
+    success_response.returncode = 0
+    success_response.stdout = json.dumps({
+        "result": "Success after retries with exponential backoff applied correctly.",
+        "total_cost_usd": 0.01
+    })
+
+    mock_subprocess_run.side_effect = [fail_response, fail_response, success_response]
+
+    with patch("pdd.agentic_common.time.sleep") as mock_sleep:
+        run_agentic_task("Do work", tmp_path, max_retries=3, retry_delay=5)
+
+    # Verify exponential backoff: 5s after attempt 1, 10s after attempt 2
+    assert mock_sleep.call_args_list == [call(5), call(10)]
+
+
+def test_run_agentic_task_moves_to_next_after_max_retries(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """
+    Issue #190: After max retries exhausted, should try next provider.
+
+    When a provider fails max_retries times, the system should move to
+    the next provider in the preference list instead of giving up.
+    """
+    mock_shutil_which.return_value = "/bin/cmd"
+    mock_env["GEMINI_API_KEY"] = "key"  # Enable Google as fallback
+
+    fail_response = MagicMock()
+    fail_response.returncode = 1
+    fail_response.stdout = ""
+    fail_response.stderr = "Provider failed"
+
+    success_response = MagicMock()
+    success_response.returncode = 0
+    success_response.stdout = json.dumps({
+        "response": "Google success after Anthropic exhausted retries. This is a real response.",
+        "stats": {}
+    })
+
+    # Anthropic fails 3 times (max_retries), then Google succeeds
+    mock_subprocess_run.side_effect = [fail_response, fail_response, fail_response, success_response]
+
+    with patch("pdd.agentic_common.time.sleep"):
+        success, msg, cost, provider = run_agentic_task("Do work", tmp_path, max_retries=3)
+
+    assert success
+    assert provider == "google"
+    assert mock_subprocess_run.call_count == 4  # 3 Anthropic attempts + 1 Google success
+
+
+def test_run_agentic_task_no_retries_by_default(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """
+    Issue #190: Default max_retries=1 means no retries (backward compatible).
+
+    The default behavior should be unchanged - on failure, immediately
+    move to the next provider without retrying.
+    """
+    mock_shutil_which.return_value = "/bin/cmd"
+    mock_env["GEMINI_API_KEY"] = "key"
+
+    fail_response = MagicMock()
+    fail_response.returncode = 1
+    fail_response.stdout = ""
+
+    success_response = MagicMock()
+    success_response.returncode = 0
+    success_response.stdout = json.dumps({
+        "response": "Google success without Anthropic retries. Fallback worked immediately.",
+        "stats": {}
+    })
+
+    mock_subprocess_run.side_effect = [fail_response, success_response]
+
+    # Default max_retries=1 means no retries
+    success, msg, cost, provider = run_agentic_task("Do work", tmp_path)
+
+    assert success
+    assert provider == "google"
+    assert mock_subprocess_run.call_count == 2  # 1 Anthropic fail + 1 Google success (no retries)
