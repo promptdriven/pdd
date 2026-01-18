@@ -207,12 +207,12 @@ def test_combined_mock_and_env(monkeypatch):
 # # Step 1: Define mocks for dependencies that need mocking at import time
 # _mock_decorator = lambda f: f  # Pass-through decorator
 # _mock_dependency = MagicMock(some_decorator=_mock_decorator)
-# _module_mocks = {
+# _module_mocks = {{
 #     "some.dependency": _mock_dependency,
-# }
+# }}
 #
 # # Step 2: Save originals BEFORE patching
-# _original_modules = {key: sys.modules.get(key) for key in _module_mocks}
+# _original_modules = {{key: sys.modules.get(key) for key in _module_mocks}}
 #
 # # Step 3: Apply mocks to sys.modules
 # sys.modules.update(_module_mocks)
