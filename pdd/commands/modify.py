@@ -120,12 +120,11 @@ def change(
                 elif len(args) == 2:
                     change_file, input_code = args
                     input_prompt = None
-                    # Non-CSV mode requires input_code to be a file, not a directory
-                    if Path(input_code).is_dir():
-                        raise click.UsageError("INPUT_CODE must be a file when not using --csv")
+                    # Without CSV mode, input_prompt_file is required
+                    raise click.UsageError("INPUT_PROMPT_FILE is required when not using --csv")
                 else:
                     raise click.UsageError(
-                        "Manual mode requires 2 or 3 arguments: CHANGE_PROMPT INPUT_CODE [INPUT_PROMPT]"
+                        "Manual mode requires 3 arguments: CHANGE_PROMPT INPUT_CODE INPUT_PROMPT"
                     )
 
             # Validate file existence
