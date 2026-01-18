@@ -2,45 +2,22 @@
 
 ### Feat
 
-- Introduce LLM prompt for generating isolated tests and refactor `test_fix.py` to improve test module isolation.
-- Refine command arguments with default values, add operation logging, and introduce new tests for `fix` and `utility` commands.
-- Recursively ensure all JSON schema properties are marked as required for OpenAI strict mode.
-- Add `promptToCodeScore` and `codeToPromptScore` fields to the LLM prompt output specification and renumber subsequent fields.
-- Introduce standardized operation logging for CLI commands and refactor sync orchestration to use the new `operation_log` module.
-- Implement an operation logging module with state management, fingerprinting, run reports, and a command decorator.
-- add operation_log module prompt for shared PDD logging infrastructure (#277)
-
-### Refactor
-
-- centralize sync orchestration logging to a new operation log module and add new tests for LLM invocation and server prompt routes.
-- introduce structured log entry creation and update functions, rename log loading, and enhance fingerprint metadata storage.
-
-## v0.0.120 (2026-01-17)
-
-### Feat
-
-- allow multiple test files for fix and test commands
-- add test cases for numbered file creation
-- Add VS Code extension PDD CLI installation system
-- add automated theorem proving languages Lean and Agda
+- **Operation Logging Module:** New `operation_log.py` providing centralized state management, fingerprinting, run reports, and a `@log_operation` decorator for CLI commands (#277).
+- **OpenAI Strict Mode:** Recursively ensure all nested JSON schema properties are marked as required, and add `additionalProperties: false` to all object schemas.
+- **Prompt-Code Diff Scores:** Added `promptToCodeScore` and `codeToPromptScore` fields to diff analysis output for bidirectional coverage assessment.
+- **Update Command Modes:** `pdd update` prompt updated to document all 4 modes: repo-wide (0 args), regeneration (1 arg), git-based (2 args with `--git`), and manual (3 args).
 
 ### Fix
 
-- prevent `pdd fix` from printing output paths for unmodified files and add reproduction tests for issue #232.
-- pass concatenated test content to fix_error_loop and update PR description
-- update tests for multiple test files
-- update tests for multiple test files
-- move file numbering logic to construct_paths
-- update extension metadata for Cursor marketplace compatibility
-- ignore sqlite cache
-- ignore .pyc files
-- ignore .pyc files
-- add --list-contexts cli test
-- Configure pytest subprocess with project root, PYTHONPATH, and cwd for accurate fix operation test results.
+- **Issue #219:** Auto-deps no longer inserts duplicate context includes when the include already exists in the prompt (#320).
+- **Issue #232:** `pdd fix` no longer prints output paths for files that weren't modified.
+- **Issue #254:** `pdd update` now preserves subdirectory structure when creating prompt files (#297). Thanks Serhan Asad!
+- **Terminal Spawner JSON:** Fixed invalid JSON generation when `EXIT_CODE` was empty, preventing HTTP 422 errors and bash "unary operator expected" errors.
+- **Pytest Isolation:** Sync orchestration now configures pytest subprocess with `--rootdir`, `PYTHONPATH`, and `cwd` based on project root marker to prevent parent directory config conflicts.
 
 ### Refactor
 
-- simplify multi-file test fixing
+- **Sync Orchestration:** Centralized logging functions moved to `operation_log` module; removed duplicate helper functions.
 
 ## v0.0.119 (2026-01-16)
 
