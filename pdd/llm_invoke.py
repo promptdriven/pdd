@@ -163,6 +163,48 @@ def _ensure_all_properties_required(schema: Dict[str, Any]) -> Dict[str, Any]:
     return schema
 
 
+def _add_additional_properties_false(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively add additionalProperties: false to all object schemas.
+
+    OpenAI's strict mode requires additionalProperties: false on ALL object
+    schemas, including nested ones. This function walks the schema tree and
+    adds the property to every object type.
+
+    Args:
+        schema: A JSON schema dictionary
+
+    Returns:
+        The schema with additionalProperties: false on all objects
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # If this is an object type, add additionalProperties: false
+    if schema.get('type') == 'object':
+        schema['additionalProperties'] = False
+        # Recursively process properties
+        if 'properties' in schema:
+            for prop_name, prop_schema in schema['properties'].items():
+                _add_additional_properties_false(prop_schema)
+
+    # Handle arrays - process items schema
+    if schema.get('type') == 'array' and 'items' in schema:
+        _add_additional_properties_false(schema['items'])
+
+    # Handle anyOf, oneOf, allOf
+    for key in ('anyOf', 'oneOf', 'allOf'):
+        if key in schema:
+            for sub_schema in schema[key]:
+                _add_additional_properties_false(sub_schema)
+
+    # Handle $defs (Pydantic's reference definitions)
+    if '$defs' in schema:
+        for def_name, def_schema in schema['$defs'].items():
+            _add_additional_properties_false(def_schema)
+
+    return schema
+
+
 def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
     """Convert a Pydantic model class to JSON Schema for cloud transport.
 
@@ -1919,8 +1961,8 @@ def llm_invoke(
                         schema = output_pydantic.model_json_schema()
                         # Ensure all properties are in required array (OpenAI strict mode requirement)
                         _ensure_all_properties_required(schema)
-                        # Add additionalProperties: false for strict mode (required by OpenAI)
-                        schema["additionalProperties"] = False
+                        # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                        _add_additional_properties_false(schema)
                         response_format = {
                             "type": "json_schema",
                             "json_schema": {
@@ -1945,8 +1987,8 @@ def llm_invoke(
                                 "strict": False
                             }
                         }
-                        # Add additionalProperties: false for strict mode (required by OpenAI)
-                        response_format["json_schema"]["schema"]["additionalProperties"] = False
+                        # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                        _add_additional_properties_false(response_format["json_schema"]["schema"])
 
                     litellm_kwargs["response_format"] = response_format
 
@@ -2133,8 +2175,8 @@ def llm_invoke(
 
                                 # Ensure all properties are in required array (OpenAI strict mode requirement)
                                 _ensure_all_properties_required(schema)
-                                # Add additionalProperties: false for strict mode (required by OpenAI)
-                                schema['additionalProperties'] = False
+                                # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                                _add_additional_properties_false(schema)
 
                                 # Use text.format with json_schema for structured output
                                 text_block = {

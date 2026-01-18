@@ -27,6 +27,16 @@ MAX_CONSECUTIVE_CRASHES = 3  # Allow up to 3 consecutive crash attempts (Bug #15
 
 # --- Real PDD Component Imports ---
 from .sync_tui import SyncApp
+from .operation_log import (
+    load_operation_log,
+    create_log_entry,
+    update_log_entry,
+    append_log_entry,
+    log_event,
+    save_fingerprint,
+    save_run_report,
+    clear_run_report,
+)
 from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
@@ -152,69 +162,11 @@ class AtomicStateUpdate:
         self._temp_files.clear()
 
 
-# --- Mock Helper Functions ---
+# --- State Management Wrappers ---
 
-def load_sync_log(basename: str, language: str) -> List[Dict[str, Any]]:
-    """Load sync log entries for a basename and language."""
-    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
-    if not log_file.exists():
-        return []
-    try:
-        with open(log_file, 'r') as f:
-            return [json.loads(line) for line in f if line.strip()]
-    except Exception:
-        return []
-
-def create_sync_log_entry(decision, budget_remaining: float) -> Dict[str, Any]:
-    """Create initial log entry from decision with all fields (actual results set to None initially)."""
-    return {
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "operation": decision.operation,
-        "reason": decision.reason,
-        "decision_type": decision.details.get("decision_type", "heuristic") if decision.details else "heuristic",
-        "confidence": decision.confidence,
-        "estimated_cost": decision.estimated_cost,
-        "actual_cost": None,
-        "success": None,
-        "model": None,
-        "duration": None,
-        "error": None,
-        "details": {
-            **(decision.details if decision.details else {}),
-            "budget_remaining": budget_remaining
-        }
-    }
-
-def update_sync_log_entry(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]:
-    """Update log entry with execution results (actual_cost, success, model, duration, error)."""
-    entry.update({
-        "actual_cost": result.get("cost", 0.0),
-        "success": result.get("success", False),
-        "model": result.get("model", "unknown"),
-        "duration": duration,
-        "error": result.get("error") if not result.get("success") else None
-    })
-    return entry
-
-def append_sync_log(basename: str, language: str, entry: Dict[str, Any]):
-    """Append completed log entry to the sync log file."""
-    log_file = META_DIR / f"{_safe_basename(basename)}_{language}_sync.log"
-    META_DIR.mkdir(parents=True, exist_ok=True)
-    with open(log_file, 'a') as f:
-        f.write(json.dumps(entry) + '\n')
-
-def log_sync_event(basename: str, language: str, event: str, details: Dict[str, Any] = None):
-    """Log a special sync event (lock_acquired, budget_warning, etc.)."""
-    entry = {
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "event": event,
-        "details": details or {}
-    }
-    append_sync_log(basename, language, entry)
-
-def save_run_report(report: Dict[str, Any], basename: str, language: str,
+def _save_run_report_atomic(report: Dict[str, Any], basename: str, language: str,
                     atomic_state: Optional['AtomicStateUpdate'] = None):
-    """Save a run report to the metadata directory.
+    """Save a run report to the metadata directory, supporting atomic updates.
 
     Args:
         report: The run report dictionary to save.
@@ -222,20 +174,18 @@ def save_run_report(report: Dict[str, Any], basename: str, language: str,
         language: The programming language.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
-    report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
     if atomic_state:
         # Buffer for atomic write
+        report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
         atomic_state.set_run_report(report, report_file)
     else:
-        # Legacy direct write
-        META_DIR.mkdir(parents=True, exist_ok=True)
-        with open(report_file, 'w') as f:
-            json.dump(report, f, indent=2, default=str)
+        # Direct write using operation_log
+        save_run_report(basename, language, report)
 
-def _save_operation_fingerprint(basename: str, language: str, operation: str,
+def _save_fingerprint_atomic(basename: str, language: str, operation: str,
                                paths: Dict[str, Path], cost: float, model: str,
                                atomic_state: Optional['AtomicStateUpdate'] = None):
-    """Save fingerprint state after successful operation.
+    """Save fingerprint state after successful operation, supporting atomic updates.
 
     Args:
         basename: The module basename.
@@ -246,31 +196,29 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         model: The model used.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
-    from datetime import datetime, timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint
-    from . import __version__
-
-    current_hashes = calculate_current_hashes(paths)
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),  # Bug #156
-    )
-
-    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language}.json"
     if atomic_state:
         # Buffer for atomic write
+        from datetime import datetime, timezone
+        from .sync_determine_operation import calculate_current_hashes, Fingerprint
+        from . import __version__
+
+        current_hashes = calculate_current_hashes(paths)
+        fingerprint = Fingerprint(
+            pdd_version=__version__,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            command=operation,
+            prompt_hash=current_hashes.get('prompt_hash'),
+            code_hash=current_hashes.get('code_hash'),
+            example_hash=current_hashes.get('example_hash'),
+            test_hash=current_hashes.get('test_hash'),
+            test_files=current_hashes.get('test_files'),  # Bug #156
+        )
+
+        fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language}.json"
         atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
     else:
-        # Legacy direct write
-        META_DIR.mkdir(parents=True, exist_ok=True)
-        with open(fingerprint_file, 'w') as f:
-            json.dump(asdict(fingerprint), f, indent=2, default=str)
+        # Direct write using operation_log
+        save_fingerprint(basename, language, operation, paths, cost, model)
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
@@ -781,7 +729,7 @@ def _execute_tests_and_create_run_report(
                     test_hash=test_hash,
                     test_files=test_file_hashes,  # Bug #156
                 )
-                save_run_report(asdict(report), basename, language, atomic_state)
+                _save_run_report_atomic(asdict(report), basename, language, atomic_state)
                 return report
 
             # Run the test command
@@ -824,7 +772,7 @@ def _execute_tests_and_create_run_report(
             test_files=test_file_hashes,  # Bug #156
         )
 
-    save_run_report(asdict(report), basename, language, atomic_state)
+    _save_run_report_atomic(asdict(report), basename, language, atomic_state)
     return report
 
 def _create_mock_context(**kwargs) -> click.Context:
@@ -841,7 +789,7 @@ def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Di
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
 
-    log_entries = load_sync_log(basename, language)
+    log_entries = load_operation_log(basename, language)
     print(f"--- Sync Log for {basename} ({language}) ---")
 
     if not log_entries:
@@ -1065,28 +1013,39 @@ def sync_orchestration(
         
         try:
             with SyncLock(basename, language):
-                log_sync_event(basename, language, "lock_acquired", {"pid": os.getpid()})
+                log_event(basename, language, "lock_acquired", {"pid": os.getpid()}, invocation_mode="sync")
                 
                 while True:
                     budget_remaining = budget - current_cost_ref[0]
                     if current_cost_ref[0] >= budget:
                         errors.append(f"Budget of ${budget:.2f} exceeded.")
-                        log_sync_event(basename, language, "budget_exceeded", {
+                        log_event(basename, language, "budget_exceeded", {
                             "total_cost": current_cost_ref[0], 
                             "budget": budget
-                        })
+                        }, invocation_mode="sync")
                         break
 
                     if budget_remaining < budget * 0.2 and budget_remaining > 0:
-                        log_sync_event(basename, language, "budget_warning", {
+                        log_event(basename, language, "budget_warning", {
                             "remaining": budget_remaining,
                             "percentage": (budget_remaining / budget) * 100
-                        })
+                        }, invocation_mode="sync")
 
                     decision = sync_determine_operation(basename, language, target_coverage, budget_remaining, False, prompts_dir, skip_tests, skip_verify, context_override)
                     operation = decision.operation
                     
-                    log_entry = create_sync_log_entry(decision, budget_remaining)
+                    log_entry = create_log_entry(
+                        operation=decision.operation,
+                        reason=decision.reason,
+                        invocation_mode="sync",
+                        estimated_cost=decision.estimated_cost,
+                        confidence=decision.confidence,
+                        decision_type=decision.details.get("decision_type", "heuristic") if decision.details else "heuristic"
+                    )
+                    if decision.details:
+                        log_entry.setdefault('details', {}).update(decision.details)
+                    log_entry.setdefault('details', {})['budget_remaining'] = budget_remaining
+
                     operation_history.append(operation)
                     
                     # Cycle detection logic
@@ -1094,7 +1053,7 @@ def sync_orchestration(
                         recent_auto_deps = [op for op in operation_history[-3:] if op == 'auto-deps']
                         if len(recent_auto_deps) >= 2:
                             errors.append("Detected auto-deps infinite loop. Force advancing to generate operation.")
-                            log_sync_event(basename, language, "cycle_detected", {"cycle_type": "auto-deps-infinite"})
+                            log_event(basename, language, "cycle_detected", {"cycle_type": "auto-deps-infinite"}, invocation_mode="sync")
                             operation = 'generate'
                             decision.operation = 'generate' # Update decision too
 
@@ -1107,7 +1066,7 @@ def sync_orchestration(
                             recent_ops == ['verify', 'crash', 'verify', 'crash']):
                             # Pattern detected - this represents MAX_CYCLE_REPEATS iterations
                             errors.append(f"Detected crash-verify cycle repeated {MAX_CYCLE_REPEATS} times. Breaking cycle.")
-                            log_sync_event(basename, language, "cycle_detected", {"cycle_type": "crash-verify", "count": MAX_CYCLE_REPEATS})
+                            log_event(basename, language, "cycle_detected", {"cycle_type": "crash-verify", "count": MAX_CYCLE_REPEATS}, invocation_mode="sync")
                             break
 
                     # Bug #4 fix: Detect test-fix cycle pattern
@@ -1119,7 +1078,7 @@ def sync_orchestration(
                             recent_ops == ['fix', 'test', 'fix', 'test']):
                             # Pattern detected - this represents MAX_CYCLE_REPEATS iterations
                             errors.append(f"Detected test-fix cycle repeated {MAX_CYCLE_REPEATS} times. Breaking cycle.")
-                            log_sync_event(basename, language, "cycle_detected", {"cycle_type": "test-fix", "count": MAX_CYCLE_REPEATS})
+                            log_event(basename, language, "cycle_detected", {"cycle_type": "test-fix", "count": MAX_CYCLE_REPEATS}, invocation_mode="sync")
                             break
                                 
                     if operation == 'fix':
@@ -1161,11 +1120,11 @@ def sync_orchestration(
                         extend_attempts = sum(1 for op in operation_history if op == 'test_extend')
                         if extend_attempts >= MAX_TEST_EXTEND_ATTEMPTS:
                             # Accept current coverage after max attempts
-                            log_sync_event(basename, language, "test_extend_limit", {
+                            log_event(basename, language, "test_extend_limit", {
                                 "attempts": extend_attempts,
                                 "max_attempts": MAX_TEST_EXTEND_ATTEMPTS,
                                 "reason": "Accepting current coverage after max extend attempts"
-                            })
+                            }, invocation_mode="sync")
                             success = True
                             break
 
@@ -1183,32 +1142,32 @@ def sync_orchestration(
                             errors.append(f"Conflict detected: {decision.reason}")
                             error_msg = decision.reason
                         
-                        update_sync_log_entry(log_entry, {'success': success, 'cost': 0.0, 'model': 'none', 'error': error_msg}, 0.0)
-                        append_sync_log(basename, language, log_entry)
+                        update_log_entry(log_entry, success=success, cost=0.0, model='none', duration=0.0, error=error_msg)
+                        append_log_entry(basename, language, log_entry)
                         break
                     
                     # Handle skips - save fingerprint with 'skip:' prefix to distinguish from actual execution
                     # Bug #11 fix: Use 'skip:' prefix so _is_workflow_complete() knows the op was skipped
                     if operation == 'verify' and (skip_verify or skip_tests):
                         skipped_operations.append('verify')
-                        update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
-                        append_sync_log(basename, language, log_entry)
+                        update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
+                        append_log_entry(basename, language, log_entry)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
-                        _save_operation_fingerprint(basename, language, 'skip:verify', pdd_files, 0.0, 'skipped')
+                        _save_fingerprint_atomic(basename, language, 'skip:verify', pdd_files, 0.0, 'skipped')
                         continue
                     if operation == 'test' and skip_tests:
                         skipped_operations.append('test')
-                        update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
-                        append_sync_log(basename, language, log_entry)
+                        update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
+                        append_log_entry(basename, language, log_entry)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
-                        _save_operation_fingerprint(basename, language, 'skip:test', pdd_files, 0.0, 'skipped')
+                        _save_fingerprint_atomic(basename, language, 'skip:test', pdd_files, 0.0, 'skipped')
                         continue
                     if operation == 'crash' and (skip_tests or skip_verify):
                         skipped_operations.append('crash')
-                        update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
-                        append_sync_log(basename, language, log_entry)
+                        update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
+                        append_log_entry(basename, language, log_entry)
                         # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
-                        _save_operation_fingerprint(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
+                        _save_fingerprint_atomic(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
                         # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
                         # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
                         current_hashes = calculate_current_hashes(pdd_files)
@@ -1220,7 +1179,7 @@ def sync_orchestration(
                             coverage=0.0,
                             test_hash=current_hashes.get('test_hash')
                         )
-                        save_run_report(asdict(synthetic_report), basename, language)
+                        _save_run_report_atomic(asdict(synthetic_report), basename, language)
                         continue
 
                     current_function_name_ref[0] = operation
@@ -1268,8 +1227,7 @@ def sync_orchestration(
                                 # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
                                 result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
                                 # Clear stale run_report so crash/verify is required for newly generated code
-                                run_report_file = META_DIR / f"{_safe_basename(basename)}_{language}_run.json"
-                                run_report_file.unlink(missing_ok=True)
+                                clear_run_report(basename, language)
                             elif operation == 'example':
                                 # Ensure example directory exists before generating
                                 pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
@@ -1336,7 +1294,7 @@ def sync_orchestration(
                                             coverage=0.0,
                                             test_hash=test_hash
                                         )
-                                        save_run_report(asdict(report), basename, language)
+                                        _save_run_report_atomic(asdict(report), basename, language)
                                         skipped_operations.append('crash')
                                         continue
                                     
@@ -1348,7 +1306,7 @@ def sync_orchestration(
                                         pdd_files['example']
                                     )
                                     if auto_fixed:
-                                        log_sync_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg})
+                                        log_event(basename, language, "auto_fix_attempted", {"message": auto_fix_msg}, invocation_mode="sync")
                                         # Retry running the example after auto-fix
                                         retry_returncode, retry_stdout, retry_stderr = _run_example_with_error_detection(
                                             cmd_parts,
@@ -1357,7 +1315,7 @@ def sync_orchestration(
                                         )
                                         if retry_returncode == 0:
                                             # Auto-fix worked! Save run report and continue
-                                            log_sync_event(basename, language, "auto_fix_success", {"message": auto_fix_msg})
+                                            log_event(basename, language, "auto_fix_success", {"message": auto_fix_msg}, invocation_mode="sync")
                                             test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                             report = RunReport(
                                                 datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1367,7 +1325,7 @@ def sync_orchestration(
                                                 coverage=0.0,
                                                 test_hash=test_hash
                                             )
-                                            save_run_report(asdict(report), basename, language)
+                                            _save_run_report_atomic(asdict(report), basename, language)
                                             result = (True, 0.0, 'auto-fix')
                                             success = True
                                             actual_cost = 0.0
@@ -1597,10 +1555,10 @@ def sync_orchestration(
                                  model_name = result[-1] if len(result) >= 1 else 'unknown'
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
-                            _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
+                            _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)
 
-                        update_sync_log_entry(log_entry, {'success': success, 'cost': actual_cost, 'model': model_name, 'error': errors[-1] if errors and not success else None}, duration)
-                        append_sync_log(basename, language, log_entry)
+                        update_log_entry(log_entry, success=success, cost=actual_cost, model=model_name, duration=duration, error=errors[-1] if errors and not success else None)
+                        append_log_entry(basename, language, log_entry)
 
                         # Post-operation checks (simplified)
                         if success and operation == 'crash':
@@ -1627,12 +1585,12 @@ def sync_orchestration(
                                  # Include test_hash for staleness detection
                                  test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                  report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
-                                 save_run_report(asdict(report), basename, language)
+                                 _save_run_report_atomic(asdict(report), basename, language)
                             except Exception as e:
                                  # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
                                  error_msg = f"Post-crash verification failed: {e}"
                                  errors.append(error_msg)
-                                 log_sync_event(basename, language, "post_crash_verification_failed", {"error": str(e)})
+                                 log_event(basename, language, "post_crash_verification_failed", {"error": str(e)}, invocation_mode="sync")
                     
                         if success and operation == 'fix':
                             # Re-run tests to update run_report after successful fix
@@ -1659,7 +1617,7 @@ def sync_orchestration(
             traceback.print_exc()
         finally:
             try:
-                log_sync_event(basename, language, "lock_released", {"pid": os.getpid(), "total_cost": current_cost_ref[0]})
+                log_event(basename, language, "lock_released", {"pid": os.getpid(), "total_cost": current_cost_ref[0]}, invocation_mode="sync")
             except: pass
             
         # Return result dict
