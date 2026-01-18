@@ -90,7 +90,7 @@ def test_get_paths(temp_pdd_env):
     assert log_path == Path(temp_pdd_env) / "test_mod_python_sync.log"
     
     fp_path = operation_log.get_fingerprint_path(basename, lang)
-    assert fp_path == Path(temp_pdd_env) / "test_mod_python.fingerprint"
+    assert fp_path == Path(temp_pdd_env) / "test_mod_python.json"
     
     rr_path = operation_log.get_run_report_path(basename, lang)
     assert rr_path == Path(temp_pdd_env) / "test_mod_python_run.json"
@@ -200,21 +200,24 @@ def test_load_operation_log_compatibility(temp_pdd_env):
     assert entries[1]["invocation_mode"] == "manual"
 
 def test_save_fingerprint(temp_pdd_env):
-    """Test saving fingerprint state."""
+    """Test saving fingerprint state in Fingerprint dataclass format."""
     basename, lang = "state", "go"
-    paths = {"p1": Path("foo/bar")}
-    
+    paths = {"prompt": Path("prompts/state_go.prompt")}
+
     operation_log.save_fingerprint(basename, lang, "op1", paths, 0.5, "gpt-4")
-    
+
     fp_path = operation_log.get_fingerprint_path(basename, lang)
     assert fp_path.exists()
-    
+
     with open(fp_path, 'r') as f:
         data = json.load(f)
-        assert data["operation"] == "op1"
-        assert data["cost"] == 0.5
-        assert data["model"] == "gpt-4"
-        assert data["paths"]["p1"] == str(Path("foo/bar"))
+        # Verify Fingerprint dataclass format (compatible with read_fingerprint)
+        assert data["command"] == "op1"
+        assert "pdd_version" in data
+        assert "timestamp" in data
+        assert "prompt_hash" in data  # May be None if file doesn't exist
+        assert "code_hash" in data
+        assert "test_hash" in data
 
 def test_clear_run_report(temp_pdd_env):
     """Test clearing run report."""
@@ -281,11 +284,14 @@ def test_log_operation_decorator_success(temp_pdd_env):
     assert entries[0]["operation"] == "test_cmd"
     
     # Verify Fingerprint (updates_fingerprint=True)
+    # Now uses Fingerprint dataclass format for sync compatibility
     fp_path = operation_log.get_fingerprint_path(basename, lang)
     assert fp_path.exists()
     with open(fp_path) as f:
         fp_data = json.load(f)
-        assert fp_data["cost"] == 0.15
+        assert fp_data["command"] == "test_cmd"
+        assert "pdd_version" in fp_data
+        assert "timestamp" in fp_data
 
     # Verify Run Report (updates_run_report=True)
     # Note: Decorator logic checks `if isinstance(result, dict)`. 
@@ -428,3 +434,193 @@ def test_z3_identity_inference_logic():
         print("Counter-example found:", s.model())
         
     assert result != sat, "Z3 found a counter-example where identity inference fails under stated assumptions."
+
+
+# --------------------------------------------------------------------------------
+# REGRESSION TEST: Fingerprint Round-Trip Bug
+# --------------------------------------------------------------------------------
+
+def test_fingerprint_path_extension_consistency(tmp_path):
+    """
+    Regression test for fingerprint path extension mismatch bug (PR #321 review).
+
+    Bug: get_fingerprint_path() returned .fingerprint extension
+         but read_fingerprint() in sync_determine_operation.py expects .json
+
+    This test verifies both modules use the same .json extension.
+    """
+    from pdd.operation_log import save_fingerprint, get_fingerprint_path
+
+    basename = "extension_test"
+    language = "python"
+
+    # Set up temp directory structure
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+
+    # Patch module to use temp directory
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)):
+
+        # Write a fingerprint using operation_log
+        save_fingerprint(
+            basename=basename,
+            language=language,
+            operation="test_operation",
+            paths={"prompt": Path("prompts/test.prompt")},
+            cost=0.123,
+            model="test-model"
+        )
+
+        # Verify the path uses .json extension (the fix)
+        expected_path = meta_dir / f"{basename}_{language}.json"
+        actual_path = get_fingerprint_path(basename, language)
+
+        assert actual_path.suffix == ".json", (
+            f"get_fingerprint_path should return .json extension, got {actual_path.suffix}"
+        )
+        assert expected_path.exists(), (
+            f"Fingerprint not written to expected .json path: {expected_path}"
+        )
+
+
+def test_fingerprint_format_compatibility(tmp_path):
+    """
+    Test that save_fingerprint writes format compatible with read_fingerprint.
+
+    This verifies that fingerprints written by manual commands (generate, example)
+    can be read by sync_determine_operation, preventing sync state corruption.
+    """
+    import json
+    from pdd.operation_log import save_fingerprint
+    from pdd.sync_determine_operation import read_fingerprint
+
+    basename = "format_test"
+    language = "python"
+
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
+
+        save_fingerprint(
+            basename=basename,
+            language=language,
+            operation="test_op",
+            paths={},
+            cost=0.1,
+            model="test"
+        )
+
+        # Verify file exists at correct path
+        fp_path = meta_dir / f"{basename}_{language}.json"
+        assert fp_path.exists()
+
+        # Verify save_fingerprint writes Fingerprint dataclass format
+        with open(fp_path) as f:
+            saved_data = json.load(f)
+
+        assert "command" in saved_data, "save_fingerprint should write 'command' field"
+        assert "pdd_version" in saved_data, "save_fingerprint should write 'pdd_version' field"
+        assert "timestamp" in saved_data, "save_fingerprint should write 'timestamp' field"
+        assert "prompt_hash" in saved_data, "save_fingerprint should write 'prompt_hash' field"
+
+        # read_fingerprint should successfully parse the fingerprint
+        result = read_fingerprint(basename, language)
+
+        # Formats are now compatible - round-trip works!
+        assert result is not None, (
+            "read_fingerprint should successfully read fingerprint written by save_fingerprint"
+        )
+        assert result.command == "test_op"
+
+
+def test_fingerprint_hash_compatibility_with_sync(tmp_path):
+    """
+    Comprehensive test verifying that save_fingerprint calculates hashes
+    identically to what sync expects via calculate_current_hashes.
+
+    This ensures that after a manual command (generate, example), sync will
+    correctly detect "no changes needed" rather than re-running operations.
+    """
+    import json
+    from pdd.operation_log import save_fingerprint
+    from pdd.sync_determine_operation import read_fingerprint, calculate_current_hashes
+
+    basename = "hash_test"
+    language = "python"
+
+    # Set up directory structure with real files
+    meta_dir = tmp_path / ".pdd" / "meta"
+    prompts_dir = tmp_path / "prompts"
+    src_dir = tmp_path / "src"
+    tests_dir = tmp_path / "tests"
+    examples_dir = tmp_path / "examples"
+
+    for d in [meta_dir, prompts_dir, src_dir, tests_dir, examples_dir]:
+        d.mkdir(parents=True)
+
+    # Create actual files with content
+    prompt_file = prompts_dir / f"{basename}_{language}.prompt"
+    code_file = src_dir / f"{basename}.py"
+    test_file = tests_dir / f"test_{basename}.py"
+    example_file = examples_dir / f"{basename}_example.py"
+
+    prompt_file.write_text("% Test prompt content\n")
+    code_file.write_text("def hello(): pass\n")
+    test_file.write_text("def test_hello(): assert True\n")
+    example_file.write_text("from src.hash_test import hello\nhello()\n")
+
+    # Build paths dict matching PDD convention
+    paths = {
+        "prompt": prompt_file,
+        "code": code_file,
+        "test": test_file,
+        "example": example_file,
+    }
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
+
+        # Calculate expected hashes using sync's function
+        expected_hashes = calculate_current_hashes(paths)
+
+        # Save fingerprint using operation_log (what manual commands use)
+        save_fingerprint(
+            basename=basename,
+            language=language,
+            operation="generate",
+            paths=paths,
+            cost=0.5,
+            model="gpt-4"
+        )
+
+        # Read fingerprint back (what sync uses to check state)
+        result = read_fingerprint(basename, language)
+
+        # Verify fingerprint was read successfully
+        assert result is not None, "read_fingerprint should parse the saved fingerprint"
+
+        # Verify ALL hash fields match what sync would calculate
+        assert result.prompt_hash == expected_hashes.get('prompt_hash'), (
+            f"prompt_hash mismatch: {result.prompt_hash} != {expected_hashes.get('prompt_hash')}"
+        )
+        assert result.code_hash == expected_hashes.get('code_hash'), (
+            f"code_hash mismatch: {result.code_hash} != {expected_hashes.get('code_hash')}"
+        )
+        assert result.example_hash == expected_hashes.get('example_hash'), (
+            f"example_hash mismatch: {result.example_hash} != {expected_hashes.get('example_hash')}"
+        )
+        assert result.test_hash == expected_hashes.get('test_hash'), (
+            f"test_hash mismatch: {result.test_hash} != {expected_hashes.get('test_hash')}"
+        )
+
+        # Verify hashes are actual values (not None) since files exist
+        assert result.prompt_hash is not None, "prompt_hash should be calculated for existing file"
+        assert result.code_hash is not None, "code_hash should be calculated for existing file"
+
+        # Verify command field
+        assert result.command == "generate"
+
+        # Verify pdd_version is set
+        assert result.pdd_version is not None, "pdd_version should be set"
