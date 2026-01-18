@@ -110,8 +110,7 @@ class TestOperationLoggingE2E:
         # Run generate
         result = self.run_pdd_command(
             ["generate", str(prompt_file), "--output", str(output_file)],
-            cwd=project_dir,
-            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
+            cwd=project_dir
         )
 
         # Verify command succeeded
@@ -151,8 +150,7 @@ class TestOperationLoggingE2E:
         # Run test generation
         result = self.run_pdd_command(
             ["test", str(prompt_file), str(code_file), "--output", str(output_file)],
-            cwd=project_dir,
-            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
+            cwd=project_dir
         )
 
         # Verify command succeeded
@@ -191,8 +189,7 @@ class TestOperationLoggingE2E:
         # Run example generation
         result = self.run_pdd_command(
             ["example", str(prompt_file), str(code_file), "--output", str(output_file)],
-            cwd=project_dir,
-            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
+            cwd=project_dir
         )
 
         # Verify command succeeded
@@ -339,8 +336,7 @@ class TestOperationLoggingE2E:
         # Run fix in manual mode
         result = self.run_pdd_command(
             ["fix", "--manual", str(prompt_file), str(code_file), str(test_file), str(error_file)],
-            cwd=project_dir,
-            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
+            cwd=project_dir
         )
 
         # Verify log entry exists
@@ -365,12 +361,10 @@ class TestOperationLoggingE2E:
             "    return 'sample'\n"
         )
 
-        # Run update on single file (--simple skips the 600s agentic path,
-        # using only the legacy 2-LLM-call path which fits within 300s)
+        # Run update on single file
         result = self.run_pdd_command(
-            ["update", "--simple", str(code_file)],
-            cwd=project_dir,
-            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
+            ["update", str(code_file)],
+            cwd=project_dir
         )
 
         # Command should complete (may succeed or fail, but not crash)
@@ -441,7 +435,7 @@ class TestSyncLogsWithSyncMode:
             cwd=project_dir,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 minutes for LLM API call (matches other E2E tests)
+            timeout=180,
             env={**os.environ, "PDD_FORCE": "1"}
         )
 
