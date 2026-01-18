@@ -37,7 +37,7 @@ def get_fingerprint_path(basename: str, language: str) -> Path:
 def get_run_report_path(basename: str, language: str) -> Path:
     """Get the path to the run report file for a specific module."""
     ensure_meta_dir()
-    return Path(META_DIR) / f"{basename}_{language}_run_report.json"
+    return Path(META_DIR) / f"{basename}_{language}_run.json"
 
 
 def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[str], Optional[str]]:
