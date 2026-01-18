@@ -1355,7 +1355,7 @@ def sync_orchestration(
                                 # For non-Python languages, set max_attempts=0 to skip iterative loop
                                 # and go directly to agentic fallback
                                 effective_max_attempts = 0 if language.lower() != 'python' else max_attempts
-                                result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
+                                result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename.replace('/', '_')}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
                             elif operation == 'test':
                                 pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
                                 # Use merge=True when test file exists to preserve fixes and append new tests
@@ -1519,7 +1519,7 @@ def sync_orchestration(
                                 # For non-Python languages, set max_attempts=0 to skip iterative loop
                                 # and go directly to agentic fallback
                                 effective_max_attempts = 0 if language.lower() != 'python' else max_attempts
-                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
+                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=str(pdd_files['test']), output_code=str(pdd_files['code']), output_results=f"{basename.replace('/', '_')}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=True, strength=strength, temperature=temperature)
                             elif operation == 'update':
                                 result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
                             else:
