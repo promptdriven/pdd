@@ -624,3 +624,235 @@ def test_fingerprint_hash_compatibility_with_sync(tmp_path):
 
         # Verify pdd_version is set
         assert result.pdd_version is not None, "pdd_version should be set"
+
+
+# --------------------------------------------------------------------------------
+# ISSUE #203: test_prompt_hash auto-management in save_fingerprint
+# --------------------------------------------------------------------------------
+
+class TestIssue203SaveFingerprintTestPromptHash:
+    """Test that save_fingerprint automatically manages test_prompt_hash based on operation type."""
+
+    def test_generate_operation_sets_test_prompt_hash_to_none(self, tmp_path):
+        """
+        Issue #203: When operation='generate', test_prompt_hash should be None
+        because code was regenerated and tests are now stale.
+        """
+        from pdd.operation_log import save_fingerprint
+        from pdd.sync_determine_operation import read_fingerprint
+
+        basename = "gen_test"
+        language = "python"
+
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+
+        # Create existing fingerprint with test_prompt_hash set
+        existing_fp = meta_dir / f"{basename}_{language}.json"
+        existing_fp.write_text(json.dumps({
+            "pdd_version": "0.0.1",
+            "timestamp": "2024-01-01T00:00:00",
+            "command": "test",
+            "prompt_hash": "old_prompt_hash",
+            "code_hash": None,
+            "example_hash": None,
+            "test_hash": None,
+            "test_files": None,
+            "test_prompt_hash": "existing_test_prompt_hash"
+        }))
+
+        with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+             patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
+
+            # Call save_fingerprint with operation='generate' (no explicit test_prompt_hash)
+            save_fingerprint(
+                basename=basename,
+                language=language,
+                operation="generate",
+                paths={},
+                cost=0.1,
+                model="test"
+            )
+
+            # Read back and verify test_prompt_hash is None
+            result = read_fingerprint(basename, language)
+            assert result is not None
+            assert result.test_prompt_hash is None, (
+                "generate operation should set test_prompt_hash to None (tests now stale)"
+            )
+
+    def test_test_operation_sets_test_prompt_hash_to_current(self, tmp_path):
+        """
+        Issue #203: When operation='test', test_prompt_hash should be set to
+        the current prompt hash (tests regenerated, linked to current prompt).
+        """
+        from pdd.operation_log import save_fingerprint
+        from pdd.sync_determine_operation import read_fingerprint
+
+        basename = "test_op_test"
+        language = "python"
+
+        meta_dir = tmp_path / ".pdd" / "meta"
+        prompts_dir = tmp_path / "prompts"
+        meta_dir.mkdir(parents=True)
+        prompts_dir.mkdir(parents=True)
+
+        # Create a prompt file with known content
+        prompt_file = prompts_dir / f"{basename}_{language}.prompt"
+        prompt_file.write_text("% Test prompt content\n")
+
+        paths = {"prompt": prompt_file}
+
+        with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+             patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
+
+            # Call save_fingerprint with operation='test'
+            save_fingerprint(
+                basename=basename,
+                language=language,
+                operation="test",
+                paths=paths,
+                cost=0.1,
+                model="test"
+            )
+
+            # Read back and verify test_prompt_hash equals prompt_hash
+            result = read_fingerprint(basename, language)
+            assert result is not None
+            assert result.prompt_hash is not None, "prompt_hash should be calculated"
+            assert result.test_prompt_hash == result.prompt_hash, (
+                "test operation should set test_prompt_hash to current prompt_hash"
+            )
+
+    def test_example_operation_preserves_test_prompt_hash(self, tmp_path):
+        """
+        Issue #203: When operation is not 'generate' or 'test', the existing
+        test_prompt_hash should be preserved.
+        """
+        from pdd.operation_log import save_fingerprint
+        from pdd.sync_determine_operation import read_fingerprint
+
+        basename = "example_test"
+        language = "python"
+
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+
+        existing_test_prompt_hash = "preserved_hash_value"
+
+        # Create existing fingerprint with test_prompt_hash set
+        existing_fp = meta_dir / f"{basename}_{language}.json"
+        existing_fp.write_text(json.dumps({
+            "pdd_version": "0.0.1",
+            "timestamp": "2024-01-01T00:00:00",
+            "command": "test",
+            "prompt_hash": "some_hash",
+            "code_hash": None,
+            "example_hash": None,
+            "test_hash": None,
+            "test_files": None,
+            "test_prompt_hash": existing_test_prompt_hash
+        }))
+
+        with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+             patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
+
+            # Call save_fingerprint with operation='example'
+            save_fingerprint(
+                basename=basename,
+                language=language,
+                operation="example",
+                paths={},
+                cost=0.1,
+                model="test"
+            )
+
+            # Read back and verify test_prompt_hash is preserved
+            result = read_fingerprint(basename, language)
+            assert result is not None
+            assert result.test_prompt_hash == existing_test_prompt_hash, (
+                "example operation should preserve existing test_prompt_hash"
+            )
+
+    def test_fix_operation_preserves_test_prompt_hash(self, tmp_path):
+        """
+        Issue #203: Fix operation should also preserve existing test_prompt_hash.
+        """
+        from pdd.operation_log import save_fingerprint
+        from pdd.sync_determine_operation import read_fingerprint
+
+        basename = "fix_test"
+        language = "python"
+
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+
+        existing_test_prompt_hash = "fix_preserved_hash"
+
+        # Create existing fingerprint
+        existing_fp = meta_dir / f"{basename}_{language}.json"
+        existing_fp.write_text(json.dumps({
+            "pdd_version": "0.0.1",
+            "timestamp": "2024-01-01T00:00:00",
+            "command": "test",
+            "prompt_hash": "some_hash",
+            "code_hash": None,
+            "example_hash": None,
+            "test_hash": None,
+            "test_files": None,
+            "test_prompt_hash": existing_test_prompt_hash
+        }))
+
+        with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+             patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
+
+            save_fingerprint(
+                basename=basename,
+                language=language,
+                operation="fix",
+                paths={},
+                cost=0.1,
+                model="test"
+            )
+
+            result = read_fingerprint(basename, language)
+            assert result is not None
+            assert result.test_prompt_hash == existing_test_prompt_hash, (
+                "fix operation should preserve existing test_prompt_hash"
+            )
+
+    def test_explicit_test_prompt_hash_overrides_auto_logic(self, tmp_path):
+        """
+        Issue #203: When test_prompt_hash is explicitly passed, it should override
+        the automatic logic.
+        """
+        from pdd.operation_log import save_fingerprint
+        from pdd.sync_determine_operation import read_fingerprint
+
+        basename = "explicit_test"
+        language = "python"
+
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+
+        explicit_hash = "explicitly_passed_hash"
+
+        with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+             patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
+
+            # Even for 'generate' operation, explicit test_prompt_hash should be used
+            save_fingerprint(
+                basename=basename,
+                language=language,
+                operation="generate",
+                paths={},
+                cost=0.1,
+                model="test",
+                test_prompt_hash=explicit_hash
+            )
+
+            result = read_fingerprint(basename, language)
+            assert result is not None
+            assert result.test_prompt_hash == explicit_hash, (
+                "Explicit test_prompt_hash should override automatic logic"
+            )

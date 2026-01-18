@@ -199,10 +199,26 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
     if atomic_state:
         # Buffer for atomic write
         from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint
+        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
         from . import __version__
 
         current_hashes = calculate_current_hashes(paths)
+
+        # Issue #203: Determine test_prompt_hash based on operation
+        # - 'generate': Reset to None (tests become stale since code changed)
+        # - 'test': Set to current prompt_hash (tests are now up-to-date with prompt)
+        # - Other operations: Preserve existing test_prompt_hash
+        existing_fingerprint = read_fingerprint(basename, language)
+        if operation == 'generate':
+            # Code regenerated - tests are now stale
+            test_prompt_hash = None
+        elif operation == 'test':
+            # Tests regenerated - link them to current prompt version
+            test_prompt_hash = current_hashes.get('prompt_hash')
+        else:
+            # Preserve existing test_prompt_hash for other operations
+            test_prompt_hash = existing_fingerprint.test_prompt_hash if existing_fingerprint else None
+
         fingerprint = Fingerprint(
             pdd_version=__version__,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -212,13 +228,19 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             example_hash=current_hashes.get('example_hash'),
             test_hash=current_hashes.get('test_hash'),
             test_files=current_hashes.get('test_files'),  # Bug #156
+            test_prompt_hash=test_prompt_hash,  # Issue #203
         )
 
         fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language}.json"
         atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
     else:
         # Direct write using operation_log
-        save_fingerprint(basename, language, operation, paths, cost, model)
+        # Issue #203: Preserve test_prompt_hash from existing fingerprint for skip operations
+        from .sync_determine_operation import read_fingerprint as read_fp
+        existing_fp = read_fp(basename, language)
+        existing_test_prompt_hash = existing_fp.test_prompt_hash if existing_fp else None
+        save_fingerprint(basename, language, operation, paths, cost, model,
+                        test_prompt_hash=existing_test_prompt_hash)
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.

@@ -4596,3 +4596,228 @@ print("Example works!")
         f"This verifies the fix: sync_orchestration.py:1266 uses "
         f"pdd_files['code'].resolve().parent instead of hardcoded Path.cwd() / 'src'"
     )
+
+
+# --- Issue #203: Auto-update tests based on prompt changes ---
+
+class TestIssue203SaveOperationFingerprintTestPromptHash:
+    """Tests for _save_fingerprint_atomic setting test_prompt_hash correctly (Issue #203)."""
+
+    def test_generate_operation_sets_test_prompt_hash_to_none(self, tmp_path, monkeypatch):
+        """After 'generate' operation, test_prompt_hash should be None (tests are stale)."""
+        from unittest.mock import MagicMock
+        from pdd.sync_orchestration import _save_fingerprint_atomic, META_DIR
+
+        # Setup
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        monkeypatch.setattr('pdd.sync_orchestration.META_DIR', meta_dir)
+
+        # Create test files
+        prompt_file = tmp_path / "test203.prompt"
+        prompt_file.write_text("test prompt content for issue 203")
+        code_file = tmp_path / "test203.py"
+        code_file.write_text("# test code for issue 203")
+
+        paths = {
+            'prompt': prompt_file,
+            'code': code_file,
+            'example': tmp_path / "test203_example.py",
+            'test': tmp_path / "test_test203.py",
+        }
+
+        mock_atomic = MagicMock()
+        _save_fingerprint_atomic("test203", "python", "generate", paths, 0.0, "model", atomic_state=mock_atomic)
+
+        # Verify set_fingerprint was called with correct data
+        mock_atomic.set_fingerprint.assert_called_once()
+        fingerprint_data = mock_atomic.set_fingerprint.call_args[0][0]
+        assert fingerprint_data['test_prompt_hash'] is None  # Should be None after generate
+
+    def test_test_operation_sets_test_prompt_hash_to_current(self, tmp_path, monkeypatch):
+        """After 'test' operation, test_prompt_hash should match current prompt_hash."""
+        from unittest.mock import MagicMock
+        from pdd.sync_orchestration import _save_fingerprint_atomic, META_DIR
+        from pdd.sync_determine_operation import calculate_sha256
+
+        # Setup
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        monkeypatch.setattr('pdd.sync_orchestration.META_DIR', meta_dir)
+
+        prompt_file = tmp_path / "test203b.prompt"
+        prompt_file.write_text("test prompt content v2 for issue 203")
+        code_file = tmp_path / "test203b.py"
+        code_file.write_text("# test code v2 for issue 203")
+        test_file = tmp_path / "test_test203b.py"
+        test_file.write_text("# test file for issue 203")
+
+        paths = {
+            'prompt': prompt_file,
+            'code': code_file,
+            'example': tmp_path / "test203b_example.py",
+            'test': test_file,
+        }
+
+        expected_prompt_hash = calculate_sha256(prompt_file)
+
+        mock_atomic = MagicMock()
+        _save_fingerprint_atomic("test203b", "python", "test", paths, 0.0, "model", atomic_state=mock_atomic)
+
+        # Verify set_fingerprint was called with correct data
+        mock_atomic.set_fingerprint.assert_called_once()
+        fingerprint_data = mock_atomic.set_fingerprint.call_args[0][0]
+        assert fingerprint_data['test_prompt_hash'] == expected_prompt_hash
+
+    def test_fix_operation_preserves_test_prompt_hash(self, tmp_path, monkeypatch):
+        """After 'fix' operation, test_prompt_hash should be preserved from previous fingerprint."""
+        import json
+        from unittest.mock import MagicMock
+        from pdd.sync_orchestration import _save_fingerprint_atomic, META_DIR
+        from pdd.sync_determine_operation import get_meta_dir
+
+        # Setup
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        monkeypatch.setattr('pdd.sync_orchestration.META_DIR', meta_dir)
+        monkeypatch.setattr('pdd.sync_determine_operation.get_meta_dir', lambda: meta_dir)
+
+        # Create initial fingerprint with test_prompt_hash set
+        initial_fp = {
+            "pdd_version": "1.0.0",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "command": "test",
+            "prompt_hash": "initial_prompt_hash_203",
+            "code_hash": "initial_code_hash_203",
+            "example_hash": None,
+            "test_hash": "initial_test_hash_203",
+            "test_files": None,
+            "test_prompt_hash": "initial_prompt_hash_203",
+        }
+        fp_file = meta_dir / "mymod203_python.json"
+        with open(fp_file, 'w') as f:
+            json.dump(initial_fp, f)
+
+        prompt_file = tmp_path / "mymod203.prompt"
+        prompt_file.write_text("test prompt content for issue 203")
+        code_file = tmp_path / "mymod203.py"
+        code_file.write_text("# fixed code for issue 203")
+
+        paths = {
+            'prompt': prompt_file,
+            'code': code_file,
+            'example': tmp_path / "mymod203_example.py",
+            'test': tmp_path / "test_mymod203.py",
+        }
+
+        mock_atomic = MagicMock()
+        _save_fingerprint_atomic("mymod203", "python", "fix", paths, 0.0, "model", atomic_state=mock_atomic)
+
+        # Verify set_fingerprint was called with preserved test_prompt_hash
+        mock_atomic.set_fingerprint.assert_called_once()
+        fingerprint_data = mock_atomic.set_fingerprint.call_args[0][0]
+        assert fingerprint_data['test_prompt_hash'] == "initial_prompt_hash_203"
+
+    def test_generate_then_test_workflow(self, tmp_path, monkeypatch):
+        """
+        End-to-end workflow: generate clears test_prompt_hash, test sets it.
+        Verifies the fingerprint data passed to atomic_state.set_fingerprint().
+        """
+        from unittest.mock import MagicMock
+        from pdd.sync_orchestration import _save_fingerprint_atomic, META_DIR
+        from pdd.sync_determine_operation import calculate_sha256
+
+        # Setup
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        monkeypatch.setattr('pdd.sync_orchestration.META_DIR', meta_dir)
+
+        prompt_file = tmp_path / "workflow203.prompt"
+        prompt_file.write_text("Original prompt for workflow test")
+        code_file = tmp_path / "workflow203.py"
+        code_file.write_text("# original code")
+        test_file = tmp_path / "test_workflow203.py"
+        test_file.write_text("# original tests")
+
+        paths = {
+            'prompt': prompt_file,
+            'code': code_file,
+            'example': tmp_path / "workflow203_example.py",
+            'test': test_file,
+        }
+
+        # Step 1: Initial test operation sets test_prompt_hash
+        original_prompt_hash = calculate_sha256(prompt_file)
+        mock_atomic1 = MagicMock()
+        _save_fingerprint_atomic("workflow203", "python", "test", paths, 0.0, "model", atomic_state=mock_atomic1)
+        fp_data1 = mock_atomic1.set_fingerprint.call_args[0][0]
+        assert fp_data1['test_prompt_hash'] == original_prompt_hash
+
+        # Step 2: Prompt changes, generate operation clears test_prompt_hash
+        prompt_file.write_text("UPDATED prompt with new requirements")
+        new_prompt_hash = calculate_sha256(prompt_file)
+        code_file.write_text("# regenerated code")
+        mock_atomic2 = MagicMock()
+        _save_fingerprint_atomic("workflow203", "python", "generate", paths, 0.0, "model", atomic_state=mock_atomic2)
+        fp_data2 = mock_atomic2.set_fingerprint.call_args[0][0]
+        assert fp_data2['test_prompt_hash'] is None  # Cleared by generate
+        assert fp_data2['prompt_hash'] == new_prompt_hash
+
+        # Step 3: Test operation re-links to new prompt
+        test_file.write_text("# new tests for updated requirements")
+        mock_atomic3 = MagicMock()
+        _save_fingerprint_atomic("workflow203", "python", "test", paths, 0.0, "model", atomic_state=mock_atomic3)
+        fp_data3 = mock_atomic3.set_fingerprint.call_args[0][0]
+        assert fp_data3['test_prompt_hash'] == new_prompt_hash  # Now linked to new prompt
+
+    def test_skip_operation_preserves_test_prompt_hash_without_atomic_state(self, tmp_path, monkeypatch):
+        """
+        Issue #203 edge case: Skip operations (without atomic_state) should preserve
+        existing test_prompt_hash instead of losing it.
+        """
+        import json
+        from pdd.sync_orchestration import _save_fingerprint_atomic, META_DIR
+        from pdd.sync_determine_operation import read_fingerprint, get_meta_dir
+
+        # Setup
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        monkeypatch.setattr('pdd.sync_orchestration.META_DIR', meta_dir)
+        monkeypatch.setattr('pdd.sync_determine_operation.get_meta_dir', lambda: meta_dir)
+        monkeypatch.setattr('pdd.operation_log.META_DIR', str(meta_dir))
+
+        # Create initial fingerprint with test_prompt_hash set
+        initial_fp = {
+            "pdd_version": "1.0.0",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "command": "test",
+            "prompt_hash": "prompt_hash_skip_test",
+            "code_hash": "code_hash_skip_test",
+            "example_hash": None,
+            "test_hash": "test_hash_skip_test",
+            "test_files": None,
+            "test_prompt_hash": "preserved_test_prompt_hash_203",
+        }
+        fp_file = meta_dir / "skipmod_python.json"
+        with open(fp_file, 'w') as f:
+            json.dump(initial_fp, f)
+
+        prompt_file = tmp_path / "skipmod.prompt"
+        prompt_file.write_text("test prompt")
+        code_file = tmp_path / "skipmod.py"
+        code_file.write_text("# code")
+
+        paths = {
+            'prompt': prompt_file,
+            'code': code_file,
+            'example': tmp_path / "skipmod_example.py",
+            'test': tmp_path / "test_skipmod.py",
+        }
+
+        # Call WITHOUT atomic_state (simulates skip operation path)
+        _save_fingerprint_atomic("skipmod", "python", "skip:test", paths, 0.0, "skipped", atomic_state=None)
+
+        # Verify test_prompt_hash is preserved
+        fp = read_fingerprint("skipmod", "python")
+        assert fp is not None
+        assert fp.test_prompt_hash == "preserved_test_prompt_hash_203"  # Should be preserved!

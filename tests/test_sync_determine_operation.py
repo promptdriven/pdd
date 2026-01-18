@@ -3041,3 +3041,254 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
         f"Expected 'generate' or 'auto-deps' due to prompt change, got '{decision.operation}'"
     assert 'prompt' in decision.reason.lower(), \
         f"Reason should mention prompt change: {decision.reason}"
+
+
+# --- Issue #203: Auto-update tests based on prompt changes ---
+
+class TestIssue203FingerprintTestPromptHash:
+    """Tests for the test_prompt_hash field in Fingerprint dataclass (Issue #203)."""
+
+    def test_fingerprint_has_test_prompt_hash_field(self):
+        """Fingerprint dataclass should have test_prompt_hash field."""
+        fp = Fingerprint(
+            pdd_version="1.0.0",
+            timestamp="2024-01-01T00:00:00Z",
+            command="test",
+            prompt_hash="prompt_hash_123",
+            code_hash="code_hash_456",
+            example_hash="example_hash_789",
+            test_hash="test_hash_abc",
+            test_files=None,
+            test_prompt_hash="prompt_hash_123",
+        )
+        assert hasattr(fp, 'test_prompt_hash')
+        assert fp.test_prompt_hash == "prompt_hash_123"
+
+    def test_fingerprint_test_prompt_hash_defaults_to_none(self):
+        """test_prompt_hash should default to None for backward compatibility."""
+        fp = Fingerprint(
+            pdd_version="1.0.0",
+            timestamp="2024-01-01T00:00:00Z",
+            command="generate",
+            prompt_hash="hash1",
+            code_hash="hash2",
+            example_hash="hash3",
+            test_hash="hash4",
+        )
+        assert fp.test_prompt_hash is None
+
+    def test_fingerprint_serialization_includes_test_prompt_hash(self):
+        """asdict should include test_prompt_hash in serialized output."""
+        from dataclasses import asdict
+        fp = Fingerprint(
+            pdd_version="1.0.0",
+            timestamp="2024-01-01T00:00:00Z",
+            command="test",
+            prompt_hash="p1",
+            code_hash="c1",
+            example_hash="e1",
+            test_hash="t1",
+            test_files=None,
+            test_prompt_hash="p1",
+        )
+        data = asdict(fp)
+        assert 'test_prompt_hash' in data
+        assert data['test_prompt_hash'] == "p1"
+
+
+class TestIssue203ReadFingerprintTestPromptHash:
+    """Tests for reading test_prompt_hash from fingerprint files (Issue #203)."""
+
+    def test_read_fingerprint_with_test_prompt_hash(self, pdd_test_environment):
+        """read_fingerprint should correctly read test_prompt_hash field."""
+        fingerprint_data = {
+            "pdd_version": "1.0.0",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "command": "test",
+            "prompt_hash": "prompt_abc",
+            "code_hash": "code_def",
+            "example_hash": "example_ghi",
+            "test_hash": "test_jkl",
+            "test_files": None,
+            "test_prompt_hash": "prompt_abc",
+        }
+        fp_file = get_meta_dir() / "issue203_python.json"
+        create_fingerprint_file(fp_file, fingerprint_data)
+
+        fp = read_fingerprint("issue203", "python")
+
+        assert fp is not None
+        assert fp.test_prompt_hash == "prompt_abc"
+
+    def test_read_fingerprint_backward_compat_without_test_prompt_hash(self, pdd_test_environment):
+        """read_fingerprint should handle old fingerprints without test_prompt_hash."""
+        old_fingerprint_data = {
+            "pdd_version": "0.99.0",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "command": "generate",
+            "prompt_hash": "old_prompt",
+            "code_hash": "old_code",
+            "example_hash": "old_example",
+            "test_hash": "old_test",
+            "test_files": None,
+            # No test_prompt_hash field - simulating old format
+        }
+        fp_file = get_meta_dir() / "oldmod203_python.json"
+        create_fingerprint_file(fp_file, old_fingerprint_data)
+
+        fp = read_fingerprint("oldmod203", "python")
+
+        assert fp is not None
+        assert fp.test_prompt_hash is None
+
+
+class TestIssue203StaleTestDetection:
+    """Tests for sync_determine_operation detecting stale tests (Issue #203)."""
+
+    @patch('sync_determine_operation.construct_paths')
+    def test_detects_stale_tests_when_test_prompt_hash_differs(self, mock_construct, pdd_test_environment):
+        """Should return 'test' operation when test_prompt_hash doesn't match current prompt."""
+        prompts_dir = pdd_test_environment / "prompts"
+
+        # Create all required files
+        p_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "NEW prompt content for 203")
+        c_hash = create_file(pdd_test_environment / f"{BASENAME}.py", "# regenerated code")
+        e_hash = create_file(pdd_test_environment / f"{BASENAME}_example.py", "# example")
+        t_hash = create_file(pdd_test_environment / f"test_{BASENAME}.py", "# old tests")
+
+        mock_construct.return_value = (
+            {}, {},
+            {
+                'code_file': str(pdd_test_environment / f"{BASENAME}.py"),
+                'example_file': str(pdd_test_environment / f"{BASENAME}_example.py"),
+                'test_file': str(pdd_test_environment / f"test_{BASENAME}.py")
+            },
+            LANGUAGE
+        )
+
+        # Create fingerprint with OLD test_prompt_hash (different from current prompt)
+        old_prompt_hash = "old_prompt_hash_before_change_203"
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "1.0",
+            "timestamp": "t",
+            "command": "test",
+            "prompt_hash": p_hash,
+            "code_hash": c_hash,
+            "example_hash": e_hash,
+            "test_hash": t_hash,
+            "test_files": None,
+            "test_prompt_hash": old_prompt_hash,  # OLD - different from current!
+        })
+
+        # Create run_report (coverage above TARGET_COVERAGE=90.0 to avoid test_extend)
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "t",
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "coverage": 95.0,
+            "test_hash": t_hash,
+        })
+
+        decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+
+        assert decision.operation == 'test'
+        assert 'outdated' in decision.reason.lower()
+        assert decision.details.get('tests_stale') is True
+
+    @patch('sync_determine_operation.construct_paths')
+    def test_no_stale_test_detection_when_test_prompt_hash_matches(self, mock_construct, pdd_test_environment):
+        """Should return 'nothing' when test_prompt_hash matches current prompt."""
+        prompts_dir = pdd_test_environment / "prompts"
+
+        p_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "synced prompt 203")
+        c_hash = create_file(pdd_test_environment / f"{BASENAME}.py", "# synced code")
+        e_hash = create_file(pdd_test_environment / f"{BASENAME}_example.py", "# example")
+        t_hash = create_file(pdd_test_environment / f"test_{BASENAME}.py", "# synced tests")
+
+        mock_construct.return_value = (
+            {}, {},
+            {
+                'code_file': str(pdd_test_environment / f"{BASENAME}.py"),
+                'example_file': str(pdd_test_environment / f"{BASENAME}_example.py"),
+                'test_file': str(pdd_test_environment / f"test_{BASENAME}.py")
+            },
+            LANGUAGE
+        )
+
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "1.0",
+            "timestamp": "t",
+            "command": "test",
+            "prompt_hash": p_hash,
+            "code_hash": c_hash,
+            "example_hash": e_hash,
+            "test_hash": t_hash,
+            "test_files": None,
+            "test_prompt_hash": p_hash,  # MATCHES current prompt hash
+        })
+
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "t",
+            "exit_code": 0,
+            "tests_passed": 10,
+            "tests_failed": 0,
+            "coverage": 95.0,  # Above TARGET_COVERAGE=90.0
+            "test_hash": t_hash,
+        })
+
+        decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+
+        assert decision.operation == 'nothing'
+
+    @patch('sync_determine_operation.construct_paths')
+    def test_no_stale_test_detection_when_test_prompt_hash_is_none(self, mock_construct, pdd_test_environment):
+        """Should NOT trigger stale test detection when test_prompt_hash is None (backward compat)."""
+        prompts_dir = pdd_test_environment / "prompts"
+
+        p_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "legacy prompt 203")
+        c_hash = create_file(pdd_test_environment / f"{BASENAME}.py", "# code")
+        e_hash = create_file(pdd_test_environment / f"{BASENAME}_example.py", "# example")
+        t_hash = create_file(pdd_test_environment / f"test_{BASENAME}.py", "# tests")
+
+        mock_construct.return_value = (
+            {}, {},
+            {
+                'code_file': str(pdd_test_environment / f"{BASENAME}.py"),
+                'example_file': str(pdd_test_environment / f"{BASENAME}_example.py"),
+                'test_file': str(pdd_test_environment / f"test_{BASENAME}.py")
+            },
+            LANGUAGE
+        )
+
+        fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+        create_fingerprint_file(fp_path, {
+            "pdd_version": "0.99",
+            "timestamp": "t",
+            "command": "test",
+            "prompt_hash": p_hash,
+            "code_hash": c_hash,
+            "example_hash": e_hash,
+            "test_hash": t_hash,
+            # No test_prompt_hash - legacy fingerprint
+        })
+
+        rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+        create_run_report_file(rr_path, {
+            "timestamp": "t",
+            "exit_code": 0,
+            "tests_passed": 5,
+            "tests_failed": 0,
+            "coverage": 95.0,  # Above TARGET_COVERAGE=90.0
+            "test_hash": t_hash,
+        })
+
+        decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
+
+        # Should NOT trigger stale test detection for legacy fingerprints
+        assert decision.operation == 'nothing'
+        assert decision.details.get('tests_stale') is not True
