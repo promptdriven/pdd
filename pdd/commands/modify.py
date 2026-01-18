@@ -120,8 +120,9 @@ def change(
                 elif len(args) == 2:
                     change_file, input_code = args
                     input_prompt = None
-                    # Without CSV mode, input_prompt_file is required
-                    raise click.UsageError("INPUT_PROMPT_FILE is required when not using --csv")
+                    # Non-CSV mode requires input_code to be a file, not a directory
+                    if Path(input_code).is_dir():
+                        raise click.UsageError("INPUT_CODE must be a file when not using --csv")
                 else:
                     raise click.UsageError(
                         "Manual mode requires 2 or 3 arguments: CHANGE_PROMPT INPUT_CODE [INPUT_PROMPT]"
@@ -221,8 +222,15 @@ def update(
                 raise click.UsageError(
                     "Cannot use file-specific arguments or flags like --git in repository-wide mode"
                 )
+            if output:
+                raise click.UsageError(
+                    "Cannot use --output in repository-wide mode"
+                )
         else:
             # Single-file mode: --extensions and --directory are not allowed
+            if len(files) > 1:
+                raise click.UsageError("Single-file mode accepts exactly one argument (the modified code file).")
+            
             if extensions:
                 raise click.UsageError(
                     "--extensions can only be used in repository-wide mode"

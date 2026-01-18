@@ -270,7 +270,19 @@ def log_operation(
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            # Try to get prompt_file from named kwarg first
             prompt_file = kwargs.get('prompt_file')
+
+            # If not found, check if there's an 'args' tuple (for commands using nargs=-1)
+            # and the first element looks like a prompt file path
+            if not prompt_file:
+                cli_args = kwargs.get('args')
+                if cli_args and len(cli_args) > 0:
+                    first_arg = str(cli_args[0])
+                    # Check if it looks like a prompt file (ends with .prompt)
+                    if first_arg.endswith('.prompt'):
+                        prompt_file = first_arg
+
             basename, language = (None, None)
             if prompt_file:
                 basename, language = infer_module_identity(prompt_file)
