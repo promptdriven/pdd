@@ -1538,8 +1538,12 @@ def sync_orchestration(
                             else:
                                 success = result is not None
 
+                        except click.Abort:
+                            errors.append(f"Operation '{operation}' was cancelled (user declined or non-interactive environment)")
+                            success = False
                         except Exception as e:
-                            errors.append(f"Exception during '{operation}': {e}")
+                            error_msg = str(e) if str(e) else type(e).__name__
+                            errors.append(f"Exception during '{operation}': {error_msg}")
                             success = False
                     
                         # Log update
@@ -1607,7 +1611,8 @@ def sync_orchestration(
                                 )
                     
                         if not success:
-                            errors.append(f"Operation '{operation}' failed.")
+                            if not errors:
+                                errors.append(f"Operation '{operation}' failed.")
                             break
 
         except BaseException as e:

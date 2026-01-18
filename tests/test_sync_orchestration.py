@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
+import click
 
 from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
@@ -77,7 +78,7 @@ def orchestration_fixture(tmp_path):
          patch('pdd.sync_orchestration.update_main') as mock_update, \
          patch('pdd.sync_orchestration.save_run_report') as mock_save_report, \
          patch('pdd.sync_orchestration._display_sync_log') as mock_display_log, \
-         patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp, \
+         patch('pdd.sync_orchestration._save_fingerprint_atomic') as mock_save_fp, \
          patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
          patch.object(sys.stdout, 'isatty', return_value=True):
 
@@ -146,7 +147,7 @@ def orchestration_fixture(tmp_path):
             'update_main': mock_update,
             'save_run_report': mock_save_report,
             '_display_sync_log': mock_display_log,
-            '_save_operation_fingerprint': mock_save_fp,
+            '_save_fingerprint_atomic': mock_save_fp,
             'get_pdd_file_paths': mock_get_paths,
         }
 
@@ -267,7 +268,7 @@ def test_skip_verify_flag(orchestration_fixture):
     orchestration_fixture['fix_verification_main'].assert_not_called()
     # Verify the state was advanced by saving a fingerprint with 'skip:' prefix
     # Bug #11 fix: skipped operations now use 'skip:' prefix to distinguish from actual execution
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'skip:verify', ANY, 0.0, 'skipped')
+    orchestration_fixture['_save_fingerprint_atomic'].assert_any_call("calculator", "python", 'skip:verify', ANY, 0.0, 'skipped')
 
 def test_skip_tests_flag(orchestration_fixture):
     """
@@ -287,7 +288,7 @@ def test_skip_tests_flag(orchestration_fixture):
     assert 'test' not in result['operations_completed']
     orchestration_fixture['cmd_test_main'].assert_not_called()
     # Bug #11 fix: skipped operations now use 'skip:' prefix to distinguish from actual execution
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'skip:test', ANY, 0.0, 'skipped')
+    orchestration_fixture['_save_fingerprint_atomic'].assert_any_call("calculator", "python", 'skip:test', ANY, 0.0, 'skipped')
 
 def test_manual_merge_request(orchestration_fixture):
     """
@@ -322,6 +323,34 @@ def test_unexpected_exception_handling(orchestration_fixture):
     mock_sync_app = orchestration_fixture['SyncApp']
     mock_sync_app.assert_called_once()
     orchestration_fixture['SyncLock'].return_value.__exit__.assert_called_once()
+
+
+def test_click_abort_produces_meaningful_error_message(orchestration_fixture):
+    """
+    Ensures that click.Abort exceptions produce descriptive error messages.
+
+    When click.Abort is raised (e.g., user declines file overwrite confirmation),
+    the error message should be meaningful, not empty (since str(click.Abort()) = '').
+    Additionally, no redundant "Operation X failed" message should be added.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.return_value = SyncDecision(operation='generate', reason='New unit')
+    orchestration_fixture['code_generator_main'].side_effect = click.Abort()
+
+    result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is False
+    assert len(result['errors']) == 1, f"Expected exactly 1 error, got {len(result['errors'])}: {result['errors']}"
+
+    # The error message should NOT be empty after the colon
+    error_msg = result['errors'][0]
+    assert "cancelled" in error_msg.lower() or "declined" in error_msg.lower(), \
+        f"Error message should mention cancellation, got: {error_msg}"
+
+    # Should NOT have the empty pattern "Exception during 'X': " with nothing after
+    assert "Exception during 'generate': ;" not in result.get('error', ''), \
+        f"Error should not have empty exception message: {result.get('error')}"
+
 
 def test_final_state_reporting(orchestration_fixture, tmp_path):
     """
@@ -1054,7 +1083,7 @@ def test_test_operation_success_detection_prevents_infinite_loop(orchestration_f
     mock_code_gen = mocks['code_generator_main']
     mock_context_gen = mocks['context_generator_main']
     mock_verify = mocks['fix_verification_main']
-    mock_save_fingerprint = mocks['_save_operation_fingerprint']
+    mock_save_fingerprint = mocks['_save_fingerprint_atomic']
     
     # Mock cmd_test_main to return a tuple with None as first element (replicating the bug)
     # but still create the test file successfully
@@ -1440,7 +1469,7 @@ class TestGenerateClearsStaleRunReport:
              patch('pdd.sync_orchestration.SyncApp') as mock_app_class, \
              patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
-             patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp, \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic') as mock_save_fp, \
              patch('pdd.sync_orchestration.META_DIR', meta_dir):
 
             # Configure lock mock
@@ -2800,7 +2829,7 @@ class TestStateUpdateAtomicity:
         """
         Verify the BUG: RunReport and Fingerprint are written with a gap.
 
-        This test captures the CALL ORDER of save_run_report vs _save_operation_fingerprint.
+        This test captures the CALL ORDER of save_run_report vs _save_fingerprint_atomic.
         With the bug: run_report is called FIRST, fingerprint LATER (non-atomic).
         After fix: They should be called together atomically (this assertion should FAIL).
 
@@ -2809,7 +2838,7 @@ class TestStateUpdateAtomicity:
         """
         mock_determine = orchestration_fixture['sync_determine_operation']
         mock_save_report = orchestration_fixture['save_run_report']
-        mock_save_fp = orchestration_fixture['_save_operation_fingerprint']
+        mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
 
         # Track call order using a shared list
         call_order = []
@@ -2837,7 +2866,7 @@ class TestStateUpdateAtomicity:
         assert 'run_report' in call_order, \
             f"save_run_report was not called. Call order: {call_order}"
         assert 'fingerprint' in call_order, \
-            f"_save_operation_fingerprint was not called. Call order: {call_order}"
+            f"_save_fingerprint_atomic was not called. Call order: {call_order}"
 
         # Find the indices
         run_report_idx = call_order.index('run_report')
@@ -3207,7 +3236,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
              patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -3263,7 +3292,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
              patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -3318,7 +3347,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch.object(sys.stdout, 'isatty', return_value=True):
 
             self._setup_sync_app_mock(mock_sync_app_class)
@@ -3371,7 +3400,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.get_test_command.get_test_command_for_file', return_value="pytest"), \
              patch('pdd.sync_orchestration.subprocess.run') as mock_subprocess, \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -3432,7 +3461,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch.object(sys.stdout, 'isatty', return_value=True):
 
             self._setup_sync_app_mock(mock_sync_app_class)
@@ -3485,7 +3514,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.get_test_command.get_test_command_for_file', return_value="go test"), \
              patch('pdd.sync_orchestration.subprocess.run') as mock_subprocess, \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -3545,7 +3574,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
              patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -4378,7 +4407,7 @@ def test_greet():
              patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
              patch("pdd.sync_orchestration.SyncApp") as mock_sync_app_class, \
              patch("pdd.sync_orchestration.fix_main") as mock_fix, \
-             patch("pdd.sync_orchestration._save_operation_fingerprint"), \
+             patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
              patch("pdd.sync_orchestration.get_pdd_file_paths") as mock_get_paths, \
              patch.object(sys.stdout, 'isatty', return_value=True):
 
