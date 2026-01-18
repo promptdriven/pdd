@@ -60,7 +60,8 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 For each step (1-9):
 1. Load the step prompt template via `load_prompt_template(f"agentic_e2e_fix_step{n}_{STEP_NAMES[n]}_LLM")`
 2. Format template with: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles, issue_content, step1_output, etc.
-3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder)`
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
+   - Use DEFAULT_MAX_RETRIES for consistent retry behavior across all orchestrators
 4. Store the output for use by subsequent steps
 5. Save state to file after step completes
 6. Accumulate cost: `total_cost += step_cost`
@@ -203,6 +204,9 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
    - If `resume=True`: Call `load_workflow_state()` to check for existing state (GitHub first, then local)
    - Track `github_comment_id` from load result for subsequent saves
    - If `resume=False`: Start fresh, call `clear_workflow_state()` to clear any existing state
+   - When saving state after each step:
+     - On success: Store output in step_outputs, set `last_completed_step = step_num`
+     - On failure (not fatal): Store "FAILED: {output}" in step_outputs, keep `last_completed_step = step_num - 1` (ensures resume re-runs the failed step)
    - On successful completion (`ALL_TESTS_PASS`): Call `clear_workflow_state()`
    - On max cycles reached: State remains for inspection
    - On user interrupt (KeyboardInterrupt): Call `save_workflow_state()` before exiting
@@ -261,7 +265,7 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
 Note: `E2E_FIX_STEP_TIMEOUTS` is defined locally in this module (see Step Name Mapping section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
