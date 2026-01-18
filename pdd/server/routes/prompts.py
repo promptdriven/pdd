@@ -774,15 +774,38 @@ async def analyze_diff(request: DiffAnalysisRequest):
             "required": ["id", "promptRange", "status", "matchConfidence", "semanticLabel", "notes"]
         }
 
+        # Schema for hiddenKnowledge items
+        hidden_knowledge_schema = {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": ["magic_value", "algorithm_choice", "edge_case", "error_handling", "api_contract", "optimization", "business_logic", "assumption"]},
+                "location": {
+                    "type": "object",
+                    "properties": {
+                        "startLine": {"type": "integer"},
+                        "endLine": {"type": "integer"}
+                    },
+                    "required": ["startLine", "endLine"]
+                },
+                "description": {"type": "string"},
+                "regenerationImpact": {"type": "string", "enum": ["would_differ", "would_fail", "might_work"]},
+                "suggestedPromptAddition": {"type": "string"}
+            },
+            "required": ["type", "location", "description", "regenerationImpact", "suggestedPromptAddition"]
+        }
+
         output_schema = {
             "type": "object",
             "properties": {
                 "overallScore": {"type": "integer", "minimum": 0, "maximum": 100},
                 "promptToCodeScore": {"type": "integer", "minimum": 0, "maximum": 100},
                 "codeToPromptScore": {"type": "integer", "minimum": 0, "maximum": 100},
+                "canRegenerate": {"type": "boolean"},
+                "regenerationRisk": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                 "summary": {"type": "string"},
                 "sections": {"type": "array", "items": section_schema},
                 "codeSections": {"type": "array", "items": section_schema},
+                "hiddenKnowledge": {"type": "array", "items": hidden_knowledge_schema},
                 "lineMappings": {
                     "type": "array",
                     "items": {
@@ -805,7 +828,9 @@ async def analyze_diff(request: DiffAnalysisRequest):
                         "documentedFeatures": {"type": "integer"},
                         "undocumentedFeatures": {"type": "integer"},
                         "promptToCodeCoverage": {"type": "number"},
-                        "codeToPromptCoverage": {"type": "number"}
+                        "codeToPromptCoverage": {"type": "number"},
+                        "hiddenKnowledgeCount": {"type": "integer"},
+                        "criticalGaps": {"type": "integer"}
                     },
                     "required": ["totalRequirements", "matchedRequirements", "missingRequirements", "promptToCodeCoverage"]
                 },
