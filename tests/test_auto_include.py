@@ -613,3 +613,139 @@ def test_auto_include_filters_circular_dependency(
 
     # The self-referential circular dependency should be filtered out
     assert "module_a_example.py" not in deps
+
+
+# ============================================================================
+# Duplicate Include Detection Tests (Issue #219)
+# ============================================================================
+
+def test_auto_include_deduplicates_wrapped_includes(
+    mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
+):
+    """
+    Regression test for GitHub issue #219: auto_include should not return
+    wrapped duplicates of includes that already exist bare in the input prompt.
+
+    When the input prompt already contains:
+        <include>context/python_preamble.prompt</include>
+
+    And the LLM returns the same include wrapped in module tags:
+        <context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+
+    The wrapped duplicate should be filtered out, because the bare include
+    already exists in the input.
+    """
+    # Mock prompt templates
+    mock_load_prompt_template.side_effect = lambda name: f"{name} content"
+
+    # Mock summarize_directory - includes available context files
+    mock_summarize_directory.return_value = (
+        "full_path,file_summary,date\n"
+        "context/python_preamble.prompt,Python preamble for code generation,2023-02-02\n"
+        "context/helper_example.py,Helper utilities,2023-02-02",
+        0.25,
+        "mock-summary-model",
+    )
+
+    # Input prompt already has a bare include for python_preamble
+    input_prompt_with_existing_include = """You are an expert Python developer.
+<include>context/python_preamble.prompt</include>
+Write clean, well-documented Python code."""
+
+    # LLM returns BOTH includes - python_preamble (duplicate) and helper (non-duplicate)
+    mock_llm_invoke.side_effect = [
+        {
+            "result": "Step 4: dependencies for the module",
+            "cost": 0.5,
+            "model_name": "mock-model-1",
+        },
+        {
+            "result": MagicMock(
+                string_of_includes=(
+                    "<context.python_preamble><include>context/python_preamble.prompt"
+                    "</include></context.python_preamble>\n"
+                    "<utils.helper><include>context/helper_example.py"
+                    "</include></utils.helper>"
+                )
+            ),
+            "cost": 0.75,
+            "model_name": "mock-model-2",
+        },
+    ]
+
+    deps, _, _, _ = auto_include(
+        input_prompt=input_prompt_with_existing_include,
+        directory_path="context/*.py",
+        csv_file=None,
+        strength=0.7,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    # The wrapped python_preamble should be REMOVED (it duplicates the bare include)
+    assert "context/python_preamble.prompt" not in deps, (
+        "Wrapped duplicate of bare include should be filtered out. "
+        f"Got: {deps}"
+    )
+
+    # The non-duplicate helper include should be PRESERVED
+    assert "context/helper_example.py" in deps, (
+        "Non-duplicate includes should be preserved. "
+        f"Got: {deps}"
+    )
+
+
+def test_auto_include_preserves_non_duplicate_includes(
+    mock_load_prompt_template, mock_summarize_directory, mock_llm_invoke
+):
+    """
+    Test that auto_include preserves includes that don't duplicate existing bare includes.
+
+    When the input prompt has NO existing includes, all LLM-generated includes
+    should be preserved.
+    """
+    mock_load_prompt_template.side_effect = lambda name: f"{name} content"
+
+    mock_summarize_directory.return_value = (
+        "full_path,file_summary,date\n"
+        "context/python_preamble.prompt,Python preamble,2023-02-02\n"
+        "context/helper_example.py,Helper utilities,2023-02-02",
+        0.25,
+        "mock-summary-model",
+    )
+
+    # Input prompt with NO existing includes
+    input_prompt_no_includes = "Write a Python module to process data."
+
+    mock_llm_invoke.side_effect = [
+        {
+            "result": "Step 4: dependencies",
+            "cost": 0.5,
+            "model_name": "mock-model-1",
+        },
+        {
+            "result": MagicMock(
+                string_of_includes=(
+                    "<context.python_preamble><include>context/python_preamble.prompt"
+                    "</include></context.python_preamble>\n"
+                    "<utils.helper><include>context/helper_example.py"
+                    "</include></utils.helper>"
+                )
+            ),
+            "cost": 0.75,
+            "model_name": "mock-model-2",
+        },
+    ]
+
+    deps, _, _, _ = auto_include(
+        input_prompt=input_prompt_no_includes,
+        directory_path="context/*.py",
+        csv_file=None,
+        strength=0.7,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    # Both includes should be preserved since input has no existing includes
+    assert "context/python_preamble.prompt" in deps
+    assert "context/helper_example.py" in deps
