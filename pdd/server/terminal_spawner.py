@@ -77,16 +77,22 @@ class TerminalSpawner:
             if job_id:
                 callback_section = f'''
 # Report completion to server (must complete before exec bash)
+EXIT_CODE=${{EXIT_CODE:-0}}
+if [ "$EXIT_CODE" -eq 0 ]; then
+    SUCCESS_JSON="true"
+else
+    SUCCESS_JSON="false"
+fi
 echo "[DEBUG] Sending callback to http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete"
-echo "[DEBUG] Payload: {{\\"success\\": '$((EXIT_CODE == 0))', \\"exit_code\\": '$EXIT_CODE'}}"
+echo "[DEBUG] Payload: {{\\"success\\": $SUCCESS_JSON, \\"exit_code\\": $EXIT_CODE}}"
 CURL_RESPONSE=$(curl -s -w "\\n[HTTP_STATUS:%{{http_code}}]" -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \\
   -H "Content-Type: application/json" \\
-  -d '{{"success": '$((EXIT_CODE == 0))', "exit_code": '$EXIT_CODE'}}' 2>&1)
+  -d "{{\\"success\\": $SUCCESS_JSON, \\"exit_code\\": $EXIT_CODE}}" 2>&1)
 echo "[DEBUG] Curl response: $CURL_RESPONSE"
 
 # Show result to user
 echo ""
-if [ $EXIT_CODE -eq 0 ]; then
+if [ "$EXIT_CODE" -eq 0 ]; then
     echo -e "\\033[32m✓ Command completed successfully\\033[0m"
 else
     echo -e "\\033[31m✗ Command failed (exit code: $EXIT_CODE)\\033[0m"
@@ -131,13 +137,15 @@ exec bash
             if job_id:
                 callback_cmd = f'''
 EXIT_CODE=$?
+EXIT_CODE=${{EXIT_CODE:-0}}
+if [ "$EXIT_CODE" -eq 0 ]; then SUCCESS_JSON="true"; else SUCCESS_JSON="false"; fi
 echo "[DEBUG] Sending callback to http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete"
-CURL_RESPONSE=$(curl -s -w "\\n[HTTP_STATUS:%{{http_code}}]" -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \
-  -H "Content-Type: application/json" \
-  -d '{{"success": '$((EXIT_CODE == 0))', "exit_code": '$EXIT_CODE'}}' 2>&1)
+CURL_RESPONSE=$(curl -s -w "\\n[HTTP_STATUS:%{{http_code}}]" -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \\
+  -H "Content-Type: application/json" \\
+  -d "{{\\"success\\": $SUCCESS_JSON, \\"exit_code\\": $EXIT_CODE}}" 2>&1)
 echo "[DEBUG] Curl response: $CURL_RESPONSE"
 echo ""
-if [ $EXIT_CODE -eq 0 ]; then echo -e "\\033[32m✓ Command completed successfully\\033[0m"; else echo -e "\\033[31m✗ Command failed (exit code: $EXIT_CODE)\\033[0m"; fi
+if [ "$EXIT_CODE" -eq 0 ]; then echo -e "\\033[32m✓ Command completed successfully\\033[0m"; else echo -e "\\033[31m✗ Command failed (exit code: $EXIT_CODE)\\033[0m"; fi
 '''
                 full_cmd = f"{command}; {callback_cmd}; exec bash"
             else:
