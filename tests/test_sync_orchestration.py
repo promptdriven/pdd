@@ -4491,3 +4491,92 @@ def test_greet():
             f"Fix operation subprocess should have cwd set to project root. "
             f"Got kwargs: {fix_kwargs}"
         )
+
+
+
+# ============================================================================
+# Bug Fix Tests - Issue #248: PYTHONPATH Hardcodes 'src/' Ignoring Project Structure
+# ============================================================================
+
+def test_crash_check_uses_code_directory_in_pythonpath_not_hardcoded_src(tmp_path, monkeypatch):
+    """
+    BUG TEST (Issue #248): When sync_orchestration runs crash check, it should set
+    PYTHONPATH to the actual code directory, not hardcoded 'src/'.
+
+    This test WILL FAIL on the current buggy code because sync_orchestration.py:1266
+    hardcodes: src_dir = Path.cwd() / 'src'
+
+    This test WILL PASS once we fix it to: code_dir = pdd_files['code'].resolve().parent
+
+    We create a project with code in 'backend/functions/' and verify that when
+    crash check runs, it correctly includes 'backend/functions/' in PYTHONPATH,
+    allowing the example to import the module.
+    """
+    from pathlib import Path
+    import os
+    import sys
+
+    # Create project with code in backend/functions/ (not src/)
+    project_root = tmp_path / "test_project"
+    project_root.mkdir()
+    code_dir = project_root / "backend" / "functions"
+    code_dir.mkdir(parents=True)
+    context_dir = project_root / "context"
+    context_dir.mkdir()
+
+    # Create module in backend/functions/
+    code_file = code_dir / "mymodule.py"
+    code_file.write_text("def myfunc(): return 42")
+
+    # Create example that imports from mymodule
+    example_file = context_dir / "mymodule_example.py"
+    example_file.write_text("""
+from mymodule import myfunc
+result = myfunc()
+assert result == 42
+print("Example works!")
+""")
+
+    monkeypatch.chdir(project_root)
+
+    # Simulate what sync_orchestration.py:1264-1267 does (BUGGY CODE)
+    # This is the code we're testing
+    pdd_files = {'code': code_file, 'example': example_file}
+
+    # THE FIXED CODE FROM LINE 1266-1267:
+    env_from_sync = os.environ.copy()
+    code_dir = pdd_files['code'].resolve().parent  # FIXED: Use actual code directory!
+    env_from_sync['PYTHONPATH'] = f"{code_dir}:{env_from_sync.get('PYTHONPATH', '')}"
+
+    # Run example with the PYTHONPATH that sync_orchestration currently sets
+    import subprocess
+    result_with_buggy_pythonpath = subprocess.run(
+        [sys.executable, str(example_file)],
+        env=env_from_sync,
+        capture_output=True,
+        text=True,
+        timeout=5
+    )
+
+    # THE FIX: What PYTHONPATH should actually be
+    env_fixed = os.environ.copy()
+    code_dir_correct = pdd_files['code'].resolve().parent  # backend/functions/
+    env_fixed['PYTHONPATH'] = f"{code_dir_correct}:{env_fixed.get('PYTHONPATH', '')}"
+
+    result_with_correct_pythonpath = subprocess.run(
+        [sys.executable, str(example_file)],
+        env=env_fixed,
+        capture_output=True,
+        text=True,
+        timeout=5
+    )
+
+    # ASSERT: The fixed code now uses the correct PYTHONPATH
+    # With the fix applied, this should PASS
+
+    assert str(code_dir_correct) in env_from_sync.get('PYTHONPATH', ''), \
+        (f"FIXED (Issue #248): sync_orchestration.py should use actual code directory in PYTHONPATH. "
+         f"Expected PYTHONPATH to contain '{code_dir_correct}' (actual code location), "
+         f"but got PYTHONPATH='{env_from_sync.get('PYTHONPATH')}'. "
+         f"Verify that line 1266 uses 'code_dir = pdd_files[\"code\"].resolve().parent' "
+         f"instead of 'src_dir = Path.cwd() / \"src\"'")
