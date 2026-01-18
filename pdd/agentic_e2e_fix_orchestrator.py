@@ -323,11 +323,11 @@ def run_agentic_e2e_fix_orchestrator(
                     "issue_number": issue_number,
                     "current_cycle": current_cycle,
                     "last_completed_step": last_completed_step,
-                    "step_outputs": step_outputs,
-                    "dev_unit_states": dev_unit_states,
+                    "step_outputs": step_outputs.copy(),  # Copy to avoid shared reference
+                    "dev_unit_states": dev_unit_states.copy(),  # Copy to avoid shared reference
                     "total_cost": total_cost,
                     "model_used": model_used,
-                    "changed_files": changed_files,
+                    "changed_files": changed_files.copy(),  # Copy to avoid shared reference
                     "last_saved_at": datetime.now().isoformat(),
                     "github_comment_id": github_comment_id
                 }
