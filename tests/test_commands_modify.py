@@ -276,7 +276,7 @@ def test_cli_update_command_git_not_in_repo_mode(mock_update_main, mock_auto_upd
     # Should handle error gracefully
     assert result.exit_code == 0
     assert result.exception is None
-    assert "Usage Error: Cannot use file-specific arguments or flags like --git" in result.output
+    assert "Usage Error: Cannot use --git in repository-wide mode" in result.output
 
     # update_main should not be called because validation failed
     mock_update_main.assert_not_called()

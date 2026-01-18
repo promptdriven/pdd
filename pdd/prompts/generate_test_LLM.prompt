@@ -41,7 +41,6 @@
     - Prefer function-scoped test resources over shared/module-scoped ones to ensure isolation
 
 <include>context/test.prompt</include>
-<include>context/pytest_isolation_example.py</include>
 
 <instructions>
     1. FIRST: Carefully analyze the ACTUAL code provided in code_under_test:

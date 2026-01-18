@@ -1,15 +1,64 @@
+## v0.0.120 (2026-01-18)
+
+### Feat
+
+- Introduce LLM prompt for generating isolated tests and refactor `test_fix.py` to improve test module isolation.
+- Refine command arguments with default values, add operation logging, and introduce new tests for `fix` and `utility` commands.
+- Recursively ensure all JSON schema properties are marked as required for OpenAI strict mode.
+- Add `promptToCodeScore` and `codeToPromptScore` fields to the LLM prompt output specification and renumber subsequent fields.
+- Introduce standardized operation logging for CLI commands and refactor sync orchestration to use the new `operation_log` module.
+- Implement an operation logging module with state management, fingerprinting, run reports, and a command decorator.
+- add operation_log module prompt for shared PDD logging infrastructure (#277)
+
+### Refactor
+
+- centralize sync orchestration logging to a new operation log module and add new tests for LLM invocation and server prompt routes.
+- introduce structured log entry creation and update functions, rename log loading, and enhance fingerprint metadata storage.
+
+## v0.0.120 (2026-01-17)
+
+### Feat
+
+- allow multiple test files for fix and test commands
+- add test cases for numbered file creation
+- Add VS Code extension PDD CLI installation system
+- add automated theorem proving languages Lean and Agda
+
+### Fix
+
+- prevent `pdd fix` from printing output paths for unmodified files and add reproduction tests for issue #232.
+- pass concatenated test content to fix_error_loop and update PR description
+- update tests for multiple test files
+- update tests for multiple test files
+- move file numbering logic to construct_paths
+- update extension metadata for Cursor marketplace compatibility
+- ignore sqlite cache
+- ignore .pyc files
+- ignore .pyc files
+- add --list-contexts cli test
+- Configure pytest subprocess with project root, PYTHONPATH, and cwd for accurate fix operation test results.
+
+### Refactor
+
+- simplify multi-file test fixing
+
 ## v0.0.119 (2026-01-16)
 
 ### Feat
 
-- Introduce 'hello' example with unit tests covering output, return value, multiple calls, and signature, removing Z3 formal verification.
-- introduce a new `hello.py` example, update `README.md` with a PDD command relationship diagram, and refactor the `hello` example and test files.
-- Add smart port detection and frontend improvements
-- Add a new 'hello' example and update the changelog with recent features, fixes, and documentation.
+- **Smart Port Detection:** `pdd connect` automatically detects when the default port (9876) is in use and finds the next available port in range 9876-9899. User-specified ports (`--port`) show a clear error if unavailable instead of auto-switching.
+- **Audio Notifications:** New `useAudioNotification` hook plays Web Audio API sounds on job completion (ascending chime for success, descending for failure). Toggle via sound icon in header; preference persisted to localStorage.
+- **Command Relationship Diagram:** README now includes a Mermaid flowchart showing how PDD commands interact (entry points → issue-driven commands → sync workflow).
+
+### Fix
+
+- **`pdd fix --loop` Without ERROR_FILE:** Loop mode (`--loop`) no longer requires ERROR_FILE argument; error output is generated during the loop. Non-loop mode still requires ERROR_FILE as the last positional argument. Thanks Serhan Asad for your help with this fix!
+- **Nested Project Test Isolation:** `_execute_tests_and_create_run_report()` now sets `--rootdir`, `PYTHONPATH`, and `cwd` based on the project's `.pddrc` marker, preventing pytest from using parent directory configs and causing infinite fix loops.
+- **Click Exception Handling:** `pdd fix` now properly re-raises Click exceptions (`Abort`, `UsageError`, etc.) instead of swallowing them with generic error handling.
 
 ### Refactor
 
-- Address PR review feedback for audio notifications
+- **PromptSpace Code Panel Layout:** Sidebar hides when code panel is open; commands displayed in vertical bar between prompt and code panels for better space utilization.
 
 ## v0.0.118 (2026-01-16)
 

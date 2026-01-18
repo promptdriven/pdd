@@ -321,6 +321,54 @@ def _filter_circular_dependencies(dependencies: str, cycles: List[List[str]]) ->
     return result
 
 
+def _extract_includes(content: str) -> Set[str]:
+    """Extract all paths from <include> tags in the content.
+
+    Args:
+        content: The string content to search.
+
+    Returns:
+        A set of paths found in <include> tags.
+    """
+    pattern = r'<include>(.*?)</include>'
+    matches = re.findall(pattern, content, re.DOTALL)
+    return {m.strip() for m in matches}
+
+
+def _filter_existing_includes(input_prompt: str, dependencies: str) -> str:
+    """Remove includes from dependencies that already exist in the input prompt.
+
+    If the input prompt already has <include>path/to/file</include>, and the
+    generated dependencies also have <wrapper><include>path/to/file</include></wrapper>,
+    the duplicate in dependencies should be removed.
+
+    Args:
+        input_prompt: The original input prompt.
+        dependencies: The generated dependencies string.
+
+    Returns:
+        The dependencies string with duplicates removed.
+    """
+    existing_includes = _extract_includes(input_prompt)
+    if not existing_includes:
+        return dependencies
+
+    result = dependencies
+    for include_path in existing_includes:
+        # Remove any include block that contains this path
+        # Pattern matches: <wrapper><include>path</include></wrapper>
+        # We use re.escape for the path to handle special chars
+        pattern = rf'<[^>]+><include>{re.escape(include_path)}</include></[^>]+>\s*'
+        result = re.sub(pattern, '', result)
+        
+        # Also try to remove bare includes if they exist in the dependencies string
+        # Pattern matches: <include>path</include> surrounded by whitespace
+        pattern_bare = rf'\s*<include>{re.escape(include_path)}</include>\s*'
+        result = re.sub(pattern_bare, '', result)
+
+    return result
+
+
 def auto_include(
     input_prompt: str,
     directory_path: str,
@@ -407,6 +455,9 @@ def auto_include(
                         f"[yellow]Warning: Filtered circular dependency: "
                         f"{' -> '.join(cycle)}[/yellow]"
                     )
+
+        # Filter out includes that already exist in the input prompt
+        dependencies = _filter_existing_includes(input_prompt, dependencies)
 
         total_cost = summary_cost + llm_cost
         model_name = llm_model_name or summary_model

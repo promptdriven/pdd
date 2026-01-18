@@ -526,23 +526,25 @@ def example_split_command():
 
 def example_change_command():
     """
-    Demonstrate the change command.
-    
+    Demonstrate the change command in manual mode.
+
     The change command modifies an existing prompt based on change instructions.
-    It can operate on a single file or in batch mode using a CSV file.
-    
-    Command signature:
-        pdd change CHANGE_PROMPT INPUT_CODE INPUT_PROMPT [OPTIONS]
-    
-    Arguments:
+    It supports two modes: agentic (default) and manual.
+
+    Command signatures:
+        Agentic mode: pdd change ISSUE_URL [OPTIONS]
+        Manual mode:  pdd change --manual CHANGE_PROMPT INPUT_CODE INPUT_PROMPT [OPTIONS]
+
+    Arguments (manual mode):
         CHANGE_PROMPT: Path to file containing change instructions (must exist)
         INPUT_CODE: Path to existing code file (must exist)
         INPUT_PROMPT: Path to prompt file to modify (must exist)
-    
+
     Options:
+        --manual: Use legacy manual mode instead of agentic mode
         --output: Where to save the modified prompt (default: overwrites input)
-        --csv: Path to CSV file for batch mode (columns: prompt_name, change_instructions)
-    
+        --csv: Enable CSV batch mode (use with --manual)
+
     Returns via @track_cost decorator:
         Tuple[Dict[str, str], float, str]:
             - result_data: Dictionary with keys:
@@ -566,11 +568,12 @@ def example_change_command():
     
     runner = CliRunner()
     
-    # Run the change command
+    # Run the change command in manual mode
     result = runner.invoke(
         cli,
         [
             "change",
+            "--manual",
             files["change_prompt"],
             files["input_code"],
             files["input_prompt"],
@@ -595,22 +598,27 @@ def example_change_command():
 
 def example_change_command_csv_batch():
     """
-    Demonstrate the change command in CSV batch mode.
-    
-    When using --csv option, the change command processes multiple prompts
+    Demonstrate the change command in manual CSV batch mode.
+
+    When using --csv with --manual, the change command processes multiple prompts
     based on instructions in a CSV file.
-    
+
     CSV file format:
         prompt_name,change_instructions
         path/to/prompt1.prompt,Instructions for first prompt
         path/to/prompt2.prompt,Instructions for second prompt
-    
+
     Command signature:
-        pdd change --csv CSV_FILE
-    
+        pdd change --manual --csv CSV_FILE CODE_DIRECTORY
+
+    Arguments:
+        CSV_FILE: Path to CSV file with batch change instructions
+        CODE_DIRECTORY: Directory containing code files referenced by prompts
+
     Options:
-        --csv: Path to CSV file with batch change instructions
-    
+        --manual: Required for CSV batch mode
+        --csv: Enable CSV batch processing
+
     Returns via @track_cost decorator:
         Tuple[Dict[str, Any], float, str]:
             - result_data: Dictionary with keys:
@@ -634,12 +642,15 @@ def example_change_command_csv_batch():
     
     runner = CliRunner()
     
-    # Run the change command in CSV batch mode
+    # Run the change command in manual CSV batch mode
     result = runner.invoke(
         cli,
         [
             "change",
-            "--csv", files["csv_file"],
+            "--manual",
+            "--csv",
+            files["csv_file"],
+            files["code_dir"],
         ],
         catch_exceptions=False,
     )
@@ -654,23 +665,23 @@ def example_change_command_csv_batch():
 def example_update_command():
     """
     Demonstrate the update command.
-    
+
     The update command updates a prompt based on changes made to the code.
-    It compares the original and modified code to understand what changed,
-    then updates the prompt to reflect those changes.
-    
+    It analyzes the modified code file and updates the corresponding prompt
+    to reflect the changes.
+
     Command signature:
-        pdd update INPUT_PROMPT MODIFIED_CODE [OPTIONS]
-    
+        Repo-wide mode: pdd update [OPTIONS]
+        Single-file mode: pdd update MODIFIED_CODE [OPTIONS]
+
     Arguments:
-        INPUT_PROMPT: Path to the original prompt file (must exist)
-        MODIFIED_CODE: Path to the modified code file (must exist)
-    
+        MODIFIED_CODE: Path to the modified code file (single-file mode)
+
     Options:
-        --original-code: Path to original code for comparison (optional)
+        --git: Use git history for original code comparison
         --output: Where to save the updated prompt (default: overwrites input)
         --simple: Use legacy 2-stage LLM update instead of agentic mode
-    
+
     Returns via @track_cost decorator:
         Tuple[Dict[str, str], float, str]:
             - result_data: Dictionary with keys:
@@ -695,20 +706,19 @@ def example_update_command():
     
     runner = CliRunner()
     
-    # Run the update command
+    # Run the update command in simple mode (legacy mode without git history)
     result = runner.invoke(
         cli,
         [
             "update",
-            files["input_prompt"],
+            "--simple",
             files["modified_code"],
-            "--original-code", files["original_code"],
             "--output", "./output/modified/greeter_updated_python.prompt",
         ],
         catch_exceptions=False,
     )
-    
-    print(f"\nCommand: pdd update {files['input_prompt']} {files['modified_code']} --original-code {files['original_code']}")
+
+    print(f"\nCommand: pdd update --simple {files['modified_code']}")
     print(f"Exit code: {result.exit_code}")
     print(f"Output:\n{result.output}")
     

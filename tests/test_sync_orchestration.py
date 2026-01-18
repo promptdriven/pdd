@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
+import click
 
 from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
@@ -77,7 +78,7 @@ def orchestration_fixture(tmp_path):
          patch('pdd.sync_orchestration.update_main') as mock_update, \
          patch('pdd.sync_orchestration.save_run_report') as mock_save_report, \
          patch('pdd.sync_orchestration._display_sync_log') as mock_display_log, \
-         patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp, \
+         patch('pdd.sync_orchestration._save_fingerprint_atomic') as mock_save_fp, \
          patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
          patch.object(sys.stdout, 'isatty', return_value=True):
 
@@ -146,7 +147,7 @@ def orchestration_fixture(tmp_path):
             'update_main': mock_update,
             'save_run_report': mock_save_report,
             '_display_sync_log': mock_display_log,
-            '_save_operation_fingerprint': mock_save_fp,
+            '_save_fingerprint_atomic': mock_save_fp,
             'get_pdd_file_paths': mock_get_paths,
         }
 
@@ -267,7 +268,7 @@ def test_skip_verify_flag(orchestration_fixture):
     orchestration_fixture['fix_verification_main'].assert_not_called()
     # Verify the state was advanced by saving a fingerprint with 'skip:' prefix
     # Bug #11 fix: skipped operations now use 'skip:' prefix to distinguish from actual execution
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'skip:verify', ANY, 0.0, 'skipped')
+    orchestration_fixture['_save_fingerprint_atomic'].assert_any_call("calculator", "python", 'skip:verify', ANY, 0.0, 'skipped')
 
 def test_skip_tests_flag(orchestration_fixture):
     """
@@ -287,7 +288,7 @@ def test_skip_tests_flag(orchestration_fixture):
     assert 'test' not in result['operations_completed']
     orchestration_fixture['cmd_test_main'].assert_not_called()
     # Bug #11 fix: skipped operations now use 'skip:' prefix to distinguish from actual execution
-    orchestration_fixture['_save_operation_fingerprint'].assert_any_call("calculator", "python", 'skip:test', ANY, 0.0, 'skipped')
+    orchestration_fixture['_save_fingerprint_atomic'].assert_any_call("calculator", "python", 'skip:test', ANY, 0.0, 'skipped')
 
 def test_manual_merge_request(orchestration_fixture):
     """
@@ -322,6 +323,34 @@ def test_unexpected_exception_handling(orchestration_fixture):
     mock_sync_app = orchestration_fixture['SyncApp']
     mock_sync_app.assert_called_once()
     orchestration_fixture['SyncLock'].return_value.__exit__.assert_called_once()
+
+
+def test_click_abort_produces_meaningful_error_message(orchestration_fixture):
+    """
+    Ensures that click.Abort exceptions produce descriptive error messages.
+
+    When click.Abort is raised (e.g., user declines file overwrite confirmation),
+    the error message should be meaningful, not empty (since str(click.Abort()) = '').
+    Additionally, no redundant "Operation X failed" message should be added.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.return_value = SyncDecision(operation='generate', reason='New unit')
+    orchestration_fixture['code_generator_main'].side_effect = click.Abort()
+
+    result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is False
+    assert len(result['errors']) == 1, f"Expected exactly 1 error, got {len(result['errors'])}: {result['errors']}"
+
+    # The error message should NOT be empty after the colon
+    error_msg = result['errors'][0]
+    assert "cancelled" in error_msg.lower() or "declined" in error_msg.lower(), \
+        f"Error message should mention cancellation, got: {error_msg}"
+
+    # Should NOT have the empty pattern "Exception during 'X': " with nothing after
+    assert "Exception during 'generate': ;" not in result.get('error', ''), \
+        f"Error should not have empty exception message: {result.get('error')}"
+
 
 def test_final_state_reporting(orchestration_fixture, tmp_path):
     """
@@ -1054,7 +1083,7 @@ def test_test_operation_success_detection_prevents_infinite_loop(orchestration_f
     mock_code_gen = mocks['code_generator_main']
     mock_context_gen = mocks['context_generator_main']
     mock_verify = mocks['fix_verification_main']
-    mock_save_fingerprint = mocks['_save_operation_fingerprint']
+    mock_save_fingerprint = mocks['_save_fingerprint_atomic']
     
     # Mock cmd_test_main to return a tuple with None as first element (replicating the bug)
     # but still create the test file successfully
@@ -1440,7 +1469,7 @@ class TestGenerateClearsStaleRunReport:
              patch('pdd.sync_orchestration.SyncApp') as mock_app_class, \
              patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
-             patch('pdd.sync_orchestration._save_operation_fingerprint') as mock_save_fp, \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic') as mock_save_fp, \
              patch('pdd.sync_orchestration.META_DIR', meta_dir):
 
             # Configure lock mock
@@ -2796,36 +2825,33 @@ class TestStateUpdateAtomicity:
         assert not fingerprint_path.exists(), \
             "fingerprint was written despite exception - rollback failed!"
 
-    def test_run_report_and_fingerprint_write_order_shows_non_atomicity(self, orchestration_fixture):
+    def test_run_report_and_fingerprint_are_written_atomically(self, orchestration_fixture):
         """
-        Verify the BUG: RunReport and Fingerprint are written with a gap.
+        Verify Bug #159 fix: RunReport and Fingerprint are written atomically.
 
-        This test captures the CALL ORDER of save_run_report vs _save_operation_fingerprint.
-        With the bug: run_report is called FIRST, fingerprint LATER (non-atomic).
-        After fix: They should be called together atomically (this assertion should FAIL).
+        This test verifies that both _save_run_report_atomic and _save_fingerprint_atomic
+        are called with an atomic_state parameter, ensuring atomic writes.
 
-        Test passes = BUG EXISTS (non-atomic writes detected)
-        Test fails = BUG FIXED (writes are now atomic)
+        The AtomicStateUpdate context manager buffers both writes and commits them
+        together, preventing state desynchronization on failures.
         """
         mock_determine = orchestration_fixture['sync_determine_operation']
-        mock_save_report = orchestration_fixture['save_run_report']
-        mock_save_fp = orchestration_fixture['_save_operation_fingerprint']
+        mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
 
-        # Track call order using a shared list
-        call_order = []
+        # Track atomic_state parameter usage
+        atomic_state_values = {'fingerprint': None}
 
-        def track_run_report(*args, **kwargs):
-            call_order.append('run_report')
+        original_save_fp = mock_save_fp.side_effect
+
+        def track_fingerprint_atomic_state(*args, **kwargs):
+            atomic_state_values['fingerprint'] = kwargs.get('atomic_state')
+            if original_save_fp:
+                return original_save_fp(*args, **kwargs)
             return None
 
-        def track_fingerprint(*args, **kwargs):
-            call_order.append('fingerprint')
-            return None
+        mock_save_fp.side_effect = track_fingerprint_atomic_state
 
-        mock_save_report.side_effect = track_run_report
-        mock_save_fp.side_effect = track_fingerprint
-
-        # Trigger a 'test' operation which should call both save functions
+        # Trigger a 'test' operation which should use atomic writes
         mock_determine.side_effect = [
             SyncDecision(operation='test', reason='Tests needed'),
             SyncDecision(operation='all_synced', reason='Done'),
@@ -2833,22 +2859,11 @@ class TestStateUpdateAtomicity:
 
         result = sync_orchestration(basename="calculator", language="python")
 
-        # Verify both functions were called
-        assert 'run_report' in call_order, \
-            f"save_run_report was not called. Call order: {call_order}"
-        assert 'fingerprint' in call_order, \
-            f"_save_operation_fingerprint was not called. Call order: {call_order}"
-
-        # Find the indices
-        run_report_idx = call_order.index('run_report')
-        fingerprint_idx = call_order.index('fingerprint')
-
-        # BUG DETECTION: With the bug, run_report is written BEFORE fingerprint
-        # This assertion PASSES when the bug exists (proving non-atomicity)
-        # This assertion FAILS after the fix (writes are atomic/together)
-        assert run_report_idx < fingerprint_idx, (
-            f"BUG #159 FIXED! run_report and fingerprint are now written atomically. "
-            f"Call order: {call_order}"
+        # Verify _save_fingerprint_atomic was called with atomic_state
+        assert mock_save_fp.called, "_save_fingerprint_atomic was not called"
+        assert atomic_state_values['fingerprint'] is not None, (
+            "Bug #159 regression: _save_fingerprint_atomic called without atomic_state. "
+            "This indicates non-atomic writes which can cause state desynchronization."
         )
 
 
@@ -3207,7 +3222,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
              patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -3263,7 +3278,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
              patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -3318,7 +3333,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch.object(sys.stdout, 'isatty', return_value=True):
 
             self._setup_sync_app_mock(mock_sync_app_class)
@@ -3371,7 +3386,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.get_test_command.get_test_command_for_file', return_value="pytest"), \
              patch('pdd.sync_orchestration.subprocess.run') as mock_subprocess, \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -3432,7 +3447,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch.object(sys.stdout, 'isatty', return_value=True):
 
             self._setup_sync_app_mock(mock_sync_app_class)
@@ -3485,7 +3500,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.get_test_command.get_test_command_for_file', return_value="go test"), \
              patch('pdd.sync_orchestration.subprocess.run') as mock_subprocess, \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -3545,7 +3560,7 @@ class TestNonPythonAgenticFallback:
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration.save_run_report'), \
              patch('pdd.sync_orchestration._display_sync_log'), \
-             patch('pdd.sync_orchestration._save_operation_fingerprint'), \
+             patch('pdd.sync_orchestration._save_fingerprint_atomic'), \
              patch('pdd.sync_orchestration.read_run_report', return_value=MagicMock(exit_code=1)), \
              patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Error")), \
              patch.object(sys.stdout, 'isatty', return_value=True):
@@ -4266,4 +4281,213 @@ def test_greet():
         assert "-c" in captured_args["value"] or any("/dev/null" in arg for arg in captured_args["value"]), (
             f"Expected -c /dev/null in pytest args to prevent parent config discovery. "
             f"Got args: {captured_args['value']}"
+        )
+
+
+class TestFixOperationProjectRootConfig:
+    """
+    Regression tests for pytest project root configuration in the fix operation.
+
+    Bug: When the fix operation runs pytest to capture error output (line 1481),
+    it didn't set proper pytest configuration (PYTHONPATH, --rootdir, cwd).
+    For nested projects (e.g., examples/hello/) with their own .pddrc marker,
+    this caused:
+    1. Import errors because PYTHONPATH wasn't set to include the nested project's src/
+    2. Wrong error output captured (import failures instead of real test failures)
+    3. fix_main() trying to fix non-existent issues based on wrong errors
+
+    Fix: The fix operation subprocess must set --rootdir, PYTHONPATH, and cwd
+    based on the project root (found by looking for .pddrc), matching the fix
+    already applied to _execute_tests_and_create_run_report().
+    """
+
+    def test_fix_operation_subprocess_sets_project_root_config(self, tmp_path, monkeypatch):
+        """
+        Regression test: Verify the fix operation subprocess (line 1481) sets correct
+        --rootdir, PYTHONPATH, and cwd for nested projects.
+
+        The fix operation runs pytest to capture error output BEFORE calling fix_main().
+        This test verifies that subprocess call uses proper pytest configuration.
+
+        Key distinction: Fix operation subprocess has NO --cov flag,
+        while _execute_tests_and_create_run_report() subprocess HAS --cov flag.
+        """
+        import subprocess
+        from unittest.mock import MagicMock, patch
+        from pdd.sync_orchestration import sync_orchestration
+        from pdd.sync_determine_operation import SyncDecision
+
+        # Create parent directory with pytest.ini (simulates pdd repo root)
+        parent_dir = tmp_path / "repo_root"
+        parent_dir.mkdir()
+        (parent_dir / "pytest.ini").write_text("[pytest]\n")
+
+        # Create nested project (simulates examples/hello/)
+        nested_project = parent_dir / "examples" / "hello"
+        nested_project.mkdir(parents=True)
+
+        # Add .pddrc marker to nested project (this is how we identify project root)
+        (nested_project / ".pddrc").write_text("")
+
+        # Create prompts/ with a prompt file
+        prompts_dir = nested_project / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "hello_python.prompt"
+        prompt_file.write_text("Create a hello function.")
+
+        # Create src/ with a module
+        src_dir = nested_project / "src"
+        src_dir.mkdir()
+        (src_dir / "hello.py").write_text('''
+def greet(name):
+    return f"Hello, {name}!"
+''')
+
+        # Create tests/ with a test that has a deliberate failure
+        tests_dir = nested_project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_hello.py"
+        test_file.write_text('''
+import hello
+
+def test_greet():
+    # Deliberate failure to trigger fix operation
+    assert hello.greet("World") == "Wrong expected value"
+''')
+
+        # Create examples/ with example file
+        examples_dir = nested_project / "examples"
+        examples_dir.mkdir()
+        example_file = examples_dir / "hello_example.py"
+        example_file.write_text("# Example file")
+
+        # Create .pdd/meta directory
+        pdd_meta = nested_project / ".pdd" / "meta"
+        pdd_meta.mkdir(parents=True)
+
+        # Change cwd to parent (simulates being in repo root)
+        monkeypatch.chdir(parent_dir)
+
+        # Capture all subprocess.run calls to find the fix operation one
+        subprocess_calls = []
+        original_run = subprocess.run
+
+        def capture_subprocess_run(cmd, **kwargs):
+            cmd_list = [str(c) for c in cmd] if not isinstance(cmd, str) else [cmd]
+            subprocess_calls.append({
+                'cmd': cmd_list,
+                'kwargs': kwargs
+            })
+            # Return a mock result for pytest calls
+            if '-m' in cmd_list and 'pytest' in cmd_list:
+                mock_result = MagicMock()
+                mock_result.returncode = 1
+                mock_result.stdout = "1 failed"
+                mock_result.stderr = ""
+                return mock_result
+            return original_run(cmd, **kwargs)
+
+        # Set up mocks to trigger fix operation
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_subprocess_run), \
+             patch("pdd.sync_orchestration.sync_determine_operation") as mock_determine, \
+             patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+             patch("pdd.sync_orchestration.SyncApp") as mock_sync_app_class, \
+             patch("pdd.sync_orchestration.fix_main") as mock_fix, \
+             patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
+             patch("pdd.sync_orchestration.get_pdd_file_paths") as mock_get_paths, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure SyncApp to run worker synchronously
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.worker_func = worker_func
+
+                def mock_run():
+                    try:
+                        return worker_func()
+                    except Exception as e:
+                        return {"success": False, "error": str(e)}
+                instance.run = mock_run
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure paths to point to nested project
+            mock_get_paths.return_value = {
+                'prompt': prompt_file,
+                'code': src_dir / 'hello.py',
+                'example': example_file,
+                'test': test_file,
+                'test_files': [test_file],
+            }
+
+            # Configure sync_determine_operation to return 'fix' once, then 'all_synced'
+            call_count = [0]
+            def determine_side_effect(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return SyncDecision(operation='fix', reason='Tests failing', confidence=0.9)
+                return SyncDecision(operation='all_synced', reason='Complete', confidence=1.0)
+            mock_determine.side_effect = determine_side_effect
+
+            # Configure fix_main to succeed
+            mock_fix.return_value = {'success': True, 'cost': 0.1, 'model': 'mock-model'}
+
+            # Run sync_orchestration to trigger fix operation
+            sync_orchestration(
+                basename="hello",
+                language="python",
+                skip_verify=True,
+                budget=10.0
+            )
+
+        # Find the fix operation subprocess call
+        # Key: Fix operation call has NO --cov flag, _execute_tests call HAS --cov flag
+        fix_operation_calls = [
+            call for call in subprocess_calls
+            if '-m' in call['cmd'] and 'pytest' in call['cmd']
+            and not any('--cov' in arg for arg in call['cmd'])
+        ]
+
+        assert len(fix_operation_calls) >= 1, (
+            f"Expected at least one fix operation subprocess call (pytest without --cov). "
+            f"All subprocess calls: {subprocess_calls}"
+        )
+
+        # Check the fix operation call has proper config
+        fix_call = fix_operation_calls[0]
+        fix_cmd = fix_call['cmd']
+        fix_kwargs = fix_call['kwargs']
+
+        # Verify --rootdir is set
+        has_rootdir = any('--rootdir=' in arg for arg in fix_cmd)
+        assert has_rootdir, (
+            f"Fix operation subprocess should have --rootdir flag. "
+            f"Got args: {fix_cmd}"
+        )
+
+        # Verify -c /dev/null is set
+        has_config_null = '-c' in fix_cmd or any('/dev/null' in arg for arg in fix_cmd)
+        assert has_config_null, (
+            f"Fix operation subprocess should have -c /dev/null to isolate pytest config. "
+            f"Got args: {fix_cmd}"
+        )
+
+        # Verify PYTHONPATH is set in env
+        env = fix_kwargs.get('env', {})
+        pythonpath = env.get('PYTHONPATH', '')
+        assert str(src_dir) in pythonpath or str(nested_project) in pythonpath, (
+            f"Fix operation subprocess should have PYTHONPATH including project src/. "
+            f"Got PYTHONPATH: {pythonpath}"
+        )
+
+        # Verify cwd is set to project root
+        cwd = fix_kwargs.get('cwd')
+        assert cwd is not None, (
+            f"Fix operation subprocess should have cwd set to project root. "
+            f"Got kwargs: {fix_kwargs}"
         )

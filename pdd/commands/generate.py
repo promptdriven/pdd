@@ -1,6 +1,7 @@
 """
 Generate, test, and example commands.
 """
+from __future__ import annotations
 import click
 from typing import Dict, Optional, Tuple, List
 
@@ -9,6 +10,7 @@ from ..context_generator_main import context_generator_main
 from ..cmd_test_main import cmd_test_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error, console
+from ..operation_log import log_operation
 
 class GenerateCommand(click.Command):
     """Ensure help shows PROMPT_FILE as required even when validated at runtime."""
@@ -69,6 +71,7 @@ class GenerateCommand(click.Command):
     help="Do not automatically include test files found in the default tests directory.",
 )
 @click.pass_context
+@log_operation("generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
 def generate(
     ctx: click.Context,
@@ -159,6 +162,7 @@ def generate(
     help="Specify where to save the generated example code (file or directory).",
 )
 @click.pass_context
+@log_operation("example", updates_fingerprint=True)
 @track_cost
 def example(
     ctx: click.Context, 
@@ -222,6 +226,7 @@ def example(
     help="Merge new tests with existing test file instead of creating a separate file.",
 )
 @click.pass_context
+@log_operation("test", updates_run_report=True)
 @track_cost
 def test(
     ctx: click.Context,

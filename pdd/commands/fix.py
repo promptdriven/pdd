@@ -10,6 +10,7 @@ from rich.console import Console
 from ..fix_main import fix_main
 from ..agentic_e2e_fix import run_agentic_e2e_fix
 from ..track_cost import track_cost
+from ..operation_log import log_operation
 from ..core.errors import handle_error
 
 console = Console()
@@ -32,6 +33,7 @@ console = Console()
 @click.option("--auto-submit", is_flag=True, help="Automatically submit example if tests pass.")
 @click.option("--agentic-fallback/--no-agentic-fallback", default=True, help="Enable agentic fallback in loop mode.")
 @click.pass_context
+@log_operation(operation="fix", clears_run_report=True)
 @track_cost
 def fix(
     ctx: click.Context,
@@ -73,8 +75,8 @@ def fix(
                 console.print("[yellow]Warning: Extra arguments ignored in Agentic E2E Fix mode.[/yellow]")
             
             issue_url = args[0]
-            verbose = ctx.obj.get("verbose", False)
-            quiet = ctx.obj.get("quiet", False)
+            verbose = ctx.obj.get("verbose", False) if ctx.obj else False
+            quiet = ctx.obj.get("quiet", False) if ctx.obj else False
             
             # Call the agentic fix workflow
             success, message, cost, model, _ = run_agentic_e2e_fix(
