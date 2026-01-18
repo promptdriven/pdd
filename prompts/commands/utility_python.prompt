@@ -26,6 +26,7 @@
        - `--budget`: Maximum cost allowed (default: 5.0).
        - `--agentic-fallback / --no-agentic-fallback`: Enable/disable agentic fallback mode (default: enabled). Pass to `fix_verification_main`.
      - Apply `@track_cost` decorator.
+     - Log operation using `@log_operation(operation="verify", clears_run_report=True, updates_run_report=True)`.
      - Handle `click.Abort` by re-raising (do not treat as error via `handle_error`).
      - Return: Tuple of (result_dict, total_cost, model_name) where result_dict contains:
        - `success`: bool
@@ -34,6 +35,7 @@
        - `attempts`: int
 
 % Dependencies
+  <include>context/command_logging.prompt</include>
   <install_completion_example>
   <include>context/install_completion_example.py</include>
   </install_completion_example>

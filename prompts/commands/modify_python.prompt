@@ -19,6 +19,7 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
    - Repo-wide mode (no args): Scan entire repo, options `--extensions` (comma-separated) and `--directory` available
    - Single-file mode: When one arg provided, treat as code file. Options `--git` and `--output` available
    - Pass `repo=is_repo_mode` to `update_main`
+   - Log operation using `@log_operation(operation="update", clears_run_report=True)`.
 
 4. **update --simple flag**: Boolean flag (default False) to use legacy 2-stage LLM update instead of agentic mode
 
@@ -33,6 +34,7 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
 - In manual mode, validate that file arguments exist before calling change_main
 
 % Dependencies
+<include>context/command_logging.prompt</include>
 <module_dependencies>
   <pdd.split_main><include>context/split_main_example.py</include></pdd.split_main>
   <pdd.change_main><include>context/change_main_example.py</include></pdd.change_main>
