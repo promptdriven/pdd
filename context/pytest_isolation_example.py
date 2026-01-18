@@ -183,3 +183,58 @@ def test_combined_mock_and_env(monkeypatch):
     assert os.path.isfile("/any/path") is True
     assert os.environ["TEST_MODE"] == "true"
     # Both automatically cleaned up
+
+
+# =============================================================================
+# PATTERN 7: Module-Level sys.modules for Import-Time Dependencies
+# =============================================================================
+#
+# When you need to mock modules BEFORE importing code under test
+# (e.g., for decorators or top-level imports), use this pattern.
+#
+# This is necessary when the code under test has decorators or module-level
+# imports that you need to mock. Unlike fixture-based mocking, this happens
+# at test file load time, before any test functions run.
+#
+# CRITICAL: You MUST restore original modules after loading, or you will
+# pollute sys.modules for all other test files during collection!
+#
+# Example usage (place at module level, outside any test function):
+#
+# import importlib.util
+# from unittest.mock import MagicMock
+#
+# # Step 1: Define mocks for dependencies that need mocking at import time
+# _mock_decorator = lambda f: f  # Pass-through decorator
+# _mock_dependency = MagicMock(some_decorator=_mock_decorator)
+# _module_mocks = {
+#     "some.dependency": _mock_dependency,
+# }
+#
+# # Step 2: Save originals BEFORE patching
+# _original_modules = {key: sys.modules.get(key) for key in _module_mocks}
+#
+# # Step 3: Apply mocks to sys.modules
+# sys.modules.update(_module_mocks)
+#
+# # Step 4: Load the module under test using importlib
+# _module_path = os.path.join(os.path.dirname(__file__), "..", "src", "module.py")
+# _module_path = os.path.abspath(_module_path)
+# _spec = importlib.util.spec_from_file_location("my_module", _module_path)
+# _module = importlib.util.module_from_spec(_spec)
+# sys.modules["my_module"] = _module
+# _spec.loader.exec_module(_module)
+# function_to_test = _module.function_to_test
+#
+# # Step 5: RESTORE originals immediately after load
+# # This is CRITICAL to avoid polluting other test files!
+# for key, original in _original_modules.items():
+#     if original is None:
+#         sys.modules.pop(key, None)
+#     else:
+#         sys.modules[key] = original
+#
+# # Now you can write normal test functions using function_to_test
+# def test_something():
+#     result = function_to_test()
+#     assert result == expected
