@@ -81,8 +81,10 @@ module_mocks = {
     "pdd.track_cost": MagicMock(track_cost=pass_through_decorator),
     "pdd.operation_log": MagicMock(log_operation=log_operation_factory),
     "pdd.core.errors": MagicMock(handle_error=mock_handle_error_func),
-    "pdd.core": MagicMock(), # Parent package
 }
+
+# Save original module values before patching (to restore after load)
+_original_modules = {key: sys.modules.get(key) for key in module_mocks}
 
 # Apply mocks to sys.modules
 sys.modules.update(module_mocks)
@@ -96,6 +98,19 @@ _fix_module = importlib.util.module_from_spec(_spec)
 sys.modules["pdd.commands.fix"] = _fix_module
 _spec.loader.exec_module(_fix_module)
 fix = _fix_module.fix
+
+# Restore original modules to avoid polluting sys.modules for other test files
+# The fix module already has internal references to the mocked objects
+for key, original_value in _original_modules.items():
+    if original_value is None:
+        sys.modules.pop(key, None)
+    else:
+        sys.modules[key] = original_value
+
+# IMPORTANT: Remove the custom-loaded pdd.commands.fix from sys.modules so that
+# other test files (like test_commands_fix.py) can properly patch the real module
+# when it gets loaded through the normal import path.
+sys.modules.pop("pdd.commands.fix", None)
 
 # --------------------------------------------------------------------------------
 # Z3 Formal Verification
