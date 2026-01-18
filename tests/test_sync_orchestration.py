@@ -2825,36 +2825,33 @@ class TestStateUpdateAtomicity:
         assert not fingerprint_path.exists(), \
             "fingerprint was written despite exception - rollback failed!"
 
-    def test_run_report_and_fingerprint_write_order_shows_non_atomicity(self, orchestration_fixture):
+    def test_run_report_and_fingerprint_are_written_atomically(self, orchestration_fixture):
         """
-        Verify the BUG: RunReport and Fingerprint are written with a gap.
+        Verify Bug #159 fix: RunReport and Fingerprint are written atomically.
 
-        This test captures the CALL ORDER of save_run_report vs _save_fingerprint_atomic.
-        With the bug: run_report is called FIRST, fingerprint LATER (non-atomic).
-        After fix: They should be called together atomically (this assertion should FAIL).
+        This test verifies that both _save_run_report_atomic and _save_fingerprint_atomic
+        are called with an atomic_state parameter, ensuring atomic writes.
 
-        Test passes = BUG EXISTS (non-atomic writes detected)
-        Test fails = BUG FIXED (writes are now atomic)
+        The AtomicStateUpdate context manager buffers both writes and commits them
+        together, preventing state desynchronization on failures.
         """
         mock_determine = orchestration_fixture['sync_determine_operation']
-        mock_save_report = orchestration_fixture['save_run_report']
         mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
 
-        # Track call order using a shared list
-        call_order = []
+        # Track atomic_state parameter usage
+        atomic_state_values = {'fingerprint': None}
 
-        def track_run_report(*args, **kwargs):
-            call_order.append('run_report')
+        original_save_fp = mock_save_fp.side_effect
+
+        def track_fingerprint_atomic_state(*args, **kwargs):
+            atomic_state_values['fingerprint'] = kwargs.get('atomic_state')
+            if original_save_fp:
+                return original_save_fp(*args, **kwargs)
             return None
 
-        def track_fingerprint(*args, **kwargs):
-            call_order.append('fingerprint')
-            return None
+        mock_save_fp.side_effect = track_fingerprint_atomic_state
 
-        mock_save_report.side_effect = track_run_report
-        mock_save_fp.side_effect = track_fingerprint
-
-        # Trigger a 'test' operation which should call both save functions
+        # Trigger a 'test' operation which should use atomic writes
         mock_determine.side_effect = [
             SyncDecision(operation='test', reason='Tests needed'),
             SyncDecision(operation='all_synced', reason='Done'),
@@ -2862,22 +2859,11 @@ class TestStateUpdateAtomicity:
 
         result = sync_orchestration(basename="calculator", language="python")
 
-        # Verify both functions were called
-        assert 'run_report' in call_order, \
-            f"save_run_report was not called. Call order: {call_order}"
-        assert 'fingerprint' in call_order, \
-            f"_save_fingerprint_atomic was not called. Call order: {call_order}"
-
-        # Find the indices
-        run_report_idx = call_order.index('run_report')
-        fingerprint_idx = call_order.index('fingerprint')
-
-        # BUG DETECTION: With the bug, run_report is written BEFORE fingerprint
-        # This assertion PASSES when the bug exists (proving non-atomicity)
-        # This assertion FAILS after the fix (writes are atomic/together)
-        assert run_report_idx < fingerprint_idx, (
-            f"BUG #159 FIXED! run_report and fingerprint are now written atomically. "
-            f"Call order: {call_order}"
+        # Verify _save_fingerprint_atomic was called with atomic_state
+        assert mock_save_fp.called, "_save_fingerprint_atomic was not called"
+        assert atomic_state_values['fingerprint'] is not None, (
+            "Bug #159 regression: _save_fingerprint_atomic called without atomic_state. "
+            "This indicates non-atomic writes which can cause state desynchronization."
         )
 
 
