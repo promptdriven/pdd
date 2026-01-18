@@ -107,8 +107,8 @@ def _write_core_dump(
         file_contents = {}
         core_dump_files = ctx.obj.get("core_dump_files", set())
 
-        if not ctx.obj.get("quiet"):
-            console.print(f"[info]Core dump: Found {len(core_dump_files)} tracked files[/info]")
+        if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+            console.print(f"[info]Debug snapshot: Found {len(core_dump_files)} tracked files[/info]")
 
         # Auto-include relevant meta files for the invoked commands
         meta_dir = Path.cwd() / ".pdd" / "meta"
@@ -137,8 +137,8 @@ def _write_core_dump(
         for file_path in core_dump_files:
             try:
                 path = Path(file_path)
-                if not ctx.obj.get("quiet"):
-                    console.print(f"[info]Core dump: Checking file {file_path}[/info]")
+                if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                    console.print(f"[info]Debug snapshot: Checking file {file_path}[/info]")
 
                 if path.exists() and path.is_file():
                     if path.stat().st_size < 50000:  # 50KB limit
@@ -150,23 +150,23 @@ def _write_core_dump(
                                 key = str(path)
 
                             file_contents[key] = path.read_text(encoding='utf-8')
-                            if not ctx.obj.get("quiet"):
-                                console.print(f"[info]Core dump: Added content for {key}[/info]")
+                            if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                                console.print(f"[info]Debug snapshot: Added content for {key}[/info]")
                         except UnicodeDecodeError:
                             file_contents[str(path)] = "<binary>"
-                            if not ctx.obj.get("quiet"):
-                                console.print(f"[warning]Core dump: Binary file {path}[/warning]")
+                            if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                                console.print(f"[warning]Debug snapshot: Binary file {path}[/warning]")
                     else:
                         file_contents[str(path)] = "<too large>"
-                        if not ctx.obj.get("quiet"):
-                            console.print(f"[warning]Core dump: File too large {path}[/warning]")
+                        if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                            console.print(f"[warning]Debug snapshot: File too large {path}[/warning]")
                 else:
-                    if not ctx.obj.get("quiet"):
-                        console.print(f"[warning]Core dump: File not found or not a file: {file_path}[/warning]")
+                    if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                        console.print(f"[warning]Debug snapshot: File not found or not a file: {file_path}[/warning]")
             except Exception as e:
                 file_contents[str(file_path)] = f"<error reading file: {e}>"
-                if not ctx.obj.get("quiet"):
-                    console.print(f"[warning]Core dump: Error reading {file_path}: {e}[/warning]")
+                if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                    console.print(f"[warning]Debug snapshot: Error reading {file_path}: {e}[/warning]")
 
         payload: Dict[str, Any] = {
             "schema_version": 1,
@@ -212,17 +212,17 @@ def _write_core_dump(
             # Check if the dump still exists after GC (may be deleted if keep=0)
             if dump_path.exists():
                 console.print(
-                    f"[info]Core dump written to [path]{dump_path}[/path]. "
-                    "You can attach this file when reporting a bug.[/info]"
+                    f"[info]📦 Debug snapshot saved to [path]{dump_path}[/path] "
+                    "(attach when reporting bugs)[/info]"
                 )
             else:
                 console.print(
-                    "[info]Core dump written and immediately cleaned up (--keep-core-dumps=0).[/info]"
+                    "[info]📦 Debug snapshot saved and immediately cleaned up (--keep-core-dumps=0)[/info]"
                 )
     except Exception as exc:
-        # Never let core dumping itself crash the CLI
+        # Never let debug snapshot creation crash the CLI
         if not ctx.obj.get("quiet"):
-            console.print(f"[warning]Failed to write core dump: {exc}[/warning]", style="warning")
+            console.print(f"[warning]Failed to write debug snapshot: {exc}[/warning]", style="warning")
 
 
 def _get_github_token() -> Optional[str]:
