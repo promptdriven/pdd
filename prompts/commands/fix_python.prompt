@@ -46,6 +46,10 @@
   <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
   </track_cost_example>
 
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+</internal_example_modules>
+
 % Instructions
   - Use `handle_error` for all exceptions except `click.Abort`.
   - Re-raise `click.Abort` to allow user cancellation to propagate.
