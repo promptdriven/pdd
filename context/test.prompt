@@ -63,3 +63,14 @@
     - Use pytest.raises() as context manager for exception testing
     - Prefer function-scoped fixtures over module or session scope
     - Use yield in fixtures to ensure cleanup runs even on test failure
+
+% 7. MODULE-LEVEL SYS.MODULES FOR IMPORT-TIME DEPENDENCIES:
+    - Sometimes you must mock modules BEFORE importing the code under test
+      (e.g., when decorators or top-level imports need mocking)
+    - ALWAYS save original values, apply mocks, load module, then RESTORE immediately
+    - BAD:  sys.modules.update(mocks); exec_module(...)  # No cleanup - pollutes all tests!
+    - GOOD: See PATTERN 7 in pytest_isolation_example.py for the full save/restore pattern
+
+<isolation_example>
+<include>context/pytest_isolation_example.py</include>
+</isolation_example>
