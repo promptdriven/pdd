@@ -49,6 +49,7 @@
 
 import sys
 import os
+import types
 import importlib.util
 import pytest
 from unittest.mock import MagicMock, patch
@@ -86,31 +87,50 @@ module_mocks = {
 # Save original module values before patching (to restore after load)
 _original_modules = {key: sys.modules.get(key) for key in module_mocks}
 
-# Apply mocks to sys.modules
-sys.modules.update(module_mocks)
+# Use an isolated module name to avoid polluting the real pdd.commands.fix namespace.
+# This prevents conflicts with tests that patch pdd.commands.fix.
+_isolated_module_name = "_test_fix_isolated.commands.fix"
+_isolated_parent_name = "_test_fix_isolated.commands"
+_isolated_grandparent_name = "_test_fix_isolated"
 
-# Directly load the fix.py module using importlib to bypass pdd.commands.__init__.py
-# This avoids triggering imports of other command modules that have real dependencies
+# Create the parent package hierarchy for relative imports to work
+_grandparent_module = types.ModuleType(_isolated_grandparent_name)
+_grandparent_module.__path__ = []
+sys.modules[_isolated_grandparent_name] = _grandparent_module
+
+_parent_module = types.ModuleType(_isolated_parent_name)
+_parent_module.__path__ = []
+sys.modules[_isolated_parent_name] = _parent_module
+
+# Set up the mocked imports to be accessible via the isolated parent
+sys.modules[f"{_isolated_grandparent_name}.fix_main"] = module_mocks["pdd.fix_main"]
+sys.modules[f"{_isolated_grandparent_name}.agentic_e2e_fix"] = module_mocks["pdd.agentic_e2e_fix"]
+sys.modules[f"{_isolated_grandparent_name}.track_cost"] = module_mocks["pdd.track_cost"]
+sys.modules[f"{_isolated_grandparent_name}.operation_log"] = module_mocks["pdd.operation_log"]
+sys.modules[f"{_isolated_grandparent_name}.core"] = MagicMock()
+sys.modules[f"{_isolated_grandparent_name}.core.errors"] = module_mocks["pdd.core.errors"]
+
+# Load the fix.py module using the isolated module name
 _fix_module_path = os.path.join(os.path.dirname(__file__), "..", "..", "pdd", "commands", "fix.py")
 _fix_module_path = os.path.abspath(_fix_module_path)
-_spec = importlib.util.spec_from_file_location("pdd.commands.fix", _fix_module_path)
+_spec = importlib.util.spec_from_file_location(_isolated_module_name, _fix_module_path)
 _fix_module = importlib.util.module_from_spec(_spec)
-sys.modules["pdd.commands.fix"] = _fix_module
+_fix_module.__package__ = _isolated_parent_name
+sys.modules[_isolated_module_name] = _fix_module
 _spec.loader.exec_module(_fix_module)
 fix = _fix_module.fix
 
-# Restore original modules to avoid polluting sys.modules for other test files
-# The fix module already has internal references to the mocked objects
+# Restore original dependency modules (only the pdd.* ones we temporarily added)
 for key, original_value in _original_modules.items():
     if original_value is None:
         sys.modules.pop(key, None)
     else:
         sys.modules[key] = original_value
 
-# IMPORTANT: Remove the custom-loaded pdd.commands.fix from sys.modules so that
-# other test files (like test_commands_fix.py) can properly patch the real module
-# when it gets loaded through the normal import path.
-sys.modules.pop("pdd.commands.fix", None)
+# Clean up our isolated modules (they're not needed by anyone else)
+for key in list(sys.modules.keys()):
+    if key.startswith("_test_fix_isolated"):
+        sys.modules.pop(key, None)
 
 # --------------------------------------------------------------------------------
 # Z3 Formal Verification
