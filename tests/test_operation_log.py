@@ -93,7 +93,7 @@ def test_get_paths(temp_pdd_env):
     assert fp_path == Path(temp_pdd_env) / "test_mod_python.fingerprint"
     
     rr_path = operation_log.get_run_report_path(basename, lang)
-    assert rr_path == Path(temp_pdd_env) / "test_mod_python_run_report.json"
+    assert rr_path == Path(temp_pdd_env) / "test_mod_python_run.json"
 
 def test_infer_module_identity_valid():
     """Test inferring identity from valid paths."""
