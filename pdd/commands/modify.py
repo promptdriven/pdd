@@ -211,25 +211,55 @@ def update(
     """
     ctx.ensure_object(dict)
     try:
-        # Determine mode based on argument count
-        is_repo_mode = len(files) == 0
+        # Handle argument counts per modify_python.prompt spec (aligned with README)
+        if len(files) == 0:
+            # Repo-wide mode
+            is_repo_mode = True
+            input_prompt_file = None
+            modified_code_file = None
+            input_code_file = None
+        elif len(files) == 1:
+            # Regeneration mode: just the code file
+            is_repo_mode = False
+            input_prompt_file = None
+            modified_code_file = files[0]
+            input_code_file = None
+        elif len(files) == 2:
+            # Git-based update: prompt + modified_code (requires --git)
+            if not git:
+                raise click.UsageError(
+                    "Two arguments require --git flag: pdd update --git <prompt> <modified_code>"
+                )
+            is_repo_mode = False
+            input_prompt_file = files[0]
+            modified_code_file = files[1]
+            input_code_file = None
+        elif len(files) == 3:
+            # Manual update: prompt + modified_code + original_code
+            if git:
+                raise click.UsageError(
+                    "Cannot use --git with 3 arguments (--git and original_code are mutually exclusive)"
+                )
+            is_repo_mode = False
+            input_prompt_file = files[0]
+            modified_code_file = files[1]
+            input_code_file = files[2]
+        else:
+            raise click.UsageError("Too many arguments. Max 3: <prompt> <modified_code> <original_code>")
 
         # Validate mode-specific options
         if is_repo_mode:
             # Repo-wide mode: --git and --output are not allowed
             if git:
                 raise click.UsageError(
-                    "Cannot use file-specific arguments or flags like --git in repository-wide mode"
+                    "Cannot use --git in repository-wide mode"
                 )
             if output:
                 raise click.UsageError(
                     "Cannot use --output in repository-wide mode"
                 )
         else:
-            # Single-file mode: --extensions and --directory are not allowed
-            if len(files) > 1:
-                raise click.UsageError("Single-file mode accepts exactly one argument (the modified code file).")
-            
+            # File modes: --extensions and --directory are not allowed
             if extensions:
                 raise click.UsageError(
                     "--extensions can only be used in repository-wide mode"
@@ -239,15 +269,12 @@ def update(
                     "--directory can only be used in repository-wide mode"
                 )
 
-        # In single-file mode, the one arg is the modified code file
-        modified_code_file = files[0] if len(files) > 0 else None
-
         # Call update_main with correct parameters
         result, cost, model = update_main(
             ctx=ctx,
-            input_prompt_file=None,
+            input_prompt_file=input_prompt_file,
             modified_code_file=modified_code_file,
-            input_code_file=None,
+            input_code_file=input_code_file,
             output=output,
             use_git=git,
             repo=is_repo_mode,
