@@ -1,0 +1,35 @@
+% Operation Logging for CLI Commands
+
+Commands that modify PDD state should log their operations using the `@log_operation`
+decorator from `pdd.operation_log`. This enables unified tracking of both manual CLI
+invocations and sync-initiated operations.
+
+<operation_log_example>
+<include>context/operation_log_example.py</include>
+</operation_log_example>
+
+% Decorator Stacking
+
+Apply `@log_operation` BEFORE `@track_cost` (decorators execute bottom-up):
+
+```python
+@click.command()
+@click.pass_context
+@log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
+@track_cost
+def generate(ctx, prompt_file, ...):
+    ...
+```
+
+% Decorator Parameters
+
+| Parameter | When to use |
+|-----------|-------------|
+| `clears_run_report=True` | Operations that invalidate test results (generate, fix, crash, verify, update) |
+| `updates_fingerprint=True` | Operations that change code/example files (generate, example) |
+| `updates_run_report=True` | Operations that produce test results (test, verify) |
+
+% Module Identity
+
+The decorator extracts `(basename, language)` from the `prompt_file` argument.
+If identity cannot be inferred, logging is silently skipped but command execution continues.

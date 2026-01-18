@@ -30,10 +30,12 @@
       - `--loop`, `--verification-program`, `--max-attempts`, `--budget`: (Manual) Loop options.
       - `--auto-submit`: (Manual) Auto-submit on success.
       - `--agentic-fallback/--no-agentic-fallback`: (Manual) Enable agentic fallback in loop mode.
-    - Track cost.
+    - Track cost using `@track_cost`.
+    - Log operation using `@log_operation(operation="fix", clears_run_report=True)`.
     - Return appropriate result tuple.
 
 % Dependencies
+  <include>context/command_logging.prompt</include>
   <fix_main_example>
   <pdd.fix_main><include>context/fix_main_example.py</include></pdd.fix_main>
   </fix_main_example>

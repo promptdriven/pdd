@@ -15,16 +15,20 @@
      - Interface: Match the `generate` command specification in `README.md` (including parameterized `-e` options and templates).
      - Logic: Resolve template if provided. Parse env vars. Call `code_generator_main`.
      - Track cost using `@track_cost`.
+     - Log operation using `@log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)`.
   2. **example**:
      - Interface: Match the `example` command specification in `README.md`.
      - Logic: Call `context_generator_main`.
      - Track cost using `@track_cost`.
+     - Log operation using `@log_operation(operation="example", updates_fingerprint=True)`.
   3. **test**:
      - Interface: Match the `test` command specification in `README.md`.
      - Logic: Call `cmd_test_main`.
      - Track cost using `@track_cost`.
+     - Log operation using `@log_operation(operation="test", updates_run_report=True)`.
 
 % Dependencies
+  <include>context/command_logging.prompt</include>
   <code_generator_main_example>
   <include>context/code_generator_main_example.py</include>
   </code_generator_main_example>
