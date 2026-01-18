@@ -16,10 +16,12 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
    - Manual mode without --csv: 3 args required (change_prompt_file, input_code, input_prompt_file)
    - Manual mode with --csv: 2 args (csv_file, code_directory) - input_prompt_file not used
 
-3. **update**: Two modes determined by presence of file arguments:
-   - Repo-wide mode (no args): Scan entire repo, options `--extensions` (comma-separated) and `--directory` available
-   - Single-file mode: When one arg provided, treat as code file. Options `--git` and `--output` available
-   - Pass `repo=is_repo_mode` to `update_main`
+3. **update**: Four modes determined by argument count (per README documentation):
+   - **Repo-wide mode (0 args)**: Scan entire repo. Options: `--extensions` (comma-separated), `--directory`
+   - **Regeneration mode (1 arg)**: `<code_file>`. Derive prompt path via conventions. Options: `--git`, `--output`
+   - **Git-based update (2 args)**: `<prompt> <modified_code>`. Requires `--git` flag; raise UsageError if missing
+   - **Manual update (3 args)**: `<prompt> <modified_code> <original_code>`. Raise UsageError if `--git` also set (mutually exclusive per update_main spec)
+   - Pass to `update_main`: `repo=is_repo_mode`, `input_prompt_file=files[0]` (for 2-3 args), `modified_code_file=files[1]` (for 2-3 args) or `files[0]` (for 1 arg), `input_code_file=files[2]` (for 3 args only), `use_git`, `output`, `simple`
    - Log operation using `@log_operation(operation="update", clears_run_report=True)`.
 
 4. **update --simple flag**: Boolean flag (default False) to use legacy 2-stage LLM update instead of agentic mode
@@ -31,6 +33,7 @@ This module contains Click commands that modify prompts: `split`, `change`, and 
 
 % Instructions
 - For `change` command: validate argument count based on mode before calling the appropriate function
+- For `update` command: validate argument count and flag combinations (2 args requires --git, 3 args forbids --git)
 - Raise `click.UsageError` for validation failures
 - In manual mode, validate that file arguments exist before calling change_main
 
