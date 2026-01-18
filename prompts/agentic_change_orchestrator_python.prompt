@@ -39,8 +39,9 @@ For steps 1-9 and 12:
 1. **Check if step already completed** (from saved state) - if so, skip and use cached output
 2. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
 3. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
-4. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder)`
+4. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
    - Use step-specific timeout plus optional timeout_adder to allow caller to extend timeouts
+   - Use DEFAULT_MAX_RETRIES for consistent retry behavior across all orchestrators
 5. Store the output for use by subsequent steps
 6. **Save state to file** after step completes (for resumption)
 7. Accumulate cost: `total_cost += step_cost`
@@ -255,6 +256,8 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
    - If state exists: Print `"Resuming from step {start_step} (steps 1-{last_completed_step} cached)"`
    - For steps < start_step: Use cached output from `state["step_outputs"]`
    - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
+     - On success: Store output in step_outputs, set `last_completed_step = step_num`
+     - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step = step_num - 1` (ensures resume re-runs the failed step)
    - On successful completion (step 12 completes): Call `clear_workflow_state()`
    - On hard stop (e.g., clarification needed): State remains for next run
    - Review loop state: Store current iteration count in state
@@ -273,7 +276,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>

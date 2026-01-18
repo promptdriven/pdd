@@ -8,7 +8,7 @@ from typing import Any
 
 from rich.console import Console
 
-from .agentic_common import run_agentic_task
+from .agentic_common import run_agentic_task, DEFAULT_MAX_RETRIES
 from .load_prompt_template import load_prompt_template
 
 console = Console()
@@ -133,7 +133,8 @@ def run_agentic_verify(
         cwd=project_root,
         verbose=verbose,
         quiet=quiet,
-        label="verify-explore"
+        label="verify-explore",
+        max_retries=DEFAULT_MAX_RETRIES,
     )
 
     # 6. Record State After Execution & Detect Changes
