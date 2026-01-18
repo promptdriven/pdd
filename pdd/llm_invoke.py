@@ -146,20 +146,46 @@ class InsufficientCreditsError(Exception):
 # --- Cloud Execution Helpers ---
 
 def _ensure_all_properties_required(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Ensure ALL properties are in the required array (OpenAI strict mode requirement).
+    """Recursively ensure ALL properties are in the required array (OpenAI strict mode).
 
-    OpenAI's strict mode requires that all properties in a JSON schema are listed
-    in the 'required' array. Pydantic's model_json_schema() only includes fields
-    without default values in 'required', which causes OpenAI to reject the schema.
+    OpenAI's strict mode requires that all properties at ALL levels of a JSON schema
+    are listed in the 'required' array. Pydantic's model_json_schema() only includes
+    fields without default values in 'required', which causes OpenAI to reject the schema.
+
+    This function walks the entire schema tree and ensures every object type has all
+    its properties in the 'required' array.
 
     Args:
         schema: A JSON schema dictionary
 
     Returns:
-        The schema with all properties added to 'required'
+        The schema with all properties added to 'required' at all nesting levels
     """
-    if 'properties' in schema:
+    if not isinstance(schema, dict):
+        return schema
+
+    # If this is an object with properties, make all properties required
+    if schema.get('type') == 'object' and 'properties' in schema:
         schema['required'] = list(schema['properties'].keys())
+        # Recurse into each property
+        for prop_schema in schema['properties'].values():
+            _ensure_all_properties_required(prop_schema)
+
+    # Handle array items
+    if schema.get('type') == 'array' and 'items' in schema:
+        _ensure_all_properties_required(schema['items'])
+
+    # Handle anyOf/oneOf/allOf
+    for key in ('anyOf', 'oneOf', 'allOf'):
+        if key in schema:
+            for sub_schema in schema[key]:
+                _ensure_all_properties_required(sub_schema)
+
+    # Handle $defs
+    if '$defs' in schema:
+        for def_schema in schema['$defs'].values():
+            _ensure_all_properties_required(def_schema)
+
     return schema
 
 
@@ -1987,6 +2013,8 @@ def llm_invoke(
                                 "strict": False
                             }
                         }
+                        # Ensure all properties are in required array (OpenAI strict mode requirement)
+                        _ensure_all_properties_required(response_format["json_schema"]["schema"])
                         # Add additionalProperties: false recursively for strict mode (required by OpenAI)
                         _add_additional_properties_false(response_format["json_schema"]["schema"])
 
