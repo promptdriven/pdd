@@ -1,6 +1,7 @@
 """
 Generate, test, and example commands.
 """
+from __future__ import annotations
 import click
 from typing import Dict, Optional, Tuple, List
 
@@ -9,6 +10,7 @@ from ..context_generator_main import context_generator_main
 from ..cmd_test_main import cmd_test_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error, console
+from ..operation_log import log_operation
 
 class GenerateCommand(click.Command):
     """Ensure help shows PROMPT_FILE as required even when validated at runtime."""
@@ -69,6 +71,7 @@ class GenerateCommand(click.Command):
     help="Do not automatically include test files found in the default tests directory.",
 )
 @click.pass_context
+@log_operation("generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
 def generate(
     ctx: click.Context,
@@ -159,6 +162,7 @@ def generate(
     help="Specify where to save the generated example code (file or directory).",
 )
 @click.pass_context
+@log_operation("example", updates_fingerprint=True)
 @track_cost
 def example(
     ctx: click.Context, 
@@ -192,9 +196,9 @@ def example(
     help="Specify where to save the generated test file (file or directory).",
 )
 @click.option(
-    "--language",
-    type=str,
-    default=None,
+    "--language", 
+    type=str, 
+    default=None, 
     help="Specify the programming language."
 )
 @click.option(
@@ -222,6 +226,7 @@ def example(
     help="Merge new tests with existing test file instead of creating a separate file.",
 )
 @click.pass_context
+@log_operation("test", updates_run_report=True)
 @track_cost
 def test(
     ctx: click.Context,
@@ -234,49 +239,21 @@ def test(
     target_coverage: Optional[float],
     merge: bool,
 ) -> Optional[Tuple[str, float, str]]:
-    """Generate unit tests for a given prompt and implementation.
-
-    CODE_FILE can be either:
-    - An implementation file (e.g., calculator.py)
-    - An example usage file ending with _example (e.g., calculator_example.py)
-
-    Files ending with _example are automatically treated as example files for TDD-style test generation.
-    """
+    """Generate unit tests for a given prompt and implementation."""
     try:
-        from pathlib import Path
-        code_path = Path(code_file)
-        is_example = code_path.stem.endswith("_example")
-
         # Convert empty tuple to None for cmd_test_main compatibility
         existing_tests_list = list(existing_tests) if existing_tests else None
-
-        # Pass to cmd_test_main with appropriate parameter
-        if is_example:
-            test_code, total_cost, model_name = cmd_test_main(
-                ctx=ctx,
-                prompt_file=prompt_file,
-                code_file=None,
-                example_file=code_file,
-                output=output,
-                language=language,
-                coverage_report=coverage_report,
-                existing_tests=existing_tests_list,
-                target_coverage=target_coverage,
-                merge=merge,
-            )
-        else:
-            test_code, total_cost, model_name = cmd_test_main(
-                ctx=ctx,
-                prompt_file=prompt_file,
-                code_file=code_file,
-                example_file=None,
-                output=output,
-                language=language,
-                coverage_report=coverage_report,
-                existing_tests=existing_tests_list,
-                target_coverage=target_coverage,
-                merge=merge,
-            )
+        test_code, total_cost, model_name = cmd_test_main(
+            ctx=ctx,
+            prompt_file=prompt_file,
+            code_file=code_file,
+            output=output,
+            language=language,
+            coverage_report=coverage_report,
+            existing_tests=existing_tests_list,
+            target_coverage=target_coverage,
+            merge=merge,
+        )
         return test_code, total_cost, model_name
     except click.Abort:
         raise

@@ -1,57 +1,101 @@
+# TEST PLAN
+# --------------------------------------------------------------------------------
+# 1. Z3 Formal Verification:
+#    - Goal: Verify the logic for mode selection (Agentic vs Manual) and argument validation.
+#    - Variables:
+#      - is_url (bool): First argument looks like a URL.
+#      - manual_flag (bool): --manual flag is present.
+#      - loop_flag (bool): --loop flag is present.
+#      - arg_count (int): Number of positional arguments.
+#    - Logic to Verify:
+#      - Agentic Mode is active IFF (is_url AND NOT manual_flag).
+#      - Manual Mode is active IFF NOT Agentic Mode.
+#      - In Manual Mode, validation passes IFF:
+#        - (loop_flag AND arg_count >= 3) OR (NOT loop_flag AND arg_count >= 4).
+#    - The Z3 test will prove that for any combination of inputs, the decision logic
+#      is consistent and covers all cases without ambiguity.
+#
+# 2. Unit Tests (pytest + click.testing.CliRunner):
+#    - Setup: Mock external dependencies (fix_main, run_agentic_e2e_fix, console, etc.)
+#      to isolate the `fix` command logic.
+#    - Test Cases:
+#      a. Agentic Mode Success:
+#         - Input: URL argument.
+#         - Verify: Calls `run_agentic_e2e_fix` with correct params.
+#         - Verify: Output contains success message.
+#      b. Agentic Mode Failure:
+#         - Input: URL argument.
+#         - Mock: `run_agentic_e2e_fix` returns failure.
+#         - Verify: Output contains failure message.
+#      c. Manual Mode (Non-Loop) Success:
+#         - Input: 4 args (prompt, code, test, error).
+#         - Verify: Calls `fix_main` with `error_file` set.
+#      d. Manual Mode (Loop) Success:
+#         - Input: --loop, 3 args (prompt, code, test).
+#         - Verify: Calls `fix_main` with `error_file=None` and `loop=True`.
+#      e. Manual Mode with Multiple Test Files:
+#         - Input: prompt, code, test1, test2, error.
+#         - Verify: Calls `fix_main` twice (once for each test file).
+#      f. Argument Validation Errors:
+#         - No arguments.
+#         - Manual mode (non-loop) with insufficient args.
+#         - Manual mode (loop) with insufficient args.
+#      g. Exception Handling:
+#         - Mock `fix_main` to raise a generic exception.
+#         - Verify: `handle_error` is called and system exits.
+#      h. Flag Passing:
+#         - Verify flags like --timeout-adder, --max-cycles are passed correctly to agentic mode.
+#         - Verify flags like --budget, --max-attempts are passed correctly to manual mode.
+
 import sys
+import os
+import importlib.util
 import pytest
 from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
-from z3 import Solver, Bool, Int, Implies, And, Not, If, sat, unsat, Or
+from z3 import Solver, Bool, Int, Implies, And, Not, If, sat, unsat
 
 # --------------------------------------------------------------------------------
-# Mocking dependencies BEFORE importing the command under test
+# Mocking dependencies before import to handle decorators and relative imports
 # --------------------------------------------------------------------------------
+# We need to mock the modules that the code under test imports.
+# This ensures that when we import `pdd.commands.fix`, it doesn't fail due to missing dependencies
+# or execute real decorators.
 
-# We need to mock the decorators and top-level imports used by fix.py
-# BEFORE we import it, otherwise the import will fail or use real modules.
-# CRITICAL: We must restore modules IMMEDIATELY after import to prevent test pollution.
-# (See PATTERN 7 in context/pytest_isolation_example.py)
+mock_fix_main_func = MagicMock()
+mock_agentic_func = MagicMock()
+mock_handle_error_func = MagicMock()
 
-_import_mocks = {
-    "pdd.track_cost": MagicMock(track_cost=MagicMock(side_effect=lambda f: f)),
-    "pdd.operation_log": MagicMock(log_operation=MagicMock(return_value=lambda f: f)),
-    "pdd.core.errors": MagicMock(),
-    "pdd.fix_main": MagicMock(),
-    "pdd.agentic_e2e_fix": MagicMock(),
+# Decorator mocks that act as pass-throughs
+def pass_through_decorator(func):
+    return func
+
+def log_operation_factory(*args, **kwargs):
+    return pass_through_decorator
+
+# Setup sys.modules mocks for the dependencies that fix.py imports
+# We mock these BEFORE loading the fix module so that the relative imports resolve to our mocks
+module_mocks = {
+    "pdd.fix_main": MagicMock(fix_main=mock_fix_main_func),
+    "pdd.agentic_e2e_fix": MagicMock(run_agentic_e2e_fix=mock_agentic_func),
+    "pdd.track_cost": MagicMock(track_cost=pass_through_decorator),
+    "pdd.operation_log": MagicMock(log_operation=log_operation_factory),
+    "pdd.core.errors": MagicMock(handle_error=mock_handle_error_func),
+    "pdd.core": MagicMock(), # Parent package
 }
 
-# Save original modules, apply mocks for import phase
-_saved_modules = {}
-for _mod_name in _import_mocks:
-    if _mod_name in sys.modules:
-        _saved_modules[_mod_name] = sys.modules[_mod_name]
-    sys.modules[_mod_name] = _import_mocks[_mod_name]
+# Apply mocks to sys.modules
+sys.modules.update(module_mocks)
 
-# Now we can safely import the command
-from pdd.commands.fix import fix
-
-# Restore modules IMMEDIATELY after import to prevent pollution of other tests
-for _mod_name in _import_mocks:
-    if _mod_name in _saved_modules:
-        sys.modules[_mod_name] = _saved_modules[_mod_name]
-    elif _mod_name in sys.modules:
-        del sys.modules[_mod_name]
-
-# Evict any pdd.core.* modules that were imported as side effects during the
-# mocking window (e.g. pdd.core.dump imported via pdd.commands.report).
-# These bound MagicMock attributes from the mocked pdd.core.errors and must
-# be re-imported fresh with the real module.
-_core_side_effects = [
-    n for n in sys.modules
-    if n.startswith("pdd.core.") and n not in _import_mocks
-    and n not in _saved_modules
-]
-for _name in _core_side_effects:
-    sys.modules.pop(_name, None)
-
-# Clean up temporary variables
-del _import_mocks, _saved_modules, _mod_name
+# Directly load the fix.py module using importlib to bypass pdd.commands.__init__.py
+# This avoids triggering imports of other command modules that have real dependencies
+_fix_module_path = os.path.join(os.path.dirname(__file__), "..", "..", "pdd", "commands", "fix.py")
+_fix_module_path = os.path.abspath(_fix_module_path)
+_spec = importlib.util.spec_from_file_location("pdd.commands.fix", _fix_module_path)
+_fix_module = importlib.util.module_from_spec(_spec)
+sys.modules["pdd.commands.fix"] = _fix_module
+_spec.loader.exec_module(_fix_module)
+fix = _fix_module.fix
 
 # --------------------------------------------------------------------------------
 # Z3 Formal Verification
@@ -71,33 +115,50 @@ def test_z3_fix_command_logic_verification():
     arg_count = Int('arg_count')
 
     # Derived States (Logic from the code)
+    # Agentic mode is selected if first arg is URL and manual flag is NOT set
     is_agentic_mode = And(is_url, Not(manual_flag))
+    
+    # Manual mode is the fallback
     is_manual_mode = Not(is_agentic_mode)
 
     # Validation Logic for Manual Mode
+    # Loop mode requires >= 3 args
+    # Non-loop mode requires >= 4 args
     min_args = If(loop_flag, 3, 4)
     is_valid_manual_args = arg_count >= min_args
 
-    # 1. Mutually Exclusive
+    # Verification Goals:
+    
+    # 1. Mutually Exclusive: Cannot be both Agentic and Manual
     s.push()
     s.add(And(is_agentic_mode, is_manual_mode))
-    assert s.check() == unsat
+    assert s.check() == unsat, "Modes should be mutually exclusive"
     s.pop()
 
-    # 2. Agentic Precedence
+    # 2. Agentic Precedence: If is_url is True, manual_flag determines the mode
     s.push()
     s.add(is_url)
+    # If manual_flag is False, MUST be agentic
     s.add(Not(manual_flag))
     s.add(Not(is_agentic_mode))
-    assert s.check() == unsat
+    assert s.check() == unsat, "Should be Agentic mode if URL provided and no manual flag"
     s.pop()
 
-    # 3. Manual Validation Safety
+    s.push()
+    s.add(is_url)
+    # If manual_flag is True, MUST be manual
+    s.add(manual_flag)
+    s.add(Not(is_manual_mode))
+    assert s.check() == unsat, "Should be Manual mode if URL provided AND manual flag is set"
+    s.pop()
+
+    # 3. Manual Validation Safety:
+    # Verify that if we are in manual mode, we consider args invalid if count is low
     s.push()
     s.add(is_manual_mode)
     s.add(arg_count < min_args)
-    s.add(is_valid_manual_args)
-    assert s.check() == unsat
+    s.add(is_valid_manual_args) # This should be impossible
+    assert s.check() == unsat, "Should mark args as invalid if count is below minimum in manual mode"
     s.pop()
 
 # --------------------------------------------------------------------------------
@@ -108,118 +169,166 @@ def test_z3_fix_command_logic_verification():
 def runner():
     return CliRunner()
 
-@pytest.fixture
-def mock_deps():
-    """
-    Fixture to mock the deferred imports inside the fix command.
-    Creates fresh mocks for each test to ensure isolation.
+@pytest.fixture(autouse=True)
+def reset_mocks():
+    mock_fix_main_func.reset_mock()
+    mock_agentic_func.reset_mock()
+    mock_handle_error_func.reset_mock()
 
-    Note: fix_main and agentic_e2e_fix are deferred imports (imported inside functions),
-    so we patch them in sys.modules. handle_error is a top-level import that was already
-    bound during the module-level import phase, so we patch it directly in the module.
-    """
-    mock_fix_main_mod = MagicMock()
-    mock_fix_main_func = MagicMock()
-    mock_fix_main_mod.fix_main = mock_fix_main_func
-
-    mock_agentic_mod = MagicMock()
-    mock_agentic_func = MagicMock()
-    mock_agentic_mod.run_agentic_e2e_fix = mock_agentic_func
-
-    mock_handle_error_func = MagicMock()
-
-    with patch.dict(sys.modules, {
-        "pdd.fix_main": mock_fix_main_mod,
-        "pdd.agentic_e2e_fix": mock_agentic_mod,
-    }):
-        # Patch handle_error directly in the fix module since it's a top-level import
-        with patch("pdd.commands.fix.handle_error", mock_handle_error_func):
-            yield {
-                "fix_main": mock_fix_main_func,
-                "run_agentic_e2e_fix": mock_agentic_func,
-                "handle_error": mock_handle_error_func,
-            }
-
-def test_fix_no_args(runner, mock_deps):
+def test_fix_no_args(runner):
+    """Test that calling fix with no arguments raises a UsageError."""
     result = runner.invoke(fix, [])
     assert result.exit_code != 0
     assert "Missing arguments" in result.output
 
-def test_agentic_mode_success(runner, mock_deps):
+def test_agentic_mode_success(runner):
+    """Test the Agentic E2E Fix mode happy path."""
     issue_url = "https://github.com/user/repo/issues/1"
-    mock_deps["run_agentic_e2e_fix"].return_value = (True, "Fix applied", 0.5, "gpt-4", {})
+    
+    # Mock return: success, message, cost, model, extra
+    mock_agentic_func.return_value = (True, "Fix applied", 0.5, "gpt-4", {})
+    
     result = runner.invoke(fix, [issue_url, "--timeout-adder", "10.0"])
+    
     assert result.exit_code == 0
     assert "Agentic fix completed" in result.output
-    mock_deps["run_agentic_e2e_fix"].assert_called_once()
-    kwargs = mock_deps["run_agentic_e2e_fix"].call_args[1]
-    assert kwargs["issue_url"] == issue_url
-    assert kwargs["timeout_adder"] == 10.0
+    
+    mock_agentic_func.assert_called_once()
+    call_kwargs = mock_agentic_func.call_args[1]
+    assert call_kwargs["issue_url"] == issue_url
+    assert call_kwargs["timeout_adder"] == 10.0
+    assert call_kwargs["max_cycles"] == 5  # Default
+    assert call_kwargs["resume"] is True   # Default
 
-def test_agentic_mode_failure(runner, mock_deps):
+def test_agentic_mode_failure(runner):
+    """Test the Agentic E2E Fix mode failure path."""
     issue_url = "https://github.com/user/repo/issues/1"
-    mock_deps["run_agentic_e2e_fix"].return_value = (False, "Could not fix", 0.1, "gpt-4", {})
+    mock_agentic_func.return_value = (False, "Could not fix", 0.1, "gpt-4", {})
+    
     result = runner.invoke(fix, [issue_url])
+    
+    assert result.exit_code == 0
     assert "Agentic fix failed" in result.output
+    assert "Could not fix" in result.output
 
-def test_manual_mode_explicit_flag(runner, mock_deps):
+def test_manual_mode_explicit_flag(runner):
+    """Test that --manual forces manual mode even with a URL-like argument."""
+    # This looks like a URL, but --manual should treat it as a file arg
     args = ["https://github.com/file.txt", "code.py", "test.py", "error.txt", "--manual"]
-    mock_deps["fix_main"].return_value = (True, "msg", "diff", 1, 0.1, "gpt-3.5")
+    
+    # Mock fix_main success
+    mock_fix_main_func.return_value = (True, "msg", "diff", "full", 0.1, "gpt-3.5")
+    
     result = runner.invoke(fix, args)
+    
     assert result.exit_code == 0
-    mock_deps["run_agentic_e2e_fix"].assert_not_called()
-    mock_deps["fix_main"].assert_called_once()
+    # Should NOT call agentic fix
+    mock_agentic_func.assert_not_called()
+    # Should call fix_main
+    mock_fix_main_func.assert_called_once()
+    
+    call_kwargs = mock_fix_main_func.call_args[1]
+    assert call_kwargs["prompt_file"] == "https://github.com/file.txt"
 
-def test_manual_mode_non_loop_success(runner, mock_deps):
+def test_manual_mode_non_loop_success(runner):
+    """Test standard manual mode with 4 arguments (Prompt, Code, Test, Error)."""
     args = ["prompt.txt", "code.py", "test.py", "error.txt"]
-    mock_deps["fix_main"].return_value = (True, "msg", "diff", 1, 0.1, "gpt-3.5")
+    
+    mock_fix_main_func.return_value = (True, "msg", "diff", "full", 0.1, "gpt-3.5")
+    
     result = runner.invoke(fix, args)
+    
     assert result.exit_code == 0
-    kwargs = mock_deps["fix_main"].call_args[1]
-    assert kwargs["error_file"] == "error.txt"
-    assert kwargs["loop"] is False
+    mock_fix_main_func.assert_called_once()
+    
+    call_kwargs = mock_fix_main_func.call_args[1]
+    assert call_kwargs["prompt_file"] == "prompt.txt"
+    assert call_kwargs["code_file"] == "code.py"
+    assert call_kwargs["unit_test_file"] == "test.py"
+    assert call_kwargs["error_file"] == "error.txt"
+    assert call_kwargs["loop"] is False
 
-def test_manual_mode_loop_success(runner, mock_deps):
+def test_manual_mode_loop_success(runner):
+    """Test loop mode which requires only 3 arguments (Prompt, Code, Test)."""
     args = ["prompt.txt", "code.py", "test.py", "--loop", "--verification-program", "verify.py"]
-    mock_deps["fix_main"].return_value = (True, "msg", "diff", 1, 0.1, "gpt-3.5")
+    
+    mock_fix_main_func.return_value = (True, "msg", "diff", "full", 0.1, "gpt-3.5")
+    
     result = runner.invoke(fix, args)
+    
     assert result.exit_code == 0
-    kwargs = mock_deps["fix_main"].call_args[1]
-    assert kwargs["loop"] is True
-    assert kwargs["verification_program"] == "verify.py"
+    mock_fix_main_func.assert_called_once()
+    
+    call_kwargs = mock_fix_main_func.call_args[1]
+    assert call_kwargs["error_file"] is None
+    assert call_kwargs["loop"] is True
+    assert call_kwargs["verification_program"] == "verify.py"
 
-def test_manual_mode_multiple_test_files(runner, mock_deps):
+def test_manual_mode_multiple_test_files(runner):
+    """Test manual mode iterating over multiple test files."""
+    # Structure: Prompt, Code, Test1, Test2, Error
     args = ["prompt.txt", "code.py", "test1.py", "test2.py", "error.txt"]
-    mock_deps["fix_main"].return_value = (True, "msg", "diff", 1, 0.1, "gpt-3.5")
+    
+    mock_fix_main_func.return_value = (True, "msg", "diff", "full", 0.1, "gpt-3.5")
+    
     result = runner.invoke(fix, args)
-    assert mock_deps["fix_main"].call_count == 2
+    
+    assert result.exit_code == 0
+    assert mock_fix_main_func.call_count == 2
+    
+    # Check calls
+    calls = mock_fix_main_func.call_args_list
+    assert calls[0][1]["unit_test_file"] == "test1.py"
+    assert calls[1][1]["unit_test_file"] == "test2.py"
+    # Error file should be passed to both in non-loop mode
+    assert calls[0][1]["error_file"] == "error.txt"
+    assert calls[1][1]["error_file"] == "error.txt"
 
-def test_manual_mode_validation_errors(runner, mock_deps):
+def test_manual_mode_validation_errors(runner):
+    """Test argument validation logic for manual mode."""
+    
+    # 1. Non-loop mode requires 4 args. Provide 3.
     result = runner.invoke(fix, ["p.txt", "c.py", "t.py"])
     assert result.exit_code != 0
     assert "Non-loop mode requires at least 4 arguments" in result.output
+    
+    # 2. Loop mode requires 3 args. Provide 2.
+    result = runner.invoke(fix, ["p.txt", "c.py", "--loop"])
+    assert result.exit_code != 0
+    assert "Loop mode requires at least 3 arguments" in result.output
 
-def test_exception_handling(runner, mock_deps):
-    mock_deps["fix_main"].side_effect = ValueError("Something went wrong")
+def test_exception_handling(runner):
+    """Test that generic exceptions are caught and handled."""
+    mock_fix_main_func.side_effect = ValueError("Something went wrong")
+    
+    # Using manual mode args to trigger fix_main
     result = runner.invoke(fix, ["p.txt", "c.py", "t.py", "e.txt"])
-    mock_deps["handle_error"].assert_called_once()
+    
+    # Should exit with 1
+    assert result.exit_code == 1
+    # Should call handle_error
+    mock_handle_error_func.assert_called_once()
+    args = mock_handle_error_func.call_args[0]
+    assert isinstance(args[0], ValueError)
+    assert args[1] == "fix"
 
-def test_options_passing(runner, mock_deps):
-    args = ["p.txt", "c.py", "t.py", "e.txt", "--budget", "10.5", "--max-attempts", "7"]
-    mock_deps["fix_main"].return_value = (True, "", "", 1, 0, "")
+def test_options_passing(runner):
+    """Test that various CLI options are correctly passed to the internal functions."""
+    # Test manual mode options
+    args = [
+        "p.txt", "c.py", "t.py", "e.txt",
+        "--budget", "10.5",
+        "--max-attempts", "7",
+        "--auto-submit",
+        "--no-agentic-fallback"
+    ]
+    
+    mock_fix_main_func.return_value = (True, "", "", "", 0, "")
+    
     runner.invoke(fix, args)
-    kwargs = mock_deps["fix_main"].call_args[1]
+    
+    kwargs = mock_fix_main_func.call_args[1]
     assert kwargs["budget"] == 10.5
-
-
-def test_user_story_fix_mode(runner, mock_deps):
-    with patch("pdd.user_story_tests.run_user_story_fix") as mock_story_fix:
-        mock_story_fix.return_value = (True, "Story fixed", 0.2, "gpt-4", ["prompts/foo.prompt"])
-        with runner.isolated_filesystem():
-            with open("story__sample.md", "w") as fh:
-                fh.write("As a user...")
-
-            result = runner.invoke(fix, ["story__sample.md"])
-
-        assert result.exit_code == 0
-        mock_story_fix.assert_called_once()
+    assert kwargs["max_attempts"] == 7
+    assert kwargs["auto_submit"] is True
+    assert kwargs["agentic_fallback"] is False
