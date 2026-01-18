@@ -1,30 +1,3 @@
-## v0.0.120 (2026-01-17)
-
-### Feat
-
-- allow multiple test files for fix and test commands
-- add test cases for numbered file creation
-- Add VS Code extension PDD CLI installation system
-- add automated theorem proving languages Lean and Agda
-
-### Fix
-
-- prevent `pdd fix` from printing output paths for unmodified files and add reproduction tests for issue #232.
-- pass concatenated test content to fix_error_loop and update PR description
-- update tests for multiple test files
-- update tests for multiple test files
-- move file numbering logic to construct_paths
-- update extension metadata for Cursor marketplace compatibility
-- ignore sqlite cache
-- ignore .pyc files
-- ignore .pyc files
-- add --list-contexts cli test
-- Configure pytest subprocess with project root, PYTHONPATH, and cwd for accurate fix operation test results.
-
-### Refactor
-
-- simplify multi-file test fixing
-
 ## v0.0.119 (2026-01-16)
 
 ### Feat
