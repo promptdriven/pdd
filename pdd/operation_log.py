@@ -29,9 +29,9 @@ def get_log_path(basename: str, language: str) -> Path:
 
 
 def get_fingerprint_path(basename: str, language: str) -> Path:
-    """Get the path to the fingerprint file for a specific module."""
+    """Get the path to the fingerprint JSON file for a specific module."""
     ensure_meta_dir()
-    return Path(META_DIR) / f"{basename}_{language}.fingerprint"
+    return Path(META_DIR) / f"{basename}_{language}.json"
 
 
 def get_run_report_path(basename: str, language: str) -> Path:
@@ -206,28 +206,45 @@ def log_event(
 
 
 def save_fingerprint(
-    basename: str, 
-    language: str, 
-    operation: str, 
-    paths: Optional[Dict[str, Path]] = None, 
-    cost: float = 0.0, 
+    basename: str,
+    language: str,
+    operation: str,
+    paths: Optional[Dict[str, Path]] = None,
+    cost: float = 0.0,
     model: str = "unknown"
 ) -> None:
     """
     Save the current fingerprint/state to the state file.
+
+    Writes the full Fingerprint dataclass format compatible with read_fingerprint()
+    in sync_determine_operation.py. This ensures manual commands (generate, example)
+    don't break sync's fingerprint tracking.
     """
+    from dataclasses import asdict
+    from datetime import timezone
+    from .sync_determine_operation import calculate_current_hashes, Fingerprint
+    from . import __version__
+
     path = get_fingerprint_path(basename, language)
-    serialized_paths = {k: str(v) for k, v in paths.items()} if paths else {}
-    data = {
-        "timestamp": datetime.now().isoformat(),
-        "operation": operation,
-        "cost": cost,
-        "model": model,
-        "paths": serialized_paths
-    }
+
+    # Calculate file hashes from paths (if provided)
+    current_hashes = calculate_current_hashes(paths) if paths else {}
+
+    # Create Fingerprint with same format as _save_fingerprint_atomic
+    fingerprint = Fingerprint(
+        pdd_version=__version__,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        command=operation,
+        prompt_hash=current_hashes.get('prompt_hash'),
+        code_hash=current_hashes.get('code_hash'),
+        example_hash=current_hashes.get('example_hash'),
+        test_hash=current_hashes.get('test_hash'),
+        test_files=current_hashes.get('test_files'),
+    )
+
     try:
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+            json.dump(asdict(fingerprint), f, indent=2)
     except Exception as e:
         console = Console()
         console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
