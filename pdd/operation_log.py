@@ -4,12 +4,12 @@ import functools
 import json
 import os
 import re
+
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import click
 from rich.console import Console
 
 # We assume standard paths relative to the project root
@@ -17,7 +17,7 @@ PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
 
 
-def ensure_meta_dir() -> None:
+def ensure_meta_dir() -> None: 
     """Ensure the .pdd/meta directory exists."""
     os.makedirs(META_DIR, exist_ok=True)
 
@@ -66,7 +66,7 @@ def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[
     return None, None
 
 
-def load_log_entries(basename: str, language: str) -> List[Dict[str, Any]]:
+def load_operation_log(basename: str, language: str) -> List[Dict[str, Any]]:
     """
     Load all log entries for a module.
     
@@ -103,7 +103,7 @@ def load_log_entries(basename: str, language: str) -> List[Dict[str, Any]]:
 def append_log_entry(
     basename: str, 
     language: str, 
-    entry_data: Dict[str, Any]
+    entry: Dict[str, Any]
 ) -> None:
     """
     Append a single entry to the module's sync log.
@@ -111,79 +111,89 @@ def append_log_entry(
     Args:
         basename: Module basename.
         language: Module language.
-        entry_data: Dictionary of data to log.
+        entry: Dictionary of data to log.
     """
     log_path = get_log_path(basename, language)
     
     # Ensure standard fields exist
-    if "timestamp" not in entry_data:
-        entry_data["timestamp"] = datetime.now().isoformat()
+    if "timestamp" not in entry:
+        entry["timestamp"] = datetime.now().isoformat()
     
     try:
         with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(entry_data) + "\n")
+            f.write(json.dumps(entry) + "\n")
     except Exception as e:
         # Fallback console warning if logging fails
         console = Console()
         console.print(f"[yellow]Warning: Failed to write to log file {log_path}: {e}[/yellow]")
 
 
-def create_manual_log_entry(
-    basename: str,
-    language: str,
+def create_log_entry(
     operation: str,
-    success: bool,
-    duration: float,
-    cost: float = 0.0,
-    model: str = "unknown",
-    metadata: Optional[Dict[str, Any]] = None
-) -> None:
+    reason: str,
+    invocation_mode: str = "sync",
+    estimated_cost: float = 0.0,
+    confidence: float = 0.0,
+    decision_type: str = "unknown"
+) -> Dict[str, Any]:
     """
-    Convenience function to create a manual invocation log entry.
-    
-    Args:
-        basename: Module basename.
-        language: Module language.
-        operation: Name of the operation (e.g., \"generate\", \"verify\").
-        success: Whether the operation succeeded.
-        duration: Duration in seconds.
-        cost: Cost in USD.
-        model: Model used.
-        metadata: Additional arbitrary metadata.
+    Create a new log entry dictionary structure.
     """
-    entry = {
+    return {
         "timestamp": datetime.now().isoformat(),
         "operation": operation,
-        "invocation_mode": "manual",
-        "reason": "Manual invocation via CLI",
-        "success": success,
-        "duration": duration,
-        "cost": cost,
-        "model": model,
+        "reason": reason,
+        "invocation_mode": invocation_mode,
+        "estimated_cost": estimated_cost,
+        "confidence": confidence,
+        "decision_type": decision_type,
+        "success": False,
+        "duration": 0.0,
+        "actual_cost": 0.0,
+        "model": "unknown",
+        "error": None
     }
-    
-    if metadata:
-        entry.update(metadata)
-        
-    append_log_entry(basename, language, entry)
+
+
+def create_manual_log_entry(operation: str) -> Dict[str, Any]:
+    """
+    Convenience function to create a manual invocation log entry dict.
+    """
+    return create_log_entry(
+        operation=operation,
+        reason="Manual invocation via CLI",
+        invocation_mode="manual"
+    )
+
+
+def update_log_entry(
+    entry: Dict[str, Any],
+    success: bool,
+    cost: float,
+    model: str,
+    duration: float,
+    error: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Update a log entry with execution results.
+    """
+    entry["success"] = success
+    entry["actual_cost"] = cost
+    entry["model"] = model
+    entry["duration"] = duration
+    entry["error"] = error
+    return entry
 
 
 def log_event(
     basename: str,
     language: str,
     event_type: str,
-    details: str,
+    details: Any,
     invocation_mode: str = "manual"
 ) -> None:
     """
     Log a special event to the sync log.
-    
-    Args:
-        basename: Module basename.
-        language: Module language.
-        event_type: Type of event (e.g., \"lock_acquired\", \"budget_warning\").
-        details: Human-readable details.
-        invocation_mode: \"manual\" or \"sync\".
     """
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -195,19 +205,29 @@ def log_event(
     append_log_entry(basename, language, entry)
 
 
-def save_fingerprint(basename: str, language: str, fingerprint: str) -> None:
+def save_fingerprint(
+    basename: str, 
+    language: str, 
+    operation: str, 
+    paths: Optional[Dict[str, Path]] = None, 
+    cost: float = 0.0, 
+    model: str = "unknown"
+) -> None:
     """
-    Save the current fingerprint to the state file.
-    
-    Args:
-        basename: Module basename.
-        language: Module language.
-        fingerprint: The content hash or fingerprint string.
+    Save the current fingerprint/state to the state file.
     """
     path = get_fingerprint_path(basename, language)
+    serialized_paths = {k: str(v) for k, v in paths.items()} if paths else {}
+    data = {
+        "timestamp": datetime.now().isoformat(),
+        "operation": operation,
+        "cost": cost,
+        "model": model,
+        "paths": serialized_paths
+    }
     try:
         with open(path, 'w', encoding='utf-8') as f:
-            f.write(fingerprint)
+            json.dump(data, f, indent=2)
     except Exception as e:
         console = Console()
         console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
@@ -216,11 +236,6 @@ def save_fingerprint(basename: str, language: str, fingerprint: str) -> None:
 def save_run_report(basename: str, language: str, report_data: Dict[str, Any]) -> None:
     """
     Save a run report (test results) to the state file.
-    
-    Args:
-        basename: Module basename.
-        language: Module language.
-        report_data: Dictionary containing report data.
     """
     path = get_run_report_path(basename, language)
     try:
@@ -234,12 +249,6 @@ def save_run_report(basename: str, language: str, report_data: Dict[str, Any]) -
 def clear_run_report(basename: str, language: str) -> None:
     """
     Remove an existing run report if it exists.
-    
-    Used when an operation invalidates previous test results.
-    
-    Args:
-        basename: Module basename.
-        language: Module language.
     """
     path = get_run_report_path(basename, language)
     if path.exists():
@@ -250,81 +259,55 @@ def clear_run_report(basename: str, language: str) -> None:
 
 
 def log_operation(
+    operation: str,
     updates_fingerprint: bool = False,
     updates_run_report: bool = False,
     clears_run_report: bool = False
 ) -> Callable:
     """
     Decorator for Click commands to automatically log operations and manage state.
-    
-    It wraps the command execution to:
-    1. Infer module identity from `prompt_file` argument.
-    2. Log the operation start/end time.
-    3. Capture success/failure.
-    4. Handle state files (fingerprints, run reports) based on configuration.
-    
-    Args:
-        updates_fingerprint: If True, saves fingerprint on success.
-        updates_run_report: If True, saves run report on success.
-        clears_run_report: If True, deletes existing run report before execution.
-        
-    Returns:
-        Decorated function.
     """
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Try to find prompt_file in arguments to infer identity
             prompt_file = kwargs.get('prompt_file')
-            
-            basename: Optional[str] = None
-            language: Optional[str] = None
-            
+            basename, language = (None, None)
             if prompt_file:
                 basename, language = infer_module_identity(prompt_file)
 
-            # Perform pre-execution cleanup
             if basename and language and clears_run_report:
                 clear_run_report(basename, language)
 
+            entry = create_manual_log_entry(operation=operation)
             start_time = time.time()
             success = False
             result = None
+            error_msg = None
             
             try:
                 result = func(*args, **kwargs)
                 success = True
                 return result
-            except Exception:
+            except Exception as e:
                 success = False
+                error_msg = str(e)
                 raise
             finally:
                 duration = time.time() - start_time
-                
-                # Only log if we successfully inferred identity
-                if basename and language:
-                    cost = 0.0
-                    model = "unknown"
-                    
+                cost = 0.0
+                model = "unknown"
+                if success and result:
                     if isinstance(result, tuple) and len(result) >= 3:
-                        if isinstance(result[1], (int, float)) and isinstance(result[2], str):
-                            cost = float(result[1])
-                            model = str(result[2])
+                        if isinstance(result[1], (int, float)): cost = float(result[1])
+                        if isinstance(result[2], str): model = str(result[2])
 
-                    # Log the operation
-                    create_manual_log_entry(
-                        basename=basename,
-                        language=language,
-                        operation=func.__name__,
-                        success=success,
-                        duration=duration,
-                        cost=cost,
-                        model=model
-                    )
-                    
+                update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
+                if basename and language:
+                    append_log_entry(basename, language, entry)
                     if success:
+                        if updates_fingerprint:
+                            save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)
-
         return wrapper
     return decorator
