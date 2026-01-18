@@ -1812,13 +1812,13 @@ After the workflow completes, a PR is automatically created linking to the issue
 
 **Manual Mode (legacy):**
 ```
-pdd [GLOBAL OPTIONS] change --manual [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE]
+pdd [GLOBAL OPTIONS] change --manual [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE INPUT_PROMPT_FILE
 ```
 
 Arguments:
 - `CHANGE_PROMPT_FILE`: The filename containing the instructions on how to modify the input prompt file.
 - `INPUT_CODE`: The filename of the code that was generated from the input prompt file, or the directory containing the code files when used with the '--csv' option.
-- `INPUT_PROMPT_FILE`: (Optional) The filename of the prompt file that will be modified. Not required when using the '--csv' option.
+- `INPUT_PROMPT_FILE`: The filename of the prompt file that will be modified. Required in standard mode; not used when using the '--csv' option.
 
 Options:
 - `--budget FLOAT`: Set the maximum cost allowed for the change process (default is $5.0).

@@ -456,3 +456,140 @@ class TestCallbackExecutionOrder:
             assert "Invoke-RestMethod" in full_command
             assert "Start-Job" not in full_command, \
                 "Windows callback should be synchronous, not using Start-Job"
+
+
+# ============================================================================
+# Tests for Callback JSON Format (Issue #277)
+# ============================================================================
+
+
+class TestCallbackJsonFormat:
+    """
+    Tests for callback JSON payload format.
+
+    BUG: The JSON payload uses shell quoting that produces invalid JSON:
+    - {"success": 1, "exit_code": } when EXIT_CODE is empty
+    - Should be: {"success": true, "exit_code": 0}
+    """
+
+    def test_darwin_callback_json_uses_boolean_for_success(self):
+        """
+        Test that callback JSON uses proper boolean true/false for success field.
+
+        Current bug: Uses 1/0 which may work but is not proper JSON boolean.
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    TerminalSpawner._darwin(
+                        "pdd generate test.prompt",
+                        job_id="test-job-123",
+                        server_port=9876
+                    )
+
+                    script_content = mock_write.call_args[0][0]
+
+                    # The JSON should use boolean true/false, not 1/0
+                    # Look for the -d parameter content (quotes are escaped in bash)
+                    assert '\\"success\\": true' in script_content or \
+                           '\\"success\\": false' in script_content or \
+                           '\\"success\\": $SUCCESS_JSON' in script_content or \
+                           'SUCCESS_JSON="true"' in script_content, \
+                        f"JSON should use boolean true/false for success field. Script:\n{script_content}"
+
+    def test_darwin_callback_handles_empty_exit_code(self):
+        """
+        Test that callback JSON handles empty EXIT_CODE gracefully.
+
+        BUG: When EXIT_CODE is empty, the JSON becomes invalid:
+        {"success": 1, "exit_code": } <- missing value!
+
+        FIX: Should use ${EXIT_CODE:-0} to default to 0.
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    TerminalSpawner._darwin(
+                        "pdd generate test.prompt",
+                        job_id="test-job-123",
+                        server_port=9876
+                    )
+
+                    script_content = mock_write.call_args[0][0]
+
+                    # Should use default value syntax to handle empty EXIT_CODE
+                    assert '${EXIT_CODE:-' in script_content or \
+                           '${EXIT_CODE:=' in script_content, \
+                        f"Should use bash default value for EXIT_CODE. Script:\n{script_content}"
+
+    def test_darwin_callback_exit_code_comparison_handles_empty(self):
+        """
+        Test that EXIT_CODE comparison is quoted to handle empty values.
+
+        BUG: [ $EXIT_CODE -eq 0 ] fails with "unary operator expected" when empty.
+        FIX: Use [ "$EXIT_CODE" -eq 0 ] or [ "${EXIT_CODE:-1}" -eq 0 ]
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    TerminalSpawner._darwin(
+                        "pdd generate test.prompt",
+                        job_id="test-job-123",
+                        server_port=9876
+                    )
+
+                    script_content = mock_write.call_args[0][0]
+
+                    # Find lines with EXIT_CODE comparison
+                    lines = script_content.split('\n')
+                    comparison_lines = [l for l in lines if 'EXIT_CODE' in l and '-eq' in l]
+
+                    for line in comparison_lines:
+                        # Should use quoted variable or default value
+                        assert '"$EXIT_CODE"' in line or \
+                               '"${EXIT_CODE' in line or \
+                               '${EXIT_CODE:-' in line, \
+                            f"EXIT_CODE comparison should be quoted. Line: {line}"
+
+    def test_linux_callback_handles_empty_exit_code(self):
+        """Test Linux callback also handles empty EXIT_CODE."""
+        with patch('shutil.which', return_value="/usr/bin/gnome-terminal"):
+            with patch('subprocess.Popen') as mock_popen:
+                TerminalSpawner._linux(
+                    "pdd generate test.prompt",
+                    job_id="test-job-123",
+                    server_port=9876
+                )
+
+                call_args = mock_popen.call_args[0][0]
+                full_command = " ".join(str(arg) for arg in call_args)
+
+                assert '${EXIT_CODE:-' in full_command or \
+                       '${EXIT_CODE:=' in full_command, \
+                    f"Should use bash default value for EXIT_CODE. Command:\n{full_command}"
+
+    def test_linux_callback_json_uses_boolean_for_success(self):
+        """Test Linux callback uses proper boolean true/false for success field."""
+        with patch('shutil.which', return_value="/usr/bin/gnome-terminal"):
+            with patch('subprocess.Popen') as mock_popen:
+                TerminalSpawner._linux(
+                    "pdd generate test.prompt",
+                    job_id="test-job-123",
+                    server_port=9876
+                )
+
+                call_args = mock_popen.call_args[0][0]
+                full_command = " ".join(str(arg) for arg in call_args)
+
+                # Check for proper boolean handling (quotes are escaped in bash)
+                assert '\\"success\\": true' in full_command or \
+                       '\\"success\\": false' in full_command or \
+                       '\\"success\\": $SUCCESS_JSON' in full_command or \
+                       'SUCCESS_JSON="true"' in full_command, \
+                    f"JSON should use boolean true/false for success field. Command:\n{full_command}"

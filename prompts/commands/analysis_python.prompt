@@ -13,9 +13,11 @@
      - Manual mode (`--manual` flag): Call `bug_main(ctx, prompt_file, code_file, program_file, current_output, desired_output, ...)`.
      Options: `--manual`, `--output`, `--language`, `--timeout-adder` (float, default 0.0, agentic mode only), `--no-github-state` (flag, disables GitHub state persistence, agentic mode only).
   4. **crash**: Takes 4 positional files (prompt, code, program, error). Call `crash_main`. Options: `--output`, `--output-program`, `--loop`, `--max-attempts`, `--budget`.
+     - Log operation using `@log_operation(operation="crash", clears_run_report=True)`.
   5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
 
 % Dependencies
+  <include>context/command_logging.prompt</include>
   <detect_change_main_example>
   <pdd.detect_change_main><include>context/detect_change_main_example.py</include></pdd.detect_change_main>
   </detect_change_main_example>
