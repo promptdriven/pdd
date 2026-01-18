@@ -8,6 +8,7 @@ REST server to enable the web frontend to interact with PDD.
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import socket
 import webbrowser
@@ -30,7 +31,11 @@ def is_port_available(port: int, host: str = "127.0.0.1") -> bool:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind((host, port))
             return True
-    except OSError:
+    except OSError as exc:
+        # If we lack permission to bind (common in sandboxed environments),
+        # treat availability as unknown and allow the caller to proceed.
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return True
         return False
 
 

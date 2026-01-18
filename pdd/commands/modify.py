@@ -14,6 +14,7 @@ from ..agentic_change import run_agentic_change
 from ..update_main import update_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from ..operation_log import log_operation
 
 console = Console()
 
@@ -191,6 +192,7 @@ def change(
 @click.option("--output", help="Output path for the updated prompt.")
 @click.option("--simple", is_flag=True, default=False, help="Use legacy simple update.")
 @click.pass_context
+@log_operation(operation="update", clears_run_report=True)
 @track_cost
 def update(
     ctx: click.Context,
