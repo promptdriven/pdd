@@ -180,27 +180,6 @@ export interface ModelsResponse {
   default_model: string;
 }
 
-// Match check types
-export interface MatchCheckRequest {
-  prompt_content: string;
-  code_content: string;
-  strength?: number;  // 0-1
-}
-
-export interface MatchCheckResult {
-  match_score: number;
-  summary: string;
-  missing?: string[];
-  extra?: string[];
-  suggestions?: string[];
-}
-
-export interface MatchCheckResponse {
-  result: MatchCheckResult;
-  cost: number;
-  model: string;
-}
-
 // Diff analysis types (detailed prompt-code comparison)
 export interface PromptRange {
   startLine: number;
@@ -748,17 +727,6 @@ class PDDApiClient {
    */
   async getModels(): Promise<ModelsResponse> {
     return this.request<ModelsResponse>('/api/v1/prompts/models');
-  }
-
-  /**
-   * Check how well code matches the prompt requirements using LLM judge.
-   * Returns a match score, summary, missing requirements, and suggestions.
-   */
-  async checkMatch(request: MatchCheckRequest): Promise<MatchCheckResponse> {
-    return this.request<MatchCheckResponse>('/api/v1/prompts/check-match', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
   }
 
   /**
