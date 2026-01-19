@@ -500,7 +500,7 @@ else
 endif
 endif
 
-all-regression: ensure-dev-deps regression sync-regression cloud-regression
+all-regression: regression sync-regression cloud-regression
 	@echo "All regression test suites completed."
 
 cloud-regression: ensure-dev-deps
