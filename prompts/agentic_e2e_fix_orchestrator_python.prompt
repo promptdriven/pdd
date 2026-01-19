@@ -15,6 +15,7 @@ Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separa
 6. Track per-dev-unit state within the issue-level state file
 7. Parse agent output for `FILES_CREATED:` and `FILES_MODIFIED:` lines to track changed files
 8. Apply `timeout_adder` to each step's base timeout from `E2E_FIX_STEP_TIMEOUTS`
+9. On successful completion with changes: commit all changed files and push to remote branch (updates existing PR created by `pdd bug`)
 
 % Step Name Mapping
 ```python
@@ -218,6 +219,24 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
    - If staleness detected, print warning: `"[yellow]Warning: Codebase may have changed since last run. Consider --no-resume for fresh start.[/yellow]"`
    - Proceed with resume unless files are missing (then warn and start fresh)
 
+% Git Commit on Success
+
+After successful completion (ALL_TESTS_PASS), if there are uncommitted changes, commit and push them to update the existing PR (created by `pdd bug`).
+
+1. **Helper function**: `_commit_and_push(cwd: Path, issue_number: int, issue_title: str, quiet: bool = False) -> Tuple[bool, str]`
+   - Check for uncommitted changes via `git status --porcelain`
+   - If no changes: return `(True, "No changes to commit")`
+   - Stage all changes: `git add -A`
+   - Commit with message: `f"fix: {issue_title}\n\nFixes #{issue_number}"`
+   - Push to remote: `git push`
+   - Return `(True, "Changes committed and pushed")` on success
+   - Return `(False, f"Push failed: {error}")` on failure
+
+2. **Integration in orchestrator**:
+   - Call `_commit_and_push()` after clearing workflow state, before returning success
+   - Log result to console (success message or warning)
+   - Do NOT fail the overall workflow if push fails - just print warning
+
 % Console Output
 1. **Header** (at start):
    ```
@@ -251,6 +270,7 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
       Cycles used: {N}/{max_cycles}
       Files changed: {comma_separated_list}
       Dev units fixed: {list}
+      {commit_message}  (e.g., "Changes committed and pushed" or "No changes to commit")
 
    OR
 

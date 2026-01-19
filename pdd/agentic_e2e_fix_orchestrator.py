@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 import json
@@ -145,6 +146,68 @@ def _check_staleness(state: Dict[str, Any], cwd: Path) -> None:
     
     if stale:
         console.print("[yellow]Warning: Codebase may have changed since last run. Consider --no-resume for fresh start.[/yellow]")
+
+
+def _commit_and_push(
+    cwd: Path,
+    issue_number: int,
+    issue_title: str,
+    quiet: bool = False
+) -> Tuple[bool, str]:
+    """
+    Commits changes and pushes to the existing branch.
+
+    The PR was already created by `pdd bug`, so pushing
+    automatically updates it.
+
+    Returns:
+        (success, message)
+    """
+    # 1. Check for uncommitted changes
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+
+    if not status_result.stdout.strip():
+        return True, "No changes to commit"
+
+    # 2. Stage all changes
+    stage_result = subprocess.run(
+        ["git", "add", "-A"],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+    if stage_result.returncode != 0:
+        return False, f"Failed to stage changes: {stage_result.stderr}"
+
+    # 3. Commit with message referencing issue
+    commit_msg = f"fix: {issue_title}\n\nFixes #{issue_number}"
+    commit_result = subprocess.run(
+        ["git", "commit", "-m", commit_msg],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+    if commit_result.returncode != 0:
+        return False, f"Failed to commit: {commit_result.stderr}"
+
+    # 4. Push to remote (branch already exists from pdd bug)
+    push_result = subprocess.run(
+        ["git", "push"],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+
+    if push_result.returncode == 0:
+        return True, "Changes committed and pushed"
+    else:
+        return False, f"Push failed: {push_result.stderr}"
+
 
 def run_agentic_e2e_fix_orchestrator(
     issue_url: str,
@@ -383,6 +446,19 @@ def run_agentic_e2e_fix_orchestrator(
             console.print(f"   Files changed: {', '.join(changed_files)}")
             fixed_units = [u for u, s in dev_unit_states.items() if s.get("fixed")]
             console.print(f"   Dev units fixed: {', '.join(fixed_units)}")
+
+            # Commit and push changes to update the existing PR
+            commit_success, commit_message = _commit_and_push(
+                cwd=cwd,
+                issue_number=issue_number,
+                issue_title=issue_title,
+                quiet=quiet
+            )
+            if commit_success:
+                console.print(f"   [green]{commit_message}[/green]")
+            else:
+                console.print(f"   [yellow]Warning: {commit_message}[/yellow]")
+
             return True, final_message, total_cost, model_used, changed_files
         else:
             final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
