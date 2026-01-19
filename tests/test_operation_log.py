@@ -630,7 +630,7 @@ def test_fingerprint_hash_compatibility_with_sync(tmp_path):
 # ISSUE #203: test_prompt_hash auto-management in save_fingerprint
 # --------------------------------------------------------------------------------
 
-class TestIssue203SaveFingerprintTestPromptHash:
+class TestIssue203TestPromptHashManagement:
     """Test that save_fingerprint automatically manages test_prompt_hash based on operation type."""
 
     def test_generate_operation_sets_test_prompt_hash_to_none(self, tmp_path):

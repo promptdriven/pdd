@@ -196,10 +196,13 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         model: The model used.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
+    # Issue #203: Import read_fingerprint once for both branches
+    from .sync_determine_operation import read_fingerprint
+
     if atomic_state:
         # Buffer for atomic write
         from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
+        from .sync_determine_operation import calculate_current_hashes, Fingerprint
         from . import __version__
 
         current_hashes = calculate_current_hashes(paths)
@@ -236,8 +239,7 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
     else:
         # Direct write using operation_log
         # Issue #203: Preserve test_prompt_hash from existing fingerprint for skip operations
-        from .sync_determine_operation import read_fingerprint as read_fp
-        existing_fp = read_fp(basename, language)
+        existing_fp = read_fingerprint(basename, language)
         existing_test_prompt_hash = existing_fp.test_prompt_hash if existing_fp else None
         save_fingerprint(basename, language, operation, paths, cost, model,
                         test_prompt_hash=existing_test_prompt_hash)
