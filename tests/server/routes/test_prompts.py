@@ -143,6 +143,7 @@ def prompts_test_env():
         get_available_models,
         check_match,
         analyze_diff,
+        get_prompt_diff,
         SyncStatusResponse,
         ModelsResponse,
         MatchCheckRequest,
@@ -152,6 +153,8 @@ def prompts_test_env():
         DiffSection,
         LineMapping,
         DiffStats,
+        PromptDiffRequest,
+        PromptDiffResponse,
         _get_cache_key,
         _get_cached_result,
         _cache_result,
@@ -171,6 +174,7 @@ def prompts_test_env():
         'get_available_models': get_available_models,
         'check_match': check_match,
         'analyze_diff': analyze_diff,
+        'get_prompt_diff': get_prompt_diff,
         'SyncStatusResponse': SyncStatusResponse,
         'ModelsResponse': ModelsResponse,
         'MatchCheckRequest': MatchCheckRequest,
@@ -180,6 +184,8 @@ def prompts_test_env():
         'DiffSection': DiffSection,
         'LineMapping': LineMapping,
         'DiffStats': DiffStats,
+        'PromptDiffRequest': PromptDiffRequest,
+        'PromptDiffResponse': PromptDiffResponse,
         '_get_cache_key': _get_cache_key,
         '_get_cached_result': _get_cached_result,
         '_cache_result': _cache_result,
@@ -1047,3 +1053,171 @@ def test_z3_coverage_calculation():
     s.add(coverage != 100)
     assert s.check() == z3.unsat
     s.pop()
+
+
+# --- Tests for Cloud-Enabled LLM Calls ---
+
+class TestCloudEnabledLLMCalls:
+    """
+    Tests to verify that LLM endpoints use cloud auto-detection.
+
+    Previously, endpoints explicitly passed use_cloud=False which forced local
+    execution. These tests verify that use_cloud is NOT explicitly set to False,
+    allowing llm_invoke to auto-detect cloud availability.
+    """
+
+    @pytest.mark.asyncio
+    async def test_check_match_allows_cloud_autodetect(self, prompts_test_env):
+        """
+        Verify /check-match endpoint does NOT pass use_cloud=False.
+
+        This allows llm_invoke to auto-detect cloud availability via
+        CloudConfig.is_cloud_enabled().
+        """
+        check_match = prompts_test_env['check_match']
+        MatchCheckRequest = prompts_test_env['MatchCheckRequest']
+        mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+
+        # Mock LLM response
+        mock_llm_invoke.llm_invoke.return_value = {
+            'result': {
+                'match_score': 85,
+                'summary': 'Test result',
+                'missing': [],
+                'extra': [],
+                'suggestions': []
+            },
+            'cost': 0.001,
+            'model_name': 'claude-sonnet-4-20250514'
+        }
+
+        request = MatchCheckRequest(
+            prompt_content="Test prompt",
+            code_content="def test(): pass",
+            strength=0.5
+        )
+
+        await check_match(request)
+
+        # Verify llm_invoke was called
+        assert mock_llm_invoke.llm_invoke.called
+
+        # Get the call arguments
+        call_kwargs = mock_llm_invoke.llm_invoke.call_args.kwargs
+
+        # CRITICAL: use_cloud should NOT be explicitly set to False
+        # If use_cloud is in kwargs, it should not be False
+        if 'use_cloud' in call_kwargs:
+            assert call_kwargs['use_cloud'] is not False, (
+                "use_cloud should not be explicitly set to False - "
+                "this prevents cloud auto-detection"
+            )
+
+    @pytest.mark.asyncio
+    async def test_analyze_diff_allows_cloud_autodetect(self, prompts_test_env):
+        """
+        Verify /diff-analysis endpoint does NOT pass use_cloud=False.
+
+        This allows llm_invoke to auto-detect cloud availability via
+        CloudConfig.is_cloud_enabled().
+        """
+        analyze_diff = prompts_test_env['analyze_diff']
+        DiffAnalysisRequest = prompts_test_env['DiffAnalysisRequest']
+        mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+        _diff_cache = prompts_test_env['_diff_cache']
+
+        _diff_cache.clear()
+
+        # Mock LLM response
+        mock_llm_invoke.llm_invoke.return_value = {
+            'result': {
+                'overallScore': 80,
+                'promptToCodeScore': 85,
+                'codeToPromptScore': 75,
+                'summary': 'Test analysis',
+                'sections': [],
+                'codeSections': [],
+                'lineMappings': [],
+                'stats': {
+                    'totalRequirements': 1,
+                    'matchedRequirements': 1,
+                    'missingRequirements': 0,
+                    'promptToCodeCoverage': 100.0
+                },
+                'missing': [],
+                'extra': [],
+                'suggestions': []
+            },
+            'cost': 0.002,
+            'model_name': 'claude-sonnet-4-20250514'
+        }
+
+        request = DiffAnalysisRequest(
+            prompt_content="Test prompt",
+            code_content="def test(): pass",
+            strength=0.5,
+            mode="detailed"
+        )
+
+        await analyze_diff(request)
+
+        # Verify llm_invoke was called
+        assert mock_llm_invoke.llm_invoke.called
+
+        # Get the call arguments
+        call_kwargs = mock_llm_invoke.llm_invoke.call_args.kwargs
+
+        # CRITICAL: use_cloud should NOT be explicitly set to False
+        if 'use_cloud' in call_kwargs:
+            assert call_kwargs['use_cloud'] is not False, (
+                "use_cloud should not be explicitly set to False - "
+                "this prevents cloud auto-detection"
+            )
+
+    @pytest.mark.asyncio
+    async def test_prompt_diff_allows_cloud_autodetect(self, prompts_test_env, tmp_path):
+        """
+        Verify /prompt-diff endpoint does NOT pass use_cloud=False.
+
+        This allows llm_invoke to auto-detect cloud availability via
+        CloudConfig.is_cloud_enabled().
+        """
+        get_prompt_diff = prompts_test_env['get_prompt_diff']
+        PromptDiffRequest = prompts_test_env['PromptDiffRequest']
+        mock_llm_invoke = prompts_test_env['mock_llm_invoke']
+
+        # Create a test file for the prompt
+        test_prompt = tmp_path / "test.prompt"
+        test_prompt.write_text("Original prompt content")
+
+        # Mock LLM response
+        mock_llm_invoke.llm_invoke.return_value = {
+            'result': {
+                'summary': 'No significant changes',
+                'changes': []
+            },
+            'cost': 0.001,
+            'model_name': 'claude-sonnet-4-20250514'
+        }
+
+        request = PromptDiffRequest(
+            prompt_path=str(test_prompt),
+            version_a="working",
+            version_b="working",
+            strength=0.5
+        )
+
+        await get_prompt_diff(request)
+
+        # Verify llm_invoke was called
+        assert mock_llm_invoke.llm_invoke.called
+
+        # Get the call arguments
+        call_kwargs = mock_llm_invoke.llm_invoke.call_args.kwargs
+
+        # CRITICAL: use_cloud should NOT be explicitly set to False
+        if 'use_cloud' in call_kwargs:
+            assert call_kwargs['use_cloud'] is not False, (
+                "use_cloud should not be explicitly set to False - "
+                "this prevents cloud auto-detection"
+            )

@@ -249,7 +249,7 @@ def connect(
                 ))
             else:
                 click.echo("Registering session with PDD Cloud...")
-                session_manager = RemoteSessionManager(jwt_token, project_root)
+                session_manager = RemoteSessionManager(jwt_token, project_root, server_port=port)
                 try:
                     # Register with cloud - no public URL needed, cloud hosts everything
                     cloud_url = asyncio.run(session_manager.register(
