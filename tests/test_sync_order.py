@@ -79,28 +79,12 @@ def test_extract_module_valid(include_path, expected):
     assert sync_order.extract_module_from_include(include_path) == expected
 
 @pytest.mark.parametrize("include_path", [
-    "context/preamble.prompt", # No _python/_example suffix logic match for .prompt? 
-                               # Wait, code says: is_prompt = filename.endswith(".prompt")
-                               # But then it strips suffixes. If "preamble.prompt" has no suffixes, 
-                               # clean_name == stem == "preamble". 
-                               # However, the prompt requirements said: "Return None for non-module includes"
-                               # Let's check the code logic:
-                               # is_example = "_example" in stem
-                               # is_prompt = filename.endswith(".prompt")
-                               # if not (is_example or is_prompt): return None
-                               # So "preamble.prompt" IS a prompt.
-                               # But usually these have language suffixes. 
-                               # If the code returns "preamble", that's technically correct by the regex logic provided.
-                               # Let's test the explicit exclusion cases mentioned in requirements.
-    "context/shared.py",       # Not a prompt, no _example
-    "README.md",
+    "context/preamble.prompt",  # No language suffix (_python/_typescript/_LLM), should be excluded
+    "context/shared.py",        # Not a prompt file
+    "README.md",                # Not a prompt file
 ])
 def test_extract_module_invalid(include_path):
     """Test that invalid paths return None."""
-    # Note: "preamble.prompt" might actually return "preamble" based on current code logic 
-    # if it doesn't strictly enforce the suffixes must exist, just that they are stripped if present.
-    # The code: `if not clean_name: return None`.
-    # If I pass "context/shared.py", is_prompt=False, is_example=False -> Returns None. Correct.
     assert sync_order.extract_module_from_include(include_path) is None
 
 def test_extract_module_suffix_stripping_order():
