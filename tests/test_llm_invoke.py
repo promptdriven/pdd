@@ -2379,3 +2379,284 @@ def test_no_warning_for_removed_base_model(mock_set_llm_cache, caplog):
                             warning_messages = [record.message for record in caplog.records if record.levelname == 'WARNING']
                             for warning in warning_messages:
                                 assert 'gpt-5.1-codex-mini' not in warning, f"Unwanted warning: {warning}"
+
+
+def test_first_available_model_selected_when_base_missing(mock_set_llm_cache, caplog):
+    """Issue #296: Verify first available model is deterministically selected when base model missing."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        # Create CSV with multiple models but no hardcoded base model
+        mock_data = [
+            MockModelInfoData(
+                provider='Google', model='gemini/gemini-2.0-flash-exp', input=0.0, output=0.0,
+                coding_arena_elo=1300, structured_output=True, base_url="", api_key="GOOGLE_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            MockModelInfoData(
+                provider='OpenAI', model='gpt-4o-mini', input=0.15, output=0.60,
+                coding_arena_elo=1320, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            MockModelInfoData(
+                provider='Anthropic', model='claude-3-haiku', input=0.25, output=1.25,
+                coding_arena_elo=1340, structured_output=True, base_url="", api_key="ANTHROPIC_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+        ]
+
+        mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                        'max_completion_tokens', 'max_reasoning_tokens']
+        for col in numeric_cols:
+            if col in mock_df.columns:
+                mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+
+        mock_df['input'] = mock_df['input'].fillna(0.0)
+        mock_df['output'] = mock_df['output'].fillna(0.0)
+        mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0)
+        mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+        mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+        mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+
+        mock_load_data.return_value = mock_df
+
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+            with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                    mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
+                    mock_completion.return_value = mock_response
+
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                        response = llm_invoke(
+                            prompt="Test prompt",
+                            input_json={"test": "data"},
+                            strength=0.5,
+                            temperature=0.7,
+                            verbose=False
+                        )
+
+                        # Verify first available model (gemini) is selected deterministically
+                        assert response is not None
+                        assert response['model_name'] == 'gemini/gemini-2.0-flash-exp', \
+                            "First available model should be selected when base model is missing"
+
+
+def test_legitimate_api_key_warnings_still_shown(mock_set_llm_cache, caplog):
+    """Issue #296: Verify legitimate API key warnings are shown while base model warnings are suppressed."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        # Create CSV without base model, where one model has missing API key
+        mock_data = [
+            MockModelInfoData(
+                provider='Google', model='gemini/gemini-2.0-flash-exp', input=0.0, output=0.0,
+                coding_arena_elo=1300, structured_output=True, base_url="", api_key="MISSING_KEY",  # Key not in env
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            MockModelInfoData(
+                provider='OpenAI', model='gpt-4o-mini', input=0.15, output=0.60,
+                coding_arena_elo=1320, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+        ]
+
+        mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                        'max_completion_tokens', 'max_reasoning_tokens']
+        for col in numeric_cols:
+            if col in mock_df.columns:
+                mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+
+        mock_df['input'] = mock_df['input'].fillna(0.0)
+        mock_df['output'] = mock_df['output'].fillna(0.0)
+        mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0)
+        mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+        mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+        mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+
+        mock_load_data.return_value = mock_df
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+            with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                    mock_response = create_mock_litellm_response("Test", model_name='gpt-4o-mini')
+                    mock_completion.return_value = mock_response
+
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                        with caplog.at_level(logging.WARNING):
+                            response = llm_invoke(
+                                prompt="Test prompt",
+                                input_json={"test": "data"},
+                                strength=0.5,
+                                temperature=0.7,
+                                verbose=False
+                            )
+
+                            assert response is not None
+                            # Verify legitimate API key warnings are still shown
+                            warning_messages = [record.message for record in caplog.records if record.levelname == 'WARNING']
+
+                            # Should warn about missing MISSING_KEY
+                            api_key_warning_found = any('MISSING_KEY' in warning for warning in warning_messages)
+                            assert api_key_warning_found, "Should warn about missing API key"
+
+                            # But should NOT warn about missing base model
+                            for warning in warning_messages:
+                                assert 'gpt-5.1-codex-mini' not in warning, \
+                                    f"Should not warn about removed base model: {warning}"
+
+
+def test_fallback_works_across_different_strength_values(mock_set_llm_cache, caplog):
+    """Issue #296: Verify fallback works correctly across different strength values."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        # Create CSV without hardcoded base model
+        mock_data = [
+            MockModelInfoData(
+                provider='Google', model='gemini/gemini-2.0-flash-exp', input=0.0, output=0.0,
+                coding_arena_elo=1300, structured_output=True, base_url="", api_key="GOOGLE_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            MockModelInfoData(
+                provider='OpenAI', model='gpt-4o-mini', input=0.15, output=0.60,
+                coding_arena_elo=1320, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            MockModelInfoData(
+                provider='Anthropic', model='claude-3-opus', input=15.0, output=75.0,
+                coding_arena_elo=1400, structured_output=True, base_url="", api_key="ANTHROPIC_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+        ]
+
+        mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                        'max_completion_tokens', 'max_reasoning_tokens']
+        for col in numeric_cols:
+            if col in mock_df.columns:
+                mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+
+        mock_df['input'] = mock_df['input'].fillna(0.0)
+        mock_df['output'] = mock_df['output'].fillna(0.0)
+        mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0)
+        mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+        mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+        mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+
+        mock_load_data.return_value = mock_df
+
+        # Test with strength < 0.5 (should use cheaper model)
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+            with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                    mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
+                    mock_completion.return_value = mock_response
+
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                        with caplog.at_level(logging.WARNING):
+                            response_low = llm_invoke(
+                                prompt="Test prompt",
+                                input_json={"test": "data"},
+                                strength=0.2,  # Low strength
+                                temperature=0.7,
+                                verbose=False
+                            )
+                            assert response_low is not None
+                            # Should not warn about missing base model
+                            warning_messages = [record.message for record in caplog.records if record.levelname == 'WARNING']
+                            for warning in warning_messages:
+                                assert 'gpt-5.1-codex-mini' not in warning
+
+        # Test with strength > 0.5 (should use more powerful model)
+        caplog.clear()
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+            with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                    mock_response = create_mock_litellm_response("Test", model_name='claude-3-opus')
+                    mock_completion.return_value = mock_response
+
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 10, "output_tokens": 10}):
+                        with caplog.at_level(logging.WARNING):
+                            response_high = llm_invoke(
+                                prompt="Test prompt",
+                                input_json={"test": "data"},
+                                strength=0.9,  # High strength
+                                temperature=0.7,
+                                verbose=False
+                            )
+                            assert response_high is not None
+                            # Should not warn about missing base model
+                            warning_messages = [record.message for record in caplog.records if record.levelname == 'WARNING']
+                            for warning in warning_messages:
+                                assert 'gpt-5.1-codex-mini' not in warning
+
+
+def test_user_csv_removes_unwanted_model_family(mock_set_llm_cache, caplog):
+    """Issue #296: Real-world scenario where user removes entire gpt-5 model family."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        # Simulate user CSV that intentionally excludes all gpt-5* models
+        mock_data = [
+            MockModelInfoData(
+                provider='Google', model='gemini/gemini-2.0-flash-exp', input=0.0, output=0.0,
+                coding_arena_elo=1300, structured_output=True, base_url="", api_key="GOOGLE_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            MockModelInfoData(
+                provider='OpenAI', model='gpt-4o-mini', input=0.15, output=0.60,
+                coding_arena_elo=1320, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            MockModelInfoData(
+                provider='Anthropic', model='claude-3-5-sonnet', input=3.0, output=15.0,
+                coding_arena_elo=1380, structured_output=True, base_url="", api_key="ANTHROPIC_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            # Notably missing: gpt-5.1-codex-mini, gpt-5-nano, and all gpt-5* variants
+        ]
+
+        mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                        'max_completion_tokens', 'max_reasoning_tokens']
+        for col in numeric_cols:
+            if col in mock_df.columns:
+                mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+
+        mock_df['input'] = mock_df['input'].fillna(0.0)
+        mock_df['output'] = mock_df['output'].fillna(0.0)
+        mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0)
+        mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+        mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+        mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+
+        mock_load_data.return_value = mock_df
+
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+            with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                    mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
+                    mock_completion.return_value = mock_response
+
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                        with caplog.at_level(logging.WARNING):
+                            response = llm_invoke(
+                                prompt="Test prompt for model family exclusion",
+                                input_json={"test": "data"},
+                                strength=0.5,
+                                temperature=0.7,
+                                verbose=False
+                            )
+
+                            assert response is not None
+                            assert response['model_name'] == 'gemini/gemini-2.0-flash-exp'
+
+                            # Verify no warnings about any gpt-5* models
+                            warning_messages = [record.message for record in caplog.records if record.levelname == 'WARNING']
+                            for warning in warning_messages:
+                                assert 'gpt-5' not in warning.lower(), \
+                                    f"User intentionally removed gpt-5* models - should not see warnings: {warning}"
+                                assert 'codex' not in warning.lower(), \
+                                    f"User intentionally removed gpt-5.1-codex-mini - should not see warnings: {warning}"
