@@ -641,7 +641,7 @@ fi
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
   log "5. Testing 'change' command"
   # Use the updated prompt from step 4 as input
-  run_pdd_command change --output "$CHANGED_MATH_PROMPT" \
+  run_pdd_command change --manual --output "$CHANGED_MATH_PROMPT" \
                          "$DETECT_CHANGE_FILE" \
                          "$MATH_SCRIPT" \
                          "$UPDATED_MATH_PROMPT"
@@ -649,7 +649,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
 
   # 5a. Change with --csv
   log "5a. Testing 'change --csv'"
-  run_pdd_command change --csv --output "$CHANGE_CSV_OUT_DIR/" "$CHANGE_CSV_FILE" "$CHANGE_CSV_CODE_DIR/" # Note trailing slash for output dir
+  run_pdd_command change --manual --csv --output "$CHANGE_CSV_OUT_DIR/" "$CHANGE_CSV_FILE" "$CHANGE_CSV_CODE_DIR/" # Note trailing slash for output dir
   check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_A" "'change --csv' output A"
   check_exists "$CHANGE_CSV_OUT_DIR/$DUMMY_PROMPT_B" "'change --csv' output B"
 

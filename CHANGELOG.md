@@ -2,27 +2,27 @@
 
 ### Feat
 
-- implement hash-based detection for committing only workflow-modified files in the agentic orchestrator.
-- Implement dependency-aware `pdd sync` order generation, including a new `sync_order.py` module, and integrate it into the agentic change orchestrator and README.
-- Add `hello.py` example with tests and `code_under_test.py`, and fix shared reference issues in orchestrator state saving.
-- Implement issue #231 - core-dump on by default with garbage collection
-- Introduce LLM prompt for generating isolated tests and refactor `test_fix.py` to improve test module isolation.
-- Refine command arguments with default values, add operation logging, and introduce new tests for `fix` and `utility` commands.
-- Recursively ensure all JSON schema properties are marked as required for OpenAI strict mode.
-- Add `promptToCodeScore` and `codeToPromptScore` fields to the LLM prompt output specification and renumber subsequent fields.
-- Introduce standardized operation logging for CLI commands and refactor sync orchestration to use the new `operation_log` module.
-- Implement an operation logging module with state management, fingerprinting, run reports, and a command decorator.
-- add operation_log module prompt for shared PDD logging infrastructure (#277)
+- **Dependency-Aware Sync Order:** New `sync_order.py` module generates topologically-sorted `sync_order.sh` scripts for PRs. Parses `<include>` tags to build a dependency graph, detects cycles, and ensures modules are synced in correct order after merge.
+- **Hash-Based Commit Detection:** E2E fix orchestrator (`pdd fix`) now commits only files that actually changed during the workflow using MD5 hash comparison, avoiding staging pre-existing modified/untracked files.
+- **Auto-Commit and Push:** `pdd fix` now automatically commits and pushes changes after successful completion.
+- **Agentic Retry with Backoff:** `run_agentic_task()` now supports `max_retries` and `retry_delay` parameters with exponential backoff, improving resilience for transient failures.
+- **Core Dump On By Default:** `--core-dump` flag is now enabled by default. Added `--keep-core-dumps` option (default: 10) with automatic garbage collection of old dumps (#231). Thanks Xavier Yin (@Enfoirer)!
 
 ### Fix
 
-- minor fixes
-- address valid Copilot review comments on PR #297
+- **Issue #264:** `pdd update` now strips `<prompt>` tags from generated .prompt files. Thanks Serhan Asad! (PR #297)
+- **Issue #248:** Fixed crash loop in `pdd sync` for projects with non-`src/` directory structures by using dynamic code directory in PYTHONPATH. Thanks Serhan Asad! (PR #329)
+- **Failed Step Resume:** Orchestrators now store failed step output with "FAILED:" prefix and preserve `last_completed_step` at previous value, ensuring resume correctly re-runs failed steps instead of skipping them.
+- **Shared Reference Fix:** Fixed shared reference issues in orchestrator state saving that could cause state corruption.
+- **Core Dump Verbosity:** Debug snapshot messages now only print when `--verbose` is set, reducing noise in normal operation.
+
+### Build
+
+- **Auto-Install Dev Dependencies:** Makefile `test`, `coverage`, and `lint` targets now automatically install dev dependencies via new `ensure-dev-deps` target. Thanks James Levine! (PR #331)
 
 ### Refactor
 
-- centralize sync orchestration logging to a new operation log module and add new tests for LLM invocation and server prompt routes.
-- introduce structured log entry creation and update functions, rename log loading, and enhance fingerprint metadata storage.
+- **Postprocess Module:** Rewrote `postprocess.py` with cleaner regex-based code extraction, better handling of incomplete code blocks, and explicit prompt language support (PR #297).
 
 ## v0.0.120 (2026-01-18)
 
