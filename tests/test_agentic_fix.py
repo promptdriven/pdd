@@ -59,7 +59,13 @@ def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
     )
 
     # Pretend CLIs exist so selection proceeds
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
+    monkeypatch.setattr("pdd.agentic_fix._find_cli_binary", lambda name, config=None: "/usr/bin/shim")
+
+    # Mock variant runners to return success without making real calls
+    mock_result = MagicMock(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", lambda *a, **k: mock_result)
+    monkeypatch.setattr("pdd.agentic_fix._run_google_variants", lambda *a, **k: mock_result)
+    monkeypatch.setattr("pdd.agentic_fix._run_openai_variants", lambda *a, **k: mock_result)
 
     # Short-circuit harvest path to succeed — NOTE: uses leading underscore (private function)
     monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
@@ -86,7 +92,7 @@ def test_run_agentic_fix_handles_no_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     # Also hide Claude CLI so subscription auth isn't detected
-    monkeypatch.setattr("shutil.which", lambda cmd: None)
+    monkeypatch.setattr("pdd.agentic_fix._find_cli_binary", lambda name, config=None: None)
 
     ok, msg, cost, model, changed_files = run_agentic_fix(
         prompt_file=str(p_prompt),
@@ -143,8 +149,8 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
 
     # For non-anthropic providers, hide Claude CLI so subscription auth isn't used
     if provider != "anthropic":
-        original_which = shutil.which
-        monkeypatch.setattr("shutil.which", lambda cmd: None if cmd == "claude" else original_which(cmd))
+        from pdd.agentic_common import _find_cli_binary as original_find
+        monkeypatch.setattr("pdd.agentic_fix._find_cli_binary", lambda name, config=None: None if name == "claude" else original_find(name, config))
 
     # Re-apply the cached key to the env var our CSV expects
     if provider == "google":
@@ -469,7 +475,7 @@ class TestCwdHandling:
             "pdd.agentic_fix.load_prompt_template",
             lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}{verify_cmd}",
         )
-        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
+        monkeypatch.setattr("pdd.agentic_fix._find_cli_binary", lambda name, config=None: "/usr/bin/shim")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
 
@@ -557,7 +563,7 @@ class TestCwdHandling:
             "pdd.agentic_fix.load_prompt_template",
             lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}{verify_cmd}",
         )
-        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
+        monkeypatch.setattr("pdd.agentic_fix._find_cli_binary", lambda name, config=None: "/usr/bin/shim")
 
         # Mock agent runners to return success without making real calls
         # With PRIMARY-FIRST logic, we need to mock the primary path functions
@@ -808,3 +814,107 @@ def hello():
         assert not (tmp_path / "T").exists(), "T file should not exist on disk"
         assert (tmp_path / "hello.py").exists()
         assert "hello, world!" in (tmp_path / "hello.py").read_text()
+
+
+class TestCliDiscoveryIntegration:
+    """
+    Integration tests verifying run_agentic_fix uses _find_cli_binary for CLI discovery.
+
+    This ensures Issue #234 is resolved: Claude should be found even when not in PATH
+    but installed in common locations like ~/.local/bin or ~/.nvm/versions/node/*/bin/.
+    """
+
+    def test_run_agentic_fix_uses_find_cli_binary(self, monkeypatch, tmp_path):
+        """
+        Verify run_agentic_fix uses _find_cli_binary instead of shutil.which.
+
+        This test ensures the fix for Issue #234 is properly integrated:
+        - _find_cli_binary should be called for CLI discovery
+        - The discovered path should be used in subprocess calls
+        """
+        p_prompt, p_code, p_test, p_err = _prep_files(tmp_path)
+
+        # Track _find_cli_binary calls
+        find_cli_calls = []
+
+        def mock_find_cli_binary(name, config=None):
+            find_cli_calls.append(name)
+            # Return a fake path for claude
+            if name == "claude":
+                return "/home/user/.local/bin/claude"
+            return None
+
+        monkeypatch.setattr("pdd.agentic_fix._find_cli_binary", mock_find_cli_binary)
+
+        # Mock other dependencies
+        monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
+        monkeypatch.setattr(
+            "pdd.agentic_fix.load_prompt_template",
+            lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}",
+        )
+
+        # Clear API keys to force CLI auth detection
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
+
+        # Short-circuit to avoid actual agent calls
+        monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
+
+        run_agentic_fix(p_prompt, p_code, p_test, p_err, cwd=tmp_path)
+
+        # Verify _find_cli_binary was called for claude
+        assert "claude" in find_cli_calls, (
+            "_find_cli_binary should be called for 'claude' CLI discovery. "
+            "If this fails, run_agentic_fix may still be using shutil.which()."
+        )
+
+    def test_run_agentic_fix_passes_cli_path_to_variant_runners(self, monkeypatch, tmp_path):
+        """
+        Verify the discovered CLI path is passed to variant runners.
+
+        This ensures the full path is used in subprocess calls, not just the binary name.
+        """
+        p_prompt, p_code, p_test, p_err = _prep_files(tmp_path)
+
+        # Track cli_path passed to variant runner
+        captured_cli_path = []
+
+        def mock_anthropic_variants(prompt_text, cwd, total_timeout, label, cli_path=None):
+            captured_cli_path.append(cli_path)
+            return MagicMock(returncode=0, stdout="fixed", stderr="")
+
+        # Return a specific path for claude
+        monkeypatch.setattr(
+            "pdd.agentic_fix._find_cli_binary",
+            lambda name, config=None: "/home/user/.local/bin/claude" if name == "claude" else None
+        )
+        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", mock_anthropic_variants)
+
+        # Mock other dependencies
+        monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
+        monkeypatch.setattr(
+            "pdd.agentic_fix.load_prompt_template",
+            lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}",
+        )
+
+        # Use anthropic with CLI auth (no API key)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
+
+        # Short-circuit verification
+        monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
+
+        run_agentic_fix(p_prompt, p_code, p_test, p_err, cwd=tmp_path)
+
+        # Verify cli_path was passed to variant runner
+        assert len(captured_cli_path) > 0, "Variant runner should have been called"
+        assert captured_cli_path[0] == "/home/user/.local/bin/claude", (
+            f"Expected cli_path='/home/user/.local/bin/claude', got '{captured_cli_path[0]}'. "
+            "The discovered CLI path should be passed to the variant runner."
+        )
