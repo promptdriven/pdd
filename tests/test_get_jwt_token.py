@@ -370,3 +370,219 @@ async def test_get_jwt_token_browser_open_error_handled(
     assert token == "id_token_abc"
     # Verify browser.open was called but error was caught
     mock_browser_open.assert_called_once_with("https://github.com/login/device")
+
+
+# =============================================================================
+# Issue #309: OAuth Device Flow Rate Limit Handling Tests
+# =============================================================================
+# These tests verify the HTTP-level handling in poll_for_token() by mocking
+# requests.post directly, rather than mocking the entire method.
+#
+# Bug 1: HTTP 429 crashes before JSON is parsed (line 304)
+#   - response.raise_for_status() is called before response.json()
+#   - GitHub returns 429 with {"error": "slow_down"}, but HTTPError is raised first
+#
+# Bug 2: slow_down handler reads non-existent field (line 311)
+#   - Code uses data["interval"] but GitHub's slow_down response doesn't include it
+#   - Per GitHub docs, clients must add 5 seconds to their current interval
+# =============================================================================
+
+from pdd.get_jwt_token import DeviceFlow
+from requests.exceptions import HTTPError
+
+
+class TestPollForTokenRateLimitHandling:
+    """Tests for OAuth device flow rate limit handling (Issue #309).
+
+    These tests mock requests.post directly to test the actual HTTP response
+    handling logic in poll_for_token(), which was previously untested.
+    """
+
+    @pytest.mark.asyncio
+    @patch("pdd.get_jwt_token.asyncio.sleep")
+    @patch("pdd.get_jwt_token.requests.post")
+    async def test_poll_for_token_handles_http_429_slow_down(
+        self, mock_post, mock_sleep
+    ):
+        """HTTP 429 with {"error": "slow_down"} should not crash.
+
+        Bug: response.raise_for_status() is called before response.json(),
+        so HTTP 429 responses raise HTTPError before the JSON body can be parsed.
+
+        This test FAILS with current buggy code because:
+        1. GitHub returns HTTP 429 with body {"error": "slow_down"}
+        2. raise_for_status() throws HTTPError immediately
+        3. The exception is caught and wrapped as TokenError, crashing auth
+
+        Expected behavior: Parse JSON first, detect "slow_down" error, wait, retry.
+        """
+        # Create mock HTTP 429 response with slow_down error
+        mock_429_response = MagicMock()
+        mock_429_response.status_code = 429
+        mock_429_response.json.return_value = {"error": "slow_down"}
+        mock_429_response.raise_for_status.side_effect = HTTPError(
+            "429 Client Error: Too Many Requests"
+        )
+
+        # Second response succeeds with access token
+        mock_success_response = MagicMock()
+        mock_success_response.status_code = 200
+        mock_success_response.json.return_value = {"access_token": "github_token_123"}
+        mock_success_response.raise_for_status.return_value = None
+
+        mock_post.side_effect = [mock_429_response, mock_success_response]
+
+        device_flow = DeviceFlow("test_client_id")
+
+        # This should NOT raise TokenError - it should handle the 429 gracefully
+        # Current buggy code raises: TokenError("Error exchanging device code for token: 429...")
+        token = await device_flow.poll_for_token(
+            device_code="test_device_code",
+            interval=5,
+            expires_in=60
+        )
+
+        assert token == "github_token_123"
+        assert mock_post.call_count == 2
+        # Should have waited after the slow_down response
+        mock_sleep.assert_called()
+
+    @pytest.mark.asyncio
+    @patch("pdd.get_jwt_token.asyncio.sleep")
+    @patch("pdd.get_jwt_token.requests.post")
+    async def test_poll_for_token_slow_down_increments_interval_by_5(
+        self, mock_post, mock_sleep
+    ):
+        """slow_down response should increase interval by 5 seconds per GitHub spec.
+
+        Bug: Code uses data["interval"] but GitHub's slow_down response does NOT
+        include an "interval" field. Per GitHub OAuth documentation:
+        "When you receive the slow_down error, 5 extra seconds are added to the
+        minimum interval"
+
+        This test FAILS with current buggy code because:
+        1. Code tries to read data["interval"] which doesn't exist
+        2. KeyError is raised (if HTTPError bug is fixed first)
+
+        Expected behavior: interval += 5 (add 5 seconds to current interval)
+        """
+        # Mock slow_down response (HTTP 200 with error in body, which is normal)
+        # Note: GitHub can return slow_down as either HTTP 200 or 429 depending on scenario
+        mock_slow_down = MagicMock()
+        mock_slow_down.status_code = 200
+        mock_slow_down.json.return_value = {"error": "slow_down"}  # No "interval" field!
+        mock_slow_down.raise_for_status.return_value = None
+
+        # Success response
+        mock_success = MagicMock()
+        mock_success.status_code = 200
+        mock_success.json.return_value = {"access_token": "github_token_456"}
+        mock_success.raise_for_status.return_value = None
+
+        mock_post.side_effect = [mock_slow_down, mock_success]
+
+        device_flow = DeviceFlow("test_client_id")
+        initial_interval = 5
+
+        token = await device_flow.poll_for_token(
+            device_code="test_device_code",
+            interval=initial_interval,
+            expires_in=60
+        )
+
+        assert token == "github_token_456"
+
+        # Key assertion: sleep should be called with interval + 5 = 10 seconds
+        # Current buggy code fails with KeyError when trying to access data["interval"]
+        sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
+        assert 10 in sleep_calls, (
+            f"Expected sleep(10) after slow_down (5 + 5), but got: {sleep_calls}. "
+            "Bug: Code tries to read data['interval'] but GitHub doesn't include it. "
+            "Fix: Use interval += 5 per GitHub spec."
+        )
+
+    @pytest.mark.asyncio
+    @patch("pdd.get_jwt_token.asyncio.sleep")
+    @patch("pdd.get_jwt_token.requests.post")
+    async def test_poll_for_token_multiple_slow_downs_accumulate(
+        self, mock_post, mock_sleep
+    ):
+        """Multiple slow_down responses should accumulate (+5s each time).
+
+        If we get slow_down twice with initial interval of 5:
+        - First slow_down: wait 10s (5+5)
+        - Second slow_down: wait 15s (10+5)
+
+        This test verifies the interval is tracked as mutable state.
+        """
+        # Three slow_down responses, then success
+        mock_slow_down = MagicMock()
+        mock_slow_down.status_code = 200
+        mock_slow_down.json.return_value = {"error": "slow_down"}
+        mock_slow_down.raise_for_status.return_value = None
+
+        mock_success = MagicMock()
+        mock_success.status_code = 200
+        mock_success.json.return_value = {"access_token": "github_token_789"}
+        mock_success.raise_for_status.return_value = None
+
+        mock_post.side_effect = [mock_slow_down, mock_slow_down, mock_slow_down, mock_success]
+
+        device_flow = DeviceFlow("test_client_id")
+
+        token = await device_flow.poll_for_token(
+            device_code="test_device_code",
+            interval=5,
+            expires_in=120  # Enough time for retries
+        )
+
+        assert token == "github_token_789"
+
+        # Should have accumulated: 10, 15, 20 seconds
+        sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
+        assert sleep_calls == [10, 15, 20], (
+            f"Expected accumulated intervals [10, 15, 20] but got {sleep_calls}. "
+            "Each slow_down should add 5 seconds to the interval."
+        )
+
+    @pytest.mark.asyncio
+    @patch("pdd.get_jwt_token.asyncio.sleep")
+    @patch("pdd.get_jwt_token.requests.post")
+    async def test_poll_for_token_authorization_pending_uses_original_interval(
+        self, mock_post, mock_sleep
+    ):
+        """authorization_pending should use original interval, not modified one.
+
+        This test ensures slow_down doesn't permanently pollute the interval
+        for subsequent authorization_pending responses.
+        """
+        mock_pending = MagicMock()
+        mock_pending.status_code = 200
+        mock_pending.json.return_value = {"error": "authorization_pending"}
+        mock_pending.raise_for_status.return_value = None
+
+        mock_success = MagicMock()
+        mock_success.status_code = 200
+        mock_success.json.return_value = {"access_token": "github_token_abc"}
+        mock_success.raise_for_status.return_value = None
+
+        # Two pending responses, then success
+        mock_post.side_effect = [mock_pending, mock_pending, mock_success]
+
+        device_flow = DeviceFlow("test_client_id")
+        initial_interval = 5
+
+        token = await device_flow.poll_for_token(
+            device_code="test_device_code",
+            interval=initial_interval,
+            expires_in=60
+        )
+
+        assert token == "github_token_abc"
+
+        # authorization_pending should use the original interval (5s), not modified
+        sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
+        assert all(call == initial_interval for call in sleep_calls), (
+            f"Expected all sleeps to use original interval {initial_interval}, "
+            f"but got {sleep_calls}. authorization_pending should not modify interval."
+        )
