@@ -957,11 +957,11 @@ def _select_model_candidates(
         # Strategy (simplified and deterministic): pick the first available model
         # from the CSV as the surrogate base. This mirrors typical CSV ordering
         # expectations and keeps behavior predictable across environments.
+        # Fix for issue #296: Don't warn when user intentionally removes hardcoded base model
         try:
             base_model = available_df.iloc[0]
-            logger.warning(
-                f"Base model '{base_model_name}' not found in CSV. Falling back to surrogate base '{base_model['model']}' (Option A')."
-            )
+            # Silently use the first available model from user's CSV without warning
+            # Users who intentionally customize their CSV shouldn't see warnings about removed models
         except Exception:
             # If any unexpected error occurs during fallback, raise a clear error
             raise ValueError(
