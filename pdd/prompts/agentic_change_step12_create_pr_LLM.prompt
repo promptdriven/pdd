@@ -13,6 +13,8 @@ You are working on step 12 of 12 in an agentic change workflow. This is the fina
 - Worktree Path: {worktree_path}
 - Branch Name: change/issue-{issue_number}
 - Files Changed: {files_to_stage}
+- Sync Order Script: {sync_order_script}
+- Sync Order Commands: {sync_order_list}
 
 % Issue Content
 <issue_content>
@@ -91,7 +93,14 @@ Closes #{issue_number}
 
 ## Next Steps After Merge
 
-1. Run `pdd sync <module>` to regenerate code from modified prompts
+1. Regenerate code from modified prompts in dependency order:
+   ```bash
+   ./sync_order.sh
+   ```
+   Or manually:
+   ```
+   {sync_order_list}
+   ```
 2. Run tests to verify functionality
 3. Deploy if applicable
 
@@ -115,7 +124,7 @@ Closes #{issue_number}
 
 ### What's Next
 1. Review the PR
-2. Run `pdd sync` on affected modules after merge
+2. Run `./sync_order.sh` after merge to regenerate code in dependency order
 3. Run tests to verify
 
 ---
