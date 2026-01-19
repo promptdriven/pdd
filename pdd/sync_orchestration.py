@@ -1252,8 +1252,8 @@ def sync_orchestration(
                                 else:
                                     # Manual check - run the example to see if it crashes
                                     env = os.environ.copy()
-                                    src_dir = Path.cwd() / 'src'
-                                    env['PYTHONPATH'] = f"{src_dir}:{env.get('PYTHONPATH', '')}"
+                                    code_dir = pdd_files['code'].resolve().parent
+                                    env['PYTHONPATH'] = f"{code_dir}:{env.get('PYTHONPATH', '')}"
                                     # Remove TUI-specific env vars that might contaminate subprocess
                                     for var in ['FORCE_COLOR', 'COLUMNS']:
                                         env.pop(var, None)
