@@ -367,6 +367,32 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                   )}
                 </button>
 
+                {/* Strength Selector */}
+                <div className="flex items-center gap-2 bg-surface-800 rounded-lg px-3 py-1.5">
+                  <span className="text-xs text-surface-400">Strength</span>
+                  <div className="flex items-center gap-1">
+                    {[
+                      { value: 0.25, label: 'Fast' },
+                      { value: 0.5, label: 'Balanced' },
+                      { value: 0.75, label: 'Strong' },
+                      { value: 1.0, label: 'Best' },
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setStrength(opt.value)}
+                        className={`px-2 py-1 rounded text-xs transition-all ${
+                          strength === opt.value
+                            ? 'bg-purple-600 text-white'
+                            : 'text-surface-400 hover:text-white hover:bg-surface-700'
+                        }`}
+                        title={opt.label}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {/* Re-analyze button */}
                 <button
                   onClick={runAnalysis}
