@@ -51,6 +51,25 @@
      - Full mode limits: 8000 chars for raw JSON.
      - When `gist_url` provided, links to gist instead of embedding contents.
 
+  8. **Console Output Behavior**:
+     - Terminology: Use "Debug snapshot" (not "Core dump") in all user-facing messages.
+     - Default mode (no flags): Single summary line only:
+       `📦 Debug snapshot saved to {path} (attach when reporting bugs)`
+     - Verbose mode (`ctx.obj.get("verbose")`): Show per-file details:
+       - "Debug snapshot: Found {n} tracked files"
+       - "Debug snapshot: Checking file {path}" for each file
+       - "Debug snapshot: Added content for {key}" for each file added
+       - Warnings for binary/large/missing files
+       - Final summary line
+     - Quiet mode (`ctx.obj.get("quiet")`): No output at all.
+     - All output via `console.print()` from `.errors` module.
+
+  9. **`garbage_collect_core_dumps` function**:
+     - Signature: `garbage_collect_core_dumps(keep: int = 10) -> int`
+     - Deletes old core dumps from `.pdd/core_dumps/`, keeping only the `keep` most recent files (sorted by mtime).
+     - Returns the number of deleted files.
+     - Called automatically after each dump write in `_write_core_dump`.
+
 % Dependencies
   - Imports `__version__` from `..` (the top-level package).
   - Imports `console`, `get_core_dump_errors` from `.errors`.

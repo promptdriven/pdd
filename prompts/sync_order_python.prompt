@@ -1,0 +1,69 @@
+% You are an expert Python engineer. Your goal is to write a module that analyzes prompt file dependencies and generates a topologically-sorted sync order.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+A utility module that parses <include> tags from prompt files, builds a dependency graph, performs topological sort, and outputs an executable shell script with pdd sync commands in the correct order.
+
+% Requirements
+
+1. Function: extract_includes_from_file(file_path: Path) -> Set[str]
+   - Parse <include>...</include> tags from a prompt file
+   - Use regex pattern: r'<include>(.*?)</include>' with re.DOTALL
+   - Return set of included paths (stripped of whitespace)
+   - Return empty set if file doesn't exist or can't be read
+
+2. Function: extract_module_from_include(include_path: str) -> Optional[str]
+   - Map include paths to module names
+   - For example files: "context/llm_invoke_example.py" -> "llm_invoke"
+   - For example files: "context/cli_example.ts" -> "cli"
+   - For prompt includes: "prompts/cli_python.prompt" -> "cli"
+   - Return None for non-module includes (preambles, shared context files without _example suffix)
+   - Strip language suffix (_python, _typescript, _LLM) and _example suffix
+
+3. Function: build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]
+   - Scan all prompt files matching: *_python.prompt, *_typescript.prompt, *_LLM.prompt
+   - For each prompt, extract module name from filename (e.g., "foo_python.prompt" -> "foo")
+   - Parse includes and map to module dependencies
+   - Build graph: module_name -> list of modules it depends on
+   - Skip self-references (module including its own example)
+   - Return empty dict if prompts_dir doesn't exist
+
+4. Function: topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]
+   - Implement Kahn's algorithm for topological sorting
+   - Return tuple of (sorted_list, cycles_detected)
+   - sorted_list: modules in dependency order (dependencies come before dependents)
+   - cycles_detected: list of cycles found (each cycle is a list of module names)
+   - If cycles exist, sorted_list contains all non-cyclic modules in order
+
+5. Function: get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]]) -> List[str]
+   - Given modified modules, find all modules that transitively depend on them
+   - Build reverse graph to find dependents efficiently
+   - Return subset of sorted_modules: modified modules + their transitive dependents
+   - Preserve topological order (dependencies before dependents)
+   - Return empty list if no modules affected
+
+6. Function: generate_sync_order_script(modules: List[str], output_path: Path, worktree_path: Optional[Path] = None) -> str
+   - If modules is empty, return empty string (no script created)
+   - Generate executable .sh file with ordered pdd sync commands
+   - Include header comments: script purpose, module count, generation timestamp
+   - Use "set -e" to fail on first error
+   - For each module, add: echo "[N/total] Syncing module_name..." and pdd sync module_name
+   - Make file executable (chmod 0o755)
+   - Return script content as string
+
+% Dependencies
+<auto_include_example>
+<include>context/auto_include_example.py</include>
+</auto_include_example>
+
+% Instructions
+- Reuse regex pattern from auto_include.py for parsing <include> tags
+- Handle missing files gracefully (log warning with logging module, skip)
+- Module name extraction: use regex to strip language suffix (_python, _typescript, _LLM) and _example suffix
+- Use pathlib.Path throughout for cross-platform compatibility
+- Use collections.deque for Kahn's algorithm queue
+- Include docstrings for all public functions
+
+% Deliverables
+- Code: pdd/sync_order.py

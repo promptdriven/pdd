@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 import re
 from pathlib import Path
@@ -24,6 +25,8 @@ except ImportError:
 AGENT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
 DEFAULT_TIMEOUT_SECONDS: float = 240.0
 MIN_VALID_OUTPUT_LENGTH: int = 50
+DEFAULT_MAX_RETRIES: int = 3
+DEFAULT_RETRY_DELAY: float = 5.0
 
 # GitHub State Markers
 GITHUB_STATE_MARKER_START = "<!-- PDD_WORKFLOW_STATE:"
@@ -122,25 +125,37 @@ def _calculate_codex_cost(usage: Dict[str, Any]) -> float:
     return input_cost + cached_cost + output_cost
 
 def run_agentic_task(
-    instruction: str, 
-    cwd: Path, 
-    *, 
-    verbose: bool = False, 
-    quiet: bool = False, 
-    label: str = "", 
-    timeout: Optional[float] = None
+    instruction: str,
+    cwd: Path,
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
+    label: str = "",
+    timeout: Optional[float] = None,
+    max_retries: int = 1,
+    retry_delay: float = DEFAULT_RETRY_DELAY
 ) -> Tuple[bool, str, float, str]:
     """
     Runs an agentic task using available providers in preference order.
-    
+
+    Args:
+        instruction: The task instruction
+        cwd: Working directory
+        verbose: Show detailed output
+        quiet: Suppress all non-error output
+        label: Task label for logging
+        timeout: Optional timeout override
+        max_retries: Number of attempts per provider before fallback (default: 1 = no retries)
+        retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
+
     Returns:
         (success, output_text, cost_usd, provider_used)
     """
     agents = get_available_agents()
-    
+
     # Filter agents based on preference order
     candidates = [p for p in AGENT_PROVIDER_PREFERENCE if p in agents]
-    
+
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
         if not quiet:
@@ -148,11 +163,11 @@ def run_agentic_task(
         return False, msg, 0.0, ""
 
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
-    
+
     # Create a unique temp file for the prompt
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
     prompt_path = cwd / prompt_filename
-    
+
     full_instruction = (
         f"{instruction}\n\n"
         f"Read the file {prompt_filename} for instructions. "
@@ -168,34 +183,47 @@ def run_agentic_task(
             if verbose:
                 console.print(f"[dim]Attempting provider: {provider} for task '{label}'[/dim]")
 
-            success, output, cost = _run_with_provider(
-                provider, prompt_path, cwd, effective_timeout, verbose, quiet
-            )
+            last_output = ""
+            for attempt in range(1, max_retries + 1):
+                if verbose and attempt > 1:
+                    console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
-            # False Positive Detection
-            if success:
-                is_false_positive = (cost == 0.0 and len(output.strip()) < MIN_VALID_OUTPUT_LENGTH)
-                
-                if is_false_positive:
-                    if not quiet:
-                        console.print(f"[bold red]Provider '{provider}' returned success but appears to be a false positive (Cost: {cost}, Len: {len(output)})[/bold red]")
-                    # Treat as failure, try next provider
-                    continue
-                
-                # Check for suspicious files (C, E, T)
-                suspicious = []
-                for name in ["C", "E", "T"]:
-                    if (cwd / name).exists():
-                        suspicious.append(name)
-                
-                if suspicious:
-                    console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
+                success, output, cost = _run_with_provider(
+                    provider, prompt_path, cwd, effective_timeout, verbose, quiet
+                )
+                last_output = output
 
-                # Real success
-                return True, output, cost, provider
-            else:
-                if verbose:
-                    console.print(f"[yellow]Provider {provider} failed: {output}[/yellow]")
+                # False Positive Detection
+                if success:
+                    is_false_positive = (cost == 0.0 and len(output.strip()) < MIN_VALID_OUTPUT_LENGTH)
+
+                    if is_false_positive:
+                        if not quiet:
+                            console.print(f"[yellow]Provider '{provider}' returned false positive (attempt {attempt})[/yellow]")
+                        # Treat as failure, retry
+                    else:
+                        # Check for suspicious files (C, E, T)
+                        suspicious = []
+                        for name in ["C", "E", "T"]:
+                            if (cwd / name).exists():
+                                suspicious.append(name)
+
+                        if suspicious:
+                            console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
+
+                        # Real success
+                        return True, output, cost, provider
+
+                # Failed - retry with backoff if attempts remain
+                if attempt < max_retries:
+                    backoff = retry_delay * attempt
+                    if verbose:
+                        console.print(f"[dim]Waiting {backoff}s before retry...[/dim]")
+                    time.sleep(backoff)
+
+            # All retries exhausted for this provider
+            if verbose:
+                console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
 
         return False, "All agent providers failed", 0.0, ""
 
