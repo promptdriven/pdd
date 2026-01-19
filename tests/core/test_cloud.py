@@ -328,8 +328,9 @@ def test_get_jwt_token_defaults_env_to_staging_for_cloud_url(clean_env):
         assert token == "ey.test.token"
         assert os.environ.get("PDD_ENV") == "staging"
 
+@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token")
-def test_get_jwt_token_missing_keys(mock_device_flow, clean_env):
+def test_get_jwt_token_missing_keys(mock_device_flow, mock_get_cached_jwt, clean_env):
     """Test that missing API keys result in None (and caught AuthError)."""
     # Ensure keys are missing
     with patch.dict(os.environ, {}, clear=True):
@@ -338,12 +339,13 @@ def test_get_jwt_token_missing_keys(mock_device_flow, clean_env):
         # Should not attempt to call the async flow if keys are missing
         mock_device_flow.assert_not_called()
 
+@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_success(mock_device_flow, clean_env):
+def test_get_jwt_token_success(mock_device_flow, mock_get_cached_jwt, clean_env):
     """Test successful device flow authentication."""
     expected_token = "ey.generated.token"
     mock_device_flow.return_value = expected_token
-    
+
     with patch.dict(os.environ, {
         FIREBASE_API_KEY_ENV: "test_key",
         GITHUB_CLIENT_ID_ENV: "test_id"
@@ -352,11 +354,12 @@ def test_get_jwt_token_success(mock_device_flow, clean_env):
         assert token == expected_token
         mock_device_flow.assert_called_once()
 
+@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_auth_error(mock_device_flow, clean_env):
+def test_get_jwt_token_auth_error(mock_device_flow, mock_get_cached_jwt, clean_env):
     """Test that AuthError during flow is caught and returns None."""
     mock_device_flow.side_effect = AuthError("Auth failed")
-    
+
     with patch.dict(os.environ, {
         FIREBASE_API_KEY_ENV: "test_key",
         GITHUB_CLIENT_ID_ENV: "test_id"
@@ -365,11 +368,12 @@ def test_get_jwt_token_auth_error(mock_device_flow, clean_env):
         token = CloudConfig.get_jwt_token(verbose=True)
         assert token is None
 
+@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_network_error(mock_device_flow, clean_env):
+def test_get_jwt_token_network_error(mock_device_flow, mock_get_cached_jwt, clean_env):
     """Test that NetworkError during flow is caught and returns None."""
     mock_device_flow.side_effect = NetworkError("Connection failed")
-    
+
     with patch.dict(os.environ, {
         FIREBASE_API_KEY_ENV: "test_key",
         GITHUB_CLIENT_ID_ENV: "test_id"
@@ -377,8 +381,9 @@ def test_get_jwt_token_network_error(mock_device_flow, clean_env):
         token = CloudConfig.get_jwt_token(verbose=True)
         assert token is None
 
+@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
-def test_get_jwt_token_unexpected_error(mock_device_flow, clean_env):
+def test_get_jwt_token_unexpected_error(mock_device_flow, mock_get_cached_jwt, clean_env):
     """Test that generic exceptions are caught and return None."""
     mock_device_flow.side_effect = Exception("Something went wrong")
 
