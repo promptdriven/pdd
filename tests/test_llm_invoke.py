@@ -2405,6 +2405,8 @@ def test_llm_invoke_time_none_does_not_crash(mock_load_models, mock_set_llm_cach
             assert response['result'] == "Mocked response"
 
 
+
+
 # ==============================================================================
 # Issue #295: OpenAI strict mode requires additionalProperties: false
 # ==============================================================================
@@ -2460,3 +2462,62 @@ def test_openai_strict_mode_schema_includes_additional_properties_false(mock_loa
                 assert schema.get('additionalProperties') == False, \
                     "Schema must include 'additionalProperties': false for OpenAI strict mode. " \
                     "Without this, OpenAI returns: 'additionalProperties' is required to be supplied and to be false."
+
+
+
+def test_no_warning_for_removed_base_model(mock_set_llm_cache, caplog):
+    """Issue #296: Verify no warning when hardcoded base model is removed from CSV."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [
+            MockModelInfoData(
+                provider='Google', model='gemini/gemini-2.0-flash-exp', input=0.0, output=0.0,
+                coding_arena_elo=1300, structured_output=True, base_url="", api_key="GOOGLE_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+            MockModelInfoData(
+                provider='OpenAI', model='gpt-4o-mini', input=0.15, output=0.60,
+                coding_arena_elo=1320, structured_output=True, base_url="", api_key="OPENAI_API_KEY",
+                max_tokens="", max_completion_tokens="", reasoning_type='budget', max_reasoning_tokens=0
+            ),
+        ]
+
+        mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                        'max_completion_tokens', 'max_reasoning_tokens']
+        for col in numeric_cols:
+            if col in mock_df.columns:
+                mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+
+        mock_df['input'] = mock_df['input'].fillna(0.0)
+        mock_df['output'] = mock_df['output'].fillna(0.0)
+        mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0)
+        mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+        mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+        mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+
+        mock_load_data.return_value = mock_df
+
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key", "PDD_FORCE_LOCAL": "1"}):
+            with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
+                with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                    mock_response = create_mock_litellm_response("Test", model_name='gemini/gemini-2.0-flash-exp')
+                    mock_completion.return_value = mock_response
+
+                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                        with caplog.at_level(logging.WARNING):
+                            response = llm_invoke(
+                                prompt="Test prompt",
+                                input_json={"test": "data"},
+                                strength=0.5,
+                                temperature=0.7,
+                                verbose=False
+                            )
+
+                            assert response is not None
+                            assert response['model_name'] == 'gemini/gemini-2.0-flash-exp'
+
+                            warning_messages = [record.message for record in caplog.records if record.levelname == 'WARNING']
+                            for warning in warning_messages:
+                                assert 'gpt-5.1-codex-mini' not in warning, f"Unwanted warning: {warning}"
