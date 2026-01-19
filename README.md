@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.119-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.121-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -365,7 +365,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.119
+Current version: 0.0.121
 
 To check your installed version, run:
 ```
@@ -1808,17 +1808,17 @@ Example (agentic mode):
 pdd change https://github.com/myorg/myrepo/issues/239
 ```
 
-After the workflow completes, a PR is automatically created linking to the issue. Review the PR and run `pdd sync` on the modified prompts to regenerate code.
+After the workflow completes, a PR is automatically created linking to the issue. The PR includes a `sync_order.sh` script that runs `pdd sync` commands in dependency order. Review the PR and run `./sync_order.sh` after merge to regenerate code.
 
 **Manual Mode (legacy):**
 ```
-pdd [GLOBAL OPTIONS] change --manual [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE]
+pdd [GLOBAL OPTIONS] change --manual [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE INPUT_PROMPT_FILE
 ```
 
 Arguments:
 - `CHANGE_PROMPT_FILE`: The filename containing the instructions on how to modify the input prompt file.
 - `INPUT_CODE`: The filename of the code that was generated from the input prompt file, or the directory containing the code files when used with the '--csv' option.
-- `INPUT_PROMPT_FILE`: (Optional) The filename of the prompt file that will be modified. Not required when using the '--csv' option.
+- `INPUT_PROMPT_FILE`: The filename of the prompt file that will be modified. Required in standard mode; not used when using the '--csv' option.
 
 Options:
 - `--budget FLOAT`: Set the maximum cost allowed for the change process (default is $5.0).

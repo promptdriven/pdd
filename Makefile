@@ -101,7 +101,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -190,20 +190,25 @@ run-examples: $(EXAMPLE_FILES)
 	)
 	@echo "All examples ran successfully"
 
+# Ensure dev dependencies are installed before running tests
+ensure-dev-deps:
+	@echo "Updating pdd conda environment with dev dependencies"
+	@conda run -n pdd --no-capture-output pip install -e '.[dev]'
+
 # Run tests
-test:
+test: ensure-dev-deps
 	@echo "Running staging tests"
 	@cd $(STAGING_DIR)
 	@conda run -n pdd --no-capture-output PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
 
 # Run tests with coverage
-coverage:
+coverage: ensure-dev-deps
 	@echo "Running tests with coverage"
 	@cd $(STAGING_DIR)
 	@conda run -n pdd --no-capture-output PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
 
 # Run pylint
-lint:
+lint: ensure-dev-deps
 	@echo "Running pylint"
 	@conda run -n pdd --no-capture-output pylint pdd tests
 
@@ -216,7 +221,7 @@ ifdef MODULE
 	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
 	$(eval PROGRAM_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
 	$(eval ERROR_FILE := $(MODULE)_crash.log)
-	
+
 	@echo "Running $(PROGRAM_FILE) to capture crash output..."
 	@mkdir -p $(shell dirname $(ERROR_FILE))
 	@if PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python $(PROGRAM_FILE) 2> $(ERROR_FILE); then \
@@ -258,7 +263,7 @@ ifdef MODULE
 	$(eval PY_PROMPT := $(PROMPTS_DIR)/$(MODULE)_python.prompt)
 	$(eval PROGRAM_FILE := $(CONTEXT_DIR)/$(MODULE)_example.py)
 	$(eval RESULTS_FILE := $(MODULE)_verify_results.log)
-	
+
 	@echo "Verifying $(PY_FILE) functionality..."
 	-conda run -n pdd --no-capture-output pdd --strength .9 --verbose verify --max-attempts 3 --budget 5.0 --output-code $(PDD_DIR)/$(MODULE)_verified.py --output-program $(CONTEXT_DIR)/$(MODULE)_example_verified.py --output-results $(RESULTS_FILE) $(PY_PROMPT) $(PY_FILE) $(PROGRAM_FILE)
 else
@@ -467,7 +472,7 @@ production:
 	@cp -r $(TESTS_DIR) .
 	@cp $(MAKEFILE_OUTPUT) .
 
-regression:
+regression: ensure-dev-deps
 	@echo "Running regression tests"
 	@mkdir -p staging/regression
 	@find staging/regression -type f ! -name ".*" -delete
@@ -480,7 +485,7 @@ endif
 
 SYNC_PARALLEL ?= 1
 
-sync-regression:
+sync-regression: ensure-dev-deps
 	@echo "Running sync regression tests"
 ifdef TEST_NUM
 	@echo "Running specific sync test: $(TEST_NUM)"
@@ -498,7 +503,7 @@ endif
 all-regression: regression sync-regression cloud-regression
 	@echo "All regression test suites completed."
 
-cloud-regression:
+cloud-regression: ensure-dev-deps
 	@echo "Running cloud regression tests"
 	@mkdir -p staging/cloud_regression
 ifdef TEST_NUM
@@ -510,7 +515,7 @@ endif
 
 # Automated test runner with Infisical for CI/CD
 .PHONY: test-all-ci
-test-all-ci:
+test-all-ci: ensure-dev-deps
 	@echo "Running all test suites with result capture for CI/CD"
 	@mkdir -p test_results
 ifdef PR_NUMBER
@@ -525,7 +530,7 @@ endif
 
 # Run all tests with Infisical (for local development and CI)
 .PHONY: test-all-with-infisical
-test-all-with-infisical:
+test-all-with-infisical: ensure-dev-deps
 	@echo "Running all test suites with Infisical"
 	@if ! command -v infisical &> /dev/null; then \
 		echo "Error: Infisical CLI not found. Please install it:"; \
@@ -580,11 +585,11 @@ build:
 	@rm -rf dist
 	@conda run -n pdd --no-capture-output python -m build
 	@rm dist/*.tar.gz #don't upload source distribution
-	
-	# Post-process the wheel with preprocessed prompts
+
+        # Post-process the wheel with preprocessed prompts
 	@echo "Post-processing wheel with preprocessed prompts..."
 	@conda run -n pdd --no-capture-output python scripts/preprocess_wheel.py 'dist/*.whl'
-	
+
 	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
 publish:
@@ -641,7 +646,14 @@ release: check-deps check-suspicious-files
 	@$(MAKE) check-suspicious-files
 	@# Update CHANGELOG.md with changes from this release
 	@echo "Updating CHANGELOG.md..."
-	@claude --dangerously-skip-permissions -p "do a git diff between the prior version and the current version to update CHANGELOG.md to make the description more accurate and complete but concise. Be sure to not missing any updates. We are using a prompt driven development approach: docs/prompting_guide.md."
+	@claude --dangerously-skip-permissions -p "Update CHANGELOG.md for the latest release. Steps: \
+1. Run 'git tag | tail -2' to find the prior and current version tags. \
+2. Run 'git diff <prior>..HEAD --stat' and 'git log <prior>..HEAD --oneline' to see all changes. \
+3. Check for external contributor PRs: look at sync commits ('git log --oneline | grep sync') and use 'gh pr list --repo promptdriven/pdd --state merged --limit 20' to find upstream PRs with their authors. \
+4. For each external contributor, credit them by name and PR number (e.g., 'Thanks Xavier Yin! (PR #317)'). Use 'gh pr view <num> --repo promptdriven/pdd --json author' to get author info. \
+5. Organize changes into sections: Feat, Fix, Build, Refactor, Docs. \
+6. Keep descriptions concise but complete. Don't miss any significant changes - check the diff stat for large file changes. \
+We are using a prompt driven development approach: docs/prompting_guide.md."
 
 analysis:
 	@echo "Running regression analysis"

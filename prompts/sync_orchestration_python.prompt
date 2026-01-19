@@ -72,6 +72,9 @@ Returns a dictionary containing:
 ## Dependencies
 
 <examples>
+    <operation_log_example>
+        <include>context/operation_log_example.py</include>
+    </operation_log_example>
     <sync_determine_operation_example>
         <include>context/sync_determine_operation_example.py</include>
     </sync_determine_operation_example>
@@ -108,6 +111,16 @@ Returns a dictionary containing:
 
 ```python
 from .sync_tui import SyncApp
+from .operation_log import (
+    load_operation_log,
+    create_log_entry,
+    update_log_entry,
+    append_log_entry,
+    log_event,
+    save_fingerprint,
+    save_run_report,
+    clear_run_report,
+)
 from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
@@ -137,11 +150,8 @@ from . import DEFAULT_STRENGTH
 
 ### Function-Scope Imports
 
-- `Fingerprint` - in `_save_operation_fingerprint()`
-- `datetime, timezone` from datetime - in `_save_operation_fingerprint()`
 - `get_extension` - at the start of `sync_orchestration()`
 - `get_test_command_for_file` from `.get_test_command` - in `_execute_tests_and_create_run_report()` and fix operation
-- `__version__` - in `_save_operation_fingerprint()`
 - `show_exit_animation` - after `app.run()` completes
 - `shutil` - inside auto-deps operation block
 - `traceback` - in exception handlers
@@ -240,16 +250,34 @@ Implement helpers for running examples with error detection:
 
 ## Helper Functions
 
-Implement these helpers for state management:
+### Imported from operation_log
 
-- `load_sync_log(basename, language)` - Load JSONL log entries
-- `create_sync_log_entry(decision, budget_remaining)` - Create initial log entry from SyncDecision
-- `update_sync_log_entry(entry, result, duration)` - Add execution results to log entry
-- `append_sync_log(basename, language, entry)` - Append entry to log file
-- `log_sync_event(basename, language, event, details)` - Log system events (lock_acquired, budget_warning, etc.)
-- `save_run_report(report, basename, language, atomic_state=None)` - Save RunReport dict, optionally via AtomicStateUpdate
-- `_save_operation_fingerprint(basename, language, operation, paths, cost, model, atomic_state=None)` - Save fingerprint after success
-- `_display_sync_log(basename, language, verbose)` - Format and display sync log
+Use these functions from `operation_log` module (already imported above):
+
+- `load_operation_log(basename, language)` - Load JSONL log entries (handles backward compatibility for entries without `invocation_mode`)
+- `create_log_entry(operation, reason, invocation_mode, estimated_cost, confidence, decision_type)` - Create log entry dict
+- `update_log_entry(entry, success, cost, model, duration, error)` - Add execution results to log entry
+- `append_log_entry(basename, language, entry)` - Append entry to log file
+- `log_event(basename, language, event_type, details, invocation_mode)` - Log system events (lock_acquired, budget_warning, etc.)
+- `save_fingerprint(basename, language, operation, paths, cost, model)` - Save fingerprint after success
+- `save_run_report(basename, language, report_data)` - Save RunReport dict
+- `clear_run_report(basename, language)` - Remove stale run report
+
+**Creating sync log entries from SyncDecision**: Extract fields from the decision object:
+```python
+entry = create_log_entry(
+    operation=decision.operation,
+    reason=decision.reason,
+    invocation_mode="sync",
+    estimated_cost=decision.estimated_cost,
+    confidence=decision.confidence,
+    decision_type=decision.decision_type
+)
+```
+
+### Local helpers (implement in this module)
+
+- `_display_sync_log(basename, language, verbose)` - Format and display sync log using `load_operation_log()`
 - `_create_mock_context(**kwargs)` - Create Click context for command execution
 - `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage)
 - `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)` - Run tests with coverage; uses `test_files` when provided
