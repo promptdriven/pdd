@@ -30,6 +30,12 @@ def manager():
     """Fixture for a RemoteSessionManager instance."""
     return RemoteSessionManager(jwt_token="fake-jwt-token", project_path=Path("/app"))
 
+
+@pytest.fixture
+def manager_custom_port():
+    """Fixture for a RemoteSessionManager instance with custom port."""
+    return RemoteSessionManager(jwt_token="fake-jwt-token", project_path=Path("/app"), server_port=9999)
+
 @pytest.fixture
 def mock_httpx_client():
     """Mock httpx.AsyncClient context manager."""
@@ -578,3 +584,85 @@ class TestCLICommandBuildingWithLists:
 
         assert "--env KEY1=val1" in cli_command
         assert "--env KEY2=val2" in cli_command
+
+
+# --- Tests for Server Port Configuration ---
+
+class TestServerPortConfiguration:
+    """Tests for configurable server port in RemoteSessionManager."""
+
+    def test_default_port(self, manager):
+        """Test that default port is 9876."""
+        assert manager.server_port == 9876
+
+    def test_custom_port(self, manager_custom_port):
+        """Test that custom port is correctly set."""
+        assert manager_custom_port.server_port == 9999
+
+    @pytest.mark.asyncio
+    async def test_do_execute_uses_custom_port(self, manager_custom_port, mock_cloud_config, mock_httpx_client):
+        """Test that _do_execute uses the configured port."""
+        # Setup mock response for command submission
+        mock_submit_response = MagicMock()
+        mock_submit_response.status_code = 200
+        mock_submit_response.json.return_value = {"job_id": "test-job-123"}
+
+        # Setup mock response for job status polling
+        mock_status_response = MagicMock()
+        mock_status_response.status_code = 200
+        mock_status_response.json.return_value = {
+            "status": "completed",
+            "result": {"stdout": "test output", "stderr": "", "exit_code": 0}
+        }
+
+        # Setup mock responses in order: submit, status poll
+        mock_httpx_client.post.return_value = mock_submit_response
+        mock_httpx_client.get.return_value = mock_status_response
+
+        # Create a test command
+        cmd = CommandInfo(
+            command_id="cmd-123",
+            type="generate",
+            payload={"args": {"prompt_file": "test.prompt"}, "options": {}},
+            status="pending",
+            created_at=datetime.datetime.now(datetime.timezone.utc),
+        )
+
+        # Mock _is_cancelled to return False
+        with patch.object(manager_custom_port, '_is_cancelled', new_callable=AsyncMock) as mock_cancelled:
+            mock_cancelled.return_value = False
+
+            # Execute the command
+            job_id, response = await manager_custom_port._do_execute(cmd)
+
+        # Verify the submit call was made to the custom port
+        submit_call = mock_httpx_client.post.call_args_list[0]
+        assert "http://127.0.0.1:9999" in submit_call[0][0]
+
+    @pytest.mark.asyncio
+    async def test_cancel_local_job_uses_custom_port(self, manager_custom_port, mock_httpx_client):
+        """Test that _cancel_local_job uses the configured port."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"cancelled": True}
+        mock_httpx_client.post.return_value = mock_response
+
+        result = await manager_custom_port._cancel_local_job("test-job-123")
+
+        # Verify the cancel call was made to the custom port
+        cancel_call = mock_httpx_client.post.call_args
+        assert "http://127.0.0.1:9999" in cancel_call[0][0]
+        assert result is True
+
+    def test_manager_initialization_with_all_params(self):
+        """Test RemoteSessionManager initializes correctly with all parameters."""
+        mgr = RemoteSessionManager(
+            jwt_token="test-token",
+            project_path=Path("/test/path"),
+            server_port=8080
+        )
+        assert mgr.jwt_token == "test-token"
+        assert mgr.project_path == Path("/test/path")
+        assert mgr.server_port == 8080
+        assert mgr.session_id is None
+        assert mgr.cloud_url is None
