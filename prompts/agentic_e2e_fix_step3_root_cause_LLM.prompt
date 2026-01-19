@@ -65,13 +65,13 @@ Your comment should follow this format:
 
 ### Failure Analysis
 
-#### Test: `{test_name}`
-- **Expected behavior (per docs):** {description}
-- **Test expects:** {description}
-- **Code does:** {description}
+#### Test: `{{test_name}}`
+- **Expected behavior (per docs):** {{description}}
+- **Test expects:** {{description}}
+- **Code does:** {{description}}
 
 ### Root Cause
-{detailed_explanation}
+{{detailed_explanation}}
 
 ### Recommendation
 [If CODE_BUG: Which dev units need fixing]
