@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.120-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.121-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -365,7 +365,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.120
+Current version: 0.0.121
 
 To check your installed version, run:
 ```
@@ -1808,7 +1808,7 @@ Example (agentic mode):
 pdd change https://github.com/myorg/myrepo/issues/239
 ```
 
-After the workflow completes, a PR is automatically created linking to the issue. Review the PR and run `pdd sync` on the modified prompts to regenerate code.
+After the workflow completes, a PR is automatically created linking to the issue. The PR includes a `sync_order.sh` script that runs `pdd sync` commands in dependency order. Review the PR and run `./sync_order.sh` after merge to regenerate code.
 
 **Manual Mode (legacy):**
 ```
