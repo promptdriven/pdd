@@ -95,7 +95,10 @@ OpenAI,gpt-4o-mini,0.15,0.6,1450,TRUE,,OPENAI_API_KEY,,,none,0
             """Mock that returns a simple code response."""
             mock_response = MagicMock()
             mock_response.choices = [MagicMock()]
-            mock_response.choices[0].message.content = 'def add(a, b):\n    return a + b'
+            mock_response.choices[0].message.content = '''```python
+def add(a, b):
+    return a + b
+```'''
             mock_response.choices[0].finish_reason = "stop"
             mock_response.model = "gemini/gemini-2.0-flash-exp"
             mock_response.usage = MagicMock()
@@ -129,18 +132,15 @@ OpenAI,gpt-4o-mini,0.15,0.6,1450,TRUE,,OPENAI_API_KEY,,,none,0
                 with patch('pdd.llm_invoke._load_model_data', side_effect=load_custom_csv):
                     with patch('pdd.llm_invoke.litellm.completion', side_effect=mock_completion):
                         with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 50, "output_tokens": 30}):
-                            # Bypass postprocess LLM call (uses output_pydantic=ExtractedCode)
-                            # This test is about #296 warning suppression, not code extraction
-                            with patch('pdd.code_generator.postprocess', return_value=('def add(a, b):\n    return a + b', 0.0, 'mock-model')):
-                                from pdd import cli
+                            from pdd import cli
 
-                                runner = CliRunner()
-                                result = runner.invoke(cli.cli, [
-                                    "--local",  # Force local execution
-                                    "generate",
-                                    "test_python.prompt",
-                                    "--output", "output.py"
-                                ], catch_exceptions=False)
+                            runner = CliRunner()
+                            result = runner.invoke(cli.cli, [
+                                "--local",  # Force local execution
+                                "generate",
+                                "test_python.prompt",
+                                "--output", "output.py"
+                            ], catch_exceptions=False)
 
         # 6. THE KEY ASSERTION: No warning about missing base model
         # Check that the command completed successfully
