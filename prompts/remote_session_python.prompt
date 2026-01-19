@@ -26,7 +26,7 @@
      - Status: "pending" | "processing" | "completed" | "failed" | "cancelled"
 
   4. **RemoteSessionManager class**:
-     - Constructor takes `jwt_token: str` and `project_path: Path`
+     - Constructor takes `jwt_token: str`, `project_path: Path`, and `server_port: int = 9876`
      - `register()`: Register session with cloud, return cloud_url
        - Params: session_name (optional)
        - Call POST to `registerSession` cloud endpoint
@@ -43,7 +43,7 @@
      - Poll cloud for pending commands every 5 seconds via `getCommands` endpoint
      - When command found: set status="processing", execute via local server, update status
      - Use asyncio.Event for clean shutdown
-     - Commands execute via local FastAPI server at http://127.0.0.1:9876
+     - Commands execute via local FastAPI server at http://127.0.0.1:{server_port}
 
   6. **Command Execution**:
      - Execute commands via POST to local `/api/v1/commands/execute` endpoint
