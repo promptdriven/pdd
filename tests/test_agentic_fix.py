@@ -918,3 +918,47 @@ class TestCliDiscoveryIntegration:
             f"Expected cli_path='/home/user/.local/bin/claude', got '{captured_cli_path[0]}'. "
             "The discovered CLI path should be passed to the variant runner."
         )
+
+    def test_variant_runners_use_cli_path_in_command(self, monkeypatch, tmp_path):
+        """
+        Critical test: verify variant runners actually USE the discovered cli_path
+        in the subprocess command, not just for logging/validation.
+
+        This is the key behavior that was missing in the original bug:
+        _find_cli_binary found the path, but the actual command used hardcoded "claude".
+        """
+        from pdd.agentic_fix import _run_anthropic_variants, _run_google_variants, _run_openai_variants
+
+        # Track the actual commands passed to subprocess.run
+        executed_commands = []
+
+        def mock_subprocess_run(cmd, **kwargs):
+            executed_commands.append(cmd)
+            return MagicMock(returncode=0, stdout="output", stderr="")
+
+        monkeypatch.setattr("pdd.agentic_fix.subprocess.run", mock_subprocess_run)
+        monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
+
+        # Test Anthropic variant with custom cli_path
+        executed_commands.clear()
+        _run_anthropic_variants("test prompt", tmp_path, 60, "test", cli_path="/custom/bin/claude")
+
+        assert len(executed_commands) > 0, "subprocess.run should have been called"
+        assert executed_commands[0][0] == "/custom/bin/claude", \
+            f"Anthropic command should use cli_path '/custom/bin/claude', got: {executed_commands[0][0]}"
+
+        # Test Google variant with custom cli_path
+        executed_commands.clear()
+        _run_google_variants("test prompt", tmp_path, 60, "test", cli_path="/custom/bin/gemini")
+
+        assert len(executed_commands) > 0, "subprocess.run should have been called"
+        assert executed_commands[0][0] == "/custom/bin/gemini", \
+            f"Google command should use cli_path '/custom/bin/gemini', got: {executed_commands[0][0]}"
+
+        # Test OpenAI variant with custom cli_path
+        executed_commands.clear()
+        _run_openai_variants("test prompt", tmp_path, 60, "test", cli_path="/custom/bin/codex")
+
+        assert len(executed_commands) > 0, "subprocess.run should have been called"
+        assert executed_commands[0][0] == "/custom/bin/codex", \
+            f"OpenAI command should use cli_path '/custom/bin/codex', got: {executed_commands[0][0]}"
