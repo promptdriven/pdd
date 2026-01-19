@@ -1091,7 +1091,9 @@ class TestCliDiscovery:
         fake_claude.write_text("#!/bin/bash\necho claude")
         fake_claude.chmod(0o755)
 
-        # Temporarily modify _COMMON_CLI_PATHS
+        # Temporarily modify _COMMON_CLI_PATHS for this test.
+        # Note: monkeypatch.setitem() automatically restores the original value
+        # after the test completes, ensuring test independence.
         original_paths = _COMMON_CLI_PATHS.get("claude", [])
         monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [fake_claude] + original_paths)
 
@@ -1258,7 +1260,9 @@ contexts:
         nvm_claude.write_text("#!/bin/bash\necho nvm claude")
         nvm_claude.chmod(0o755)
 
-        # Patch _COMMON_CLI_PATHS to include our test nvm path
+        # Patch _COMMON_CLI_PATHS to include our test nvm path.
+        # Note: monkeypatch.setitem() automatically restores the original value
+        # after the test completes, ensuring test independence.
         nvm_node_dir = tmp_path / ".nvm" / "versions" / "node"
         original_paths = _COMMON_CLI_PATHS.get("claude", [])
         # Add the nvm node parent directory (will be glob-expanded)
@@ -1272,6 +1276,43 @@ contexts:
             f"Should find claude in nvm path, but got None. Expected: {nvm_claude}"
         assert result == str(nvm_claude), \
             f"Should find claude at {nvm_claude}, but got {result}"
+
+    def test_find_cli_binary_nvm_multiple_versions(self, monkeypatch, tmp_path):
+        """
+        Test nvm glob expansion with multiple node versions installed.
+
+        Simulates a realistic scenario where a user has multiple node versions:
+        ~/.nvm/versions/node/v18.0.0/bin/
+        ~/.nvm/versions/node/v20.10.0/bin/claude  <- claude installed here
+        ~/.nvm/versions/node/v21.1.0/bin/
+
+        The glob should find claude in any version directory.
+        """
+        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Create multiple nvm version directories
+        nvm_base = tmp_path / ".nvm" / "versions" / "node"
+        versions = ["v18.0.0", "v20.10.0", "v21.1.0"]
+
+        for version in versions:
+            bin_dir = nvm_base / version / "bin"
+            bin_dir.mkdir(parents=True)
+
+        # Only install claude in the middle version (v20.10.0)
+        claude_path = nvm_base / "v20.10.0" / "bin" / "claude"
+        claude_path.write_text("#!/bin/bash\necho claude v20")
+        claude_path.chmod(0o755)
+
+        # Patch _COMMON_CLI_PATHS
+        monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [nvm_base])
+
+        result = _find_cli_binary("claude")
+
+        assert result is not None, "Should find claude across multiple nvm versions"
+        assert result == str(claude_path), \
+            f"Should find claude in v20.10.0, got {result}"
 
     def test_build_provider_command_uses_discovered_path(self, monkeypatch):
         """

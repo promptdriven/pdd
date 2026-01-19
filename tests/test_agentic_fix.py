@@ -831,19 +831,29 @@ class TestCliDiscovery:
 
     def test_run_agentic_fix_uses_find_cli_binary(self, monkeypatch, tmp_path):
         """
-        Integration test: run_agentic_fix should use _find_cli_binary for CLI discovery.
+        Integration test: run_agentic_fix should use _find_cli_binary for CLI discovery
+        AND pass the discovered path to the variant runner.
 
-        This test verifies that the fix is properly integrated into the main flow.
+        This test verifies that:
+        1. _find_cli_binary is called to discover the CLI path
+        2. The discovered path is passed to _run_anthropic_variants as cli_path
         """
         p_prompt, p_code, p_test, p_err = _prep_files(tmp_path)
 
         # Track which CLI was found
         found_cli_path = []
+        # Track the cli_path passed to variant runner
+        variant_runner_cli_paths = []
 
         def mock_find_cli_binary(name, config=None):
             result = f"/mocked/path/{name}"
             found_cli_path.append((name, result))
             return result
+
+        def mock_run_anthropic_variants(*args, **kwargs):
+            # Capture the cli_path argument
+            variant_runner_cli_paths.append(kwargs.get("cli_path"))
+            return MagicMock(returncode=0, stdout="", stderr="")
 
         # Mock dependencies
         monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
@@ -853,10 +863,7 @@ class TestCliDiscovery:
         )
         monkeypatch.setattr("pdd.agentic_fix._find_cli_binary", mock_find_cli_binary)
         monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
-
-        # Mock subprocess to avoid actual CLI calls
-        mock_result = MagicMock(returncode=0, stdout="", stderr="")
-        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", lambda *a, **k: mock_result)
+        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", mock_run_anthropic_variants)
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
@@ -867,6 +874,12 @@ class TestCliDiscovery:
         claude_calls = [c for c in found_cli_path if c[0] == "claude"]
         assert len(claude_calls) > 0, \
             "run_agentic_fix should use _find_cli_binary to discover claude"
+
+        # Verify the discovered path was passed to the variant runner
+        assert len(variant_runner_cli_paths) > 0, \
+            "run_agentic_fix should call _run_anthropic_variants"
+        assert variant_runner_cli_paths[0] == "/mocked/path/claude", \
+            f"cli_path passed to variant runner should be the discovered path, got: {variant_runner_cli_paths[0]}"
 
     def test_variant_runners_use_cli_path_in_command(self, monkeypatch, tmp_path):
         """

@@ -24,6 +24,9 @@ CLI_COMMANDS: Dict[str, str] = {
     "openai": "codex",
 }
 
+# Maximum directory depth to search for .pddrc files (prevents infinite loops)
+MAX_PDDRC_SEARCH_DEPTH: int = 10
+
 # Common installation paths for CLI tools (platform-specific)
 # Used as fallback when shutil.which() fails to find the binary
 _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
@@ -34,7 +37,9 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path("/usr/local/bin/claude"),
         Path("/opt/homebrew/bin/claude"),
         Path("/home/linuxbrew/.linuxbrew/bin/claude"),
-        Path.home() / ".nvm" / "versions" / "node",  # Will be glob-expanded for nvm
+        # nvm base path - glob-expanded in _find_cli_binary() to search
+        # ~/.nvm/versions/node/*/bin/ for all installed node versions
+        Path.home() / ".nvm" / "versions" / "node",
     ],
     "codex": [
         Path.home() / ".npm-global" / "bin" / "codex",
@@ -250,7 +255,7 @@ def _load_agentic_config() -> Dict[str, Any]:
     # Search for .pddrc in current dir and parent dirs
     search_path = Path.cwd()
     pddrc_path: Optional[Path] = None
-    for _ in range(10):  # Limit search depth
+    for _ in range(MAX_PDDRC_SEARCH_DEPTH):
         candidate = search_path / ".pddrc"
         if candidate.is_file():
             pddrc_path = candidate
@@ -319,7 +324,8 @@ def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Opti
     # Strategy 3: Search common installation directories
     common_paths = _COMMON_CLI_PATHS.get(name, [])
     for candidate in common_paths:
-        # Handle nvm directory (needs glob for version subdirs)
+        # Handle nvm directory: glob-expand ~/.nvm/versions/node/*/bin/ to find
+        # the CLI binary across all installed node versions (e.g., v18.0.0, v20.10.0)
         if "nvm" in str(candidate) and candidate.name == "node":
             try:
                 for version_dir in candidate.glob("*/bin"):
