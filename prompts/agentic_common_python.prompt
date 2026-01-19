@@ -48,15 +48,23 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 - Returns list of available provider names (e.g., `["anthropic", "google"]`)
 - Checks both CLI binary exists AND API key is configured
 
-`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "", timeout: Optional[float] = None) -> Tuple[bool, str, float, str]`
+`run_agentic_task(instruction: str, cwd: Path, *, verbose: bool = False, quiet: bool = False, label: str = "", timeout: Optional[float] = None, max_retries: int = 1, retry_delay: float = DEFAULT_RETRY_DELAY) -> Tuple[bool, str, float, str]`
 - Tries providers in `AGENT_PROVIDER_PREFERENCE` order
 - Returns (success, output, cost, provider_used)
 - Optional `timeout` parameter overrides environment variable and default
+- Optional `max_retries` controls retry attempts per provider before fallback (default: 1 for backward compatibility; use DEFAULT_MAX_RETRIES in production)
+- Optional `retry_delay` is base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
 
 % Default Timeout
 Export `DEFAULT_TIMEOUT_SECONDS: float = 240.0` as fallback for orchestrators that don't specify step-specific timeouts.
 
 Note: Per-step timeout dictionaries (BUG_STEP_TIMEOUTS, CHANGE_STEP_TIMEOUTS, E2E_FIX_STEP_TIMEOUTS) are defined in their respective orchestrator modules, not here. This keeps workflow-specific configuration with the workflow.
+
+% Retry Constants
+Export `DEFAULT_MAX_RETRIES: int = 3` for orchestrators to use.
+Export `DEFAULT_RETRY_DELAY: float = 5.0` as base delay for exponential backoff.
+
+All orchestrators should import and use these constants for consistent retry behavior.
 
 % False Positive Detection (Issue #261)
 Export `MIN_VALID_OUTPUT_LENGTH: int = 50`
@@ -91,6 +99,14 @@ Notes:
 - Return `(False, "{provider} error: {message}", 0.0, provider)` on subprocess failure
 - Try next provider in preference order on failure; return failure only if all providers fail
 - Log false positive detection at error level before trying next provider
+
+% Retry Logic
+- `max_retries` controls how many times to attempt a provider before moving to next (default: 1 = no retries for backward compatibility with tests)
+- `retry_delay` is the base delay in seconds between retries
+- On failure, retry the same provider with exponential backoff: delay = retry_delay * attempt_number
+- Only after all retries exhausted for a provider, move to next provider in preference order
+- Log retry attempts when verbose mode is enabled
+- Orchestrators should import `DEFAULT_MAX_RETRIES` and pass it explicitly
 
 % GitHub State Persistence (Cross-Machine Resume)
 

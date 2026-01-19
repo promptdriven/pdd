@@ -15,6 +15,7 @@ Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separa
 6. Track per-dev-unit state within the issue-level state file
 7. Parse agent output for `FILES_CREATED:` and `FILES_MODIFIED:` lines to track changed files
 8. Apply `timeout_adder` to each step's base timeout from `E2E_FIX_STEP_TIMEOUTS`
+9. On successful completion with changes: commit all changed files and push to remote branch (updates existing PR created by `pdd bug`)
 
 % Step Name Mapping
 ```python
@@ -60,7 +61,8 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 For each step (1-9):
 1. Load the step prompt template via `load_prompt_template(f"agentic_e2e_fix_step{n}_{STEP_NAMES[n]}_LLM")`
 2. Format template with: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles, issue_content, step1_output, etc.
-3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder)`
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
+   - Use DEFAULT_MAX_RETRIES for consistent retry behavior across all orchestrators
 4. Store the output for use by subsequent steps
 5. Save state to file after step completes
 6. Accumulate cost: `total_cost += step_cost`
@@ -203,6 +205,9 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
    - If `resume=True`: Call `load_workflow_state()` to check for existing state (GitHub first, then local)
    - Track `github_comment_id` from load result for subsequent saves
    - If `resume=False`: Start fresh, call `clear_workflow_state()` to clear any existing state
+   - When saving state after each step:
+     - On success: Store output in step_outputs, set `last_completed_step = step_num`
+     - On failure (not fatal): Store "FAILED: {output}" in step_outputs, keep `last_completed_step = step_num - 1` (ensures resume re-runs the failed step)
    - On successful completion (`ALL_TESTS_PASS`): Call `clear_workflow_state()`
    - On max cycles reached: State remains for inspection
    - On user interrupt (KeyboardInterrupt): Call `save_workflow_state()` before exiting
@@ -213,6 +218,41 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
    - Check if any `changed_files` in state have been modified since state was saved (compare mtimes)
    - If staleness detected, print warning: `"[yellow]Warning: Codebase may have changed since last run. Consider --no-resume for fresh start.[/yellow]"`
    - Proceed with resume unless files are missing (then warn and start fresh)
+
+% Git Commit on Success
+
+After successful completion (ALL_TESTS_PASS), commit only files that changed during the workflow (not pre-existing modified/untracked files). Uses hash-based comparison to accurately detect changes.
+
+1. **Helper function**: `_get_modified_and_untracked(cwd: Path) -> Set[str]`
+   - Get modified tracked files via `git diff --name-only HEAD`
+   - Get untracked files via `git ls-files --others --exclude-standard`
+   - Return combined set of file paths
+
+2. **Helper function**: `_get_file_hashes(cwd: Path) -> Dict[str, Optional[str]]`
+   - For each file in `_get_modified_and_untracked(cwd)`:
+     - If file exists: compute MD5 hash of content
+     - If file deleted/missing: store None
+   - Return dict of {filepath: hash_or_none}
+
+3. **Snapshot before workflow**:
+   - At start of orchestrator (after setup, before main loop): `initial_file_hashes = _get_file_hashes(cwd)`
+
+4. **Helper function**: `_commit_and_push(cwd: Path, issue_number: int, issue_title: str, initial_file_hashes: Dict[str, Optional[str]], quiet: bool = False) -> Tuple[bool, str]`
+   - Get current hashes: `current_hashes = _get_file_hashes(cwd)`
+   - Find files changed during workflow:
+     - New files: in current_hashes but not in initial_file_hashes
+     - Modified files: hash differs between initial and current
+   - If no files to commit: return `(True, "No changes to commit")`
+   - Stage only those files: `git add <file>` for each
+   - Commit with message: `f"fix: {issue_title}\n\nFixes #{issue_number}"`
+   - Push to remote: `git push`
+   - Return `(True, f"Committed and pushed {N} file(s)")` on success
+   - Return `(False, f"Push failed: {error}")` on failure
+
+5. **Integration in orchestrator**:
+   - Call `_commit_and_push(..., initial_file_hashes=initial_file_hashes)` after clearing workflow state
+   - Log result to console (success message or warning)
+   - Do NOT fail the overall workflow if push fails - just print warning
 
 % Console Output
 1. **Header** (at start):
@@ -247,6 +287,7 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
       Cycles used: {N}/{max_cycles}
       Files changed: {comma_separated_list}
       Dev units fixed: {list}
+      {commit_message}  (e.g., "Changes committed and pushed" or "No changes to commit")
 
    OR
 
@@ -261,7 +302,7 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
 Note: `E2E_FIX_STEP_TIMEOUTS` is defined locally in this module (see Step Name Mapping section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
