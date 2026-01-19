@@ -646,7 +646,14 @@ release: check-deps check-suspicious-files
 	@$(MAKE) check-suspicious-files
 	@# Update CHANGELOG.md with changes from this release
 	@echo "Updating CHANGELOG.md..."
-	@claude --dangerously-skip-permissions -p "do a git diff between the prior version and the current version to update CHANGELOG.md to make the description more accurate and complete but concise. Be sure to not missing any updates. We are using a prompt driven development approach: docs/prompting_guide.md."
+	@claude --dangerously-skip-permissions -p "Update CHANGELOG.md for the latest release. Steps: \
+1. Run 'git tag | tail -2' to find the prior and current version tags. \
+2. Run 'git diff <prior>..HEAD --stat' and 'git log <prior>..HEAD --oneline' to see all changes. \
+3. Check for external contributor PRs: look at sync commits ('git log --oneline | grep sync') and use 'gh pr list --repo promptdriven/pdd --state merged --limit 20' to find upstream PRs with their authors. \
+4. For each external contributor, credit them by name and PR number (e.g., 'Thanks Xavier Yin! (PR #317)'). Use 'gh pr view <num> --repo promptdriven/pdd --json author' to get author info. \
+5. Organize changes into sections: Feat, Fix, Build, Refactor, Docs. \
+6. Keep descriptions concise but complete. Don't miss any significant changes - check the diff stat for large file changes. \
+We are using a prompt driven development approach: docs/prompting_guide.md."
 
 analysis:
 	@echo "Running regression analysis"
