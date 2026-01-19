@@ -367,30 +367,19 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                   )}
                 </button>
 
-                {/* Strength Selector */}
-                <div className="flex items-center gap-2 bg-surface-800 rounded-lg px-3 py-1.5">
+                {/* Strength Slider */}
+                <div className="flex items-center gap-3 bg-surface-800 rounded-lg px-3 py-1.5">
                   <span className="text-xs text-surface-400">Strength</span>
-                  <div className="flex items-center gap-1">
-                    {[
-                      { value: 0.25, label: 'Fast' },
-                      { value: 0.5, label: 'Balanced' },
-                      { value: 0.75, label: 'Strong' },
-                      { value: 1.0, label: 'Best' },
-                    ].map(opt => (
-                      <button
-                        key={opt.value}
-                        onClick={() => setStrength(opt.value)}
-                        className={`px-2 py-1 rounded text-xs transition-all ${
-                          strength === opt.value
-                            ? 'bg-purple-600 text-white'
-                            : 'text-surface-400 hover:text-white hover:bg-surface-700'
-                        }`}
-                        title={opt.label}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={strength}
+                    onChange={(e) => setStrength(parseFloat(e.target.value))}
+                    className="w-20 h-1.5 bg-surface-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                  />
+                  <span className="text-xs text-purple-400 w-8">{(strength * 100).toFixed(0)}%</span>
                 </div>
 
                 {/* Re-analyze button */}
