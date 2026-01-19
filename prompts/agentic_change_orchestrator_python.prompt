@@ -14,6 +14,14 @@ Orchestrator for the 12-step agentic change workflow. Runs each step as a separa
 8. **State Persistence**: Save step outputs to state file after each step completes
 9. **Step Resumption**: On start, load saved state and skip steps that have already completed
 10. **Review Loop**: Steps 10-11 repeat until step 10 outputs "No Issues Found" (max 5 iterations)
+11. **Sync Order Generation**: After review loop completes (before Step 12):
+    - Import from pdd.sync_order: build_dependency_graph, topological_sort, get_affected_modules, generate_sync_order_script
+    - Build dependency graph from prompts_dir = worktree_path / "prompts"
+    - Extract modified modules from files_to_stage (parse module names from prompt filenames like "prompts/foo_python.prompt" -> "foo")
+    - Get affected modules (modified + transitive dependents)
+    - If affected modules exist, generate sync_order.sh in worktree root
+    - Add to context: sync_order_script (path or ""), sync_order_list (newline-separated commands or "No modules to sync")
+    - Print warning if circular dependencies detected
 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
@@ -104,7 +112,7 @@ Context for review loop:
 - Step 9 receives: issue_content, step7_output, step8_output, worktree_path
 - Step 10 receives: issue_content, step9_output, worktree_path, files_to_stage, review_iteration, previous_fixes
 - Step 11 receives: issue_content, step10_output, worktree_path, review_iteration
-- Step 12 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title
+- Step 12 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list
 
 % Files to Stage
 After Step 9 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to subsequent steps:
@@ -213,7 +221,7 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
    Next steps:
       1. Review and merge the PR
-      2. Run `pdd sync <module>` after merge
+      2. Run `./sync_order.sh` after merge (or see PR for manual commands)
    ```
 
 Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
