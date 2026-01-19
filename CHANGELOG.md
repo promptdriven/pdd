@@ -1,3 +1,29 @@
+## v0.0.121 (2026-01-18)
+
+### Feat
+
+- implement hash-based detection for committing only workflow-modified files in the agentic orchestrator.
+- Implement dependency-aware `pdd sync` order generation, including a new `sync_order.py` module, and integrate it into the agentic change orchestrator and README.
+- Add `hello.py` example with tests and `code_under_test.py`, and fix shared reference issues in orchestrator state saving.
+- Implement issue #231 - core-dump on by default with garbage collection
+- Introduce LLM prompt for generating isolated tests and refactor `test_fix.py` to improve test module isolation.
+- Refine command arguments with default values, add operation logging, and introduce new tests for `fix` and `utility` commands.
+- Recursively ensure all JSON schema properties are marked as required for OpenAI strict mode.
+- Add `promptToCodeScore` and `codeToPromptScore` fields to the LLM prompt output specification and renumber subsequent fields.
+- Introduce standardized operation logging for CLI commands and refactor sync orchestration to use the new `operation_log` module.
+- Implement an operation logging module with state management, fingerprinting, run reports, and a command decorator.
+- add operation_log module prompt for shared PDD logging infrastructure (#277)
+
+### Fix
+
+- minor fixes
+- address valid Copilot review comments on PR #297
+
+### Refactor
+
+- centralize sync orchestration logging to a new operation log module and add new tests for LLM invocation and server prompt routes.
+- introduce structured log entry creation and update functions, rename log loading, and enhance fingerprint metadata storage.
+
 ## v0.0.120 (2026-01-18)
 
 ### Feat
