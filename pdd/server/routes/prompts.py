@@ -561,7 +561,6 @@ Evaluate the code against the prompt requirements and respond with a JSON object
                 },
                 "required": ["match_score", "summary"]
             },
-            use_cloud=False,
         )
 
         # Parse result - it might be a string or dict depending on model
@@ -850,7 +849,6 @@ async def analyze_diff(request: DiffAnalysisRequest):
             strength=strength,
             temperature=0.1,
             output_schema=output_schema,
-            use_cloud=False,
         )
 
         # Parse result
@@ -1309,7 +1307,6 @@ async def get_prompt_diff(request: PromptDiffRequest):
             strength=request.strength,
             temperature=0.1,
             output_schema=output_schema,
-            use_cloud=False,
         )
 
         llm_result = result.get('result', {})

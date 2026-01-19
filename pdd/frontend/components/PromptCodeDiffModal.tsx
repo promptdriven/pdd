@@ -367,6 +367,21 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                   )}
                 </button>
 
+                {/* Strength Slider */}
+                <div className="flex items-center gap-3 bg-surface-800 rounded-lg px-3 py-1.5">
+                  <span className="text-xs text-surface-400">Strength</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={strength}
+                    onChange={(e) => setStrength(parseFloat(e.target.value))}
+                    className="w-20 h-1.5 bg-surface-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                  />
+                  <span className="text-xs text-purple-400 w-8">{(strength * 100).toFixed(0)}%</span>
+                </div>
+
                 {/* Re-analyze button */}
                 <button
                   onClick={runAnalysis}
