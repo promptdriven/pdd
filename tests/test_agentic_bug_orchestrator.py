@@ -798,3 +798,113 @@ def test_resume_restores_context(mock_dependencies, default_args, tmp_path):
     step3_prompt = formatted_prompts[0]  # First call is step 3 (steps 1-2 skipped)
     assert "Step 1 found no duplicates" in step3_prompt
     assert "Step 2 confirmed it's a bug" in step3_prompt
+
+
+def test_failed_step_not_marked_completed(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #190: Failed steps should not increment last_completed_step in saved state.
+    When a step fails, it should be stored as "FAILED: {output}" and last_completed_step
+    should remain at the previous step's number.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    saved_states = []
+
+    # Step 6 fails (simulating Gemini timeout/failure)
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        step_num = int(label.replace('step', '')) if label.startswith('step') else 0
+        if step_num == 6:
+            return (False, "All agent providers failed", 0.0, "")
+        if step_num == 7:
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Step {step_num} output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Capture saved states
+    original_save = None
+    def capture_state(cwd, issue_number, workflow_type, state, state_dir, repo_owner, repo_name, use_github_state=True, github_comment_id=None):
+        saved_states.append(state.copy())
+        return None
+
+    with patch("pdd.agentic_bug_orchestrator.save_workflow_state", side_effect=capture_state):
+        run_agentic_bug_orchestrator(**default_args)
+
+    # Find the state saved after step 6 failed
+    step6_state = next((s for s in saved_states if "6" in s.get("step_outputs", {})), None)
+    assert step6_state is not None, "State should have been saved after step 6"
+
+    # Key assertion: last_completed_step should be 5, not 6 (because step 6 failed)
+    assert step6_state["last_completed_step"] == 5, \
+        f"Expected last_completed_step=5 after step 6 failed, got {step6_state['last_completed_step']}"
+
+    # The failed output should be prefixed with "FAILED:"
+    assert step6_state["step_outputs"]["6"].startswith("FAILED:"), \
+        "Failed step output should be prefixed with 'FAILED:'"
+
+
+def test_resume_reruns_failed_step(mock_dependencies, default_args, tmp_path):
+    """
+    Issue #190: Resume should re-run a failed step, not skip it.
+    If last_completed_step=5 and step 6 has "FAILED:" output, resume should re-run step 6.
+    """
+    import json
+    from pdd.agentic_bug_orchestrator import _get_state_dir
+
+    mock_run, mock_load, _ = mock_dependencies
+    default_args["cwd"] = tmp_path
+
+    # Create state file where step 5 completed but step 6 failed
+    state_dir = _get_state_dir(tmp_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
+
+    state = {
+        "workflow": "bug",
+        "issue_number": default_args["issue_number"],
+        "issue_url": default_args["issue_url"],
+        "last_completed_step": 5,  # Step 6 failed, so last COMPLETED is 5
+        "step_outputs": {
+            "1": "ok", "2": "ok", "3": "ok", "4": "ok", "5": "ok",
+            "6": "FAILED: All agent providers failed"  # Failed output stored
+        },
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+        "changed_files": [],
+        "worktree_path": None,
+    }
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+
+    executed_steps = []
+
+    def track_execution(*args, **kwargs):
+        label = kwargs.get('label', '')
+        executed_steps.append(label)
+        if label == 'step7':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = track_execution
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Step 6 should be re-executed (not skipped) because last_completed_step=5
+    assert "step6" in executed_steps, \
+        f"Step 6 should be re-executed on resume, but executed steps were: {executed_steps}"
+
+    # Steps 1-5 should NOT be executed (skipped due to resume)
+    assert "step1" not in executed_steps, "Step 1 should be skipped on resume"
+    assert "step2" not in executed_steps, "Step 2 should be skipped on resume"
+    assert "step3" not in executed_steps, "Step 3 should be skipped on resume"
+    assert "step4" not in executed_steps, "Step 4 should be skipped on resume"
+    assert "step5" not in executed_steps, "Step 5 should be skipped on resume"
+
+    # Steps 6-10 should all be executed (5 steps)
+    assert len(executed_steps) == 5, \
+        f"Expected 5 steps to be executed (6-10), but got {len(executed_steps)}: {executed_steps}"

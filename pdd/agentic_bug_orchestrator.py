@@ -12,7 +12,8 @@ from .agentic_common import (
     run_agentic_task,
     load_workflow_state,
     save_workflow_state,
-    clear_workflow_state
+    clear_workflow_state,
+    DEFAULT_MAX_RETRIES
 )
 from .load_prompt_template import load_prompt_template
 
@@ -357,6 +358,7 @@ def run_agentic_bug_orchestrator(
             quiet=quiet,
             label=f"step{step_num}",
             timeout=BUG_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
         )
 
         # Update tracking
@@ -441,17 +443,24 @@ def run_agentic_bug_orchestrator(
             console.print(f"  → Step {step_num} complete.")
 
         # Save state after each step (for resume support)
-        step_outputs[str(step_num)] = output
-        
+        # Only mark step completed if it succeeded; failed steps get "FAILED:" prefix
+        # and last_completed_step stays at previous step (ensures resume re-runs failed step)
+        if success:
+            step_outputs[str(step_num)] = output
+            last_completed_step_to_save = step_num
+        else:
+            step_outputs[str(step_num)] = f"FAILED: {output}"
+            last_completed_step_to_save = step_num - 1
+
         new_state = {
             "workflow": "bug",
             "issue_number": issue_number,
             "issue_url": issue_url,
-            "last_completed_step": step_num,
-            "step_outputs": step_outputs,
+            "last_completed_step": last_completed_step_to_save,
+            "step_outputs": step_outputs.copy(),  # Copy to avoid shared reference
             "total_cost": total_cost,
             "model_used": last_model_used,
-            "changed_files": changed_files,
+            "changed_files": changed_files.copy(),  # Copy to avoid shared reference
             "worktree_path": str(worktree_path) if worktree_path else None,
             "github_comment_id": github_comment_id
         }

@@ -6,6 +6,9 @@ __pycache__/
 .tmp/
 .agentic_prompt*
 
+staging_data_dump.json
+.pdd/core_dumps/*
+
 .vscode/settings.json
 
 pdd/litellm_cache.sqlite/cache.db

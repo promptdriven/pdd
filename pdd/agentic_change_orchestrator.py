@@ -20,6 +20,7 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    DEFAULT_MAX_RETRIES,
 )
 from pdd.load_prompt_template import load_prompt_template
 
@@ -325,7 +326,8 @@ def run_agentic_change_orchestrator(
             verbose=verbose,
             quiet=quiet,
             timeout=timeout,
-            label=f"step{step_num}"
+            label=f"step{step_num}",
+            max_retries=DEFAULT_MAX_RETRIES,
         )
 
         # Update tracking
@@ -370,10 +372,16 @@ def run_agentic_change_orchestrator(
                 return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
         # Update Context & State
+        # Only mark step completed if it succeeded; failed steps get "FAILED:" prefix
+        # and last_completed_step stays at previous step (ensures resume re-runs failed step)
         context[f"step{step_num}_output"] = step_output
-        state["step_outputs"][str(step_num)] = step_output
-        state["last_completed_step"] = step_num
-        
+        if step_success:
+            state["step_outputs"][str(step_num)] = step_output
+            state["last_completed_step"] = step_num
+        else:
+            state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+            # Don't update last_completed_step - keep it at previous value
+
         # Save State
         save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result:
@@ -423,7 +431,8 @@ def run_agentic_change_orchestrator(
                 verbose=verbose,
                 quiet=quiet,
                 timeout=timeout10,
-                label=f"step10_iter{review_iteration}"
+                label=f"step10_iter{review_iteration}",
+                max_retries=DEFAULT_MAX_RETRIES,
             )
             
             total_cost += s10_cost
@@ -454,7 +463,8 @@ def run_agentic_change_orchestrator(
                 verbose=verbose,
                 quiet=quiet,
                 timeout=timeout11,
-                label=f"step11_iter{review_iteration}"
+                label=f"step11_iter{review_iteration}",
+                max_retries=DEFAULT_MAX_RETRIES,
             )
             
             total_cost += s11_cost
@@ -488,7 +498,8 @@ def run_agentic_change_orchestrator(
             verbose=verbose,
             quiet=quiet,
             timeout=timeout12,
-            label="step12"
+            label="step12",
+            max_retries=DEFAULT_MAX_RETRIES,
         )
         
         total_cost += s12_cost
