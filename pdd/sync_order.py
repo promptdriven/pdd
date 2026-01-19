@@ -11,8 +11,6 @@ from collections import deque, defaultdict
 
 from rich.console import Console
 
-from pdd.construct_paths import _is_known_language
-
 # Initialize rich console
 console = Console()
 
@@ -69,23 +67,10 @@ def extract_module_from_include(include_path: str) -> Optional[str]:
 
     # Check if it looks like a module file:
     # - Example files contain "_example" in the stem
-    # - Prompt files must have a KNOWN language suffix (e.g., _python, _java, _go, _rust)
-    # - LLM prompts (_LLM) are runtime prompts, NOT code generation prompts
-    # - Exclude 'prompt' suffix as it's not a programming language
+    # - Prompt files must have a language suffix (_python, _typescript, _LLM)
     is_example = "_example" in stem
-    suffix_match = re.search(r'_([a-zA-Z0-9]+)$', stem)
-    suffix_value = suffix_match.group(1).lower() if suffix_match else None
-
-    # Exclude special suffixes that are in the CSV but aren't programming languages
-    excluded_suffixes = {'llm', 'prompt'}
-    if suffix_value in excluded_suffixes:
-        # LLM and prompt suffixes are NOT code generation prompts
-        is_lang_suffix = False
-    else:
-        # Check if it's a known programming language from data/language_format.csv
-        is_lang_suffix = _is_known_language(suffix_value) if suffix_value else False
-
-    is_module_prompt = filename.endswith(".prompt") and is_lang_suffix
+    has_language_suffix = bool(re.search(r'(_python|_typescript|_LLM)$', stem, re.IGNORECASE))
+    is_module_prompt = filename.endswith(".prompt") and has_language_suffix
 
     if not (is_example or is_module_prompt):
         return None
@@ -94,9 +79,8 @@ def extract_module_from_include(include_path: str) -> Optional[str]:
     # Order matters: remove language specific suffixes first, then _example
     clean_name = stem
 
-    # Only remove suffix if it's a known language suffix
-    if is_lang_suffix:
-        clean_name = re.sub(r'_[a-zA-Z0-9]+$', '', clean_name)
+    # Remove language suffixes
+    clean_name = re.sub(r'(_python|_typescript|_LLM)$', '', clean_name, flags=re.IGNORECASE)
 
     # Remove example suffix
     clean_name = re.sub(r'_example$', '', clean_name, flags=re.IGNORECASE)
@@ -123,9 +107,11 @@ def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
 
     dependency_graph: Dict[str, Set[str]] = defaultdict(set)
     
-    # Scan all prompt files with language suffix, excluding LLM runtime prompts
-    all_prompts = list(prompts_dir.rglob("*_*.prompt"))
-    prompt_files = [f for f in all_prompts if not f.stem.lower().endswith('_llm')]
+    # Scan for relevant prompt files
+    patterns = ["*_python.prompt", "*_typescript.prompt", "*_LLM.prompt"]
+    prompt_files: List[Path] = []
+    for pattern in patterns:
+        prompt_files.extend(prompts_dir.glob(pattern))
 
     for p_file in prompt_files:
         # Determine current module name from filename
@@ -208,44 +194,18 @@ def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[
                 queue.append(v)
 
     cycles: List[List[str]] = []
-
+    
     if processed_count != len(all_nodes):
-        remaining = {n for n, deg in in_degree.items() if deg > 0}
-
-        # Find actual cycle participants: nodes that can reach themselves
-        # through remaining-only edges (DFS reachability check)
-        actual_cyclic: Set[str] = set()
-        for node in remaining:
-            visited: Set[str] = set()
-            stack = [dep for dep in adj_list.get(node, []) if dep in remaining]
-            found_cycle = False
-            while stack and not found_cycle:
-                current = stack.pop()
-                if current == node:
-                    found_cycle = True
-                    break
-                if current in visited:
-                    continue
-                visited.add(current)
-                stack.extend(dep for dep in adj_list.get(current, []) if dep in remaining)
-            if found_cycle:
-                actual_cyclic.add(node)
-
-        if actual_cyclic:
-            cycles.append(sorted(actual_cyclic))
-            logger.warning(f"Cyclic dependencies detected involving: {sorted(actual_cyclic)}")
-
-        # Append non-cyclic remaining nodes to sorted_list in best-effort order
-        # (these depend on cyclic nodes but aren't cyclic themselves)
-        non_cyclic_remaining = remaining - actual_cyclic
-        if non_cyclic_remaining:
-            ordered = sorted(non_cyclic_remaining, key=lambda n: (in_degree[n], n))
-            sorted_list.extend(ordered)
+        # Cycle detected. Identify nodes involved in cycles.
+        remaining_nodes = [n for n, deg in in_degree.items() if deg > 0]
+        if remaining_nodes:
+            cycles.append(remaining_nodes)
+            logger.warning(f"Cyclic dependencies detected involving: {remaining_nodes}")
 
     return sorted_list, cycles
 
 
-def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]], cyclic_modules: Optional[Set[str]] = None) -> List[str]:
+def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]]) -> List[str]:
     """
     Identifies modules that need syncing based on modified modules and dependencies.
 
@@ -253,13 +213,9 @@ def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: D
         sorted_modules: Full list of modules in topological order.
         modified: Set of module names that have changed.
         graph: Dependency graph (module -> dependencies).
-        cyclic_modules: Optional set of modules that are part of dependency cycles.
-            These are excluded from sorted_modules by topological sort but should
-            still be included if they're affected.
 
     Returns:
-        List of modules to sync, preserving topological order for non-cyclic modules,
-        with cyclic modules appended at the end in alphabetical order.
+        List of modules to sync, preserving topological order.
     """
     if not modified:
         return []
@@ -289,12 +245,7 @@ def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: D
 
     # Filter sorted_modules to keep only affected ones, preserving order
     result = [m for m in sorted_modules if m in affected]
-
-    # Include affected modules that are in cycles (append at end, sorted for determinism)
-    if cyclic_modules:
-        cyclic_affected = sorted([m for m in cyclic_modules if m in affected and m not in result])
-        result.extend(cyclic_affected)
-
+    
     return result
 
 
@@ -327,7 +278,7 @@ def generate_sync_order_script(modules: List[str], output_path: Path, worktree_p
     ]
 
     if worktree_path:
-        lines.append("# Run this script from your repository root directory")
+        lines.append(f"cd {worktree_path}")
         lines.append("")
 
     total = len(modules)

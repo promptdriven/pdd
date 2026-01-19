@@ -1808,7 +1808,7 @@ Example (agentic mode):
 pdd change https://github.com/myorg/myrepo/issues/239
 ```
 
-After the workflow completes, a PR is automatically created linking to the issue. Review the PR and run `pdd sync` on the modified prompts to regenerate code.
+After the workflow completes, a PR is automatically created linking to the issue. The PR includes a `sync_order.sh` script that runs `pdd sync` commands in dependency order. Review the PR and run `./sync_order.sh` after merge to regenerate code.
 
 **Manual Mode (legacy):**
 ```
