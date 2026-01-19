@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -148,43 +149,106 @@ def _check_staleness(state: Dict[str, Any], cwd: Path) -> None:
         console.print("[yellow]Warning: Codebase may have changed since last run. Consider --no-resume for fresh start.[/yellow]")
 
 
+def _get_modified_and_untracked(cwd: Path) -> Set[str]:
+    """Returns set of modified tracked files plus untracked files."""
+    files: Set[str] = set()
+
+    # Get modified tracked files
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD"],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        files.update(f for f in result.stdout.strip().split("\n") if f)
+
+    # Get untracked files
+    result = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=cwd,
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        files.update(f for f in result.stdout.strip().split("\n") if f)
+
+    return files
+
+
+def _get_file_hashes(cwd: Path) -> Dict[str, Optional[str]]:
+    """
+    Returns {filepath: md5_hash} for all modified and untracked files.
+
+    If a file is deleted or unreadable, stores None for that file.
+    """
+    hashes: Dict[str, Optional[str]] = {}
+    for filepath in _get_modified_and_untracked(cwd):
+        path = cwd / filepath
+        if path.exists() and path.is_file():
+            try:
+                hashes[filepath] = hashlib.md5(path.read_bytes()).hexdigest()
+            except (IOError, OSError):
+                hashes[filepath] = None
+        else:
+            hashes[filepath] = None  # Deleted or not a file
+    return hashes
+
+
 def _commit_and_push(
     cwd: Path,
     issue_number: int,
     issue_title: str,
+    initial_file_hashes: Dict[str, Optional[str]],
     quiet: bool = False
 ) -> Tuple[bool, str]:
     """
-    Commits changes and pushes to the existing branch.
+    Commits only files that changed during the workflow and pushes.
+
+    Uses hash comparison to detect actual content changes, avoiding
+    staging pre-existing modified/untracked files.
 
     The PR was already created by `pdd bug`, so pushing
     automatically updates it.
 
+    Args:
+        cwd: Working directory
+        issue_number: GitHub issue number
+        issue_title: Issue title for commit message
+        initial_file_hashes: File hashes from before workflow started
+        quiet: Suppress output
+
     Returns:
         (success, message)
     """
-    # 1. Check for uncommitted changes
-    status_result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
+    # Get current file hashes
+    current_hashes = _get_file_hashes(cwd)
 
-    if not status_result.stdout.strip():
+    # Find files that changed during workflow
+    files_to_commit: List[str] = []
+    for filepath, current_hash in current_hashes.items():
+        if filepath not in initial_file_hashes:
+            # New file created during workflow
+            files_to_commit.append(filepath)
+        elif initial_file_hashes[filepath] != current_hash:
+            # Content changed during workflow
+            files_to_commit.append(filepath)
+
+    if not files_to_commit:
         return True, "No changes to commit"
 
-    # 2. Stage all changes
-    stage_result = subprocess.run(
-        ["git", "add", "-A"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if stage_result.returncode != 0:
-        return False, f"Failed to stage changes: {stage_result.stderr}"
+    # Stage only workflow-changed files
+    for filepath in files_to_commit:
+        stage_result = subprocess.run(
+            ["git", "add", filepath],
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+        if stage_result.returncode != 0:
+            return False, f"Failed to stage {filepath}: {stage_result.stderr}"
 
-    # 3. Commit with message referencing issue
+    # Commit with message referencing issue
     commit_msg = f"fix: {issue_title}\n\nFixes #{issue_number}"
     commit_result = subprocess.run(
         ["git", "commit", "-m", commit_msg],
@@ -195,7 +259,7 @@ def _commit_and_push(
     if commit_result.returncode != 0:
         return False, f"Failed to commit: {commit_result.stderr}"
 
-    # 4. Push to remote (branch already exists from pdd bug)
+    # Push to remote (branch already exists from pdd bug)
     push_result = subprocess.run(
         ["git", "push"],
         cwd=cwd,
@@ -204,7 +268,7 @@ def _commit_and_push(
     )
 
     if push_result.returncode == 0:
-        return True, "Changes committed and pushed"
+        return True, f"Committed and pushed {len(files_to_commit)} file(s)"
     else:
         return False, f"Push failed: {push_result.stderr}"
 
@@ -276,6 +340,9 @@ def run_agentic_e2e_fix_orchestrator(
         clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
 
     console.print(f"Fixing e2e tests for issue #{issue_number}: \"{issue_title}\"")
+
+    # Snapshot file state before workflow (for hash-based commit detection)
+    initial_file_hashes = _get_file_hashes(cwd)
 
     success = False
     final_message = ""
@@ -452,6 +519,7 @@ def run_agentic_e2e_fix_orchestrator(
                 cwd=cwd,
                 issue_number=issue_number,
                 issue_title=issue_title,
+                initial_file_hashes=initial_file_hashes,
                 quiet=quiet
             )
             if commit_success:

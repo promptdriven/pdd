@@ -221,19 +221,36 @@ The orchestrator must parse certain step outputs to extract machine-readable dat
 
 % Git Commit on Success
 
-After successful completion (ALL_TESTS_PASS), if there are uncommitted changes, commit and push them to update the existing PR (created by `pdd bug`).
+After successful completion (ALL_TESTS_PASS), commit only files that changed during the workflow (not pre-existing modified/untracked files). Uses hash-based comparison to accurately detect changes.
 
-1. **Helper function**: `_commit_and_push(cwd: Path, issue_number: int, issue_title: str, quiet: bool = False) -> Tuple[bool, str]`
-   - Check for uncommitted changes via `git status --porcelain`
-   - If no changes: return `(True, "No changes to commit")`
-   - Stage all changes: `git add -A`
+1. **Helper function**: `_get_modified_and_untracked(cwd: Path) -> Set[str]`
+   - Get modified tracked files via `git diff --name-only HEAD`
+   - Get untracked files via `git ls-files --others --exclude-standard`
+   - Return combined set of file paths
+
+2. **Helper function**: `_get_file_hashes(cwd: Path) -> Dict[str, Optional[str]]`
+   - For each file in `_get_modified_and_untracked(cwd)`:
+     - If file exists: compute MD5 hash of content
+     - If file deleted/missing: store None
+   - Return dict of {filepath: hash_or_none}
+
+3. **Snapshot before workflow**:
+   - At start of orchestrator (after setup, before main loop): `initial_file_hashes = _get_file_hashes(cwd)`
+
+4. **Helper function**: `_commit_and_push(cwd: Path, issue_number: int, issue_title: str, initial_file_hashes: Dict[str, Optional[str]], quiet: bool = False) -> Tuple[bool, str]`
+   - Get current hashes: `current_hashes = _get_file_hashes(cwd)`
+   - Find files changed during workflow:
+     - New files: in current_hashes but not in initial_file_hashes
+     - Modified files: hash differs between initial and current
+   - If no files to commit: return `(True, "No changes to commit")`
+   - Stage only those files: `git add <file>` for each
    - Commit with message: `f"fix: {issue_title}\n\nFixes #{issue_number}"`
    - Push to remote: `git push`
-   - Return `(True, "Changes committed and pushed")` on success
+   - Return `(True, f"Committed and pushed {N} file(s)")` on success
    - Return `(False, f"Push failed: {error}")` on failure
 
-2. **Integration in orchestrator**:
-   - Call `_commit_and_push()` after clearing workflow state, before returning success
+5. **Integration in orchestrator**:
+   - Call `_commit_and_push(..., initial_file_hashes=initial_file_hashes)` after clearing workflow state
    - Log result to console (success message or warning)
    - Do NOT fail the overall workflow if push fails - just print warning
 
