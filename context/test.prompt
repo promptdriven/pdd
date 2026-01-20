@@ -71,6 +71,40 @@
     - BAD:  sys.modules.update(mocks); exec_module(...)  # No cleanup - pollutes all tests!
     - GOOD: See PATTERN 7 in pytest_isolation_example.py for the full save/restore pattern
 
+% 8. SYS.STDOUT AND SYS.STDERR MANIPULATION:
+    - Code under test may wrap sys.stdout/stderr (e.g., for output capture, logging, CLI tools)
+    - If wrappers aren't restored, subsequent tests see corrupted streams and fail mysteriously
+    - ALWAYS save and restore streams in fixtures when testing CLI or output-capturing code
+    - BAD:  sys.stdout = custom_stream  # Persists and corrupts subsequent tests
+    - GOOD: Use a fixture that saves, replaces, and restores:
+        @pytest.fixture
+        def captured_output():
+            import io
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            yield sys.stdout, sys.stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
+    - When testing Click CLI commands with CliRunner:
+      - CliRunner isolates streams during invoke(), but code that wraps streams
+        and exits early (e.g., ctx.exit(0)) may leave streams wrapped
+      - Add defensive cleanup in conftest.py for CLI test modules:
+        @pytest.fixture(autouse=True)
+        def restore_streams():
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            yield
+            # Restore if streams were replaced with wrappers
+            if sys.stdout is not original_stdout:
+                sys.stdout = original_stdout
+            if sys.stderr is not original_stderr:
+                sys.stderr = original_stderr
+
+    - See PATTERN 8 in pytest_isolation_example.py for concrete examples
+
 <isolation_example>
 <include>context/pytest_isolation_example.py</include>
 </isolation_example>

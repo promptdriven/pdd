@@ -16,7 +16,7 @@ RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
 @pytest.mark.real
-def test_real_fix_command(create_dummy_files, tmp_path):
+def test_real_fix_command(create_dummy_files, tmp_path, monkeypatch):
     """Test the 'fix' command with real files by calling the function directly."""
     if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
         pytest.skip(
@@ -195,14 +195,13 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
     }
 
     # Change working directory to tmp_path so imports work correctly
-    original_cwd = os.getcwd()
-    os.chdir(tmp_path)
-    
+    # Use monkeypatch for automatic cleanup (prevents test pollution)
+    monkeypatch.chdir(tmp_path)
+
     # Set PDD_PATH to the project root so prompt templates can be found
     # Get the project root dynamically from the current test file location
-    original_pdd_path = os.getenv('PDD_PATH')
     project_root = Path(__file__).parent.parent  # Go up from tests/ to project root
-    os.environ['PDD_PATH'] = str(project_root)
+    monkeypatch.setenv('PDD_PATH', str(project_root))
 
     try:
         # Call fix_main directly - with no mock this time
@@ -250,17 +249,7 @@ sys.exit(0 if test_result.wasSuccessful() else 1)
 
     except Exception as e:
         pytest.fail(f"Real fix test failed: {e}")
-
-    finally:
-        # Restore original PDD_PATH
-        if original_pdd_path:
-             os.environ['PDD_PATH'] = original_pdd_path
-        else:
-             if 'PDD_PATH' in os.environ:
-                 del os.environ['PDD_PATH']
-        
-        # Restore original working directory
-        os.chdir(original_cwd)
+    # Note: monkeypatch automatically restores cwd and PDD_PATH after test
 
 
 def test_fix_command_exits_nonzero_for_nonexistent_error_file(tmp_path):
