@@ -10,25 +10,36 @@ from z3 import Solver, Bool, Int, Implies, And, Not, If, sat, unsat, Or
 
 # We need to mock the decorators and top-level imports used by fix.py
 # BEFORE we import it, otherwise the import will fail or use real modules.
+# CRITICAL: We must restore modules IMMEDIATELY after import to prevent test pollution.
+# (See PATTERN 7 in context/pytest_isolation_example.py)
 
-mock_track_cost = MagicMock(side_effect=lambda f: f)
-mock_log_operation = MagicMock(return_value=lambda f: f)
-mock_handle_error = MagicMock()
-
-module_mocks = {
-    "pdd.track_cost": MagicMock(track_cost=mock_track_cost),
-    "pdd.operation_log": MagicMock(log_operation=mock_log_operation),
-    "pdd.core.errors": MagicMock(handle_error=mock_handle_error),
+_import_mocks = {
+    "pdd.track_cost": MagicMock(track_cost=MagicMock(side_effect=lambda f: f)),
+    "pdd.operation_log": MagicMock(log_operation=MagicMock(return_value=lambda f: f)),
+    "pdd.core.errors": MagicMock(),
     "pdd.fix_main": MagicMock(),
     "pdd.agentic_e2e_fix": MagicMock(),
 }
 
-# Apply mocks to sys.modules globally for the import phase
-patcher = patch.dict(sys.modules, module_mocks)
-patcher.start()
+# Save original modules, apply mocks for import phase
+_saved_modules = {}
+for _mod_name in _import_mocks:
+    if _mod_name in sys.modules:
+        _saved_modules[_mod_name] = sys.modules[_mod_name]
+    sys.modules[_mod_name] = _import_mocks[_mod_name]
 
 # Now we can safely import the command
 from pdd.commands.fix import fix
+
+# Restore modules IMMEDIATELY after import to prevent pollution of other tests
+for _mod_name in _import_mocks:
+    if _mod_name in _saved_modules:
+        sys.modules[_mod_name] = _saved_modules[_mod_name]
+    elif _mod_name in sys.modules:
+        del sys.modules[_mod_name]
+
+# Clean up temporary variables
+del _import_mocks, _saved_modules, _mod_name
 
 # --------------------------------------------------------------------------------
 # Z3 Formal Verification
@@ -89,6 +100,11 @@ def runner():
 def mock_deps():
     """
     Fixture to mock the deferred imports inside the fix command.
+    Creates fresh mocks for each test to ensure isolation.
+
+    Note: fix_main and agentic_e2e_fix are deferred imports (imported inside functions),
+    so we patch them in sys.modules. handle_error is a top-level import that was already
+    bound during the module-level import phase, so we patch it directly in the module.
     """
     mock_fix_main_mod = MagicMock()
     mock_fix_main_func = MagicMock()
@@ -98,18 +114,19 @@ def mock_deps():
     mock_agentic_func = MagicMock()
     mock_agentic_mod.run_agentic_e2e_fix = mock_agentic_func
 
-    mock_handle_error.reset_mock()
+    mock_handle_error_func = MagicMock()
 
     with patch.dict(sys.modules, {
         "pdd.fix_main": mock_fix_main_mod,
         "pdd.agentic_e2e_fix": mock_agentic_mod,
-        "pdd.core.errors": sys.modules["pdd.core.errors"]
     }):
-        yield {
-            "fix_main": mock_fix_main_func,
-            "run_agentic_e2e_fix": mock_agentic_func,
-            "handle_error": mock_handle_error
-        }
+        # Patch handle_error directly in the fix module since it's a top-level import
+        with patch("pdd.commands.fix.handle_error", mock_handle_error_func):
+            yield {
+                "fix_main": mock_fix_main_func,
+                "run_agentic_e2e_fix": mock_agentic_func,
+                "handle_error": mock_handle_error_func,
+            }
 
 def test_fix_no_args(runner, mock_deps):
     result = runner.invoke(fix, [])
