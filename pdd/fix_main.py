@@ -387,11 +387,14 @@ def fix_main(
                 success = False
 
         # Save fixed files
-        if fixed_unit_test:
+        if fixed_unit_test and not protect_tests:
             output_test_path = Path(output_file_paths["output_test"])
             output_test_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_test_path, 'w') as f:
                 f.write(fixed_unit_test)
+        elif fixed_unit_test and protect_tests:
+            if verbose:
+                rprint("[yellow]Unit test update skipped (protect_tests=True).[/yellow]")
 
         if fixed_code:
             output_code_path = Path(output_file_paths["output_code"])
