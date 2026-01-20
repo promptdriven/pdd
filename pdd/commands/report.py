@@ -23,7 +23,7 @@ from ..core.dump import _build_issue_markdown, _github_config, _post_issue_to_gi
 @click.option(
     "--repo",
     default=None,
-    help="GitHub repository in format 'owner/repo'. Defaults to 'promptdriven/pdd' or PDD_GITHUB_REPO env var."
+    help="GitHub repository in format 'owner/repo'. Can also be set via PDD_GITHUB_REPO environment variable."
 )
 @click.option(
     "--description",
@@ -60,7 +60,12 @@ def report_core(ctx: click.Context, core_file: Optional[str], api: bool, repo: O
             raise click.UsageError(f"Failed to parse core dump: {e}")
 
         # Determine repository
-        target_repo = repo or os.getenv("PDD_GITHUB_REPO", "promptdriven/pdd")
+        target_repo = repo or os.getenv("PDD_GITHUB_REPO")
+        if not target_repo:
+            raise click.UsageError(
+                "Repository must be specified. "
+                "Use --repo OWNER/REPO or set PDD_GITHUB_REPO environment variable."
+            )
 
         # For API submission, create a gist with all files
         gist_url = None
