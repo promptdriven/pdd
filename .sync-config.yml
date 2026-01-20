@@ -10,6 +10,8 @@ shared:
   - pdd/*.py
   - pdd/commands/*.py
   - pdd/core/*.py
+  - pdd/server/*.py
+  - pdd/server/routes/*.py
 
   # Tests (unit tests)
   - tests/test_*.py
