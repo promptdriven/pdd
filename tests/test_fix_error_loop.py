@@ -1711,3 +1711,58 @@ def test_z3_loop_termination_condition():
     
     result = s.check()
     assert result == z3.unsat, "Loop condition allows continuation even if budget exceeded!"
+
+
+# --- Regression Tests for protect_tests Feature (Issue #303) ---
+
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.subprocess.run")
+def test_protect_tests_prevents_unit_test_write(mock_subprocess, mock_fix, mock_pytest, mock_files):
+    """
+    REGRESSION TEST (Issue #303): When protect_tests=True and LLM returns
+    updated_unit_test=True, the unit test file should NOT be written to disk,
+    but the code file SHOULD still be written when updated_code=True.
+    """
+    code, test, prompt = mock_files
+
+    # Save original test content before any changes
+    with open(test, 'r') as f:
+        original_test_content = f.read()
+
+    # Initial: fail, Post-fix: pass
+    mock_pytest.side_effect = [
+        (1, 0, 0, "FAILED test"),
+        (0, 0, 0, "PASSED")
+    ]
+
+    # LLM returns BOTH unit test AND code updates
+    mock_fix.return_value = (
+        True,                    # updated_unit_test = True
+        True,                    # updated_code = True
+        "new_test_content",      # fixed_unit_test (LLM wants to change this)
+        "new_code_content",      # fixed_code
+        "analysis", 0.1, "gpt-4"
+    )
+
+    # Verification succeeds
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "OK"
+
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        test, code, prompt, "prompt text", "verify.py",
+        0.5, 0.1, 5, 1.0,
+        protect_tests=True  # KEY: Enable protect_tests
+    )
+
+    assert success is True
+    assert attempts == 1
+
+    # Code file SHOULD be updated (protect_tests doesn't affect code)
+    with open(code, 'r') as f:
+        assert f.read() == "new_code_content", "Code should be written"
+
+    # Test file should NOT be updated (protected!)
+    with open(test, 'r') as f:
+        assert f.read() == original_test_content, \
+            "Test file should NOT be modified when protect_tests=True"
