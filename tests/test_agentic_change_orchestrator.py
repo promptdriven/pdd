@@ -605,3 +605,173 @@ def test_step9_prompt_template_includes_step5_output():
 
     assert "{step5_output}" in template_content, \
         "Step 9 template must include {step5_output} to receive documentation changes from Step 5"
+
+
+# -----------------------------------------------------------------------------
+# Sync Order Context Tests (Requirement #11)
+# -----------------------------------------------------------------------------
+
+def test_sync_order_context_populated_before_step12(mock_dependencies, temp_cwd):
+    """
+    Test that sync_order_script and sync_order_list are added to context
+    before Step 12 template formatting (Requirement #11).
+
+    TDD: Before fix, fails with AssertionError (keys missing from context).
+    """
+    mock_run, mock_load, mock_subprocess, _ = mock_dependencies
+
+    # Step 9 reports modified prompt files
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/foo_python.prompt", 0.1, "gpt-4")
+        if label.startswith("step10"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Capture context passed to template.format()
+    last_context = {}
+    def capture_format(**kwargs):
+        last_context.clear()
+        last_context.update(kwargs)
+        return "Formatted"
+
+    mock_template = MagicMock()
+    mock_template.format.side_effect = capture_format
+    mock_load.return_value = mock_template
+
+    # Create worktree directory with prompt files
+    # Path matches orchestrator: git_root / ".pdd" / "worktrees" / "change-issue-{N}"
+    issue_number = 999
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+    prompts_dir = worktree_path / "prompts"
+    prompts_dir.mkdir(parents=True)
+    (prompts_dir / "foo_python.prompt").write_text("% foo module")
+
+    run_agentic_change_orchestrator(
+        issue_url="http://test",
+        issue_content="Test",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=issue_number,
+        issue_author="a",
+        issue_title="T",
+        cwd=temp_cwd,
+    )
+
+    # Assert: Step 12 context must have sync_order variables
+    assert "sync_order_script" in last_context, \
+        f"sync_order_script missing. Keys: {list(last_context.keys())}"
+    assert "sync_order_list" in last_context, \
+        f"sync_order_list missing. Keys: {list(last_context.keys())}"
+
+
+def test_sync_order_defaults_when_no_prompts_modified(mock_dependencies, temp_cwd):
+    """
+    Test sync_order has default values when no prompt files are modified.
+    """
+    mock_run, mock_load, mock_subprocess, _ = mock_dependencies
+
+    # Step 9 reports only non-prompt files
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: src/main.py", 0.1, "gpt-4")
+        if label.startswith("step10"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    last_context = {}
+    def capture_format(**kwargs):
+        last_context.clear()
+        last_context.update(kwargs)
+        return "Formatted"
+
+    mock_template = MagicMock()
+    mock_template.format.side_effect = capture_format
+    mock_load.return_value = mock_template
+
+    run_agentic_change_orchestrator(
+        issue_url="http://test",
+        issue_content="Test",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=888,
+        issue_author="a",
+        issue_title="T",
+        cwd=temp_cwd,
+    )
+
+    # Should have default values
+    assert last_context.get("sync_order_script") == ""
+    assert last_context.get("sync_order_list") == "No modules to sync"
+
+
+def test_worktree_path_in_context_when_resuming(mock_dependencies, temp_cwd):
+    """
+    Test that worktree_path is added to context when resuming after Step 9.
+
+    TDD: Before fix, fails with KeyError: 'worktree_path' at Step 10.
+    """
+    mock_run, mock_load, mock_subprocess, _ = mock_dependencies
+
+    # Create state file simulating completion through step 9
+    state_dir = temp_cwd / ".pdd/change-state"
+    state_dir.mkdir(parents=True)
+
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / "change-issue-777"
+    worktree_path.mkdir(parents=True)
+
+    initial_state = {
+        "issue_number": 777,
+        "last_completed_step": 9,
+        "step_outputs": {str(i): f"out{i}" for i in range(1, 10)},
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "worktree_path": str(worktree_path),
+        "review_iteration": 0,
+        "previous_fixes": "",
+    }
+    with open(state_dir / "change_state_777.json", "w") as f:
+        json.dump(initial_state, f)
+
+    # Step 10 returns no issues so we proceed to step 12
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label.startswith("step10"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Capture context to verify worktree_path is present
+    last_context = {}
+    def capture_format(**kwargs):
+        last_context.clear()
+        last_context.update(kwargs)
+        return "Formatted"
+
+    mock_template = MagicMock()
+    mock_template.format.side_effect = capture_format
+    mock_load.return_value = mock_template
+
+    # Run orchestrator - should resume from step 10
+    run_agentic_change_orchestrator(
+        issue_url="http://test",
+        issue_content="Test",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=777,
+        issue_author="a",
+        issue_title="T",
+        cwd=temp_cwd,
+    )
+
+    # Assert: worktree_path must be in context
+    assert "worktree_path" in last_context, \
+        f"worktree_path missing when resuming. Keys: {list(last_context.keys())}"
+    assert last_context["worktree_path"] == str(worktree_path)
