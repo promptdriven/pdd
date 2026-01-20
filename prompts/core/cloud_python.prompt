@@ -29,14 +29,20 @@
      Cloud is ENABLED if:
      - `PDD_JWT_TOKEN` is set (for injected token in testing/CI scenarios), OR
      - Both `FIREBASE_API_KEY_ENV` and `GITHUB_CLIENT_ID_ENV` are set (for device flow auth)
-  7) Export module-level constants for env var names and cloud endpoints
-  8) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
+  7) `get_cloud_timeout()`: Return cloud request timeout in seconds
+     - Check `PDD_CLOUD_TIMEOUT` env var first
+     - Fall back to `DEFAULT_CLOUD_TIMEOUT` (900 seconds / 15 minutes)
+     - Return int, handle invalid env var values gracefully (return default)
+  8) Export module-level constants for env var names and cloud endpoints
+  9) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
 
 % Constants
   - `FIREBASE_API_KEY_ENV = "NEXT_PUBLIC_FIREBASE_API_KEY"`
   - `GITHUB_CLIENT_ID_ENV = "GITHUB_CLIENT_ID"`
   - `PDD_CLOUD_URL_ENV = "PDD_CLOUD_URL"`
   - `PDD_JWT_TOKEN_ENV = "PDD_JWT_TOKEN"`
+  - `PDD_CLOUD_TIMEOUT_ENV = "PDD_CLOUD_TIMEOUT"`
+  - `DEFAULT_CLOUD_TIMEOUT = 900` (15 minutes, configurable via PDD_CLOUD_TIMEOUT env var)
   - `CLOUD_ENDPOINTS` dict with keys: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, updateCommand
 
 % Dependencies
