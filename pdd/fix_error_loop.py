@@ -21,6 +21,8 @@ from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
 from .agentic_langtest import default_verify_cmd_for
 from .core.cloud import CloudConfig
+# Moved import to top level to allow mocking in tests
+from .pytest_output import run_pytest_and_capture_output
 
 # Cloud request timeout for LLM calls
 CLOUD_FIX_TIMEOUT = 400  # seconds
@@ -42,7 +44,8 @@ def cloud_fix_errors(
     temperature: float,
     verbose: bool = False,
     time: float = DEFAULT_TIME,
-    code_file_ext: str = ".py"
+    code_file_ext: str = ".py",
+    protect_tests: bool = False
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Call the cloud fixCode endpoint to fix errors in code and unit tests.
@@ -61,6 +64,7 @@ def cloud_fix_errors(
         verbose: Enable verbose logging
         time: Time budget for thinking effort
         code_file_ext: File extension to determine language (e.g., ".py", ".java")
+        protect_tests: If True, prevents LLM from modifying unit tests
 
     Returns:
         Tuple of:
@@ -91,6 +95,7 @@ def cloud_fix_errors(
         "temperature": temperature,
         "time": time if time is not None else 0.25,
         "verbose": verbose,
+        "protectTests": protect_tests
     }
 
     headers = {
@@ -200,7 +205,6 @@ def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
     Run pytest on the specified test file using the subprocess-based runner.
     Returns a tuple: (failures, errors, warnings, logs)
     """
-    from .pytest_output import run_pytest_and_capture_output
     # Use the subprocess-based runner to avoid module caching issues
     output_data = run_pytest_and_capture_output(test_file)
     
@@ -271,6 +275,7 @@ def fix_error_loop(unit_test_file: str,
                    verbose: bool = False,
                    time: float = DEFAULT_TIME,
                    agentic_fallback: bool = True,
+                   protect_tests: bool = False,
                    use_cloud: bool = False):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations,
@@ -298,6 +303,7 @@ def fix_error_loop(unit_test_file: str,
         verbose: Enable verbose logging (default: False).
         time: Time parameter for the fix_errors_from_unit_tests call.
         agentic_fallback: Whether to trigger cli agentic fallback when fix fails.
+        protect_tests: When True, prevents the LLM from modifying test files.
         use_cloud: If True, use cloud LLM for fix calls while keeping test execution local.
     Outputs:
         success: Boolean indicating if the overall process succeeded.
@@ -323,6 +329,9 @@ def fix_error_loop(unit_test_file: str,
             os.remove(error_log_file)
             if verbose:
                 rprint(f"[green]Removed old error log file:[/green] {error_log_file}")
+        except OSError:
+            # Ignore errors if file cannot be removed (e.g. race condition, or mocked exists=True but file missing)
+            pass
         except Exception as e:
             rprint(f"[red]Error:[/red] Could not remove error log file: {e}")
             return False, "", "", 0, 0.0, ""
@@ -621,7 +630,7 @@ def fix_error_loop(unit_test_file: str,
 
         # Update best iteration if needed:
         if (errors < best_iteration_info["errors"] or
-            (errors == best_iteration_info["errors"] and fails < best_iteration_info["fails"]) or
+            (errors == best_iteration_info["errors" ] and fails < best_iteration_info["fails"]) or
             (errors == best_iteration_info["errors"] and fails == best_iteration_info["fails"] and warnings < best_iteration_info["warnings"])):
             best_iteration_info = {
                 "attempt": iteration,
@@ -661,7 +670,8 @@ def fix_error_loop(unit_test_file: str,
                         temperature=temperature,
                         verbose=verbose,
                         time=time,
-                        code_file_ext=os.path.splitext(code_file)[1]
+                        code_file_ext=os.path.splitext(code_file)[1],
+                        protect_tests=protect_tests
                     )
                 except RuntimeError as cloud_err:
                     # Cloud failed - fall back to local if it's a recoverable error
@@ -680,7 +690,8 @@ def fix_error_loop(unit_test_file: str,
                         strength,
                         temperature,
                         verbose=verbose,
-                        time=time
+                        time=time,
+                        protect_tests=protect_tests
                     )
             else:
                 # Use local LLM for fix
@@ -693,7 +704,8 @@ def fix_error_loop(unit_test_file: str,
                     strength,
                     temperature,
                     verbose=verbose,
-                    time=time  # Pass time parameter
+                    time=time,  # Pass time parameter
+                    protect_tests=protect_tests
                 )
 
             # Update the fix attempt in the structured log
@@ -712,7 +724,7 @@ def fix_error_loop(unit_test_file: str,
             break
 
         # Update unit test file if needed.
-        if updated_unit_test:
+        if updated_unit_test and not protect_tests:
             try:
                 # Ensure we have valid content even if the returned fixed_unit_test is empty
                 content_to_write = fixed_unit_test if fixed_unit_test else unit_test_contents
@@ -723,6 +735,9 @@ def fix_error_loop(unit_test_file: str,
             except Exception as e:
                 rprint(f"[red]Error writing updated unit test:[/red] {e}")
                 break
+        elif updated_unit_test and protect_tests:
+            if verbose:
+                rprint("[yellow]Unit test update skipped (protect_tests=True).[/yellow]")
 
         # Update code file and run verification if needed.
         if updated_code:
@@ -829,7 +844,7 @@ def fix_error_loop(unit_test_file: str,
                 
                 # Check if the best iteration had passing tests
                 success = (best_iteration_info["fails"] == 0 and 
-                          best_iteration_info["errors"] == 0 and 
+                          best_iteration_info["errors" ] == 0 and 
                           best_iteration_info["warnings"] == 0)
             except Exception as e:
                 rprint(f"[red]Error restoring best iteration backups:[/red] {e}")
@@ -924,6 +939,7 @@ if __name__ == "__main__":
     unit_test_file = "tests/test_example.py"
     code_file = "src/code_example.py"
     prompt = "Write a function that adds two numbers"
+    prompt_file = "prompts/example_prompt.txt"  # Added prompt_file for testing
     verification_program = "verify_code.py"  # Program that verifies the code
     strength = 0.5
     temperature = 0.0
@@ -935,6 +951,7 @@ if __name__ == "__main__":
     success, final_unit_test, final_code, attempts, total_cost, model_name = fix_error_loop(
         unit_test_file,
         code_file,
+        prompt_file,
         prompt,
         verification_program,
         strength,
