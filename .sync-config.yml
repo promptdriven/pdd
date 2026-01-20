@@ -73,9 +73,7 @@ cap_only:
 
 # Exclusion patterns (applied globally when copying)
 exclude:
-  # Test exclusions (NOT the .sh regression scripts, just dirs/files)
-  - tests/regression*
-  - tests/sync_regression*
+  # Test exclusions (regression output dirs in subdirectories, not .sh scripts)
   - tests/**/regression*
   - tests/**/*.ipynb
   - tests/csv/**
