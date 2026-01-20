@@ -715,7 +715,7 @@ Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts a
 | Task Type | Where to Start | The Workflow |
 | :--- | :--- | :--- |
 | **New Feature** | **The Prompt** | 1. Add/Update Requirements in Prompt.<br>2. Regenerate Code (LLM sees existing tests).<br>3. Write new Tests to verify. |
-| **Bug Fix** | **The Test File** | 1. Use `pdd bug` to create a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case if needed.<br>3. Run `pdd fix` (LLM sees the new test and must pass it). |
+| **Bug Fix** | **The Test File** | 1. Use `pdd bug` to create a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case if needed.<br>3. Run `pdd fix` (LLM sees the new test and must pass it).<br>**Tip:** Use `pdd fix --protect-tests` if the tests from `pdd bug` are correct and you want to prevent the LLM from modifying them. |
 
 **Key insight:** When you run `pdd generate` after adding a test, the LLM sees that test as context. This means the generated code is constrained to pass it - the test acts as a specification, not just a verification.
 

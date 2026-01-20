@@ -30,6 +30,7 @@
       - `--loop`, `--verification-program`, `--max-attempts`, `--budget`: (Manual) Loop options.
       - `--auto-submit`: (Manual) Auto-submit on success.
       - `--agentic-fallback/--no-agentic-fallback`: (Manual) Enable agentic fallback in loop mode.
+      - `--protect-tests/--no-protect-tests`: (Both modes) When enabled, prevents the LLM from modifying test files. Useful when tests created by `pdd bug` are known to be correct and only the code should be fixed. Default: False.
     - Track cost using `@track_cost`.
     - Log operation using `@log_operation(operation="fix", clears_run_report=True)`.
     - Return appropriate result tuple.

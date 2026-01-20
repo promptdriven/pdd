@@ -12,6 +12,7 @@
         'temperature' - A float between 0 and 1 that controls the randomness of the LLM's output.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+        'protect_tests' - A boolean that, when True, prevents the LLM from modifying the unit test. Only the code will be fixed. Default is False.
     Outputs as a tuple:
         'update_unit_test' - Boolean indicating whether the unit test needs to be updated.
         'update_code' - Boolean indicating whether the code under test needs to be updated.
@@ -58,6 +59,7 @@
                 - 'code'
                 - 'prompt' (the preprocessed input prompt from Step 3a)
                 - 'errors' (the input error string)
+                - 'protect_tests' (the input protect_tests boolean, converted to "true" or "false" string)
             - 'strength' (the input strength)
             - 'temperature' (the input temperature)
             - 'time' (the input time)
