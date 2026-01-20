@@ -22,6 +22,8 @@ class TestPromptFormatting:
             "cycle_number": 1,
             "max_cycles": 5,
             "issue_content": "Test issue content",
+            "protect_tests": "false",
+            "protect_tests_flag": "",
         }
 
     def test_step1_prompt_formats_without_error(self, base_context):
@@ -86,3 +88,45 @@ class TestPromptFormatting:
         formatted = template.format(**base_context)
         assert "pytest" in formatted
         assert "{name}" in formatted  # Should remain as example literal
+
+    def test_step1_prompt_includes_protect_tests_flag_when_enabled(self, base_context):
+        """Step 1 template should include --protect-tests flag when enabled.
+
+        Regression test for Issue #303: protect_tests parameter should be passed
+        to pdd fix commands in e2e fix workflow.
+        """
+        base_context["protect_tests"] = "true"
+        base_context["protect_tests_flag"] = "--protect-tests"
+        template = load_prompt_template("agentic_e2e_fix_step1_unit_tests_LLM")
+        assert template is not None
+
+        formatted = template.format(**base_context)
+        assert "--protect-tests" in formatted
+
+    def test_step1_prompt_no_protect_tests_flag_when_disabled(self, base_context):
+        """Step 1 template should NOT include --protect-tests flag when disabled."""
+        base_context["protect_tests"] = "false"
+        base_context["protect_tests_flag"] = ""
+        template = load_prompt_template("agentic_e2e_fix_step1_unit_tests_LLM")
+        assert template is not None
+
+        formatted = template.format(**base_context)
+        # The flag placeholder should be empty
+        assert "--protect-tests" not in formatted
+
+    def test_step8_prompt_includes_protect_tests_flag_when_enabled(self, base_context):
+        """Step 8 template should include --protect-tests flag when enabled.
+
+        Regression test for Issue #303: protect_tests parameter should be passed
+        to pdd fix commands in e2e fix workflow.
+        """
+        for i in range(1, 8):
+            base_context[f"step{i}_output"] = f"Step {i} output"
+        base_context["failing_dev_units"] = "test_module"
+        base_context["protect_tests"] = "true"
+        base_context["protect_tests_flag"] = "--protect-tests"
+        template = load_prompt_template("agentic_e2e_fix_step8_run_pdd_fix_LLM")
+        assert template is not None
+
+        formatted = template.format(**base_context)
+        assert "--protect-tests" in formatted
