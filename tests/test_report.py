@@ -43,7 +43,7 @@ def test_report_core_api_success(mock_console_print, mock_github_config, mock_cr
         mock_post_issue.return_value = "https://github.com/promptdriven/pdd/issues/123"
 
         # Act
-        result = runner.invoke(cli, ["report-core", "--api"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", "--api", "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -68,7 +68,7 @@ def test_report_core_api_gist_failure_fallback(mock_console_print, mock_github_c
         mock_post_issue.return_value = "https://github.com/promptdriven/pdd/issues/123" # Issue still succeeds
 
         # Act
-        result = runner.invoke(cli, ["report-core", "--api"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", "--api", "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -93,7 +93,7 @@ def test_report_core_api_issue_failure_fallback_to_browser(mock_console_print, m
         mock_post_issue.return_value = None  # Simulate issue creation failure
 
         # Act
-        result = runner.invoke(cli, ["report-core", "--api"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", "--api", "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -118,7 +118,7 @@ def test_report_core_specific_file_browser(mock_console_print, mock_github_confi
         mock_github_config.return_value = None # No github auth
 
         # Act
-        result = runner.invoke(cli, ["report-core", str(dump_path)], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", str(dump_path), "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -143,7 +143,7 @@ def test_report_core_with_description(mock_console_print, mock_github_config, mo
         mock_github_config.return_value = None  # Simulate no GitHub auth for browser fallback
 
         # Act
-        result = runner.invoke(cli, ["report-core", "-d", "This is a test description."], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", "-d", "This is a test description.", "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
