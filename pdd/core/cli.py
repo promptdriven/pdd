@@ -66,6 +66,22 @@ class OutputCapture:
         return self.buffer.getvalue()
 
 
+def _restore_captured_streams(ctx: click.Context) -> None:
+    """Restore original streams if they were captured for core dump.
+
+    This must be called before any early exit (ctx.exit(0)) to prevent
+    sys.stdout/stderr from remaining wrapped with OutputCapture, which
+    causes test pollution when running multiple tests.
+    """
+    if isinstance(ctx.obj, dict):
+        stdout_capture = ctx.obj.get("_stdout_capture")
+        stderr_capture = ctx.obj.get("_stderr_capture")
+        if stdout_capture:
+            sys.stdout = stdout_capture.original_stream
+        if stderr_capture:
+            sys.stderr = stderr_capture.original_stream
+
+
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
@@ -361,6 +377,7 @@ def cli(
         # Print one per line; avoid Rich formatting for portability
         for name in names:
             click.echo(name)
+        _restore_captured_streams(ctx)
         ctx.exit(0)
 
     # Optional early validation for --context
@@ -394,6 +411,7 @@ def cli(
         if not quiet:
             console.print("[info]Run `pdd --help` for usage or `pdd setup` to finish onboarding.[/info]")
         click.echo(ctx.get_help())
+        _restore_captured_streams(ctx)
         ctx.exit(0)
 
 # --- Result Callback for Command Execution Summary ---
