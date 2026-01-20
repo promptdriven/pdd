@@ -217,16 +217,15 @@ def _find_working_directory(
 
 
 def run_agentic_e2e_fix(
-    issue_url: str,
-    *,
-    timeout_adder: float = 0.0,
-    max_cycles: int = 5,
-    resume: bool = True,
-    force: bool = False,
-    verbose: bool = False,
-    quiet: bool = False,
-    use_github_state: bool = True,
-    protect_tests: bool = False
+    issue_url: str, 
+    *, 
+    timeout_adder: float = 0.0, 
+    max_cycles: int = 5, 
+    resume: bool = True, 
+    force: bool = False, 
+    verbose: bool = False, 
+    quiet: bool = False, 
+    use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     CLI entry point for the agentic e2e fix workflow.
@@ -240,7 +239,6 @@ def run_agentic_e2e_fix(
         verbose: Show detailed output.
         quiet: Suppress non-error output.
         use_github_state: Enable/disable GitHub comment-based state persistence.
-        protect_tests: When True, prevents modification of test files during fix.
 
     Returns:
         (success, message, total_cost, model_used, changed_files)
@@ -317,6 +315,5 @@ def run_agentic_e2e_fix(
         resume=resume,
         verbose=verbose,
         quiet=quiet,
-        use_github_state=use_github_state,
-        protect_tests=protect_tests
+        use_github_state=use_github_state
     )

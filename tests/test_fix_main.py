@@ -2443,5 +2443,3 @@ def test_fix_main_passes_protect_tests_to_fix_errors_from_unit_tests(
     call_kwargs = mock_fix_errors.call_args.kwargs
     assert 'protect_tests' in call_kwargs, "protect_tests must be passed to fix_errors_from_unit_tests"
     assert call_kwargs['protect_tests'] is True
-
-
