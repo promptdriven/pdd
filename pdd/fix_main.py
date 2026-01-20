@@ -387,14 +387,11 @@ def fix_main(
                 success = False
 
         # Save fixed files
-        if fixed_unit_test and not protect_tests:
+        if fixed_unit_test:
             output_test_path = Path(output_file_paths["output_test"])
             output_test_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_test_path, 'w') as f:
                 f.write(fixed_unit_test)
-        elif fixed_unit_test and protect_tests:
-            if verbose:
-                rprint("[yellow]Unit test update skipped (protect_tests=True).[/yellow]")
 
         if fixed_code:
             output_code_path = Path(output_file_paths["output_code"])
@@ -423,10 +420,8 @@ def fix_main(
                     rprint(f"[bold red]Error printing analysis preview: {e}[/bold red]")
             if success:
                 rprint("[bold green]Fixed files saved:[/bold green]")
-                if fixed_unit_test and not protect_tests:
+                if fixed_unit_test:
                     rprint(f"  Test file: {output_file_paths['output_test']}")
-                elif fixed_unit_test and protect_tests:
-                    rprint(f"  Test file: [yellow]skipped (--protect-tests)[/yellow]")
                 if fixed_code:
                     rprint(f"  Code file: {output_file_paths['output_code']}")
                 if output_file_paths.get("output_results"):

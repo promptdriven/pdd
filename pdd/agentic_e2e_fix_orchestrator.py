@@ -288,8 +288,7 @@ def run_agentic_e2e_fix_orchestrator(
     resume: bool = True,
     verbose: bool = False,
     quiet: bool = False,
-    use_github_state: bool = True,
-    protect_tests: bool = False
+    use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrator for the 9-step agentic e2e fix workflow.
@@ -381,8 +380,6 @@ def run_agentic_e2e_fix_orchestrator(
                     "cycle_number": current_cycle,
                     "max_cycles": max_cycles,
                     "issue_content": issue_content,
-                    "protect_tests": "true" if protect_tests else "false",
-                    "protect_tests_flag": "--protect-tests" if protect_tests else "",
                 }
                 
                 # Add previous step outputs
