@@ -1613,6 +1613,7 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 - `--manual`: Use manual mode with explicit file arguments (required for legacy/single dev-unit fixing).
 - `--verbose`: Show detailed output during processing.
 - `--quiet`: Suppress all output except errors.
+- `--protect-tests/--no-protect-tests`: When enabled, prevents the LLM from modifying test files. The LLM will treat tests as read-only specifications and only fix the code. This is especially useful when tests created by `pdd bug` are known to be correct. Default: `--no-protect-tests`.
 
 #### Agentic E2E Fix Options
 - `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0).
@@ -1731,6 +1732,9 @@ pdd fix --no-resume https://github.com/myorg/myrepo/issues/42
 
 # Disable GitHub state persistence (local-only)
 pdd fix --no-github-state https://github.com/myorg/myrepo/issues/42
+
+# Protect tests from modification (only fix code, not tests)
+pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 ```
 
 **Prerequisites:**
@@ -2091,6 +2095,12 @@ After `pdd bug` creates failing tests and a draft PR, use `pdd fix` with the sam
 
 ```bash
 pdd fix https://github.com/myorg/myrepo/issues/42
+```
+
+**Tip:** If `pdd bug` correctly identified the bug and created valid failing tests, use `--protect-tests` to prevent `pdd fix` from modifying the tests. This ensures the LLM only fixes the code to make the tests pass:
+
+```bash
+pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 ```
 
 See the [fix command](#6-fix) documentation for details on the agentic E2E fix workflow.

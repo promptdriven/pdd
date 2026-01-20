@@ -22,6 +22,7 @@
         - `agentic_fallback` (bool): Whether to enable the CLI agent fallback behavior (default True). Pass through to `fix_error_loop`.
         - `strength` (Optional[float]): Model strength parameter. If provided, overrides context value. Defaults to None (uses context).
         - `temperature` (Optional[float]): Model temperature parameter. If provided, overrides context value. Defaults to None (uses context).
+        - `protect_tests` (bool): When True, prevents the LLM from modifying test files. The LLM will only fix code, treating tests as read-only specifications. Default is False.
 
     Outputs:
         - Returns a tuple containing:
@@ -47,10 +48,11 @@
     - Retrieve `confirm_callback = ctx.obj.get('confirm_callback')` for TUI confirmation support.
     - It is fine to pass `force`/`quiet` directly to `construct_paths` without first storing locals.
     - Accept `agentic_fallback: bool = True` and pass through to `fix_error_loop`.
+    - Accept `protect_tests: bool = False` and pass through to `fix_error_loop` and `fix_errors_from_unit_tests`.
 
 2.  File Path Handling and Function Calls:
-    - When calling `fix_error_loop`, pass the original file paths (`code_file`, `unit_test_file`, and `prompt_file`), `prompt` content (from `input_strings`), `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), `verbose`, and `agentic_fallback`.
-    - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths.get('output_results')`, along with `strength`, `temperature`, `time`, and `verbose`. Determine `success` as `update_unit_test or update_code`, and set `attempts = 1` for non-loop mode.
+    - When calling `fix_error_loop`, pass the original file paths (`code_file`, `unit_test_file`, and `prompt_file`), `prompt` content (from `input_strings`), `verification_program`, `strength`, `temperature`, `max_attempts`, `budget`, `time`, `error_log_file` (from `output_file_paths`), `verbose`, `agentic_fallback`, and `protect_tests`.
+    - When calling `fix_errors_from_unit_tests`, use the processed `input_strings` from `construct_paths` for `unit_test`, `code`, `prompt`, and `error`, and pass `error_file = output_file_paths.get('output_results')`, along with `strength`, `temperature`, `time`, `verbose`, and `protect_tests`. Determine `success` as `update_unit_test or update_code`, and set `attempts = 1` for non-loop mode.
     - In non-loop mode, pre‑validate the provided `error_file` exists before constructing paths; raise `FileNotFoundError` if missing.
     - Call `construct_paths(..., create_error_file=loop, context_override=ctx.obj.get('context'))` so an empty error log is created only during loop mode and the global `--context` is honored.
     - Handle both fixing approaches appropriately based on the `--loop` parameter.

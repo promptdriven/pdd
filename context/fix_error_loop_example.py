@@ -107,14 +107,14 @@ def main():
         use_cloud=False         # Set to True to use cloud LLM endpoint
     )
 
-    console.print("\\n[bold green]=== Results ===[/bold green]")
+    console.print("\n[bold green]=== Results ===[/bold green]")
     console.print(f"Success: {success}")
     console.print(f"Attempts used: {attempts}")
     console.print(f"Total Cost: ${cost:.4f}")
     console.print(f"Model: {model}")
     
     if success:
-        console.print("\\n[bold]Fixed Code:[/bold]")
+        console.print("\n[bold]Fixed Code:[/bold]")
         console.print(final_code)
     else:
         console.print("[red]Failed to fix the code within budget/attempts.[/red]")
