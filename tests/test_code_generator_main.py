@@ -2223,3 +2223,145 @@ class TestLLMArrayUnwrapping:
 
         expected = '[\n  {\n    "key": "value"\n  }\n]'
         assert generated_code_content == expected
+
+
+# =============================================================================
+# Issue #154 Regression Tests: File Overwrite Not Happening
+# =============================================================================
+#
+# These tests verify the bug where "generation overwrite a file doesn't always
+# happen". The root cause is an architectural disconnect between:
+# 1. construct_paths() - handles overwrite confirmation
+# 2. code_generator_main() - handles actual file write at line 1087
+#
+# When generate_output_paths() returns {} (e.g., due to empty basename),
+# output_path becomes falsy and the write block is skipped silently.
+#
+# TEST STRATEGY:
+# These tests assert the EXPECTED FIXED behavior, so they will FAIL on the
+# current buggy code and PASS once the bug is fixed.
+# =============================================================================
+
+
+class TestIssue154OverwriteNotHappening:
+    """
+    Regression tests for GitHub Issue #154: File overwrite not always happening.
+
+    The bug manifests when:
+    1. construct_paths() returns empty/falsy output_file_paths
+    2. LLM successfully generates code
+    3. The file write block at line 1087 is silently skipped due to `if output_path:`
+
+    These tests assert the EXPECTED behavior after the fix, so they will
+    FAIL on the current buggy code.
+    """
+
+    def test_issue_154_empty_output_path_should_raise_error(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+    ):
+        """
+        FAILING TEST for issue #154: Empty output_path should raise an error.
+
+        Current behavior (BUG): Code generates, write is silently skipped.
+        Expected behavior (FIX): Should raise click.UsageError when output_path is empty.
+
+        This test FAILS on the current buggy code because no error is raised.
+        """
+        mock_ctx.obj['local'] = True
+        mock_ctx.obj['quiet'] = False
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "issue154_prompt.prompt"
+        create_file(prompt_file_path, "Test prompt for issue 154")
+
+        # Simulate what happens when generate_output_paths returns {}
+        # due to empty basename - output_file_paths.get("output") returns ""
+        mock_construct_paths_fixture.return_value = (
+            {},  # resolved_config
+            {"prompt_file": "Test prompt for issue 154"},
+            {"output": ""},  # Empty string - falsy output path (triggers the bug)
+            "python"
+        )
+
+        # EXPECTED FIX: Should raise click.UsageError when output_path is empty
+        # CURRENT BUG: No error raised, write is silently skipped
+        with pytest.raises(click.UsageError) as excinfo:
+            code_generator_main(
+                mock_ctx, str(prompt_file_path), "", None, False
+            )
+
+        # Verify the error message is helpful
+        assert "output" in str(excinfo.value).lower() or "path" in str(excinfo.value).lower(), \
+            "Error message should mention output path issue"
+
+    def test_issue_154_none_output_path_should_raise_error(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars
+    ):
+        """
+        FAILING TEST for issue #154: None output_path should raise an error.
+
+        When construct_paths returns None for output path (e.g., when
+        generate_output_paths returns {} and .get("output") returns None),
+        an error should be raised instead of silently skipping the write.
+
+        This test FAILS on the current buggy code.
+        """
+        mock_ctx.obj['local'] = True
+        mock_ctx.obj['quiet'] = False
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "issue154_none_prompt.prompt"
+        create_file(prompt_file_path, "Test prompt for issue 154 - None case")
+
+        # Simulate output_file_paths.get("output") returning None
+        mock_construct_paths_fixture.return_value = (
+            {},  # resolved_config
+            {"prompt_file": "Test prompt for issue 154 - None case"},
+            {"output": None},  # None output path - triggers the bug
+            "python"
+        )
+
+        # EXPECTED FIX: Should raise click.UsageError when output_path is None
+        # CURRENT BUG: No error, write silently skipped, console shows warning
+        with pytest.raises(click.UsageError) as excinfo:
+            code_generator_main(
+                mock_ctx, str(prompt_file_path), None, None, False
+            )
+
+        assert "output" in str(excinfo.value).lower() or "path" in str(excinfo.value).lower()
+
+    def test_issue_154_llm_should_not_be_called_with_invalid_output_path(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_env_vars
+    ):
+        """
+        FAILING TEST for issue #154: LLM should NOT be called when output_path is invalid.
+
+        The architectural bug is that output_path validation happens AFTER the
+        expensive LLM call. The LLM is called (costing money/time) even when
+        output_path is invalid/empty.
+
+        Expected fix: Validate output_path BEFORE calling the LLM.
+        This test FAILS on the current buggy code because the LLM IS called.
+        """
+        mock_ctx.obj['local'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "issue154_llm_call.prompt"
+        create_file(prompt_file_path, "Test prompt")
+
+        # Empty output path - simulates generate_output_paths returning {}
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Test prompt"},
+            {"output": ""},  # Empty - should be caught BEFORE LLM call
+            "python"
+        )
+
+        # Expect an error to be raised BEFORE the LLM is called
+        try:
+            code_generator_main(mock_ctx, str(prompt_file_path), "", None, False)
+        except click.UsageError:
+            pass  # This is the expected behavior after fix
+
+        # EXPECTED FIX: LLM should NOT be called when output_path is invalid
+        # CURRENT BUG: LLM IS called, wasting resources
+        assert not mock_local_generator_fixture.called, \
+            "LLM should NOT be called when output_path is empty/invalid. " \
+            "The output path should be validated BEFORE expensive LLM operations."
