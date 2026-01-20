@@ -408,3 +408,18 @@ def test_cli_fix_non_loop_mode_requires_error_file(tmp_path):
     # Should fail because ERROR_FILE is missing
     assert result.exit_code != 0, "Should fail without ERROR_FILE in non-loop mode"
     assert "requires at least 4 arguments" in result.output or "ERROR_FILE" in result.output
+
+
+def test_run_agentic_e2e_fix_has_protect_tests_parameter():
+    """run_agentic_e2e_fix function signature should include protect_tests.
+
+    This ensures the CLI can pass the --protect-tests flag to the agentic e2e fix.
+    """
+    import inspect
+    from pdd.agentic_e2e_fix import run_agentic_e2e_fix
+
+    sig = inspect.signature(run_agentic_e2e_fix)
+    params = list(sig.parameters.keys())
+
+    assert 'protect_tests' in params, \
+        "run_agentic_e2e_fix must accept protect_tests parameter"

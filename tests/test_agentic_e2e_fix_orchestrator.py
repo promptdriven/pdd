@@ -86,3 +86,56 @@ class TestPromptFormatting:
         formatted = template.format(**base_context)
         assert "pytest" in formatted
         assert "{name}" in formatted  # Should remain as example literal
+
+    def test_step1_prompt_formats_with_protect_tests_flag(self, base_context):
+        """Step 1 prompt should accept protect_tests_flag variable.
+
+        When --protect-tests is enabled, the prompt should include the flag
+        in pdd fix commands.
+        """
+        base_context["protect_tests"] = "true"
+        base_context["protect_tests_flag"] = "--protect-tests"
+
+        template = load_prompt_template("agentic_e2e_fix_step1_unit_tests_LLM")
+        assert template is not None
+
+        # This should NOT raise KeyError for missing protect_tests_flag
+        formatted = template.format(**base_context)
+        assert "--protect-tests" in formatted, \
+            "Step 1 prompt should include --protect-tests flag when enabled"
+
+    def test_step8_prompt_formats_with_protect_tests_flag(self, base_context):
+        """Step 8 prompt should accept protect_tests_flag variable.
+
+        When --protect-tests is enabled, the prompt should include the flag
+        in pdd fix commands.
+        """
+        # Add required step outputs
+        for i in range(1, 8):
+            base_context[f"step{i}_output"] = f"Step {i} output"
+        base_context["failing_dev_units"] = "test_module"
+        base_context["protect_tests"] = "true"
+        base_context["protect_tests_flag"] = "--protect-tests"
+
+        template = load_prompt_template("agentic_e2e_fix_step8_run_pdd_fix_LLM")
+        assert template is not None
+
+        # This should NOT raise KeyError for missing protect_tests_flag
+        formatted = template.format(**base_context)
+        assert "--protect-tests" in formatted, \
+            "Step 8 prompt should include --protect-tests flag when enabled"
+
+
+def test_run_agentic_e2e_fix_orchestrator_has_protect_tests_parameter():
+    """run_agentic_e2e_fix_orchestrator should accept protect_tests parameter.
+
+    This ensures the orchestrator can receive and use the protect_tests flag.
+    """
+    import inspect
+    from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+    sig = inspect.signature(run_agentic_e2e_fix_orchestrator)
+    params = list(sig.parameters.keys())
+
+    assert 'protect_tests' in params, \
+        "run_agentic_e2e_fix_orchestrator must accept protect_tests parameter"
