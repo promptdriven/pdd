@@ -329,9 +329,10 @@ def fix_error_loop(unit_test_file: str,
             os.remove(error_log_file)
             if verbose:
                 rprint(f"[green]Removed old error log file:[/green] {error_log_file}")
-        except OSError:
+        except OSError as e:
             # Ignore errors if file cannot be removed (e.g. race condition, or mocked exists=True but file missing)
-            pass
+            if verbose:
+                rprint(f"[yellow]Warning:[/yellow] Could not remove old error log file '{error_log_file}': {e}")
         except Exception as e:
             rprint(f"[red]Error:[/red] Could not remove error log file: {e}")
             return False, "", "", 0, 0.0, ""
