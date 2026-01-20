@@ -324,3 +324,106 @@ def test_cli_with_stream_safety(restore_streams_after_test):
     # result = runner.invoke(cli, ["--some-flag"])
     # assert result.exit_code == 0
     pass
+
+
+# =============================================================================
+# PATTERN 9: ANTI-PATTERN - patcher.start() Without stop()
+# =============================================================================
+#
+# This is the #1 cause of test pollution! NEVER do this:
+#
+# --------- BAD CODE - DO NOT USE ---------
+# from unittest.mock import patch, MagicMock
+#
+# module_mocks = {
+#     "some.module": MagicMock(),
+#     "another.module": MagicMock(),
+# }
+#
+# patcher = patch.dict(sys.modules, module_mocks)
+# patcher.start()  # <-- DANGER: Never stopped!
+#
+# from code_under_test import function_to_test
+#
+# # Tests run... but patcher is NEVER stopped!
+# # All subsequent test files in the pytest run see mocked modules!
+# --------- END BAD CODE ---------
+#
+# The correct approach (PATTERN 7 above) saves and restores immediately:
+#
+# --------- GOOD CODE ---------
+# _saved = {}
+# for name in module_mocks:
+#     _saved[name] = sys.modules.get(name)
+#     sys.modules[name] = module_mocks[name]
+#
+# from code_under_test import function_to_test
+#
+# # RESTORE IMMEDIATELY - before any tests run!
+# for name in module_mocks:
+#     if _saved[name] is not None:
+#         sys.modules[name] = _saved[name]
+#     elif name in sys.modules:
+#         del sys.modules[name]
+# --------- END GOOD CODE ---------
+
+
+# =============================================================================
+# PATTERN 10: Top-Level Imports vs Deferred Imports
+# =============================================================================
+#
+# When code under test has top-level imports like:
+#     from pdd.core.errors import handle_error
+#
+# The name "handle_error" is bound at import time. Patching sys.modules
+# in a test fixture is TOO LATE - the name is already bound!
+#
+# --------- BAD CODE - DOES NOT WORK ---------
+# @pytest.fixture
+# def mock_deps():
+#     mock_errors = MagicMock()
+#     # This patches sys.modules, but handle_error is already bound!
+#     with patch.dict(sys.modules, {"pdd.core.errors": mock_errors}):
+#         yield {"handle_error": mock_errors.handle_error}
+#
+# def test_something(mock_deps):
+#     result = call_code_that_uses_handle_error()
+#     # FAILS! The original handle_error was called, not the mock
+#     mock_deps["handle_error"].assert_called_once()
+# --------- END BAD CODE ---------
+#
+# --------- GOOD CODE ---------
+# @pytest.fixture
+# def mock_deps():
+#     mock_handle_error = MagicMock()
+#     # Patch the name directly in the module where it was imported
+#     with patch("pdd.commands.fix.handle_error", mock_handle_error):
+#         yield {"handle_error": mock_handle_error}
+#
+# def test_something(mock_deps):
+#     result = call_code_that_uses_handle_error()
+#     # PASSES! We patched the bound name directly
+#     mock_deps["handle_error"].assert_called_once()
+# --------- END GOOD CODE ---------
+
+
+# =============================================================================
+# PATTERN 11: When to Use Module-Level vs Fixture Mocking
+# =============================================================================
+#
+# Decision tree:
+#
+# Q: Does code under test have decorators or top-level code needing mocks?
+#    (e.g., @track_cost decorator, module-level initialization)
+#
+# YES → Use module-level save/mock/import/restore (PATTERN 7)
+#       - Mock before import
+#       - Restore IMMEDIATELY after import
+#       - Use fixtures for additional test-time mocking
+#
+# NO  → Use fixture-based mocking (PATTERN 2, 4)
+#       - pytest handles cleanup automatically
+#       - Cleaner and safer
+#
+# NEVER leave module-level mocks active for "all tests in this file"!
+# They will pollute other test files that run after yours.

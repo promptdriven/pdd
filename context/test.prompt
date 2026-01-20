@@ -105,6 +105,69 @@
 
     - See PATTERN 8 in pytest_isolation_example.py for concrete examples
 
+% 9. NEVER USE patcher.start() AT MODULE LEVEL WITHOUT IMMEDIATE stop():
+    - patch.dict(sys.modules, ...).start() at module level is EXTREMELY DANGEROUS
+    - If you forget patcher.stop(), ALL subsequent tests in the ENTIRE pytest run see mocked modules
+    - This is the #1 cause of mysterious test failures that only happen when running the full suite
+
+    - BAD (caused 70 test failures in our codebase):
+        patcher = patch.dict(sys.modules, module_mocks)
+        patcher.start()  # NEVER STOPPED - pollutes entire test suite!
+        from my_module import my_func
+        # All subsequent test files see mocked sys.modules forever!
+
+    - GOOD: Use save/restore pattern that cleans up IMMEDIATELY after import:
+        _saved = {}
+        for name in module_mocks:
+            _saved[name] = sys.modules.get(name)
+            sys.modules[name] = module_mocks[name]
+
+        from my_module import my_func  # Import with mocks active
+
+        # RESTORE IMMEDIATELY after import - don't wait for tests!
+        for name in module_mocks:
+            if _saved[name] is not None:
+                sys.modules[name] = _saved[name]
+            elif name in sys.modules:
+                del sys.modules[name]
+
+% 10. TOP-LEVEL IMPORTS VS DEFERRED IMPORTS:
+    - Top-level imports (e.g., `from module import func` at file start) bind names at import time
+    - Patching sys.modules AFTER import doesn't affect already-bound names!
+
+    - SCENARIO: Code under test has top-level import:
+        # In pdd/commands/fix.py (code under test)
+        from pdd.core.errors import handle_error  # Binds at import time
+
+    - BAD: Patching sys.modules in fixture - TOO LATE:
+        with patch.dict(sys.modules, {"pdd.core.errors": mock}):
+            # handle_error in fix.py is still the ORIGINAL, not mock!
+            result = runner.invoke(fix, args)
+            mock.handle_error.assert_called()  # FAILS - original was called
+
+    - GOOD: Patch the bound name directly in the module where it was imported:
+        with patch("pdd.commands.fix.handle_error", mock_func):
+            result = runner.invoke(fix, args)
+            mock_func.assert_called()  # PASSES - we patched the bound name
+
+% 11. WHEN TO USE FIXTURE vs MODULE-LEVEL MOCKING:
+    - PREFER fixture-based mocking - pytest handles cleanup automatically
+    - ONLY use module-level mocking when you MUST mock BEFORE importing
+      (e.g., decorators that run at import time, top-level code that executes on import)
+
+    - Module-level mocking rules:
+      1. Mock ONLY for the import phase
+      2. RESTORE immediately after import completes
+      3. Use fixtures for test-time mocking (during test execution)
+
+    - NEVER leave module-level mocks active "for all tests in this file"
+      It will pollute OTHER test files that run after yours!
+
+    - Example decision tree:
+      Q: Does the code under test have decorators or top-level code that needs mocking?
+      YES → Use module-level save/mock/import/restore pattern (PATTERN 7, Section 9)
+      NO  → Use fixture-based mocking with patch() context manager
+
 <isolation_example>
 <include>context/pytest_isolation_example.py</include>
 </isolation_example>
