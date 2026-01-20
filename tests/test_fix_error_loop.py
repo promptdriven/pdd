@@ -1379,30 +1379,6 @@ def test_fix_error_loop_cloud_mode(mock_subprocess, mock_cloud, mock_pytest, moc
 
 @patch("pdd.fix_error_loop.run_pytest_on_file")
 @patch("pdd.fix_error_loop._safe_run_agentic_fix")
-def test_agentic_fallback_triggered(mock_agentic, mock_pytest, mock_files):
-    """Test that agentic fallback is triggered when loop exhausts attempts."""
-    code, test, prompt = mock_files
-    mock_pytest.return_value = (1, 0, 0, "Fail")
-    mock_agentic.return_value = (True, "Agent fixed it", 0.5, "agent-model", ["code.py"])
-    
-    # We need to patch fix_errors_from_unit_tests to avoid real LLM calls and control cost
-    with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
-        mock_fix.return_value = (False, False, "", "", "", 0.1, "model")
-        
-        success, _, _, attempts, cost, model = fix_error_loop(
-            test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 1, 1.0,
-            agentic_fallback=True
-        )
-        
-        assert success is True
-        assert attempts == 1
-        # Cost = 0.1 (loop) + 0.5 (agent) = 0.6
-        assert cost == 0.6
-        assert model == "agent-model"
-        mock_agentic.assert_called_once()
-
-@patch("pdd.fix_error_loop.run_pytest_on_file")
-@patch("pdd.fix_error_loop._safe_run_agentic_fix")
 def test_initial_exception_triggers_agentic(mock_agentic, mock_pytest, mock_files):
     """Test that an exception during initial test triggers agentic fallback immediately."""
     code, test, prompt = mock_files

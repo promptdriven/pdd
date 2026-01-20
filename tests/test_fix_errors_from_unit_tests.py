@@ -846,17 +846,8 @@ E   AssertionError: assert '/tmp/random_data.json' in []
     # Hard assertion: at least one fix should be proposed
     assert update_unit_test or update_code, "LLM should propose at least one fix"
 
-import pytest
-import os
-import tempfile
-from unittest.mock import patch, MagicMock, mock_open
 from pydantic import ValidationError
 from z3 import *
-
-# Import the code under test
-# Note: We assume the file is in the python path or relative import works.
-# Based on instructions, we import from the module name.
-from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests, validate_inputs, CodeFix
 
 # ==========================================
 # Z3 Formal Verification
