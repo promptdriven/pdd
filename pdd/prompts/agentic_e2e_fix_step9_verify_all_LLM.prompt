@@ -81,14 +81,14 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 **Status:** ALL_TESTS_PASS
 
 ### Test Results
-- Unit tests: {N}/{M} pass
-- E2E tests: {N}/{M} pass
+- Unit tests: {{N}}/{{M}} pass
+- E2E tests: {{N}}/{{M}} pass
 
 ### Summary
 All bugs fixed successfully in {cycle_number} cycle(s).
 
 ### Files Changed (Total)
-{list_of_all_files_modified}
+{{list_of_all_files_modified}}
 
 ---
 *Workflow complete - all tests passing*
@@ -101,16 +101,16 @@ All bugs fixed successfully in {cycle_number} cycle(s).
 **Status:** CONTINUE_CYCLE
 
 ### Test Results
-- Unit tests: {N}/{M} pass ({K} still failing)
-- E2E tests: {N}/{M} pass ({K} still failing)
+- Unit tests: {{N}}/{{M}} pass ({{K}} still failing)
+- E2E tests: {{N}}/{{M}} pass ({{K}} still failing)
 
 ### Remaining Failures
 | Test | Failure Type |
 |------|--------------|
-| `test_{name}` | {type} |
+| `test_{{name}}` | {{type}} |
 
 ### Analysis
-{explanation_of_remaining_failures}
+{{explanation_of_remaining_failures}}
 
 ---
 *Starting Cycle {next_cycle}*
@@ -129,10 +129,10 @@ All bugs fixed successfully in {cycle_number} cycle(s).
 ### Remaining Failures
 | Test | Failure Type |
 |------|--------------|
-| `test_{name}` | {type} |
+| `test_{{name}}` | {{type}} |
 
 ### Recommendation
-{manual_intervention_suggestions}
+{{manual_intervention_suggestions}}
 
 ---
 *Workflow stopped - max cycles reached*
