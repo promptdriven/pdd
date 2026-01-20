@@ -38,7 +38,7 @@ You are working on step 1 of 9 in an agentic e2e fix workflow. This issue was ty
      ```bash
      # Create a temp error file for pdd fix
      touch /tmp/pdd_fix_errors_{{dev_unit}}.log
-     pdd fix --manual prompts/{{dev_unit}}_python.prompt pdd/{{dev_unit}}.py tests/test_{{dev_unit}}.py /tmp/pdd_fix_errors_{{dev_unit}}.log --loop
+     pdd fix --manual prompts/{{dev_unit}}_python.prompt pdd/{{dev_unit}}.py tests/test_{{dev_unit}}.py /tmp/pdd_fix_errors_{{dev_unit}}.log --loop {protect_tests_flag}
      ```
    - Run pdd fix sequentially, one dev unit at a time
    - Capture the output of each pdd fix run
