@@ -15,8 +15,8 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main, CLOUD_REQUEST_TIMEOUT
-from pdd.core.cloud import CloudConfig
+from pdd.code_generator_main import code_generator_main
+from pdd.core.cloud import CloudConfig, get_cloud_timeout
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
 
 # Get the cloud URL for assertions in tests
@@ -462,7 +462,7 @@ def test_full_gen_cloud_success(
             "verbose": mock_ctx.obj['verbose']
         },
         headers={"Authorization": "Bearer test_jwt_token", "Content-Type": "application/json"},
-        timeout=CLOUD_REQUEST_TIMEOUT
+        timeout=get_cloud_timeout()
     )
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
 

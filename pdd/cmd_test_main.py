@@ -14,12 +14,9 @@ from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
-from .core.cloud import CloudConfig
+from .core.cloud import CloudConfig, get_cloud_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
-
-# Cloud request timeout
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
@@ -221,7 +218,7 @@ def cmd_test_main(
                 cloud_url,
                 json=payload,
                 headers=headers,
-                timeout=CLOUD_REQUEST_TIMEOUT
+                timeout=get_cloud_timeout()
             )
 
             # Check for HTTP errors explicitly
