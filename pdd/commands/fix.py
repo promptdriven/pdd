@@ -188,4 +188,4 @@ def fix(
     except Exception as e:
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
         handle_error(e, "fix", quiet)
-        return None
+        ctx.exit(1)
