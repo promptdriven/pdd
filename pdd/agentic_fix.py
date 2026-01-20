@@ -16,6 +16,7 @@ from .get_run_command import get_run_command_for_file  # Gets run command for a 
 from .llm_invoke import _load_model_data          # Loads provider/model metadata from llm_model.csv
 from .load_prompt_template import load_prompt_template  # Loads prompt templates by name
 from .agentic_langtest import default_verify_cmd_for    # Provides a default verify command (per language)
+from .agentic_common import get_available_agents        # Centralized agent detection (handles CLI auth, API keys, Vertex AI)
 
 console = Console()
 
@@ -968,30 +969,25 @@ def run_agentic_fix(
         csv_path = find_llm_csv_path()
         model_df = _load_model_data(csv_path)
 
-        available_agents: List[str] = []
-        present_keys: List[str] = []
-        seen = set()
+        # Use centralized agent detection which handles all auth methods:
+        # - API keys (ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY)
+        # - Vertex AI auth (GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_GENAI_USE_VERTEXAI)
+        # - CLI-based auth (claude CLI for subscription users)
+        available_agents = get_available_agents()
 
-        for provider in AGENT_PROVIDER_PREFERENCE:
-            provider_df = model_df[model_df["provider"].str.lower() == provider]
-            if provider_df.empty:
-                continue
-            api_key_name = provider_df.iloc[0]["api_key"]
-            if not api_key_name:
-                continue
-            # Check CLI availability first (subscription auth), then API key
-            has_cli_auth = provider == "anthropic" and shutil.which("claude")
-            has_api_key = os.getenv(api_key_name) or (provider == "google" and os.getenv("GEMINI_API_KEY"))
-            if has_cli_auth or has_api_key:
-                if has_cli_auth:
-                    present_keys.append("claude-cli-auth")
-                else:
-                    present_keys.append(api_key_name or ("GEMINI_API_KEY" if provider == "google" else ""))
-                if provider not in seen:
-                    available_agents.append(provider)
-                    seen.add(provider)
+        # Log detected auth methods for debugging
+        auth_methods = []
+        if "anthropic" in available_agents:
+            auth_methods.append("claude-cli-auth" if shutil.which("claude") else "ANTHROPIC_API_KEY")
+        if "google" in available_agents:
+            if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true":
+                auth_methods.append("vertex-ai-auth")
+            else:
+                auth_methods.append("GEMINI_API_KEY")
+        if "openai" in available_agents:
+            auth_methods.append("OPENAI_API_KEY")
+        _info(f"[cyan]Env API keys present (names only): {', '.join(auth_methods) or 'none'}[/cyan]")
 
-        _info(f"[cyan]Env API keys present (names only): {', '.join([k for k in present_keys if k]) or 'none'}[/cyan]")
         if not available_agents:
             return False, "No configured agent API keys found in environment.", est_cost, used_model, changed_files
 
