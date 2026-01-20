@@ -2443,3 +2443,21 @@ def test_fix_main_passes_protect_tests_to_fix_errors_from_unit_tests(
     call_kwargs = mock_fix_errors.call_args.kwargs
     assert 'protect_tests' in call_kwargs, "protect_tests must be passed to fix_errors_from_unit_tests"
     assert call_kwargs['protect_tests'] is True
+
+
+def test_fix_main_code_checks_protect_tests_before_writing_test():
+    """fix_main.py should check protect_tests before writing test file.
+
+    This is a source code inspection test to ensure the conditional:
+        if fixed_unit_test and not protect_tests:
+    exists in fix_main.py, preventing test file writes when protect_tests=True.
+    """
+    from pathlib import Path
+
+    # Read the fix_main.py source code
+    fix_main_path = Path(__file__).parent.parent / "pdd" / "fix_main.py"
+    source = fix_main_path.read_text()
+
+    # Check that the code includes "protect_tests" check when writing test file
+    assert "if fixed_unit_test and not protect_tests:" in source, \
+        "fix_main.py should check 'if fixed_unit_test and not protect_tests:' before writing test file"
