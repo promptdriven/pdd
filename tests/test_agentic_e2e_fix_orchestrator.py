@@ -22,6 +22,8 @@ class TestPromptFormatting:
             "cycle_number": 1,
             "max_cycles": 5,
             "issue_content": "Test issue content",
+            "protect_tests": "false",
+            "protect_tests_flag": "",
         }
 
     def test_step1_prompt_formats_without_error(self, base_context):
