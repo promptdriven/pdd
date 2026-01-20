@@ -44,11 +44,14 @@ from z3 import Solver, Bool, And, Not
 from pdd.core.cloud import (
     CloudConfig,
     DEFAULT_BASE_URL,
+    DEFAULT_CLOUD_TIMEOUT,
     CLOUD_ENDPOINTS,
     FIREBASE_API_KEY_ENV,
     GITHUB_CLIENT_ID_ENV,
     PDD_CLOUD_URL_ENV,
     PDD_JWT_TOKEN_ENV,
+    PDD_CLOUD_TIMEOUT_ENV,
+    get_cloud_timeout,
     AuthError,
     NetworkError,
     RateLimitError
@@ -68,6 +71,7 @@ def clean_env():
     keys_to_clear = [
         PDD_CLOUD_URL_ENV,
         PDD_JWT_TOKEN_ENV,
+        PDD_CLOUD_TIMEOUT_ENV,
         FIREBASE_API_KEY_ENV,
         GITHUB_CLIENT_ID_ENV,
         "PDD_ENV",
@@ -466,3 +470,75 @@ def test_get_jwt_token_in_async_context_without_cached_token(mock_get_cached_jwt
             assert token is None
 
         asyncio.run(async_test())
+
+
+# -----------------------------------------------------------------------------
+# Unit Tests: Cloud Timeout Configuration (get_cloud_timeout)
+# -----------------------------------------------------------------------------
+
+def test_get_cloud_timeout_default(clean_env):
+    """Test that default timeout (900 seconds / 15 minutes) is returned when no env var is set."""
+    timeout = get_cloud_timeout()
+    assert timeout == DEFAULT_CLOUD_TIMEOUT
+    assert timeout == 900  # 15 minutes
+
+
+def test_get_cloud_timeout_custom_value(clean_env):
+    """Test that PDD_CLOUD_TIMEOUT environment variable overrides the default."""
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "300"}):
+        timeout = get_cloud_timeout()
+        assert timeout == 300
+
+
+def test_get_cloud_timeout_large_value(clean_env):
+    """Test that large timeout values are accepted."""
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "3600"}):
+        timeout = get_cloud_timeout()
+        assert timeout == 3600  # 1 hour
+
+
+def test_get_cloud_timeout_invalid_value_returns_default(clean_env):
+    """Test that invalid (non-integer) values fall back to default."""
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "invalid"}):
+        timeout = get_cloud_timeout()
+        assert timeout == DEFAULT_CLOUD_TIMEOUT
+
+
+def test_get_cloud_timeout_empty_string_returns_default(clean_env):
+    """Test that empty string falls back to default."""
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: ""}):
+        timeout = get_cloud_timeout()
+        assert timeout == DEFAULT_CLOUD_TIMEOUT
+
+
+def test_get_cloud_timeout_float_value_truncates(clean_env):
+    """Test that float values are truncated to integer."""
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "300.5"}):
+        # int("300.5") raises ValueError, so it should fall back to default
+        timeout = get_cloud_timeout()
+        assert timeout == DEFAULT_CLOUD_TIMEOUT
+
+
+def test_get_cloud_timeout_negative_value(clean_env):
+    """Test that negative values are accepted (caller's responsibility to validate)."""
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "-100"}):
+        timeout = get_cloud_timeout()
+        # Negative values are technically valid integers
+        assert timeout == -100
+
+
+def test_get_cloud_timeout_zero_value(clean_env):
+    """Test that zero timeout is accepted."""
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "0"}):
+        timeout = get_cloud_timeout()
+        assert timeout == 0
+
+
+def test_get_cloud_timeout_returns_int(clean_env):
+    """Test that the return type is always an integer."""
+    timeout = get_cloud_timeout()
+    assert isinstance(timeout, int)
+
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "600"}):
+        timeout = get_cloud_timeout()
+        assert isinstance(timeout, int)

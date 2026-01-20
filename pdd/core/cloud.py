@@ -30,6 +30,32 @@ FIREBASE_API_KEY_ENV = "NEXT_PUBLIC_FIREBASE_API_KEY"
 GITHUB_CLIENT_ID_ENV = "GITHUB_CLIENT_ID"
 PDD_CLOUD_URL_ENV = "PDD_CLOUD_URL"
 PDD_JWT_TOKEN_ENV = "PDD_JWT_TOKEN"
+PDD_CLOUD_TIMEOUT_ENV = "PDD_CLOUD_TIMEOUT"
+
+# Default cloud request timeout (seconds)
+DEFAULT_CLOUD_TIMEOUT = 900  # 15 minutes
+
+
+def get_cloud_timeout() -> int:
+    """Get cloud request timeout in seconds.
+
+    The timeout can be configured via the PDD_CLOUD_TIMEOUT environment variable.
+    Defaults to 900 seconds (15 minutes) if not set.
+
+    Returns:
+        Timeout in seconds as an integer.
+
+    Example:
+        # Use default (600 seconds)
+        timeout = get_cloud_timeout()
+
+        # Override via environment variable
+        export PDD_CLOUD_TIMEOUT=300  # 5 minutes
+    """
+    try:
+        return int(os.environ.get(PDD_CLOUD_TIMEOUT_ENV, str(DEFAULT_CLOUD_TIMEOUT)))
+    except ValueError:
+        return DEFAULT_CLOUD_TIMEOUT
 
 # Default cloud endpoints
 DEFAULT_BASE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net"
@@ -256,6 +282,9 @@ __all__ = [
     'GITHUB_CLIENT_ID_ENV',
     'PDD_CLOUD_URL_ENV',
     'PDD_JWT_TOKEN_ENV',
+    'PDD_CLOUD_TIMEOUT_ENV',
     'DEFAULT_BASE_URL',
+    'DEFAULT_CLOUD_TIMEOUT',
     'CLOUD_ENDPOINTS',
+    'get_cloud_timeout',
 ]
