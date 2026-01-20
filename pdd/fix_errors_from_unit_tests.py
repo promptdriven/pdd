@@ -107,8 +107,9 @@ def fix_errors_from_unit_tests(
     error_file: str,
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
+    time: float = DEFAULT_TIME,
     verbose: bool = False,
-    time: float = DEFAULT_TIME
+    protect_tests: bool = False
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix errors in unit tests using LLM models and log the process.
@@ -122,8 +123,9 @@ def fix_errors_from_unit_tests(
         error_file (str): Path to error log file
         strength (float): LLM model strength (0-1)
         temperature (float): LLM temperature (0-1)
-        verbose (bool): Whether to print detailed output
         time (float): Time parameter for llm_invoke
+        verbose (bool): Whether to print detailed output
+        protect_tests (bool): If True, prevents LLM from modifying unit tests
 
     Returns:
         Tuple containing update flags, fixed code/tests, total cost, and model name
@@ -145,16 +147,13 @@ def fix_errors_from_unit_tests(
         if not fix_errors_prompt or not extract_fix_prompt:
             raise ValueError("Failed to load prompt templates")
 
-        # Step 2: Read error file content
-        existing_errors = ""
-        try:
-            if os.path.exists(error_file):
-                with open(error_file, 'r', encoding='utf-8') as f:
-                    existing_errors = f.read()
-        except Exception as e:
-            if verbose:
-                console.print(f"[yellow]Warning: Could not read error file: {str(e)}[/yellow]")
-
+        # Step 2: Read error file content (Note: logic in prompt says we don't use this for input history, 
+        # but existing code had a read block. The prompt says: "This function uses the 'error_log_file' path *only* for writing its own analysis output")
+        # However, to preserve existing structure regarding file checks, we keep the check but don't necessarily use it for input context unless specified.
+        # The prompt explicitly says: "Note: The 'error' input parameter contains the current error message... This function uses the 'error_log_file' path *only* for writing its own analysis output"
+        # So we can skip reading it into a variable for the LLM input, but the existing code read it. 
+        # The existing code didn't actually use `existing_errors` in the input_json, so removing the read is safe and aligns with new prompt.
+        
         # Step 3: Run first prompt through llm_invoke
         processed_prompt = preprocess(
             prompt,
@@ -178,7 +177,8 @@ def fix_errors_from_unit_tests(
                 "unit_test": unit_test,
                 "code": code,
                 "prompt": processed_prompt,
-                "errors": error
+                "errors": error,
+                "protect_tests": "true" if protect_tests else "false"
             },
             strength=strength,
             temperature=temperature,

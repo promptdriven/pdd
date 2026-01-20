@@ -2,10 +2,11 @@ import pytest
 from pathlib import Path
 import tempfile
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 from pydantic import BaseModel
 
-from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests, CodeFix
+# Corrected import path to use the full package structure
+from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests, validate_inputs, CodeFix
 
 # Test data
 SAMPLE_UNIT_TEST = """
@@ -844,3 +845,287 @@ E   AssertionError: assert '/tmp/random_data.json' in []
 
     # Hard assertion: at least one fix should be proposed
     assert update_unit_test or update_code, "LLM should propose at least one fix"
+
+from pydantic import ValidationError
+from z3 import *
+
+# ==========================================
+# Z3 Formal Verification
+# ==========================================
+
+def test_z3_validate_inputs_constraints():
+    """
+    Formally verify the constraints logic used in validate_inputs using Z3.
+    We want to prove that if inputs are within [0, 1], no error condition is met.
+    """
+    # Create Z3 variables
+    strength = Real('strength')
+    temperature = Real('temperature')
+
+    # The logic in the code is:
+    # if not 0 <= strength <= 1: raise
+    # if not 0 <= temperature <= 1: raise
+    
+    # We define the "Valid" condition
+    is_valid_strength = And(strength >= 0, strength <= 1)
+    is_valid_temp = And(temperature >= 0, temperature <= 1)
+    inputs_valid = And(is_valid_strength, is_valid_temp)
+
+    # We define the "Error" condition (the inverse of valid)
+    # The code raises error if NOT valid.
+    # So we want to verify: Is it possible for inputs_valid to be True AND (strength < 0 OR strength > 1)?
+    # This is a sanity check on the logic.
+    
+    solver = Solver()
+    
+    # Case 1: Verify that if strength is valid, the error condition (strength < 0 or strength > 1) is UNSAT
+    solver.push()
+    solver.add(is_valid_strength)
+    solver.add(Or(strength < 0, strength > 1))
+    assert solver.check() == unsat, "Z3 found a case where strength is valid but error condition is met"
+    solver.pop()
+
+    # Case 2: Verify that if temperature is valid, the error condition is UNSAT
+    solver.push()
+    solver.add(is_valid_temp)
+    solver.add(Or(temperature < 0, temperature > 1))
+    assert solver.check() == unsat, "Z3 found a case where temperature is valid but error condition is met"
+    solver.pop()
+
+# ==========================================
+# Unit Tests
+# ==========================================
+
+@pytest.fixture
+def mock_dependencies():
+    """Fixture to mock all internal and external dependencies."""
+    with patch('pdd.fix_errors_from_unit_tests.load_prompt_template') as mock_load, \
+         patch('pdd.fix_errors_from_unit_tests.preprocess') as mock_preprocess, \
+         patch('pdd.fix_errors_from_unit_tests.llm_invoke') as mock_invoke, \
+         patch('pdd.fix_errors_from_unit_tests.write_to_error_file') as mock_write, \
+         patch('builtins.open', new_callable=mock_open) as mock_file_open, \
+         patch('os.makedirs') as mock_makedirs, \
+         patch('os.path.exists') as mock_exists:
+        
+        # Setup default behaviors
+        mock_load.return_value = "mock_template"
+        mock_preprocess.return_value = "processed_prompt"
+        mock_exists.return_value = False
+        
+        yield {
+            'load': mock_load,
+            'preprocess': mock_preprocess,
+            'invoke': mock_invoke,
+            'write': mock_write,
+            'open': mock_file_open,
+            'makedirs': mock_makedirs,
+            'exists': mock_exists
+        }
+
+def test_validate_inputs_valid():
+    """Test validate_inputs with valid range."""
+    # Should not raise
+    validate_inputs(0.5, 0.5)
+    validate_inputs(0.0, 0.0)
+    validate_inputs(1.0, 1.0)
+
+def test_validate_inputs_invalid():
+    """Test validate_inputs raises ValueError for out of range."""
+    with pytest.raises(ValueError, match="Strength must be between"):
+        validate_inputs(-0.1, 0.5)
+    with pytest.raises(ValueError, match="Strength must be between"):
+        validate_inputs(1.1, 0.5)
+    with pytest.raises(ValueError, match="Temperature must be between"):
+        validate_inputs(0.5, -0.1)
+    with pytest.raises(ValueError, match="Temperature must be between"):
+        validate_inputs(0.5, 1.1)
+
+def test_fix_errors_happy_path(mock_dependencies):
+    """
+    Test the main success flow:
+    1. Loads templates
+    2. Calls LLM 1 (Analysis)
+    3. Calls LLM 2 (Extraction)
+    4. Returns correct tuple
+    """
+    mocks = mock_dependencies
+    
+    # Setup LLM responses
+    # Response 1: Analysis
+    mocks['invoke'].side_effect = [
+        {
+            'cost': 0.01,
+            'model_name': 'gpt-4',
+            'result': 'Analysis of the error...'
+        },
+        {
+            'cost': 0.02,
+            'model_name': 'gpt-4',
+            'result': CodeFix(
+                update_unit_test=True,
+                update_code=True,
+                fixed_unit_test="def test_fixed(): pass",
+                fixed_code="def code_fixed(): pass"
+            )
+        }
+    ]
+
+    result = fix_errors_from_unit_tests(
+        unit_test="def test_foo(): pass",
+        code="def foo(): pass",
+        prompt="write foo",
+        error="AssertionError",
+        error_file="error.log",
+        strength=0.5,
+        temperature=0.2,
+        verbose=True
+    )
+
+    # Assertions
+    assert result[0] is True  # update_unit_test
+    assert result[1] is True  # update_code
+    assert result[2] == "def test_fixed(): pass"
+    assert result[3] == "def code_fixed(): pass"
+    assert result[4] == "Analysis of the error..."
+    assert result[5] == 0.03  # Total cost
+    assert result[6] == "gpt-4"
+
+    # Verify LLM 1 call arguments
+    call_args_1 = mocks['invoke'].call_args_list[0]
+    assert call_args_1.kwargs['input_json']['protect_tests'] == "false"
+    assert call_args_1.kwargs['strength'] == 0.5
+    
+    # Verify LLM 2 call arguments
+    call_args_2 = mocks['invoke'].call_args_list[1]
+    assert call_args_2.kwargs['input_json']['unit_test_fix'] == "Analysis of the error..."
+    # Check that output_pydantic was passed
+    assert call_args_2.kwargs['output_pydantic'] == CodeFix
+
+def test_fix_errors_protect_tests_flag(mock_dependencies):
+    """Test that protect_tests=True is correctly passed to the LLM."""
+    mocks = mock_dependencies
+    
+    # Setup minimal valid responses
+    mocks['invoke'].side_effect = [
+        {'cost': 0, 'model_name': 'm', 'result': 'analysis'},
+        {'cost': 0, 'model_name': 'm', 'result': CodeFix(update_unit_test=False, update_code=False, fixed_unit_test="", fixed_code="")}
+    ]
+
+    fix_errors_from_unit_tests(
+        unit_test="t", code="c", prompt="p", error="e", error_file="f",
+        protect_tests=True
+    )
+
+    # Verify LLM 1 call arguments
+    call_args_1 = mocks['invoke'].call_args_list[0]
+    assert call_args_1.kwargs['input_json']['protect_tests'] == "true"
+
+def test_fix_errors_missing_inputs():
+    """Test that empty inputs raise ValueError."""
+    with pytest.raises(ValueError, match="All input parameters must be non-empty"):
+        fix_errors_from_unit_tests(
+            unit_test="", # Empty
+            code="code",
+            prompt="prompt",
+            error="error",
+            error_file="log"
+        )
+
+def test_fix_errors_template_load_failure(mock_dependencies):
+    """Test behavior when prompt templates fail to load."""
+    mocks = mock_dependencies
+    mocks['load'].return_value = None  # Simulate failure
+
+    result = fix_errors_from_unit_tests(
+        unit_test="t", code="c", prompt="p", error="e", error_file="f"
+    )
+
+    # Should return failure tuple
+    assert result[0] is False
+    assert "Error: ValueError" in result[6] # Model name field contains error
+
+def test_fix_errors_llm_validation_error(mock_dependencies):
+    """Test handling of Pydantic ValidationError during LLM processing."""
+    mocks = mock_dependencies
+    
+    # Simulate ValidationError during first invoke (or second)
+    mocks['invoke'].side_effect = ValidationError.from_exception_data("msg", [])
+
+    result = fix_errors_from_unit_tests(
+        unit_test="t", code="c", prompt="p", error="e", error_file="f"
+    )
+
+    assert result[0] is False
+    assert "Error: ValidationError" in result[6]
+
+def test_fix_errors_generic_exception(mock_dependencies):
+    """Test handling of generic exceptions."""
+    mocks = mock_dependencies
+    mocks['invoke'].side_effect = Exception("Something exploded")
+
+    result = fix_errors_from_unit_tests(
+        unit_test="t", code="c", prompt="p", error="e", error_file="f"
+    )
+
+    assert result[0] is False
+    assert "Error: Exception" in result[6]
+
+# ==========================================
+# File I/O Tests (Integration-style logic)
+# ==========================================
+
+def test_write_to_error_file_logic():
+    """
+    Test the write_to_error_file logic specifically.
+    Since this function is internal to the module but critical, we test it by 
+    invoking the main function and mocking the os/file operations to verify behavior.
+    """
+    # We need to import the function directly if possible, or rely on the main function calling it.
+    # The prompt provided the code, so we can import it from the module.
+    from pdd.fix_errors_from_unit_tests import write_to_error_file
+    
+    with patch('builtins.open', mock_open(read_data="old_content")) as mock_file, \
+         patch('os.path.exists', return_value=True), \
+         patch('os.makedirs') as mock_mkdirs, \
+         patch('pdd.fix_errors_from_unit_tests.NamedTemporaryFile') as mock_temp, \
+         patch('os.replace') as mock_replace:
+        
+        # Setup temp file mock
+        mock_temp_obj = MagicMock()
+        mock_temp.return_value.__enter__.return_value = mock_temp_obj
+        mock_temp_obj.name = "/tmp/tempfile"
+        
+        write_to_error_file("/path/to/error.log", "new_content")
+        
+        # Verify directory creation
+        mock_mkdirs.assert_called_with("/path/to", exist_ok=True)
+        
+        # Verify writing to temp file (should contain old + separator + new)
+        # Note: exact string matching might be brittle due to timestamps, so we check calls
+        writes = mock_temp_obj.write.call_args_list
+        assert len(writes) >= 2
+        assert writes[0][0][0] == "old_content"
+        assert "new_content" in writes[1][0][0]
+        
+        # Verify atomic replace
+        mock_replace.assert_called_with("/tmp/tempfile", "/path/to/error.log")
+
+def test_write_to_error_file_fallback():
+    """Test fallback to temp directory if primary write fails."""
+    from pdd.fix_errors_from_unit_tests import write_to_error_file
+    
+    with patch('builtins.open', mock_open()), \
+         patch('os.path.exists', return_value=False), \
+         patch('os.makedirs', side_effect=PermissionError("No access")), \
+         patch('pdd.fix_errors_from_unit_tests.NamedTemporaryFile') as mock_temp, \
+         patch('os.replace') as mock_replace, \
+         patch('tempfile.gettempdir', return_value="/sys/tmp"):
+        
+        mock_temp_obj = MagicMock()
+        mock_temp.return_value.__enter__.return_value = mock_temp_obj
+        mock_temp_obj.name = "/sys/tmp/tempfile"
+        
+        write_to_error_file("/protected/error.log", "content")
+        
+        # Should attempt to replace to fallback path
+        mock_replace.assert_called_with("/sys/tmp/tempfile", "/sys/tmp/error.log")

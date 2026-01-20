@@ -317,7 +317,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
     error_file = tmp_path / "error.txt"
     error_file.write_text("error content")
 
-    with patch('pdd.commands.fix.fix_main') as mock_fix_main:
+    with patch('pdd.fix_main.fix_main') as mock_fix_main:
         mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
         result = runner.invoke(cli.cli, [
             'fix',
@@ -346,6 +346,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
             agentic_fallback=True,
             strength=None,
             temperature=None,
+            protect_tests=False,
         )
         mock_fix_main.assert_any_call(
             ctx=ANY,
@@ -364,6 +365,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
             agentic_fallback=True,
             strength=None,
             temperature=None,
+            protect_tests=False,
         )
 
 @pytest.mark.parametrize("num_test_files", [1, 2])
@@ -383,7 +385,7 @@ def test_cli_fix_loop_mode_no_error_file(tmp_path, num_test_files):
     for tf in test_files:
         tf.write_text("test content")
 
-    with patch('pdd.commands.fix.fix_main') as mock_fix_main:
+    with patch('pdd.fix_main.fix_main') as mock_fix_main:
         mock_fix_main.return_value = (True, "fixed_test", "fixed_code", 1, 0.1, "gpt-4")
         result = runner.invoke(cli.cli, [
             'fix', '--manual', '--loop', '--verification-program', str(verify_file),

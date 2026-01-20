@@ -1,3 +1,25 @@
+## v0.0.122 (2026-01-19)
+
+### Feat
+
+- Add `protect_tests` parameter to agentic fix, update `simple_math_python` prompt with detailed requirements, and introduce `pdd-prompt-sync` Claude agent.
+- Introduce `pdd-prompt-sync` agent, refine `simple_math_python.prompt` with detailed requirements, and update `fix` command error handling to exit with status 1.
+- Add `pdd-prompt-sync` agent for prompt-implementation synchronization and introduce `protect_tests` option to prevent unit test modifications during fixes.
+- Add `protect_tests` option to `fix_error_loop` to prevent LLM modification of unit tests, refactor imports, and enhance related prompts and tests.
+- Add --protect-tests option to prevent LLM from modifying test files (#303)
+- Remove legacy Match button and add Strength selector to Diff modal
+- Improve `CHANGELOG.md` generation by expanding the `Makefile`'s `claude` prompt to include external contributor attribution and structured release notes.
+
+### Fix
+
+- Mock _get_cached_jwt in device flow tests to prevent test pollution
+- Use slider for Strength selector in Diff modal (like Version History)
+- Check JWT file cache before asyncio.run() in CloudConfig.get_jwt_token()
+- Pass server port to RemoteSessionManager for remote command execution
+- Enable cloud auto-detection for diff check LLM calls
+- remove importlib.reload that fails when running full test suite
+- escape single braces in e2e fix prompt templates to prevent KeyError
+
 ## v0.0.121 (2026-01-18)
 
 ### Feat

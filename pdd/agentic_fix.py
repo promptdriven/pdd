@@ -934,6 +934,7 @@ def run_agentic_fix(
     *,
     verbose: bool = False,
     quiet: bool = False,
+    protect_tests: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Main entrypoint for agentic fallback:
@@ -1115,6 +1116,7 @@ def run_agentic_fix(
             test_content=test_content,
             error_content=error_content,
             verify_cmd=verify_cmd or "No verification command provided.",
+            protect_tests="true" if protect_tests else "false",
         )
         instruction_file = working_dir / "agentic_fix_instructions.txt"
         instruction_file.write_text(primary_instr, encoding="utf-8")
