@@ -86,7 +86,7 @@ def fix_error_loop(
    - If tests pass, read files and break (set `best_iteration=0`)
    - Otherwise: create timestamped backups in `.pdd/backups/`, update best iteration tracker, call `fix_errors_from_unit_tests`, write files, run verification, re-run pytest
 5. Post-loop: restore best iteration if final state is worse; set `best_iteration="final"` if current is best
-6. Agentic fallback: if not success and budget remains, ensure error_log_file exists (write initial state if no iterations ran), then call `_safe_run_agentic_fix` with `cwd=None` (project root)
+6. Agentic fallback: if not success and budget remains, ensure error_log_file exists (write initial state if no iterations ran), then call `_safe_run_agentic_fix` with `cwd=None` (project root) 
 7. Return 6-tuple
 
 ### Control Flow Diagram:
