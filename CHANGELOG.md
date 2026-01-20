@@ -2,23 +2,28 @@
 
 ### Feat
 
-- Add `protect_tests` parameter to agentic fix, update `simple_math_python` prompt with detailed requirements, and introduce `pdd-prompt-sync` Claude agent.
-- Introduce `pdd-prompt-sync` agent, refine `simple_math_python.prompt` with detailed requirements, and update `fix` command error handling to exit with status 1.
-- Add `pdd-prompt-sync` agent for prompt-implementation synchronization and introduce `protect_tests` option to prevent unit test modifications during fixes.
-- Add `protect_tests` option to `fix_error_loop` to prevent LLM modification of unit tests, refactor imports, and enhance related prompts and tests.
-- Add --protect-tests option to prevent LLM from modifying test files (#303)
-- Remove legacy Match button and add Strength selector to Diff modal
-- Improve `CHANGELOG.md` generation by expanding the `Makefile`'s `claude` prompt to include external contributor attribution and structured release notes.
+- **Protect Tests Mode:** New `--protect-tests` flag for `pdd fix` prevents the LLM from modifying test files (#303). The LLM treats tests as read-only specifications and only fixes the implementation code. Useful when tests created by `pdd bug` are known to be correct. Propagates through fix_error_loop, fix_errors_from_unit_tests, and agentic_fix modules.
+- **pdd-prompt-sync Agent:** New Claude Code agent for comparing module prompts with their implementations and synchronizing them following PDD conventions.
+- **Diff Modal Improvements:** Removed legacy Match button; added Strength selector slider to Diff modal for bidirectional prompt-code analysis.
 
 ### Fix
 
-- Mock _get_cached_jwt in device flow tests to prevent test pollution
-- Use slider for Strength selector in Diff modal (like Version History)
-- Check JWT file cache before asyncio.run() in CloudConfig.get_jwt_token()
-- Pass server port to RemoteSessionManager for remote command execution
-- Enable cloud auto-detection for diff check LLM calls
-- remove importlib.reload that fails when running full test suite
-- escape single braces in e2e fix prompt templates to prevent KeyError
+- **JWT Cache Check:** Check JWT file cache before `asyncio.run()` in `CloudConfig.get_jwt_token()` to avoid unnecessary async overhead.
+- **Remote Server Port:** Pass server port to `RemoteSessionManager` for correct remote command execution.
+- **Cloud Auto-Detection:** Enable cloud auto-detection for diff check LLM calls.
+- **Test Isolation:** Mock `_get_cached_jwt` in device flow tests to prevent test pollution; remove `importlib.reload` that fails when running full test suite.
+- **E2E Prompt Templates:** Escape single braces in e2e fix prompt templates to prevent KeyError during string formatting.
+- **Fix Command Exit Status:** `pdd fix` now exits with status 1 on errors instead of silently succeeding.
+
+### Docs
+
+- Update `remote_session` prompt with configurable `server_port` parameter documentation.
+- Add `--protect-tests` usage examples to README.
+
+### Build
+
+- Include server and server routes Python files in sync configuration.
+- Broaden sync config exclusion for test regression directories to `tests/**/regression*`.
 
 ## v0.0.121 (2026-01-18)
 
