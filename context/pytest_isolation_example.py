@@ -335,10 +335,10 @@ def test_cli_with_stream_safety(restore_streams_after_test):
 # --------- BAD CODE - DO NOT USE ---------
 # from unittest.mock import patch, MagicMock
 #
-# module_mocks = {
+# module_mocks = {{
 #     "some.module": MagicMock(),
 #     "another.module": MagicMock(),
-# }
+# }}
 #
 # patcher = patch.dict(sys.modules, module_mocks)
 # patcher.start()  # <-- DANGER: Never stopped!
@@ -352,7 +352,7 @@ def test_cli_with_stream_safety(restore_streams_after_test):
 # The correct approach (PATTERN 7 above) saves and restores immediately:
 #
 # --------- GOOD CODE ---------
-# _saved = {}
+# _saved = {{}}
 # for name in module_mocks:
 #     _saved[name] = sys.modules.get(name)
 #     sys.modules[name] = module_mocks[name]
@@ -383,8 +383,8 @@ def test_cli_with_stream_safety(restore_streams_after_test):
 # def mock_deps():
 #     mock_errors = MagicMock()
 #     # This patches sys.modules, but handle_error is already bound!
-#     with patch.dict(sys.modules, {"pdd.core.errors": mock_errors}):
-#         yield {"handle_error": mock_errors.handle_error}
+#     with patch.dict(sys.modules, {{"pdd.core.errors": mock_errors}}):
+#         yield {{"handle_error": mock_errors.handle_error}}
 #
 # def test_something(mock_deps):
 #     result = call_code_that_uses_handle_error()
@@ -398,7 +398,7 @@ def test_cli_with_stream_safety(restore_streams_after_test):
 #     mock_handle_error = MagicMock()
 #     # Patch the name directly in the module where it was imported
 #     with patch("pdd.commands.fix.handle_error", mock_handle_error):
-#         yield {"handle_error": mock_handle_error}
+#         yield {{"handle_error": mock_handle_error}}
 #
 # def test_something(mock_deps):
 #     result = call_code_that_uses_handle_error()

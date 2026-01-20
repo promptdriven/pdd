@@ -117,7 +117,7 @@
         # All subsequent test files see mocked sys.modules forever!
 
     - GOOD: Use save/restore pattern that cleans up IMMEDIATELY after import:
-        _saved = {}
+        _saved = {{}}
         for name in module_mocks:
             _saved[name] = sys.modules.get(name)
             sys.modules[name] = module_mocks[name]
@@ -140,7 +140,7 @@
         from pdd.core.errors import handle_error  # Binds at import time
 
     - BAD: Patching sys.modules in fixture - TOO LATE:
-        with patch.dict(sys.modules, {"pdd.core.errors": mock}):
+        with patch.dict(sys.modules, {{"pdd.core.errors": mock}}):
             # handle_error in fix.py is still the ORIGINAL, not mock!
             result = runner.invoke(fix, args)
             mock.handle_error.assert_called()  # FAILS - original was called

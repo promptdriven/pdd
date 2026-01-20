@@ -2232,6 +2232,145 @@ def test_cloud_enabled_detection():
                 assert result["cost"] == 0.001
 
 
+# --- Issue #348: Auth Status Mismatch Tests ---
+
+def test_llm_invoke_cloud_401_clears_jwt_cache():
+    """
+    Issue #348: When cloud returns 401, JWT cache should be cleared.
+
+    This prevents repeated failures when the cached JWT is stale.
+    The user should be prompted to re-authenticate.
+    """
+    with patch("pdd.core.cloud.CloudConfig") as mock_config:
+        mock_config.is_cloud_enabled.return_value = True
+        mock_config.get_jwt_token.return_value = "stale_token"
+        mock_config.get_endpoint_url.return_value = "https://example.com/llmInvoke"
+
+        # Mock requests.post to return 401
+        with patch("requests.post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.json.return_value = {
+                "error": "Token expired, 1768937106 < 1768937546"
+            }
+            mock_post.return_value = mock_response
+
+            # Mock clear_jwt_cache to verify it's called
+            with patch("pdd.auth_service.clear_jwt_cache") as mock_clear_cache:
+                mock_clear_cache.return_value = (True, None)
+
+                with patch("rich.console.Console"):
+                    from pdd.llm_invoke import _llm_invoke_cloud, CloudFallbackError
+
+                    with pytest.raises(CloudFallbackError) as exc_info:
+                        _llm_invoke_cloud(
+                            prompt="Test {topic}",
+                            input_json={"topic": "test"},
+                            strength=0.5,
+                            temperature=0.1,
+                            verbose=False,
+                            output_pydantic=None,
+                            output_schema=None,
+                            time=0.25,
+                            use_batch_mode=False,
+                            messages=None,
+                            language=None,
+                        )
+
+                    # Verify JWT cache was cleared
+                    mock_clear_cache.assert_called_once()
+
+                    # Verify error message is helpful
+                    assert "Authentication expired" in str(exc_info.value)
+                    assert "pdd auth logout && pdd auth login" in str(exc_info.value)
+
+
+def test_llm_invoke_cloud_403_clears_jwt_cache():
+    """
+    Issue #348: 403 Forbidden should also clear JWT cache.
+
+    This handles cases where the token is revoked or invalid.
+    """
+    with patch("pdd.core.cloud.CloudConfig") as mock_config:
+        mock_config.is_cloud_enabled.return_value = True
+        mock_config.get_jwt_token.return_value = "revoked_token"
+        mock_config.get_endpoint_url.return_value = "https://example.com/llmInvoke"
+
+        with patch("requests.post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 403
+            mock_response.json.return_value = {
+                "error": "Access denied"
+            }
+            mock_post.return_value = mock_response
+
+            with patch("pdd.auth_service.clear_jwt_cache") as mock_clear_cache:
+                mock_clear_cache.return_value = (True, None)
+
+                with patch("rich.console.Console"):
+                    from pdd.llm_invoke import _llm_invoke_cloud, CloudFallbackError
+
+                    with pytest.raises(CloudFallbackError) as exc_info:
+                        _llm_invoke_cloud(
+                            prompt="Test {topic}",
+                            input_json={"topic": "test"},
+                            strength=0.5,
+                            temperature=0.1,
+                            verbose=False,
+                            output_pydantic=None,
+                            output_schema=None,
+                            time=0.25,
+                            use_batch_mode=False,
+                            messages=None,
+                            language=None,
+                        )
+
+                    # Verify JWT cache was cleared for 403 too
+                    mock_clear_cache.assert_called_once()
+
+
+def test_llm_invoke_cloud_401_error_message_contains_server_error():
+    """
+    Issue #348: The error message should include the server's error detail.
+
+    This helps users understand why authentication failed.
+    """
+    with patch("pdd.core.cloud.CloudConfig") as mock_config:
+        mock_config.is_cloud_enabled.return_value = True
+        mock_config.get_jwt_token.return_value = "mismatched_token"
+        mock_config.get_endpoint_url.return_value = "https://example.com/llmInvoke"
+
+        with patch("requests.post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.json.return_value = {
+                "error": "JWT audience mismatch: expected prod, got staging"
+            }
+            mock_post.return_value = mock_response
+
+            with patch("pdd.auth_service.clear_jwt_cache"):
+                with patch("rich.console.Console"):
+                    from pdd.llm_invoke import _llm_invoke_cloud, CloudFallbackError
+
+                    with pytest.raises(CloudFallbackError) as exc_info:
+                        _llm_invoke_cloud(
+                            prompt="Test {topic}",
+                            input_json={"topic": "test"},
+                            strength=0.5,
+                            temperature=0.1,
+                            verbose=False,
+                            output_pydantic=None,
+                            output_schema=None,
+                            time=0.25,
+                            use_batch_mode=False,
+                            messages=None,
+                            language=None,
+                        )
+
+                    # Error should include the specific server error
+                    assert "JWT audience mismatch" in str(exc_info.value)
+
+
 # --- Regression Test for time=None TypeError ---
 
 def test_llm_invoke_time_none_does_not_crash(mock_load_models, mock_set_llm_cache):
