@@ -238,3 +238,89 @@ def test_combined_mock_and_env(monkeypatch):
 # def test_something():
 #     result = function_to_test()
 #     assert result == expected
+
+
+# =============================================================================
+# PATTERN 8: sys.stdout/sys.stderr Stream Restoration
+# =============================================================================
+#
+# When testing code that wraps or redirects sys.stdout/sys.stderr (e.g., CLI
+# tools with output capture, logging wrappers), you must ensure streams are
+# restored after each test. Failure to do so corrupts output for all subsequent
+# tests, causing mysterious failures where output appears in wrong places.
+#
+# This is particularly important for Click CLI testing where:
+# - Code may wrap streams with OutputCapture or similar wrappers
+# - Early exits (ctx.exit(0)) may bypass normal cleanup paths
+# - CliRunner isolation can be bypassed by stream wrappers that persist
+
+import io
+
+
+@pytest.fixture
+def captured_streams():
+    """GOOD: Fixture for safe stream capture with automatic restoration.
+
+    Use this when you need to capture stdout/stderr in tests.
+    Streams are always restored, even if the test fails.
+    """
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    captured_stdout = io.StringIO()
+    captured_stderr = io.StringIO()
+    sys.stdout = captured_stdout
+    sys.stderr = captured_stderr
+
+    yield captured_stdout, captured_stderr
+
+    # Cleanup - always restore original streams
+    sys.stdout = original_stdout
+    sys.stderr = original_stderr
+
+
+@pytest.fixture(autouse=True)
+def restore_streams_after_test():
+    """GOOD: Autouse fixture for CLI tests to prevent stream pollution.
+
+    Place this in conftest.py for test modules that invoke CLI commands.
+    Detects if streams were replaced with wrappers and restores originals.
+
+    This provides defense-in-depth: even if code under test fails to
+    restore streams (e.g., due to early exit), this fixture ensures
+    subsequent tests see clean streams.
+    """
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    yield
+
+    # Restore if streams were replaced (e.g., by OutputCapture wrappers)
+    if sys.stdout is not original_stdout:
+        sys.stdout = original_stdout
+    if sys.stderr is not original_stderr:
+        sys.stderr = original_stderr
+
+
+def test_with_captured_streams(captured_streams):
+    """Test using safe stream capture fixture."""
+    stdout, stderr = captured_streams
+    print("captured output")
+    assert "captured output" in stdout.getvalue()
+    # Streams automatically restored after test
+
+
+def test_cli_with_stream_safety(restore_streams_after_test):
+    """Test CLI that may wrap streams without proper cleanup.
+
+    The autouse fixture ensures streams are restored even if:
+    - The CLI wraps sys.stdout with a custom class (like OutputCapture)
+    - An early exit (ctx.exit(0)) bypasses normal cleanup
+    - An exception occurs during execution
+    """
+    # Example: CLI invocation that might wrap streams
+    # from click.testing import CliRunner
+    # runner = CliRunner()
+    # result = runner.invoke(cli, ["--some-flag"])
+    # assert result.exit_code == 0
+    pass

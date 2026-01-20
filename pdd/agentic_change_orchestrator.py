@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 from rich.console import Console
 from rich.markup import escape
@@ -23,6 +23,13 @@ from pdd.agentic_common import (
     DEFAULT_MAX_RETRIES,
 )
 from pdd.load_prompt_template import load_prompt_template
+from pdd.sync_order import (
+    build_dependency_graph,
+    topological_sort,
+    get_affected_modules,
+    generate_sync_order_script,
+    extract_module_from_include,
+)
 
 # Initialize console for rich output
 console = Console()
@@ -263,6 +270,7 @@ def run_agentic_change_orchestrator(
              if not quiet:
                 console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")
              current_work_dir = worktree_path
+             context["worktree_path"] = str(worktree_path)
         else:
             # Re-create worktree if missing
             wt_path, err = _setup_worktree(cwd, issue_number, quiet)
@@ -272,6 +280,7 @@ def run_agentic_change_orchestrator(
             current_work_dir = worktree_path
             # Update state with new path
             state["worktree_path"] = str(worktree_path)
+            context["worktree_path"] = str(worktree_path)
 
     for step_num, name, description in steps_config:
         # Skip if already done
@@ -482,6 +491,50 @@ def run_agentic_change_orchestrator(
 
         if review_iteration >= MAX_REVIEW_ITERATIONS:
             console.print("[yellow]Warning: Maximum review iterations reached. Proceeding to PR creation.[/yellow]")
+
+    # --- Sync Order Generation (before Step 12) ---
+    # Per requirement #11 in agentic_change_orchestrator_python.prompt
+    sync_order_script = ""
+    sync_order_list = "No modules to sync"
+
+    # Parse files_to_stage (comma-separated string) to extract prompt files
+    files_to_stage_str = context.get("files_to_stage", "")
+    file_list = [f.strip() for f in files_to_stage_str.split(",") if f.strip()]
+
+    # Extract module names from modified prompt files
+    modified_modules: Set[str] = set()
+    for file_path in file_list:
+        if file_path.startswith("prompts/") and file_path.endswith(".prompt"):
+            module = extract_module_from_include(file_path)
+            if module:
+                modified_modules.add(module)
+
+    # Build dependency graph and compute sync order if we have modified modules
+    if worktree_path:
+        prompts_dir = worktree_path / "prompts"
+        if prompts_dir.exists() and modified_modules:
+            try:
+                graph = build_dependency_graph(prompts_dir)
+                sorted_modules, cycles = topological_sort(graph)
+
+                if cycles and not quiet:
+                    console.print(f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]")
+
+                affected = get_affected_modules(sorted_modules, modified_modules, graph)
+
+                if affected:
+                    script_path = worktree_path / "sync_order.sh"
+                    sync_order_list = generate_sync_order_script(affected, script_path, worktree_path)
+                    sync_order_script = str(script_path)
+                    if not quiet:
+                        console.print(f"[dim]Generated sync order script: {script_path}[/dim]")
+            except Exception as e:
+                if not quiet:
+                    console.print(f"[yellow]Warning: Could not generate sync order: {e}[/yellow]")
+
+    # Add to context for Step 12 template
+    context["sync_order_script"] = sync_order_script
+    context["sync_order_list"] = sync_order_list
 
     # --- Step 12: Create PR ---
     if last_completed_step < 12:
