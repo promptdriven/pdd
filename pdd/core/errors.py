@@ -54,7 +54,8 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
             console.print(f"  [error]Input/Output Error:[/error] {exception}", style="error")
         elif isinstance(exception, click.UsageError): # Handle Click usage errors explicitly if needed
              console.print(f"  [error]Usage Error:[/error] {exception}", style="error")
-             # click.UsageError should typically exit with 2, but we are handling it.
+             # click.UsageError should typically exit with 2, so we re-raise it
+             raise exception
         elif isinstance(exception, MarkupError):
             console.print("  [error]Markup Error:[/error] Invalid Rich markup encountered.", style="error")
             # Print the error message safely escaped
