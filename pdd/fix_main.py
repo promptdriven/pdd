@@ -54,6 +54,7 @@ def fix_main(
     agentic_fallback: bool = True,
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
+    protect_tests: bool = False,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -321,7 +322,8 @@ def fix_main(
                 error_log_file=output_file_paths.get("output_results"),
                 verbose=verbose,
                 agentic_fallback=agentic_fallback,
-                use_cloud=use_cloud_for_loop
+                use_cloud=use_cloud_for_loop,
+                protect_tests=protect_tests
             )
         elif not cloud_execution_succeeded:
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)
@@ -336,7 +338,8 @@ def fix_main(
                 strength=strength,
                 temperature=temperature,
                 time=time, # Pass time to fix_errors_from_unit_tests
-                verbose=verbose
+                verbose=verbose,
+                protect_tests=protect_tests
             )
             attempts = 1
 
