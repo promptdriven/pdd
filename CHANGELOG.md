@@ -1,3 +1,23 @@
+## v0.0.123 (2026-01-20)
+
+### Feat
+
+- Implement and test `protect_tests` flag propagation in agentic fix orchestrator, commands, and prompts.
+- Implement `--protect-tests` feature to prevent modification of test files during agentic fixes and add TDD tests for its functionality.
+- implement `--protect-tests` flag to prevent writing fixed test files and integrate it into agentic e2e fix workflow.
+- Implement `protect_tests` option to prevent modification of test files during the agentic fix workflow.
+- Update `CHANGELOG.md` to document new `--protect-tests` flag, `pdd-prompt-sync` agent, Diff modal improvements, and various fixes, docs, and build updates.
+
+### Fix
+
+- Test: simple_math add function returns wrong result
+- Test: Verify --protect-tests flag in agentic e2e fix
+- Prevent pytest stream pollution by ensuring `sys.stdout`/`sys.stderr` are restored after CLI tests and on early exits.
+
+### Refactor
+
+- Improve test isolation for `fix` command tests and refine `simple_math_python` prompt requirements.
+
 ## v0.0.122 (2026-01-19)
 
 ### Feat
