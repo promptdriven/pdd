@@ -33,18 +33,9 @@ class TestDiffAnalysisSchemaCompleteness:
 
     def test_schema_includes_canRegenerate(self):
         """Schema must include canRegenerate field that prompt template requests."""
-        # Import here to get fresh module state
-        from pdd.server.routes import prompts
-        import importlib
-        importlib.reload(prompts)
-
-        # Get the schema by inspecting the module
-        # We check the DiffAnalysisResult Pydantic model which defines expected fields
         from pdd.server.routes.prompts import DiffAnalysisResult
 
-        # The Pydantic model has the field
-        assert hasattr(DiffAnalysisResult.model_fields, 'canRegenerate') or \
-               'canRegenerate' in DiffAnalysisResult.model_fields, \
+        assert 'canRegenerate' in DiffAnalysisResult.model_fields, \
             "DiffAnalysisResult model should have canRegenerate field"
 
     def test_schema_includes_regenerationRisk(self):

@@ -54,6 +54,23 @@ class TestPromptFormatting:
         assert "pytest" in formatted
         assert "{test_file}" in formatted  # Should remain as example literal
 
+    def test_step3_prompt_formats_without_error(self, base_context):
+        """Step 3 template should format successfully with orchestrator context.
+
+        Regression test for issue #338: Template had {test_name}, {description},
+        {detailed_explanation} that were not escaped with double braces.
+        """
+        base_context["step1_output"] = "Step 1 output"
+        base_context["step2_output"] = "Step 2 output"
+        template = load_prompt_template("agentic_e2e_fix_step3_root_cause_LLM")
+        assert template is not None, "Template should load"
+
+        # This should NOT raise KeyError (was the bug in issue #338)
+        formatted = template.format(**base_context)
+        assert "{test_name}" in formatted  # Should remain as example literal
+        assert "{description}" in formatted  # Should remain as example literal
+        assert "{detailed_explanation}" in formatted  # Should remain as example literal
+
     def test_step7_prompt_formats_without_error(self, base_context):
         """Step 7 template should format successfully with orchestrator context.
 

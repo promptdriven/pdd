@@ -20,6 +20,7 @@ from ..get_jwt_token import (
     TokenError,
     UserCancelledError,
     get_jwt_token as device_flow_get_token,
+    _get_cached_jwt,
 )
 
 console = Console()
@@ -153,7 +154,17 @@ class CloudConfig:
                 console.print(f"[info]Using injected JWT token from {PDD_JWT_TOKEN_ENV}[/info]")
             return injected_token
 
-        # Standard device flow authentication
+        # Check file cache first (synchronous - works in async contexts)
+        # This is critical for FastAPI endpoints which run in an event loop
+        cached_jwt = _get_cached_jwt(verbose=verbose)
+        if cached_jwt:
+            if verbose:
+                console.print("[info]Using cached JWT token[/info]")
+            return cached_jwt
+
+        # Standard device flow authentication (requires asyncio.run)
+        # Note: This will fail if called from within a running event loop
+        # In that case, the cached JWT should be used (user should run pdd login first)
         try:
             firebase_api_key = os.environ.get(FIREBASE_API_KEY_ENV)
             github_client_id = os.environ.get(GITHUB_CLIENT_ID_ENV)
@@ -162,6 +173,19 @@ class CloudConfig:
                 raise AuthError(f"{FIREBASE_API_KEY_ENV} not set.")
             if not github_client_id:
                 raise AuthError(f"{GITHUB_CLIENT_ID_ENV} not set.")
+
+            # Check if we're in a running event loop (e.g., FastAPI)
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in an async context - can't use asyncio.run()
+                # User needs to run 'pdd login' first to cache credentials
+                raise AuthError(
+                    "Cannot authenticate interactively from async context. "
+                    "Please run 'pdd login' first to cache credentials."
+                )
+            except RuntimeError:
+                # No running event loop - safe to use asyncio.run()
+                pass
 
             return asyncio.run(device_flow_get_token(
                 firebase_api_key=firebase_api_key,

@@ -75,14 +75,14 @@ Root cause analysis indicates CODE_BUG only. Skipping to dev unit identification
 ### Changes Made
 | File | Change |
 |------|--------|
-| `{test_file}` | {description_of_change} |
+| `{{test_file}}` | {{description_of_change}} |
 
 ### Verification
-- Tests run: {N}
-- Tests passing (after test fix): {N}
-- Tests still failing (code bugs): {N}
+- Tests run: {{N}}
+- Tests passing (after test fix): {{N}}
+- Tests still failing (code bugs): {{N}}
 
-FILES_MODIFIED: {comma_separated_list_of_test_files}
+FILES_MODIFIED: {{comma_separated_list_of_test_files}}
 
 ---
 *Proceeding to Step 5: Identify Dev Units*
