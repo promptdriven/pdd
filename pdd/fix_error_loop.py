@@ -20,12 +20,9 @@ from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
 from .agentic_langtest import default_verify_cmd_for
-from .core.cloud import CloudConfig
+from .core.cloud import CloudConfig, get_cloud_timeout
 # Moved import to top level to allow mocking in tests
 from .pytest_output import run_pytest_and_capture_output
-
-# Cloud request timeout for LLM calls
-CLOUD_FIX_TIMEOUT = 400  # seconds
 
 console = Console()
 
@@ -112,7 +109,7 @@ def cloud_fix_errors(
             cloud_url,
             json=payload,
             headers=headers,
-            timeout=CLOUD_FIX_TIMEOUT
+            timeout=get_cloud_timeout()
         )
         response.raise_for_status()
 
@@ -131,7 +128,7 @@ def cloud_fix_errors(
         return update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name
 
     except requests.exceptions.Timeout:
-        raise RuntimeError(f"Cloud fix timed out after {CLOUD_FIX_TIMEOUT}s")
+        raise RuntimeError(f"Cloud fix timed out after {get_cloud_timeout()}s")
 
     except requests.exceptions.HTTPError as e:
         status_code = e.response.status_code if e.response else 0

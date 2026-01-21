@@ -52,7 +52,26 @@
      - Returns Tuple[bool, Optional[str]] - (success, combined_error_message).
      - Collect errors from both operations if any.
 
-  8. **get_cached_jwt**:
+  8. **get_refresh_token**:
+     - Get the stored refresh token from keyring.
+     - Try standard keyring first, fall back to keyrings.alt.file.PlaintextKeyring.
+     - Returns Optional[str] - the refresh token string or None if not found.
+     - Handle ImportError gracefully (return None).
+
+  9. **verify_auth** (async):
+     - Deep validation of authentication state by attempting token refresh if needed.
+     - First check JWT cache - if valid, return success with username extracted from token.
+     - If JWT expired, check for refresh token in keyring.
+     - If refresh token exists, attempt to refresh using FirebaseAuthenticator._refresh_firebase_token().
+     - Extract username from JWT payload (email or sub field).
+     - Returns Dict with keys:
+       - valid: bool - True if we can get a valid token
+       - error: Optional[str] - Error message if validation failed
+       - needs_reauth: bool - True if user needs to re-login
+       - username: Optional[str] - User email/identifier if available
+     - Handle TokenError (needs_reauth=True), NetworkError (needs_reauth=False), RateLimitError (needs_reauth=False).
+
+  11. **get_cached_jwt**:
      - Retrieve the cached JWT token if valid and not expired.
      - Read from JWT_CACHE_FILE, parse JSON.
      - Check if token exists and expires_at > current_time + 300 (5 minute buffer).
@@ -73,4 +92,4 @@
 
 % Deliverables
   - Code: `pdd/auth_service.py`
-  - Exports: get_jwt_cache_info, has_refresh_token, clear_jwt_cache, clear_refresh_token, get_auth_status, logout, get_cached_jwt, JWT_CACHE_FILE, KEYRING_SERVICE_NAME, KEYRING_USER_NAME
+  - Exports: get_jwt_cache_info, has_refresh_token, clear_jwt_cache, clear_refresh_token, get_auth_status, logout, get_refresh_token, verify_auth, get_cached_jwt, JWT_CACHE_FILE, KEYRING_SERVICE_NAME, KEYRING_USER_NAME
