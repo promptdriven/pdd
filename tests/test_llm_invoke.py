@@ -2802,3 +2802,38 @@ def test_user_csv_removes_unwanted_model_family(mock_set_llm_cache, caplog):
                                     f"User intentionally removed gpt-5* models - should not see warnings: {warning}"
                                 assert 'codex' not in warning.lower(), \
                                     f"User intentionally removed gpt-5.1-codex-mini - should not see warnings: {warning}"
+
+
+def test_default_base_model_can_be_none():
+    """
+    Test that DEFAULT_BASE_MODEL can be None when PDD_MODEL_DEFAULT is not set.
+
+    This verifies that the hardcoded DEFAULT_LLM_MODEL is no longer required.
+    When PDD_MODEL_DEFAULT env var is not set, DEFAULT_BASE_MODEL should be None,
+    and model selection should use the first available model from CSV.
+
+    Related to Issue #296 - proper fix to remove hardcoded model dependency.
+    """
+    import pdd.llm_invoke as llm_invoke_module
+    import importlib
+
+    # Temporarily unset PDD_MODEL_DEFAULT to test the default behavior
+    original_env = os.environ.copy()
+    try:
+        # Remove PDD_MODEL_DEFAULT if it exists
+        if 'PDD_MODEL_DEFAULT' in os.environ:
+            del os.environ['PDD_MODEL_DEFAULT']
+
+        # Reload the module to pick up the environment change
+        importlib.reload(llm_invoke_module)
+
+        # Check that DEFAULT_BASE_MODEL is None (not the hardcoded gpt-5.1-codex-mini)
+        from pdd.llm_invoke import DEFAULT_BASE_MODEL
+
+        assert DEFAULT_BASE_MODEL is None, \
+            f"DEFAULT_BASE_MODEL should be None when PDD_MODEL_DEFAULT is not set, got: {DEFAULT_BASE_MODEL}"
+    finally:
+        # Restore original environment
+        os.environ.clear()
+        os.environ.update(original_env)
+        importlib.reload(llm_invoke_module)
