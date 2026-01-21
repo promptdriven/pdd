@@ -67,9 +67,12 @@ def extract_module_from_include(include_path: str) -> Optional[str]:
 
     # Check if it looks like a module file:
     # - Example files contain "_example" in the stem
-    # - Prompt files must have a language suffix (_python, _typescript, _LLM)
+    # - Prompt files must have a language suffix (e.g., _python, _java, _go, _rust)
+    # - LLM prompts (_LLM) are runtime prompts, NOT code generation prompts
     is_example = "_example" in stem
-    has_language_suffix = bool(re.search(r'(_python|_typescript|_LLM)$', stem, re.IGNORECASE))
+    suffix_match = re.search(r'_([a-zA-Z0-9]+)$', stem)
+    is_llm_prompt = suffix_match and suffix_match.group(1).lower() == 'llm'
+    has_language_suffix = suffix_match is not None and not is_llm_prompt
     is_module_prompt = filename.endswith(".prompt") and has_language_suffix
 
     if not (is_example or is_module_prompt):
@@ -79,8 +82,8 @@ def extract_module_from_include(include_path: str) -> Optional[str]:
     # Order matters: remove language specific suffixes first, then _example
     clean_name = stem
 
-    # Remove language suffixes
-    clean_name = re.sub(r'(_python|_typescript|_LLM)$', '', clean_name, flags=re.IGNORECASE)
+    # Remove language suffix (generic pattern)
+    clean_name = re.sub(r'_[a-zA-Z0-9]+$', '', clean_name)
 
     # Remove example suffix
     clean_name = re.sub(r'_example$', '', clean_name, flags=re.IGNORECASE)
@@ -107,11 +110,9 @@ def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
 
     dependency_graph: Dict[str, Set[str]] = defaultdict(set)
     
-    # Scan for relevant prompt files
-    patterns = ["*_python.prompt", "*_typescript.prompt", "*_LLM.prompt"]
-    prompt_files: List[Path] = []
-    for pattern in patterns:
-        prompt_files.extend(prompts_dir.rglob(pattern))
+    # Scan all prompt files with language suffix, excluding LLM runtime prompts
+    all_prompts = list(prompts_dir.rglob("*_*.prompt"))
+    prompt_files = [f for f in all_prompts if not f.stem.lower().endswith('_llm')]
 
     for p_file in prompt_files:
         # Determine current module name from filename

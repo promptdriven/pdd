@@ -16,29 +16,6 @@ from pdd.core.cli import cli as cli_command, process_commands
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
-@pytest.mark.skip(reason="Issue #231: --core-dump is now on by default. See test_cli_core_dump_on_by_default_issue_231")
-@patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
-def test_cli_core_dump_default_flag_false(mock_main, mock_auto_update, runner, create_dummy_files):
-    """DEPRECATED: By default, core_dump flag was False. Now it's True per issue #231."""
-    files = create_dummy_files("test_core_default.prompt")
-    mock_main.return_value = ('code', False, 0.0, 'model')
-
-    result = runner.invoke(cli.cli, ["generate", str(files["test_core_default.prompt"])])
-
-    if result.exit_code != 0:
-        print(f"Unexpected exit code: {result.exit_code}")
-        print(result.output)
-        if result.exception:
-            raise result.exception
-
-    mock_main.assert_called_once()
-    ctx = mock_main.call_args.kwargs.get("ctx")
-    assert ctx is not None
-    # If implementation does not set it explicitly, this assertion can be relaxed
-    assert ctx.obj.get("core_dump", False) is False
-    mock_auto_update.assert_called_once_with()
-
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 def test_cli_core_dump_flag_sets_ctx_true(mock_main, mock_auto_update, runner, create_dummy_files):
