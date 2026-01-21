@@ -1,3 +1,22 @@
+## v0.0.125 (2026-01-20)
+
+### Feat
+
+- Display selected example info in verbose generate output
+
+### Fix
+
+- Prevent architecture graph position collapse on save
+- Use first available provider as fallback model name
+- Strip markdown bold from file paths in agentic orchestrator's parsing logic, add a regression test, and update VS Code pytest arguments.
+- Use first available provider as fallback model name
+- Remove duplicate {protect_tests} placeholder in test mocks
+
+### Refactor
+
+- Cache allHavePositions to avoid redundant filtering
+- Align agentic_fix.py with agentic_crash.py patterns
+
 ## v0.0.124 (2026-01-20)
 
 ### Feat
