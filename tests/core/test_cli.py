@@ -46,9 +46,10 @@ def setup_cli_environment():
             def install_completion(): pass
             
         yield
-        
-        # Restore commands
-        cli_command.commands = original_commands
+
+        # Restore commands in-place to preserve the dict object reference
+        cli_command.commands.clear()
+        cli_command.commands.update(original_commands)
 
 def _capture_summary(invoked_subcommands, results):
     """
