@@ -11,7 +11,7 @@ import httpx
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
-from .construct_paths import construct_paths
+from .construct_paths import construct_paths, BUILTIN_EXT_MAP
 from .context_generator import context_generator
 from .core.cloud import CloudConfig
 # get_jwt_token imports removed - using CloudConfig.get_jwt_token() instead
@@ -117,15 +117,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                     resolved_output = str(output_path.with_suffix(".md"))
                 elif format_lower == "code":
                     # For code format, determine the correct language extension based on language
-                    # Use the same mapping as construct_paths for consistency
-                    builtin_ext_map = {
-                        'python': '.py', 'javascript': '.js', 'typescript': '.ts', 'java': '.java',
-                        'cpp': '.cpp', 'c': '.c', 'go': '.go', 'ruby': '.rb', 'rust': '.rs',
-                        'kotlin': '.kt', 'swift': '.swift', 'csharp': '.cs', 'php': '.php',
-                        'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
-                        'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
-                    }
-                    lang_ext = builtin_ext_map.get(language.lower() if language else '', f".{language.lower()}" if language else '.py')
+                    lang_key = language.lower() if language else ''
+                    lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
                     resolved_output = str(output_path.with_suffix(lang_ext))
                 else:
                     # Fallback (shouldn't happen due to click.Choice validation)
