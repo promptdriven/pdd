@@ -774,7 +774,13 @@ def code_generator_main(
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
                 processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
-                
+
+                # Extract and display pinned example ID if present in prompt
+                pin_match = re.search(r'<pin>([^<]+)</pin>', processed_prompt_for_cloud)
+                if pin_match and verbose:
+                    pinned_example_id = pin_match.group(1).strip()
+                    console.print(f"[cyan]Using pinned example:[/cyan] {pinned_example_id}")
+
                 # Get JWT token via CloudConfig (handles both injected tokens and device flow)
                 jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
 
@@ -798,6 +804,15 @@ def code_generator_main(
                         total_cost = float(response_data.get("totalCost", 0.0))
                         model_name = response_data.get("modelName", "cloud_model")
 
+                        # Extract example information from examplesUsed array (cloud returns this)
+                        examples_used = response_data.get("examplesUsed", [])
+                        if examples_used:
+                            selected_example_id = examples_used[0].get("id")
+                            selected_example_title = examples_used[0].get("title")
+                        else:
+                            selected_example_id = None
+                            selected_example_title = None
+
                         # Strip markdown code fences if present (cloud API returns fenced JSON)
                         if generated_code_content and isinstance(language, str) and language.strip().lower() == "json":
                             cleaned = generated_code_content.strip()
@@ -816,7 +831,14 @@ def code_generator_main(
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
-                             console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
+                             # Display example info if available
+                             if selected_example_id:
+                                 example_info = f" | Example: {selected_example_id}"
+                                 if selected_example_title:
+                                     example_info += f" ({selected_example_title})"
+                                 console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}{example_info}", title="[green]Cloud Success[/green]", expand=False))
+                             else:
+                                 console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
                     except requests.exceptions.Timeout:
                         if cloud_only:
                             console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
