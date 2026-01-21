@@ -73,21 +73,28 @@ Code is a GENERATED artifact in PDD. To change code behavior, change the prompts
    - Understand the current requirements, dependencies, and constraints
    - Note the prompt structure (Role, Requirements, Dependencies, etc.)
 
-2. **Design prompt changes**
+2. **Extension Analysis (REQUIRED for new prompts)**
+   For any new prompt being designed, document:
+   - What existing modules were considered as alternatives
+   - Why those modules cannot be extended to provide this functionality
+   - What specific capability gap requires a new module
+   This analysis MUST appear in the output for each new prompt.
+
+3. **Design prompt changes**
    For each prompt that needs modification:
    - What new requirements need to be added?
    - What existing requirements need to be updated?
    - Are there new dependencies to include?
    - Are there new constraints or error handling needs?
 
-3. **Design new prompts**
+4. **Design new prompts**
    For each new prompt to be created:
    - What is the role and scope?
    - What are the requirements (5-10 items, testable)?
    - What dependencies need to be included?
    - Follow the prompt structure from the PDD guide
 
-4. **Check for conflicts**
+5. **Check for conflicts**
    - Do any changes conflict with existing behavior?
    - Are there breaking changes to interfaces?
    - Will existing tests still pass?
@@ -127,6 +134,11 @@ Your comment should follow this format:
   2. [requirement 2]
   ...
 - Dependencies: [list of includes]
+
+**Extension Analysis (REQUIRED):**
+- Modules considered: [list existing modules that were evaluated]
+- Why not extendable: [specific reason for each module]
+- Capability gap: [what new capability this module provides]
 
 ### Interface Changes
 - [List any breaking changes or interface updates]

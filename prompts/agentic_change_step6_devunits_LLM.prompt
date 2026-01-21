@@ -49,23 +49,33 @@ You are working on step 6 of 12 in an agentic change workflow. Previous steps co
    - What existing functionality needs modification?
    - What are the inputs, outputs, and constraints?
 
-2. **Explore the codebase**
+2. **Component Discovery First (CRITICAL)**
+   Before proposing new modules, thoroughly search for existing components that could fulfill the requirement:
+   - Search `pdd/` for modules with similar functionality (use keyword search, grep for related functions)
+   - Review `prompts/` to understand what each existing module does
+   - Check if existing modules can be extended rather than duplicating functionality
+   - Look at `sync_order.py` and its `build_dependency_graph()` to understand module relationships
+   - Document which existing modules were considered and why they can/cannot be reused
+
+3. **Explore the codebase**
    - Find the `prompts/` directory and list existing prompts
    - Identify prompts related to the requested functionality
    - Check `context/` for related examples
    - Look for existing tests in `tests/`
 
-3. **Identify affected dev units**
+4. **Identify affected dev units**
    For each affected module, identify the complete dev unit:
    - **Prompt file**: `prompts/{{module}}_python.prompt`
    - **Code file**: `pdd/{{module}}.py` (or appropriate path)
    - **Example file**: `context/{{module}}_example.py`
    - **Test file**: `tests/test_{{module}}.py`
 
-4. **Categorize dev units**
-   - **MODIFY**: Existing dev units that need changes
-   - **CREATE**: New dev units that need to be created
+5. **Categorize dev units (PREFER MODIFY over CREATE)**
+   - **MODIFY**: Existing dev units that need changes - ALWAYS prefer this when possible
+   - **CREATE**: New dev units - ONLY when no existing module can be extended to provide the functionality
    - **DEPENDENCY**: Dev units that are dependencies (may need interface updates)
+
+   **Anti-duplication check:** For each CREATE, you MUST justify why MODIFY is not possible. List specific existing modules that were considered and explain why they cannot be extended.
 
 % Important: Scope of `pdd change`
 
@@ -105,6 +115,12 @@ Your comment should follow this format:
 | Prompt | Code | Example | Test |
 |--------|------|---------|------|
 | `prompts/yyy_python.prompt` | `pdd/yyy.py` | `context/yyy_example.py` | `tests/test_yyy.py` |
+
+### Reuse Analysis (REQUIRED for each CREATE)
+For each new dev unit proposed, explain:
+- **Module:** `yyy`
+- **Existing modules considered:** [list modules that were evaluated]
+- **Why extension not possible:** [specific reason why existing modules cannot be extended]
 
 ### Dependencies (may need interface updates)
 - `prompts/zzz_python.prompt` - [reason]
