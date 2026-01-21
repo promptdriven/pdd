@@ -2,12 +2,24 @@
 
 ### Feat
 
-- Add configurable cloud timeout via PDD_CLOUD_TIMEOUT env var (#347)
+- **Configurable Cloud Timeout:** `PDD_CLOUD_TIMEOUT` env var sets cloud request timeout (default: 900s). New `get_cloud_timeout()` in `pdd/core/cloud.py`.
+- **Auth Deep Verification:** `pdd auth status --verify` tests actual token refresh capability. New `get_refresh_token()` and async `verify_auth()` in `auth_service.py`.
 
 ### Fix
 
-- Correct docstring example to match 900s default timeout
-- Authentication error handling, agentic fix agent detection, and test isolation
+- **Auth Error Auto-Recovery:** Cloud 401/403 responses clear stale JWT cache and provide re-auth instructions.
+- **Agentic Fix Agent Detection:** Use centralized `get_available_agents()` from `agentic_common`, supporting API keys, Vertex AI, and Claude CLI.
+- **Nested Prompt Discovery:** `sync_order.py` uses `rglob()` instead of `glob()` to find prompts in subdirectories.
+
+### Docs
+
+- Add `PDD_CLOUD_TIMEOUT` to README.
+- Add test isolation patterns to `context/test.prompt`: module-level patcher anti-pattern, top-level vs deferred imports, fixture vs module-level mocking.
+
+### Build
+
+- Add `scripts/pytest-infisical.sh` for VS Code Test Explorer secret injection.
+- Remove unused `simple_math` example files.
 
 ## v0.0.123 (2026-01-20)
 
