@@ -19,13 +19,10 @@ from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop, run_pytest_on_file
 from .get_jwt_token import get_jwt_token
 from .get_language import get_language
-from .core.cloud import CloudConfig
+from .core.cloud import CloudConfig, get_cloud_timeout
 
 # Import DEFAULT_STRENGTH from the package
 from . import DEFAULT_STRENGTH
-
-# Cloud request timeout
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
@@ -178,7 +175,7 @@ def fix_main(
                         cloud_url,
                         json=payload,
                         headers=headers,
-                        timeout=CLOUD_REQUEST_TIMEOUT
+                        timeout=get_cloud_timeout()
                     )
                     response.raise_for_status()
 
@@ -244,9 +241,9 @@ def fix_main(
 
                 except requests.exceptions.Timeout:
                     if cloud_only:
-                        console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                        console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
                         raise click.UsageError("Cloud execution timed out")
-                    console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
+                    console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                     current_execution_is_local = True
 
                 except requests.exceptions.HTTPError as e:
