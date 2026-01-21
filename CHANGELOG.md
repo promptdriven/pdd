@@ -1,22 +1,28 @@
+## v0.0.124 (2026-01-20)
+
+### Feat
+
+- Add configurable cloud timeout via PDD_CLOUD_TIMEOUT env var (#347)
+
+### Fix
+
+- Correct docstring example to match 900s default timeout
+- Authentication error handling, agentic fix agent detection, and test isolation
+
 ## v0.0.123 (2026-01-20)
 
 ### Feat
 
-- Implement and test `protect_tests` flag propagation in agentic fix orchestrator, commands, and prompts.
-- Implement `--protect-tests` feature to prevent modification of test files during agentic fixes and add TDD tests for its functionality.
-- implement `--protect-tests` flag to prevent writing fixed test files and integrate it into agentic e2e fix workflow.
-- Implement `protect_tests` option to prevent modification of test files during the agentic fix workflow.
-- Update `CHANGELOG.md` to document new `--protect-tests` flag, `pdd-prompt-sync` agent, Diff modal improvements, and various fixes, docs, and build updates.
+- **Protect Tests Flag in Agentic Fix:** `--protect-tests` flag now propagates through the entire agentic e2e fix workflow: CLI → `agentic_e2e_fix.py` → `agentic_e2e_fix_orchestrator.py` → step 1 and step 8 prompt templates. When enabled, `pdd fix --loop` commands include `--protect-tests` and `fix_main` skips writing fixed test files.
+- **Sync Order Script Generation:** `pdd change` now generates a topologically-sorted `sync_order.sh` script before PR creation (step 12). Parses modified prompt files from `files_to_stage`, builds dependency graph, and outputs correct sync order for post-merge operations.
 
 ### Fix
 
-- Test: simple_math add function returns wrong result
-- Test: Verify --protect-tests flag in agentic e2e fix
-- Prevent pytest stream pollution by ensuring `sys.stdout`/`sys.stderr` are restored after CLI tests and on early exits.
+- **Pytest Stream Pollution:** Added `_restore_captured_streams()` helper in `cli.py` called before early exits (`ctx.exit(0)`) to restore `sys.stdout`/`sys.stderr` if wrapped with `OutputCapture`. Prevents stream pollution when running full test suite.
 
 ### Refactor
 
-- Improve test isolation for `fix` command tests and refine `simple_math_python` prompt requirements.
+- **Test Isolation Improvements:** Added `restore_standard_streams` autouse fixture in `conftest.py` for defense-in-depth stream restoration. Refactored `tests/commands/test_fix.py` to restore sys.modules immediately after import. Updated `tests/test_commands_fix.py` to use `monkeypatch.chdir()` for automatic cleanup.
 
 ## v0.0.122 (2026-01-19)
 
