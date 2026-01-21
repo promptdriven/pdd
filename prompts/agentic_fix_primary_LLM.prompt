@@ -1,92 +1,39 @@
-% YOU ARE A DEBUGGING AGENT with full file system access.
+You are fixing a failing test in a PDD (Prompt-Driven Development) project.
+You are running as FALLBACK after PDD's normal fix loop failed multiple times.
 
-% TASK: Fix the failing test at {test_abs}
+## PDD Principle
+The PROMPT FILE is the source of truth. Code is a generated artifact.
+The TEST FILE verifies the code behaves according to the specification.
 
-% APPROACH:
-1. Read the error traceback carefully to understand what's failing
-2. Explore the relevant files to understand the codebase structure
-3. Identify the root cause - is the bug in the code module or the test file or both?
-4. Use your file editing tools to make minimal, targeted fixes
-5. After fixing, output the test command to verify your changes
+## Files (you have full read/write access)
+- Code file: {code_abs}
+- Test file: {test_abs}
+- Project root: Current working directory
 
-% FILES YOU CAN READ AND EDIT:
-<code_module>
-    {code_abs}
-  </code_module>
-<test_file>
-    {test_abs}
-</test_file>
+## Test Protection Mode: {protect_tests}
+If "true", do NOT modify the test file - only fix the code.
 
-% TEST PROTECTION MODE: {protect_tests}
-% If protect_tests is "true":
-%   - The test_file is PROTECTED and MUST NOT be modified
-%   - You can READ the test to understand expected behavior, but you can ONLY edit the code_module
-%   - The test file represents the correct specification; the bug is in the code
-%   - Do NOT use your file editing tools on the test file
-
-
-% ORIGINAL SPECIFICATION:
-<prompt_content> 
-    {prompt_content}
+## Original Specification
+<prompt_content>
+{prompt_content}
 </prompt_content>
 
+## Error Log
+<error_log>
+{error_content}
+</error_log>
 
-% ERROR LOG:
-<error_content>
-  {error_content}
-</error_content>
+## Your Task
+1. Read the code and test files to understand what's failing
+2. Analyze the error traceback to identify the root cause
+3. Explore related files if needed (imports, dependencies, etc.)
+4. Make the necessary changes to fix the failing test
+5. Run the test to verify: {verify_cmd}
+6. Repeat until tests pass
+7. Output JSON: {{"success": bool, "message": str, "changed_files": list[str]}}
 
-
-% DEBUGGING GUIDELINES:
-- Analyze the traceback to find WHERE the error occurs and WHY
-- The bug could be in EITHER file - don't assume it's always in the code
-- If the error is in how the test USES the code → fix the test
-- If the error is in the code's IMPLEMENTATION → fix the code
-- You may need to fix BOTH files in some cases
-
-% COMMON ERROR TYPES AND FIXES:
-- ImportError/ModuleNotFoundError for LOCAL modules: The import statement may be wrong.
-  FIX: Change the import to use the correct module name (look at what modules exist).
-  DO NOT create new modules to match a wrong import - fix the import instead!
-- ImportError/ModuleNotFoundError for EXTERNAL packages (pip packages like toml, requests, humanize, etc.):
-  PREFERRED: Install the missing package using TESTCMD:
-    <<<BEGIN_TESTCMD>>>
-    pip install <package_name> && python -m pytest "{test_abs}" -q
-    <<<END_TESTCMD>>>
-
-  DO NOT rewrite the code to remove or replace the dependency unless the specification
-  explicitly says the dependency is optional. If the code uses a library, INSTALL IT.
-
-  ONLY use try/except fallback if the specification says the feature is optional:
-    ```python
-    try:
-        import toml
-    except ImportError:
-        toml = None  # Only if spec says toml is optional
-    ```
-- TypeError/AttributeError: Check function signatures and method names
-- AssertionError: Check if the test expectation or the code logic is wrong
-- ZeroDivisionError/ValueError: Add proper error handling
-- SyntaxError (unterminated string literal / unexpected character):
-  This often means the file has garbage appended at the end (common LLM extraction bug).
-  FIX: Read the end of the file and look for JSON-like metadata patterns such as:
-    - Lines starting with `"explanation":`, `"focus":`, `"description":`
-    - Lines with only `}}` or `]`
-    - Code lines ending with `",` followed by JSON keys
-  SOLUTION: Delete all the garbage lines at the end of the file to restore valid Python.
-
-% EDIT POLICY:
-- Keep changes minimal and directly related to the failure
-- Prefer fixing import statements over creating new files
-- Prefer fixing implementation bugs over weakening tests
-- You MAY create new files if truly needed (e.g., __init__.py for packages)
-
-% AFTER FIXING, OUTPUT VERIFICATION COMMAND:
-<<<BEGIN_TESTCMD>>>
-python -m pytest "{test_abs}" -q
-<<<END_TESTCMD>>>
-
-% IMPORTANT:
-- Use your file tools to directly read and modify the files
-- Do NOT output the full file contents - just make targeted edits
-- The test command will be run automatically to verify your fix worked
+## Guidelines
+- Read actual source files before assuming what exists
+- Keep changes minimal and focused on the failure
+- You may modify multiple files if needed
+- You may install missing packages with pip
