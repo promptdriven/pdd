@@ -4,6 +4,7 @@
     "python.testing.pytestArgs": [
         "-n",
         "auto",
+        "--run-all",
         "tests"
     ],
     "python.testing.unittestEnabled": false,
