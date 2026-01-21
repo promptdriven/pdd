@@ -8,6 +8,7 @@ for PDD CLI commands. It covers:
 2. Handling environment variable overrides.
 3. Checking if cloud features are enabled.
 4. Retrieving JWT tokens for authentication.
+5. Configuring cloud request timeouts via PDD_CLOUD_TIMEOUT.
 
 File structure (relative to project root):
     pdd/
@@ -37,8 +38,11 @@ try:
         CLOUD_ENDPOINTS,
         PDD_CLOUD_URL_ENV,
         PDD_JWT_TOKEN_ENV,
+        PDD_CLOUD_TIMEOUT_ENV,
+        DEFAULT_CLOUD_TIMEOUT,
         FIREBASE_API_KEY_ENV,
         GITHUB_CLIENT_ID_ENV,
+        get_cloud_timeout,
     )
 except ImportError:
     # Fallback for when running in a flat directory structure during testing
@@ -48,8 +52,11 @@ except ImportError:
             CLOUD_ENDPOINTS,
             PDD_CLOUD_URL_ENV,
             PDD_JWT_TOKEN_ENV,
+            PDD_CLOUD_TIMEOUT_ENV,
+            DEFAULT_CLOUD_TIMEOUT,
             FIREBASE_API_KEY_ENV,
             GITHUB_CLIENT_ID_ENV,
+            get_cloud_timeout,
         )
     except ImportError:
         print("Error: Could not import CloudConfig. Please ensure the module is in the python path.")
@@ -167,11 +174,49 @@ def example_jwt_token_handling() -> None:
                 print("❌ Failed to retrieve token via device flow.")
 
 
+def example_cloud_timeout() -> None:
+    """
+    Demonstrates how to retrieve and configure cloud request timeouts.
+    Shows how the PDD_CLOUD_TIMEOUT environment variable can override the default.
+    """
+    print_header("4. Cloud Timeout Configuration")
+
+    # Default timeout (900 seconds / 15 minutes)
+    print("--- Default Configuration ---")
+    timeout = get_cloud_timeout()
+    print(f"Default Timeout: {timeout} seconds ({timeout / 60:.1f} minutes)")
+    print(f"DEFAULT_CLOUD_TIMEOUT constant: {DEFAULT_CLOUD_TIMEOUT}")
+
+    # Custom timeout via environment variable
+    print("\n--- Custom Configuration ---")
+    custom_timeout = "300"  # 5 minutes
+
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: custom_timeout}):
+        timeout = get_cloud_timeout()
+        print(f"Custom Timeout:  {timeout} seconds ({timeout / 60:.1f} minutes)")
+
+        if timeout == int(custom_timeout):
+            print("✅ Successfully retrieved custom timeout from environment.")
+        else:
+            print("❌ Failed to retrieve custom timeout from environment.")
+
+    # Invalid value falls back to default
+    print("\n--- Invalid Configuration (Fallback) ---")
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "invalid_value"}):
+        timeout = get_cloud_timeout()
+        print(f"Timeout with invalid env var: {timeout} seconds")
+
+        if timeout == DEFAULT_CLOUD_TIMEOUT:
+            print("✅ Correctly fell back to default for invalid value.")
+        else:
+            print("❌ Did not fall back to default for invalid value.")
+
+
 def example_error_handling() -> None:
     """
     Demonstrates how the configuration handles missing keys during auth.
     """
-    print_header("4. Error Handling")
+    print_header("5. Error Handling")
 
     print("--- Missing API Keys ---")
     # Ensure environment is empty of keys
@@ -190,18 +235,21 @@ def main() -> None:
     Run all examples.
     """
     print("Running CloudConfig Examples...")
-    
+
     # 1. URL Configuration
     example_url_configuration()
-    
+
     # 2. Cloud Enabled Check
     example_cloud_enabled_check()
-    
+
     # 3. JWT Token Handling
     # Note: This uses mocks to simulate the async device flow
     example_jwt_token_handling()
 
-    # 4. Error Handling
+    # 4. Cloud Timeout Configuration
+    example_cloud_timeout()
+
+    # 5. Error Handling
     example_error_handling()
 
     print("\nAll examples completed.")

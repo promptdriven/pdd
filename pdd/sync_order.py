@@ -111,7 +111,7 @@ def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
     patterns = ["*_python.prompt", "*_typescript.prompt", "*_LLM.prompt"]
     prompt_files: List[Path] = []
     for pattern in patterns:
-        prompt_files.extend(prompts_dir.glob(pattern))
+        prompt_files.extend(prompts_dir.rglob(pattern))
 
     for p_file in prompt_files:
         # Determine current module name from filename
