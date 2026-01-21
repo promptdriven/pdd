@@ -726,7 +726,9 @@ def run_agentic_fix(
 
         # Use accumulated cost from agent
         est_cost = agent_cost
-        used_model = f"agentic-{provider_used}" if provider_used else "agentic-cli"
+        # Use provider_used if available, otherwise fall back to first available agent
+        fallback_provider = available_agents[0] if available_agents else "cli"
+        used_model = f"agentic-{provider_used}" if provider_used else f"agentic-{fallback_provider}"
 
         _print_head("Agent output", raw_output or "")
 
