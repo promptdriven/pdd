@@ -2223,3 +2223,311 @@ class TestLLMArrayUnwrapping:
 
         expected = '[\n  {\n    "key": "value"\n  }\n]'
         assert generated_code_content == expected
+
+
+# --- Tests for Example Display (Pinned & Cloud Response) ---
+
+def test_pinned_example_extraction_verbose(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars, capsys
+):
+    """Test that pinned example ID from <pin> tag is displayed in verbose mode."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt\n<pin>test-example-id-123</pin>\nMore content"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "pin_prompt.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "pin_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    # pdd_preprocess returns prompt unchanged (passthrough)
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": [{"id": "test-example-id-123", "title": "Test Example Title"}]
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that console.print was called with pinned example message
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call and "test-example-id-123" in call for call in print_calls)
+        assert pinned_call_found, f"Expected 'Using pinned example: test-example-id-123' in console output. Got: {print_calls}"
+
+
+def test_pinned_example_no_verbose(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that pinned example is NOT displayed when verbose=False."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = False  # Not verbose
+
+    prompt_content = "Test prompt\n<pin>test-example-id-456</pin>\nMore content"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "pin_prompt_quiet.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "pin_output_quiet.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that "Using pinned example" was NOT printed
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call for call in print_calls)
+        assert not pinned_call_found, f"'Using pinned example' should not appear when verbose=False. Got: {print_calls}"
+
+
+def test_no_pin_tag_no_display(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that no pinned example message when prompt has no <pin> tag."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt without pin tag"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "no_pin_prompt.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "no_pin_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that "Using pinned example" was NOT printed
+        print_calls = [str(call) for call in mock_console.print.call_args_list]
+        pinned_call_found = any("Using pinned example" in call for call in print_calls)
+        assert not pinned_call_found, f"'Using pinned example' should not appear without <pin> tag. Got: {print_calls}"
+
+
+def test_cloud_response_with_examples_used(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test that examplesUsed from cloud response is displayed in success panel."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "example_response.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "example_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": [{"id": "ex-123", "title": "Test Example Title"}]
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that console.print was called with example info in Panel
+        # Need to inspect Panel objects for their content
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    # Panel.renderable contains the content
+                    panel_content = str(arg.renderable)
+                    if "ex-123" in panel_content and "Test Example Title" in panel_content:
+                        example_info_found = True
+                        break
+                elif isinstance(arg, str):
+                    if "ex-123" in arg and "Test Example Title" in arg:
+                        example_info_found = True
+                        break
+        assert example_info_found, f"Expected example info 'ex-123 (Test Example Title)' in console output"
+
+
+def test_cloud_response_empty_examples_used(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test standard success message when examplesUsed array is empty."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "no_example_response.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "no_example_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response with empty examplesUsed array
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model",
+        "examplesUsed": []  # Empty array
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that success message is present but without example info
+        # Need to inspect Panel objects for their content
+        cloud_success_found = False
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    panel_content = str(arg.renderable)
+                    if "Cloud generation successful" in panel_content:
+                        cloud_success_found = True
+                    if "Example:" in panel_content:
+                        example_info_found = True
+                elif isinstance(arg, str):
+                    if "Cloud generation successful" in arg:
+                        cloud_success_found = True
+                    if "Example:" in arg:
+                        example_info_found = True
+        assert cloud_success_found, f"Expected 'Cloud generation successful' in console output"
+        assert not example_info_found, f"'Example:' should not appear when examplesUsed is empty"
+
+
+def test_cloud_response_without_examples_used_key(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_get_jwt_token_fixture, mock_requests_post_fixture, mock_env_vars
+):
+    """Test standard success message when examplesUsed key is missing from response."""
+    mock_ctx.obj['local'] = False
+    mock_ctx.obj['verbose'] = True
+
+    prompt_content = "Test prompt"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "missing_example_key.prompt"
+    create_file(prompt_file_path, prompt_content)
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "missing_key_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python"
+    )
+    mock_pdd_preprocess_fixture.return_value = prompt_content
+
+    # Mock cloud response without examplesUsed key at all
+    mock_response = MagicMock(spec=requests.Response)
+    mock_response.json.return_value = {
+        "generatedCode": DEFAULT_MOCK_GENERATED_CODE,
+        "totalCost": 0.001,
+        "modelName": "test-model"
+        # No examplesUsed key
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = mock_response
+
+    with patch('pdd.code_generator_main.console') as mock_console:
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check that success message is present but without example info
+        # Need to inspect Panel objects for their content
+        cloud_success_found = False
+        example_info_found = False
+        for call in mock_console.print.call_args_list:
+            args = call[0] if call[0] else ()
+            for arg in args:
+                if isinstance(arg, Panel):
+                    panel_content = str(arg.renderable)
+                    if "Cloud generation successful" in panel_content:
+                        cloud_success_found = True
+                    if "Example:" in panel_content:
+                        example_info_found = True
+                elif isinstance(arg, str):
+                    if "Cloud generation successful" in arg:
+                        cloud_success_found = True
+                    if "Example:" in arg:
+                        example_info_found = True
+        assert cloud_success_found, f"Expected 'Cloud generation successful' in console output"
+        assert not example_info_found, f"'Example:' should not appear when examplesUsed key is missing"

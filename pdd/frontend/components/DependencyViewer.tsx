@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -44,6 +44,8 @@ interface DependencyViewerProps {
   onDependencyRemove?: (targetFilename: string, sourceFilename: string) => void;
   onPositionsChange?: (positions: Map<string, { x: number; y: number }>) => void;
   highlightedModules?: Set<string>;  // For error highlighting
+  // Callback when Dagre calculates initial positions (for auto-saving)
+  onInitialPositionsCalculated?: (positions: Map<string, { x: number; y: number }>) => void;
 }
 
 // Determine category based on tags
@@ -140,6 +142,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   onDependencyRemove,
   onPositionsChange,
   highlightedModules = new Set(),
+  onInitialPositionsCalculated,
 }) => {
   const [isPrdVisible, setIsPrdVisible] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
@@ -158,11 +161,18 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     return map;
   }, [promptsInfo]);
 
+  // Pre-compute position status for reuse across useMemo and useEffect
+  const allHavePositions = useMemo(
+    () => architecture.every((m) => m.position),
+    [architecture]
+  );
+
   // Convert architecture to React Flow nodes and edges
   const { initialNodes, initialEdges } = useMemo(() => {
-    // Check if any modules have saved positions
-    const hasSavedPositions = architecture.some((m) => m.position);
+    // Check position scenarios
+    const noneHavePositions = architecture.every((m) => !m.position);
 
+    // Create initial nodes - positions will be set based on scenario
     const nodes: Node<ModuleNodeData>[] = architecture.map((m) => {
       const category = getCategory(m);
       const hasPrompt = existingPrompts.has(m.filename);
@@ -170,7 +180,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       return {
         id: m.filename,
         type: 'moduleNode',
-        // Use saved position if available, otherwise will be set by Dagre
+        // Temporary position - will be updated by Dagre if needed
         position: m.position || { x: 0, y: 0 },
         data: {
           label: m.filename.replace(/_[A-Za-z]+\.prompt$/, '').replace(/\.prompt$/, ''),
@@ -211,24 +221,97 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
         }))
     );
 
-    // Only apply Dagre layout if no saved positions exist
-    if (!hasSavedPositions) {
+    // Three-way position handling:
+    // 1. No modules have positions → full Dagre layout
+    // 2. All modules have positions → use saved positions (already set above)
+    // 3. Some modules have positions → hybrid: Dagre for all, then overlay saved positions
+    if (noneHavePositions) {
+      // Full Dagre layout for all nodes
       const layouted = getLayoutedElements(nodes, edges, 'TB');
       return { initialNodes: layouted.nodes, initialEdges: layouted.edges };
+    } else if (!allHavePositions) {
+      // Hybrid approach: Run Dagre to get positions for all nodes,
+      // then override with saved positions where available
+      const layouted = getLayoutedElements(nodes, edges, 'TB');
+      const savedPositions = new Map(
+        architecture
+          .filter((m) => m.position)
+          .map((m) => [m.filename, m.position!])
+      );
+      const hybridNodes = layouted.nodes.map((node) => {
+        const savedPos = savedPositions.get(node.id);
+        if (savedPos) {
+          return { ...node, position: savedPos };
+        }
+        return node;
+      });
+      return { initialNodes: hybridNodes, initialEdges: layouted.edges };
     }
 
+    // All modules have positions - use them as-is
     return { initialNodes: nodes, initialEdges: edges };
   }, [architecture, existingPrompts, promptInfoMap, onModuleClick, editMode, onModuleEdit, onModuleDelete, highlightedModules]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
+  // Track previous editMode to detect when entering edit mode
+  const prevEditModeRef = useRef(editMode);
+
+  // Persist ALL current positions when entering edit mode
+  // This ensures Dagre-calculated positions are captured before any edits
+  useEffect(() => {
+    const wasNotEditing = !prevEditModeRef.current;
+    const nowEditing = editMode;
+    prevEditModeRef.current = editMode;
+
+    // Only fire when transitioning from non-edit to edit mode
+    if (wasNotEditing && nowEditing && onPositionsChange && nodes.length > 0) {
+      const positions = new Map<string, { x: number; y: number }>();
+      nodes.forEach((n) => {
+        positions.set(n.id, { x: n.position.x, y: n.position.y });
+      });
+      onPositionsChange(positions);
+    }
+  }, [editMode, nodes, onPositionsChange]);
+
+  // Track whether we've already fired the initial positions callback
+  const initialPositionsCalledRef = useRef(false);
+
+  // Fire callback when Dagre calculates initial positions (for modules without saved positions)
+  // This allows the parent to auto-save positions even before entering edit mode
+  useEffect(() => {
+    // Only fire once per component mount, when we have nodes and the callback is provided
+    if (
+      !initialPositionsCalledRef.current &&
+      onInitialPositionsCalculated &&
+      nodes.length > 0 &&
+      // Only fire if Dagre was applied (i.e., not all modules had saved positions)
+      !allHavePositions
+    ) {
+      initialPositionsCalledRef.current = true;
+      const positions = new Map<string, { x: number; y: number }>();
+      nodes.forEach((n) => {
+        positions.set(n.id, { x: n.position.x, y: n.position.y });
+      });
+      onInitialPositionsCalculated(positions);
+    }
+  }, [nodes, allHavePositions, onInitialPositionsCalculated]);
+
   // Re-layout when clicking the layout button
   const handleRelayout = useCallback(() => {
     const layouted = getLayoutedElements(nodes, edges, 'TB');
     setNodes(layouted.nodes);
     setEdges(layouted.edges);
-  }, [nodes, edges, setNodes, setEdges]);
+    // Persist the new Dagre positions if in edit mode
+    if (editMode && onPositionsChange) {
+      const positions = new Map<string, { x: number; y: number }>();
+      layouted.nodes.forEach((n) => {
+        positions.set(n.id, { x: n.position.x, y: n.position.y });
+      });
+      onPositionsChange(positions);
+    }
+  }, [nodes, edges, setNodes, setEdges, editMode, onPositionsChange]);
 
   // Handle edge creation (dependency added)
   const handleConnect = useCallback(
