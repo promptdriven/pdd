@@ -737,6 +737,24 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     updatePositions(positions);
   }, [updatePositions]);
 
+  // Handle initial positions calculated by Dagre (before entering edit mode)
+  // This updates the base architecture state so positions are available when saving
+  const handleInitialPositionsCalculated = useCallback((positions: Map<string, { x: number; y: number }>) => {
+    if (!architecture) return;
+
+    // Update architecture with calculated positions
+    const updatedArchitecture = architecture.map((m) => {
+      const pos = positions.get(m.filename);
+      if (pos) {
+        return { ...m, position: pos };
+      }
+      return m;
+    });
+
+    // Update both the base architecture and the history hook's original
+    setArchitecture(updatedArchitecture);
+  }, [architecture]);
+
   // Validate and save architecture
   const handleSaveArchitecture = useCallback(async () => {
     if (!editableArchitecture || editableArchitecture.length === 0) return;
@@ -1389,6 +1407,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 onDependencyRemove={handleDependencyRemove}
                 onPositionsChange={handlePositionsChange}
                 highlightedModules={highlightedModules}
+                onInitialPositionsCalculated={handleInitialPositionsCalculated}
               />
             )
           ) : (
