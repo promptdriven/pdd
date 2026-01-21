@@ -86,8 +86,6 @@ from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
-# Import the default model constant
-from pdd import DEFAULT_LLM_MODEL
 from pdd.path_resolution import get_default_resolver
 
 # Opt-in to future pandas behavior regarding downcasting
@@ -600,8 +598,8 @@ else:
     logger.debug(f".env file not found at {ENV_PATH}. API keys might need to be provided manually.")
 
 # Default model if PDD_MODEL_DEFAULT is not set
-# Use the imported constant as the default
-DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_LLM_MODEL)
+# No hardcoded default - will use first available model from CSV if None
+DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", None)
 
 # --- LiteLLM Cache Configuration (S3 compatible for GCS, with SQLite fallback) ---
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
