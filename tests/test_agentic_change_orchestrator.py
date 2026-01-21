@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -775,3 +775,39 @@ def test_worktree_path_in_context_when_resuming(mock_dependencies, temp_cwd):
     assert "worktree_path" in last_context, \
         f"worktree_path missing when resuming. Keys: {list(last_context.keys())}"
     assert last_context["worktree_path"] == str(worktree_path)
+
+
+# -----------------------------------------------------------------------------
+# Unit Tests: _parse_changed_files
+# -----------------------------------------------------------------------------
+
+def test_parse_changed_files_strips_markdown_formatting():
+    """
+    Test that _parse_changed_files strips markdown bold formatting from paths.
+
+    Regression test for bug where LLM added ** markdown bold to prompt files,
+    causing sync order generation to skip them because startswith("prompts/")
+    returned False for "** prompts/foo.prompt".
+    """
+    # Simulate LLM output with ** markdown bold on prompt files
+    output = """
+    FILES_MODIFIED: ** prompts/foo_python.prompt, docs/README.md, **prompts/bar_LLM.prompt**
+    FILES_CREATED: **prompts/new_python.prompt**
+    """
+
+    files = _parse_changed_files(output)
+
+    # All files should have markdown stripped
+    assert "prompts/foo_python.prompt" in files, f"Expected stripped path, got: {files}"
+    assert "prompts/bar_LLM.prompt" in files, f"Expected stripped path, got: {files}"
+    assert "prompts/new_python.prompt" in files, f"Expected stripped path, got: {files}"
+    assert "docs/README.md" in files, f"Expected docs file, got: {files}"
+
+    # Verify no ** remains in any path
+    for f in files:
+        assert "**" not in f, f"Markdown not stripped from: {f}"
+        assert not f.startswith("*"), f"Leading * not stripped from: {f}"
+
+    # Verify paths can now be correctly identified as prompts
+    prompt_files = [f for f in files if f.startswith("prompts/") and f.endswith(".prompt")]
+    assert len(prompt_files) == 3, f"Expected 3 prompt files, got {len(prompt_files)}: {prompt_files}"
