@@ -642,8 +642,13 @@ class SyncApp(App):
         # Track log widget width for proper text wrapping
         # Accounts for: log-container border (2), RichLog padding (2), scrollbar (2)
         self._log_width = 74  # Default fallback (80 - 6)
-        # Freeze UI rendering width to the initial terminal width (clamped to a minimum).
+        # Minimum UI width used when clamping the layout to avoid overly narrow renders.
         self._min_ui_width = 80
+        # _fixed_ui_width stores the frozen UI width that the app should render against.
+        # It is set once based on the initial terminal size (respecting _min_ui_width)
+        # and then reused for subsequent layout calculations. Keeping this width fixed
+        # prevents resize-related rendering issues and reflow glitches in Textual/Rich
+        # when the underlying terminal is resized while the app is running.
         self._fixed_ui_width: Optional[int] = None
 
         # Reference to self for stdin redirector (using list for mutability)
