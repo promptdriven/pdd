@@ -116,7 +116,7 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                     # Replace extension with .md to match format constraint
                     resolved_output = str(output_path.with_suffix(".md"))
                 elif format_lower == "code":
-                    # For py format, determine the correct language extension based on language
+                    # For code format, determine the correct language extension based on language
                     # Use the same mapping as construct_paths for consistency
                     builtin_ext_map = {
                         'python': '.py', 'javascript': '.js', 'typescript': '.ts', 'java': '.java',
