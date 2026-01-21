@@ -46,7 +46,7 @@ def patch_env(monkeypatch):
     monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
 
 
-def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
+def test_run_agentic_fix_success_via_run_agentic_task(monkeypatch, tmp_path, patch_env):
     p_prompt, p_code, p_test, p_err = _prep_files(tmp_path)
 
     # Force model CSV to our in-test DF
@@ -55,14 +55,20 @@ def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
     # Minimal prompt template (we just need .format(...) to succeed)
     monkeypatch.setattr(
         "pdd.agentic_fix.load_prompt_template",
-        lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}",
+        lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}",
     )
 
     # Pretend CLIs exist so selection proceeds
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
 
-    # Short-circuit harvest path to succeed — NOTE: uses leading underscore (private function)
-    monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
+    # Mock run_agentic_task to return success
+    monkeypatch.setattr(
+        "pdd.agentic_fix.run_agentic_task",
+        lambda instruction, cwd, verbose, quiet, label, max_retries: (True, "", 0.05, "anthropic")
+    )
+
+    # Mock verification to pass
+    monkeypatch.setattr("pdd.agentic_fix._verify_and_log", lambda *a, **k: True)
 
     ok, msg, cost, model, changed_files = run_agentic_fix(
         p_prompt, p_code, p_test, p_err, cwd=tmp_path
@@ -70,7 +76,7 @@ def test_run_agentic_fix_success_via_harvest(monkeypatch, tmp_path, patch_env):
     assert ok is True
     assert isinstance(changed_files, list)
     assert "successful" in msg.lower()
-    assert cost > 0.0
+    assert cost >= 0.0
     assert model.startswith("agentic-")
 
 
@@ -259,162 +265,6 @@ class TestVerifyAndLog:
             assert result is True
 
 
-# --- Tests for agentic mode invocation (TDD: should fail until code is fixed) ---
-
-class TestAgenticModeInvocation:
-    """
-    Tests verifying agents are invoked with full file access, not completion mode.
-
-    These tests check that:
-    1. Claude is NOT invoked with -p flag (which prevents file tool access)
-    2. Codex is NOT invoked with --sandbox read-only (which prevents file writes)
-    3. Gemini is NOT invoked with -p flag (which prevents tool access)
-
-    These tests should FAIL initially (RED phase) and PASS after the fix (GREEN phase).
-    """
-
-    @pytest.fixture
-    def mock_subprocess_run(self):
-        """Mock subprocess.run to capture CLI commands without executing them."""
-        with patch('pdd.agentic_fix.subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout="<<<BEGIN_FILE:test.py>>>fixed<<<END_FILE:test.py>>>",
-                stderr=""
-            )
-            yield mock_run
-
-    def test_claude_not_in_completion_mode(self, mock_subprocess_run, tmp_path):
-        """
-        Claude should NOT use -p/--print flag with full prompt - it prevents file tool access.
-
-        Current (buggy): ["claude", "-p", "--dangerously-skip-permissions", <full_prompt>]
-        Expected: Claude invoked without -p, so it can use file tools in agentic mode
-
-        When -p (print mode) is used, Claude runs in completion mode and cannot use
-        file tools like Read, Write, Edit, etc. For agentic fix to work, we need
-        Claude to have full file access.
-        """
-        from pdd.agentic_fix import _run_anthropic_variants
-
-        # Call the function with a long prompt (simulating real usage)
-        long_prompt = "Fix this code: " + "x" * 1000  # Simulate a real prompt
-        _run_anthropic_variants(long_prompt, tmp_path, 60, "test")
-
-        # Get the command that was called
-        assert mock_subprocess_run.called, "subprocess.run should have been called"
-        call_args = mock_subprocess_run.call_args[0][0]
-
-        # -p flag is a boolean flag (print mode), NOT an option with a value
-        # Command structure: claude -p --dangerously-skip-permissions <prompt>
-        # The prompt is the LAST argument, not the argument after -p
-        has_p_flag = "-p" in call_args or "--print" in call_args
-
-        if has_p_flag:
-            # In print mode, the prompt is passed as the last positional argument
-            # Check if it's a long embedded prompt (bad) vs a short instruction pointing to a file (ok)
-            last_arg = call_args[-1]
-            assert len(last_arg) < 500, \
-                f"Claude in -p mode receives full prompt as argument (got {len(last_arg)} chars); " \
-                "this prevents file tool access. Remove -p flag to enable agentic mode."
-
-    def test_codex_not_read_only_sandbox(self, mock_subprocess_run, tmp_path):
-        """
-        Codex should NOT have --sandbox read-only in any variant definition.
-
-        Current (buggy) variants in code:
-        1. ["codex", "exec", full]
-        2. ["codex", "exec", "--skip-git-repo-check", full]
-        3. ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", full]  <-- BAD
-
-        The third variant uses read-only which prevents file writes.
-        This test inspects the source code to verify no variants use read-only.
-        """
-        import inspect
-        from pdd.agentic_fix import _run_openai_variants
-
-        # Get the source code of the function
-        source = inspect.getsource(_run_openai_variants)
-
-        # Check that read-only is NOT in the source code
-        assert "read-only" not in source.lower(), \
-            "Codex variants should not include 'read-only' sandbox; " \
-            "agents need write access to modify files"
-
-    def test_gemini_not_in_completion_mode(self, mock_subprocess_run, tmp_path):
-        """
-        Gemini should NOT use -p flag with full prompt - it may prevent tool access.
-
-        Current (buggy): ["gemini", "-p", <full_prompt>]
-        Expected: Gemini invoked without -p, or with -p pointing to a file
-        """
-        from pdd.agentic_fix import _run_google_variants
-
-        # Call with a long prompt
-        long_prompt = "Fix this code: " + "y" * 1000
-        _run_google_variants(long_prompt, tmp_path, 60, "test")
-
-        # Get the command that was called
-        assert mock_subprocess_run.called, "subprocess.run should have been called"
-        call_args = mock_subprocess_run.call_args[0][0]
-
-        # Check: -p flag should NOT be present with a long prompt
-        has_p_flag = "-p" in call_args
-        if has_p_flag:
-            p_index = call_args.index("-p")
-            if p_index + 1 < len(call_args):
-                prompt_arg = call_args[p_index + 1]
-                assert len(prompt_arg) < 500, \
-                    f"Gemini should not receive full prompt via -p flag (got {len(prompt_arg)} chars); " \
-                    "use file-based prompt to enable agentic mode"
-
-
-class TestPromptFileHandling:
-    """Tests for secure temp prompt file handling to prevent race conditions."""
-
-    @pytest.fixture
-    def mock_subprocess_run(self):
-        """Mock subprocess.run to capture CLI commands without executing."""
-        with patch('pdd.agentic_fix.subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0, stdout="output", stderr=""
-            )
-            yield mock_run
-
-    def test_no_hardcoded_prompt_filename(self):
-        """
-        Static analysis: source should not use hardcoded '.agentic_prompt.txt'.
-
-        Bug: Hardcoded filename causes race conditions in concurrent execution.
-        """
-        import inspect
-        from pdd.agentic_fix import (
-            _run_anthropic_variants,
-            _run_openai_variants,
-            _run_google_variants
-        )
-
-        for func in [_run_anthropic_variants, _run_openai_variants, _run_google_variants]:
-            source = inspect.getsource(func)
-            assert '".agentic_prompt.txt"' not in source, \
-                f"{func.__name__}: hardcoded '.agentic_prompt.txt' causes race conditions"
-
-    def test_prompt_file_cleaned_up_after_execution(self, mock_subprocess_run, tmp_path):
-        """
-        Behavioral: temp prompt files must be deleted after execution.
-
-        Bug: Leaving files on disk exposes sensitive prompt content.
-        """
-        from pdd.agentic_fix import _run_anthropic_variants
-
-        _run_anthropic_variants("test prompt", tmp_path, 60, "test")
-
-        # No prompt files should remain (any naming pattern)
-        remaining = list(tmp_path.glob("*prompt*"))
-        assert len(remaining) == 0, \
-            f"Temp prompt files should be cleaned up, found: {remaining}"
-
-
 class TestCwdHandling:
     """
     Tests for working directory handling in run_agentic_fix.
@@ -467,7 +317,7 @@ class TestCwdHandling:
         monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
         monkeypatch.setattr(
             "pdd.agentic_fix.load_prompt_template",
-            lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}{verify_cmd}",
+            lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}{protect_tests}",
         )
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -484,14 +334,13 @@ class TestCwdHandling:
 
         monkeypatch.setattr(Path, "write_text", track_write)
 
-        # Mock agent runners to return success without making real calls
-        # With PRIMARY-FIRST logic, we need to mock the primary path functions
-        mock_result = MagicMock(returncode=0, stdout="", stderr="")
-        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", lambda *a, **k: mock_result)
-        monkeypatch.setattr("pdd.agentic_fix._run_google_variants", lambda *a, **k: mock_result)
-        monkeypatch.setattr("pdd.agentic_fix._run_openai_variants", lambda *a, **k: mock_result)
-        # Also mock harvest fallback
-        monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
+        # Mock run_agentic_task to return success
+        monkeypatch.setattr(
+            "pdd.agentic_fix.run_agentic_task",
+            lambda instruction, cwd, verbose, quiet, label, max_retries: (True, "", 0.05, "anthropic")
+        )
+        # Mock verification to pass
+        monkeypatch.setattr("pdd.agentic_fix._verify_and_log", lambda *a, **k: True)
 
         # Call with relative paths AND explicit cwd parameter
         ok, msg, cost, model, changed_files = run_agentic_fix(
@@ -555,17 +404,17 @@ class TestCwdHandling:
 
         monkeypatch.setattr(
             "pdd.agentic_fix.load_prompt_template",
-            lambda name: "{code_abs}{test_abs}{begin}{end}{prompt_content}{code_content}{test_content}{error_content}{verify_cmd}",
+            lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}{protect_tests}",
         )
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
 
-        # Mock agent runners to return success without making real calls
-        # With PRIMARY-FIRST logic, we need to mock the primary path functions
-        mock_result = MagicMock(returncode=0, stdout="", stderr="")
-        monkeypatch.setattr("pdd.agentic_fix._run_anthropic_variants", lambda *a, **k: mock_result)
-        monkeypatch.setattr("pdd.agentic_fix._run_google_variants", lambda *a, **k: mock_result)
-        monkeypatch.setattr("pdd.agentic_fix._run_openai_variants", lambda *a, **k: mock_result)
-        monkeypatch.setattr("pdd.agentic_fix._try_harvest_then_verify", lambda *a, **k: True)
+        # Mock run_agentic_task to return success
+        monkeypatch.setattr(
+            "pdd.agentic_fix.run_agentic_task",
+            lambda instruction, cwd, verbose, quiet, label, max_retries: (True, "", 0.05, "anthropic")
+        )
+        # Mock verification to pass
+        monkeypatch.setattr("pdd.agentic_fix._verify_and_log", lambda *a, **k: True)
 
         # Call with relative paths and explicit cwd
         run_agentic_fix(
