@@ -1,3 +1,28 @@
+## v0.0.125 (2026-01-20)
+
+### Feat
+
+- **Verbose Example Info:** Display selected example info (ID and title) in verbose generate output. Shows pinned example if present in prompt.
+
+### Fix
+
+- **Architecture Graph Position Collapse:** Prevent graph positions from collapsing on save by capturing Dagre-calculated positions before entering edit mode; added hybrid position handling for mixed saved/unsaved positions.
+- **Agentic Model Fallback:** Use first available provider as fallback model name when preferred provider unavailable.
+- **Markdown Path Parsing:** Strip markdown bold (`**`) from file paths in agentic orchestrator's parsing logic.
+- **Test Mock Placeholder:** Remove duplicate `{protect_tests}` placeholder in test mocks.
+- **Flaky Test Fix:** Use in-place dict operations (`clear()`/`update()`) instead of reference assignment when restoring mutable containers in test fixtures.
+- **Sync Order Language Support:** Generalize module extraction to support any language suffix (Go, Rust, Java, etc.); explicitly exclude `_LLM` prompts as runtime prompts.
+
+### Refactor
+
+- **Agentic Fix Simplification:** Align `agentic_fix.py` with `agentic_crash.py` patterns; use shared `run_agentic_task()` helper, remove `AGENT_COST_PER_CALL`, `AGENT_PROVIDER_PREFERENCE`, and harvest-only mode (deleted `agentic_fix_harvest_only_LLM.prompt`), simplify primary LLM prompt.
+- **Frontend Optimization:** Cache `allHavePositions` computation in `DependencyViewer.tsx`; persist positions when entering edit mode.
+
+### Docs
+
+- **Test Isolation Guidelines:** Add section 12 to `context/test.prompt` documenting in-place mutable container restoration patterns for dicts, lists, and sets.
+- **VS Code Test Config:** Configure VS Code to run all pytest tests via `.vscode/settings.json`.
+
 ## v0.0.124 (2026-01-20)
 
 ### Feat

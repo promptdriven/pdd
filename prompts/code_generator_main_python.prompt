@@ -150,8 +150,10 @@
       - Send JSON payload with fields: `{ "promptContent": <processed prompt>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`.
         % Note: A time/effort field (e.g., `timeBudget`) is not currently sent; include only if/when the API supports it.
       - Cloud endpoint: `https://us-central1-prompt-driven-development.cloudfunctions.net/generateCode`
-      - Expected response fields: `generatedCode`, `totalCost`, `modelName`.
+      - Expected response fields: `generatedCode`, `totalCost`, `modelName`, and optionally `examplesUsed` (array of example objects with `id` and `title`).
       - Post-process JSON responses: When `language` is "json" (case-insensitive), strip markdown code fences from `generatedCode` if present. The cloud API may return fenced JSON like "```json\n...\n```". Remove leading "```json" or "```" and trailing "```" to extract the raw JSON content.
+      - Pinned example display: Before making the cloud call, if the processed prompt contains a `<pin>example-id</pin>` tag and `verbose=True`, extract and display the pinned example ID (e.g., "Using pinned example: example-id").
+      - Example info in success panel: Extract example information from the `examplesUsed` array in the cloud response (first element's `id` and `title`). When `verbose=True` and an example was used, display it in the Cloud Success panel (e.g., "Example: ex-123 (Example Title)").
    3. If cloud execution fails (auth/network/HTTP/JSON errors, timeout, or missing code):
       - Log a warning and automatically fall back to local execution.
    4. For local execution, call the local code generator with the already preprocessed and substituted prompt, and set `preprocess_prompt=False` on the generator call.
