@@ -76,9 +76,9 @@ Code generation happens separately via `pdd sync` after the PR is merged.
 
 4. **Create new prompts**
    For each new prompt identified in Step 8:
-   - Use the standard prompt structure:
+   - Use the standard prompt structure, adapting paths based on the project's .pddrc (from Step 6):
      ```
-     <include>context/python_preamble.prompt</include>
+     <include>context/{language}_preamble.prompt</include>
 
      % Goal
      [One sentence describing the module]
@@ -92,11 +92,17 @@ Code generation happens separately via `pdd sync` after the PR is merged.
      ...
 
      % Dependencies
-     <module_name><include>context/module_example.py</include></module_name>
+     <module_name><include>{example_dir}/module_example.{ext}</include></module_name>
 
      % Deliverables
-     - Code: `pdd/module_name.py`
+     - Code: `{source_dir}/module_name.{ext}`
      ```
+
+   Substitute actual values from the project's .pddrc:
+   - `{language}`: from `default_language` (e.g., `python`, `typescript`)
+   - `{example_dir}`: from `example_output_path` (e.g., `context/`, `examples/`)
+   - `{source_dir}`: from `generate_output_path` (e.g., `src/`, `lib/`, `pdd/`)
+   - `{ext}`: file extension for the language (e.g., `.py`, `.ts`)
 
 5. **Final Validation: No Code Duplication (CRITICAL)**
    Before completing, verify:
@@ -127,18 +133,20 @@ Your comment should follow this format:
 **Status:** Changes Applied
 
 ### Files Modified
-FILES_MODIFIED: prompts/xxx_python.prompt, README.md
+FILES_MODIFIED: prompts/xxx_{lang}.prompt, README.md
 
 ### Files Created
-FILES_CREATED: prompts/yyy_python.prompt
+FILES_CREATED: prompts/yyy_{lang}.prompt
+
+*(Use actual language from project's .pddrc)*
 
 ### Summary of Changes
 
-#### `prompts/xxx_python.prompt`
+#### `prompts/xxx_{lang}.prompt`
 - Added requirement for [feature]
 - Updated dependency to include [module]
 
-#### `prompts/yyy_python.prompt` (new)
+#### `prompts/yyy_{lang}.prompt` (new)
 - Created new prompt for [purpose]
 - Includes [N] requirements
 
@@ -197,8 +205,8 @@ SCOPE_VIOLATION: [Yes/No]
 Your final response MUST include these exact lines for the orchestrator to parse:
 
 ```
-FILES_MODIFIED: prompts/file1_python.prompt, prompts/file2_python.prompt
-FILES_CREATED: prompts/file3_python.prompt
+FILES_MODIFIED: prompts/file1_{lang}.prompt, prompts/file2_{lang}.prompt
+FILES_CREATED: prompts/file3_{lang}.prompt
 ```
 
 These lines MUST:
@@ -206,12 +214,15 @@ These lines MUST:
 - Be followed by a comma-separated list of file paths on the SAME LINE
 - NOT use markdown bullets, numbered lists, or multi-line formats
 - Appear in your final summary (not just in the GitHub comment)
+- Use actual language from project's .pddrc (e.g., `_python`, `_typescript`)
 
 Example of CORRECT format:
 ```
 FILES_MODIFIED: prompts/sync_main_python.prompt, prompts/fix_error_loop_python.prompt
 FILES_CREATED: prompts/parallel_fix_python.prompt
 ```
+
+(Substitute actual language suffix based on project configuration)
 
 Example of WRONG format (will cause workflow failure):
 ```

@@ -119,14 +119,16 @@ Your comment should follow this format:
 
 ### Prompt Modifications
 
-#### `prompts/xxx_python.prompt`
+#### `prompts/xxx_{language}.prompt`
 **Current state:** [Brief description]
 **Changes needed:**
 1. Add requirement: [new requirement]
 2. Update requirement: [existing → new]
-3. Add dependency: `<include>context/yyy_example.py</include>`
+3. Add dependency: `<include>{example_dir}/yyy_example.{ext}</include>`
 
-#### `prompts/zzz_python.prompt`
+*(Use actual language and paths from project structure in Step 6)*
+
+#### `prompts/zzz_{language}.prompt`
 **New prompt to create:**
 - Role: [module purpose]
 - Requirements:
