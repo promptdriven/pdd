@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 12 of 12 in an agentic change workflow. This is the final step. All prompt changes have been made and verified. Now you create a PR for review.
+You are working on step 13 of 13 in an agentic change workflow. This is the final step. All prompt changes have been made and verified. Now you create a PR for review.
 
 % Inputs
 
@@ -110,7 +110,7 @@ Closes #{issue_number}
 
 **Issue Comment Format:**
 ```markdown
-## Step 12: Pull Request Created
+## Step 13: Pull Request Created
 
 **Status:** PR Ready for Review
 
