@@ -161,12 +161,16 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
     return map;
   }, [promptsInfo]);
 
+  // Pre-compute position status for reuse across useMemo and useEffect
+  const allHavePositions = useMemo(
+    () => architecture.every((m) => m.position),
+    [architecture]
+  );
+
   // Convert architecture to React Flow nodes and edges
   const { initialNodes, initialEdges } = useMemo(() => {
-    // Count how many modules have saved positions
-    const modulesWithPositions = architecture.filter((m) => m.position);
-    const allHavePositions = modulesWithPositions.length === architecture.length;
-    const noneHavePositions = modulesWithPositions.length === 0;
+    // Check position scenarios
+    const noneHavePositions = architecture.every((m) => !m.position);
 
     // Create initial nodes - positions will be set based on scenario
     const nodes: Node<ModuleNodeData>[] = architecture.map((m) => {
@@ -283,7 +287,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       onInitialPositionsCalculated &&
       nodes.length > 0 &&
       // Only fire if Dagre was applied (i.e., not all modules had saved positions)
-      architecture.some((m) => !m.position)
+      !allHavePositions
     ) {
       initialPositionsCalledRef.current = true;
       const positions = new Map<string, { x: number; y: number }>();
@@ -292,7 +296,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
       });
       onInitialPositionsCalculated(positions);
     }
-  }, [nodes, architecture, onInitialPositionsCalculated]);
+  }, [nodes, allHavePositions, onInitialPositionsCalculated]);
 
   // Re-layout when clicking the layout button
   const handleRelayout = useCallback(() => {
