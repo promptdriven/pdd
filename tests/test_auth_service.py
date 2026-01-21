@@ -779,3 +779,122 @@ def test_z3_auth_status_state_machine():
     if s.check() == sat:
         pytest.fail("Found state where Cached=True but Cache_Valid=False")
     s.pop()
+
+
+# --- Issue #358: expires_at: null crashes auth_service functions ---
+
+class TestExpiresAtNullBugIssue358:
+    """
+    Tests for Issue #358: Functions crash with TypeError when JWT cache file
+    has expires_at: null.
+
+    Bug: dict.get('key', default) returns None when the key EXISTS with value None,
+    not the default value. This causes TypeError on comparison with float.
+
+    Affected functions:
+    - get_jwt_cache_info() - pdd/auth_service.py:39-41
+    - get_cached_jwt() - pdd/auth_service.py:62-64
+
+    Issue: https://github.com/promptdriven/pdd/issues/358
+    """
+
+    def test_get_jwt_cache_info_crashes_with_expires_at_null(self, mock_home):
+        """
+        REPRODUCES BUG: get_jwt_cache_info() should handle expires_at: null gracefully.
+
+        Current buggy behavior: Raises TypeError: '>' not supported between
+        instances of 'NoneType' and 'float'
+
+        Expected behavior after fix: Returns (False, None) - treats as invalid cache
+
+        This test FAILS on the current buggy code.
+        """
+        cache_file = mock_home / ".pdd" / "jwt_cache"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create corrupted cache file with expires_at: null
+        # This is the exact scenario described in Issue #358
+        corrupted_cache = {
+            "id_token": "some_token",
+            "expires_at": None  # JSON null -> Python None
+        }
+        cache_file.write_text(json.dumps(corrupted_cache))
+
+        # This should NOT raise TypeError - it should return (False, None)
+        # BUG: Currently raises TypeError: '>' not supported between
+        # instances of 'NoneType' and 'float'
+        is_valid, expires_at = auth_service.get_jwt_cache_info()
+
+        # If we get here without exception, the bug is fixed
+        # Expected: (False, None) - cache is invalid
+        assert is_valid is False, "Should return False for invalid expires_at value"
+        assert expires_at is None, "Should return None for expires_at"
+
+    def test_get_cached_jwt_crashes_with_expires_at_null(self, mock_home):
+        """
+        REPRODUCES BUG: get_cached_jwt() should handle expires_at: null gracefully.
+
+        Current buggy behavior: Raises TypeError: '>' not supported between
+        instances of 'NoneType' and 'float'
+
+        Expected behavior after fix: Returns None - treats as invalid/expired cache
+
+        This test FAILS on the current buggy code.
+        """
+        cache_file = mock_home / ".pdd" / "jwt_cache"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create corrupted cache file with expires_at: null
+        corrupted_cache = {
+            "id_token": "valid_looking_token",
+            "expires_at": None  # JSON null -> Python None
+        }
+        cache_file.write_text(json.dumps(corrupted_cache))
+
+        # This should NOT raise TypeError - it should return None
+        # BUG: Currently raises TypeError: '>' not supported between
+        # instances of 'NoneType' and 'float'
+        token = auth_service.get_cached_jwt()
+
+        # If we get here without exception, the bug is fixed
+        # Expected: None - cache is invalid
+        assert token is None, "Should return None for invalid expires_at value"
+
+    def test_get_jwt_cache_info_handles_expires_at_non_numeric_string(self, mock_home):
+        """
+        Edge case: expires_at is a non-numeric string.
+
+        Expected: Should not crash, should return (False, None).
+        """
+        cache_file = mock_home / ".pdd" / "jwt_cache"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+        corrupted_cache = {
+            "id_token": "some_token",
+            "expires_at": "not_a_number"
+        }
+        cache_file.write_text(json.dumps(corrupted_cache))
+
+        # Should handle gracefully without crash
+        is_valid, expires_at = auth_service.get_jwt_cache_info()
+        assert is_valid is False, "Should return False for non-numeric expires_at"
+        assert expires_at is None
+
+    def test_get_cached_jwt_handles_expires_at_non_numeric_string(self, mock_home):
+        """
+        Edge case: expires_at is a non-numeric string.
+
+        Expected: Should not crash, should return None.
+        """
+        cache_file = mock_home / ".pdd" / "jwt_cache"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+        corrupted_cache = {
+            "id_token": "some_token",
+            "expires_at": "not_a_timestamp"
+        }
+        cache_file.write_text(json.dumps(corrupted_cache))
+
+        # Should handle gracefully without crash
+        token = auth_service.get_cached_jwt()
+        assert token is None, "Should return None for non-numeric expires_at"

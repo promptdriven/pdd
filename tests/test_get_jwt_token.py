@@ -370,3 +370,126 @@ async def test_get_jwt_token_browser_open_error_handled(
     assert token == "id_token_abc"
     # Verify browser.open was called but error was caught
     mock_browser_open.assert_called_once_with("https://github.com/login/device")
+
+
+# --- Issue #358: _get_cached_jwt() crashes with expires_at: null ---
+
+class TestGetCachedJWTExpiresAtNull:
+    """
+    Tests for Issue #358: _get_cached_jwt() crashes with TypeError when
+    cache file has expires_at: null.
+
+    Bug: dict.get('key', default) returns None when the key EXISTS with value None,
+    not the default value. This causes TypeError on comparison with float.
+
+    Issue: https://github.com/promptdriven/pdd/issues/358
+    """
+
+    def test_get_cached_jwt_crashes_with_expires_at_null(self, tmp_path):
+        """
+        REPRODUCES BUG: _get_cached_jwt() should handle expires_at: null gracefully.
+
+        Current buggy behavior: Raises TypeError: '>' not supported between
+        instances of 'NoneType' and 'float'
+
+        Expected behavior after fix: Returns None (treats as expired/invalid cache)
+
+        This test FAILS on the current buggy code.
+        """
+        import json
+        import pdd.get_jwt_token as jwt_module
+
+        # Save original and restore after test
+        original_cache_file = jwt_module.JWT_CACHE_FILE
+
+        try:
+            # Set up cache file in temp directory
+            jwt_module.JWT_CACHE_FILE = tmp_path / ".pdd" / "jwt_cache"
+            jwt_module.JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            # Create corrupted cache file with expires_at: null
+            # This is the exact scenario described in Issue #358
+            corrupted_cache = {
+                "id_token": "some_token",
+                "expires_at": None  # JSON null -> Python None
+            }
+            with open(jwt_module.JWT_CACHE_FILE, 'w') as f:
+                json.dump(corrupted_cache, f)
+
+            # This should NOT raise TypeError - it should return None gracefully
+            # BUG: Currently raises TypeError: '>' not supported between
+            # instances of 'NoneType' and 'float'
+            from pdd.get_jwt_token import _get_cached_jwt
+            result = _get_cached_jwt()
+
+            # If we get here without exception, the bug is fixed
+            # Expected: None (cache is invalid/expired)
+            assert result is None, "Should return None for invalid expires_at value"
+
+        finally:
+            jwt_module.JWT_CACHE_FILE = original_cache_file
+
+    def test_get_cached_jwt_handles_expires_at_non_numeric_string(self, tmp_path):
+        """
+        Edge case: expires_at is a non-numeric string.
+
+        Expected: Should not crash, should return None.
+        """
+        import json
+        import pdd.get_jwt_token as jwt_module
+
+        original_cache_file = jwt_module.JWT_CACHE_FILE
+
+        try:
+            jwt_module.JWT_CACHE_FILE = tmp_path / ".pdd" / "jwt_cache"
+            jwt_module.JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            # Create cache with string expires_at (corrupted data)
+            corrupted_cache = {
+                "id_token": "some_token",
+                "expires_at": "not_a_number"
+            }
+            with open(jwt_module.JWT_CACHE_FILE, 'w') as f:
+                json.dump(corrupted_cache, f)
+
+            from pdd.get_jwt_token import _get_cached_jwt
+            result = _get_cached_jwt()
+
+            # Should handle gracefully without crash
+            assert result is None, "Should return None for non-numeric expires_at"
+
+        finally:
+            jwt_module.JWT_CACHE_FILE = original_cache_file
+
+    def test_get_cached_jwt_handles_expires_at_boolean(self, tmp_path):
+        """
+        Edge case: expires_at is a boolean value.
+
+        Note: In Python, bool is subclass of int, so True == 1, False == 0.
+        This shouldn't crash but the token would be expired.
+        """
+        import json
+        import pdd.get_jwt_token as jwt_module
+
+        original_cache_file = jwt_module.JWT_CACHE_FILE
+
+        try:
+            jwt_module.JWT_CACHE_FILE = tmp_path / ".pdd" / "jwt_cache"
+            jwt_module.JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            # Create cache with boolean expires_at
+            corrupted_cache = {
+                "id_token": "some_token",
+                "expires_at": False  # == 0, which is in the past
+            }
+            with open(jwt_module.JWT_CACHE_FILE, 'w') as f:
+                json.dump(corrupted_cache, f)
+
+            from pdd.get_jwt_token import _get_cached_jwt
+            result = _get_cached_jwt()
+
+            # Boolean False == 0, so this is "expired" and should return None
+            assert result is None, "Should return None for expired (False == 0) expires_at"
+
+        finally:
+            jwt_module.JWT_CACHE_FILE = original_cache_file
