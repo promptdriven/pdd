@@ -383,7 +383,18 @@ def _llm_invoke_cloud(
             raise InsufficientCreditsError(error_msg)
 
         elif response.status_code in (401, 403):
-            error_msg = response.json().get("error", f"Authentication failed ({response.status_code})")
+            # Clear stale JWT cache to prevent repeated failures
+            try:
+                from pdd.auth_service import clear_jwt_cache
+                clear_jwt_cache()
+            except Exception:
+                pass  # Don't fail if cache clearing fails
+
+            server_error = response.json().get("error", "")
+            error_msg = (
+                f"Authentication expired ({server_error or response.status_code}). "
+                "Please re-authenticate with: pdd auth logout && pdd auth login"
+            )
             raise CloudFallbackError(error_msg)
 
         elif response.status_code >= 500:

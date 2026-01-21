@@ -13,7 +13,7 @@ import os
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .fix_code_loop import fix_code_loop
-from .core.cloud import CloudConfig
+from .core.cloud import CloudConfig, get_cloud_timeout
 from .get_language import get_language
 
 # Import fix_code_module_errors conditionally or ensure it's always available
@@ -22,9 +22,6 @@ try:
 except ImportError:
     # Handle case where fix_code_module_errors might not be available if not needed
     fix_code_module_errors = None
-
-# Cloud request timeout
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
@@ -207,7 +204,7 @@ def crash_main(
                             cloud_url,
                             json=payload,
                             headers=headers,
-                            timeout=CLOUD_REQUEST_TIMEOUT
+                            timeout=get_cloud_timeout()
                         )
                         response.raise_for_status()
 
@@ -257,9 +254,9 @@ def crash_main(
 
                     except requests.exceptions.Timeout:
                         if cloud_only:
-                            console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                            console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
                             raise click.UsageError("Cloud execution timed out")
-                        console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
+                        console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
 
                     except requests.exceptions.HTTPError as e:

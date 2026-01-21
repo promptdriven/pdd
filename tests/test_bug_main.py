@@ -11,8 +11,8 @@ import requests
 from click import Context
 from rich.console import Console
 from pdd import DEFAULT_STRENGTH
-from pdd.bug_main import bug_main, CLOUD_REQUEST_TIMEOUT
-from pdd.core.cloud import CloudConfig
+from pdd.bug_main import bug_main
+from pdd.core.cloud import CloudConfig, get_cloud_timeout
 
 
 def _has_cloud_credentials() -> bool:

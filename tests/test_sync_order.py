@@ -130,6 +130,36 @@ def test_build_dependency_graph_missing_dir(mock_logger):
     assert graph == {}
     mock_logger.error.assert_called()
 
+
+def test_build_dependency_graph_nested_directories(temp_prompts_dir):
+    """
+    Test that build_dependency_graph finds prompts in nested subdirectories.
+
+    Regression test for bug where prompts in subdirectories like
+    prompts/backend/models/ were not discovered because glob() was
+    used instead of rglob().
+    """
+    # Create nested directory structure (mimics prompts/backend/models/)
+    backend_dir = temp_prompts_dir / "backend" / "models"
+    backend_dir.mkdir(parents=True)
+
+    # Create prompt files at different nesting levels
+    (backend_dir / "foo_python.prompt").write_text("% foo module", encoding="utf-8")
+    (temp_prompts_dir / "backend" / "bar_python.prompt").write_text(
+        "<include>prompts/backend/models/foo_python.prompt</include>",
+        encoding="utf-8"
+    )
+
+    graph = sync_order.build_dependency_graph(temp_prompts_dir)
+
+    # Verify modules are discovered (rglob finds nested files)
+    assert "foo" in graph, f"foo not found in graph: {graph}"
+    assert "bar" in graph, f"bar not found in graph: {graph}"
+
+    # Verify dependency parsing works for nested paths
+    assert "foo" in graph["bar"], f"bar should depend on foo: {graph}"
+    assert graph["foo"] == [], f"foo should have no dependencies: {graph}"
+
 # ==============================================================================
 # Unit Tests: topological_sort
 # ==============================================================================

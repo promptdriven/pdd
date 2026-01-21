@@ -18,9 +18,18 @@
   3. **status**:
      - Displays current authentication state.
      - Use get_auth_status() from pdd.auth_service to check auth state.
+     - Options:
+       - --verify (flag): When set, actually attempt token refresh to validate credentials.
      - Exit code 0 if authenticated (valid JWT exists), 1 otherwise.
      - Output: "Authenticated as: <github_username>" or "Not authenticated."
-     - If authenticated, decode JWT from cache to extract user info (sub claim or custom claims).
+     - If authenticated, decode JWT from cache to extract user info (email or sub claim).
+     - Show token expiration time in minutes.
+     - If token expired but refresh token exists (and not --verify):
+       - Show warning: "Session for: <user> (token expired, will refresh on next use)"
+       - Exit code 0 (still considered authenticated).
+     - If --verify flag:
+       - Call verify_auth() from pdd.auth_service to attempt actual token refresh.
+       - Show success/failure based on result.
 
   4. **logout**:
      - Use logout() from pdd.auth_service to clear both JWT cache and keyring token.
@@ -46,7 +55,7 @@
   - NO @track_cost decorator (no LLM calls in these commands).
   - Use click.echo() for output, click.style() for colored output.
   - Handle asyncio.run() for calling async get_jwt_token.
-  - Import logout() and get_auth_status() from pdd.auth_service for status/logout commands.
+  - Import logout(), get_auth_status(), and verify_auth() from pdd.auth_service for status/logout commands.
   - Use pathlib.Path for file operations.
   - Import error classes from pdd.get_jwt_token.
 
