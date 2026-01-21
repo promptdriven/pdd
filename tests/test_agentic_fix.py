@@ -317,7 +317,7 @@ class TestCwdHandling:
         monkeypatch.setattr("pdd.agentic_fix._load_model_data", lambda _: _df())
         monkeypatch.setattr(
             "pdd.agentic_fix.load_prompt_template",
-            lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}{protect_tests}",
+            lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}",
         )
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -404,7 +404,7 @@ class TestCwdHandling:
 
         monkeypatch.setattr(
             "pdd.agentic_fix.load_prompt_template",
-            lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}{protect_tests}",
+            lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}",
         )
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/shim")
 
