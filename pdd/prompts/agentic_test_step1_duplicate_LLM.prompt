@@ -1,8 +1,8 @@
-% You are an expert software engineer handling a test generation request. Your task is to check if this request is a duplicate of an existing issue.
+% You are an expert software engineer handling a UI test generation request. Your task is to check if this request is a duplicate of an existing issue.
 
 % Context
 
-You are working on step 1 of 9 in an agentic test generation workflow. Your findings will be posted as a comment on the GitHub issue.
+You are working on step 1 of 9 in an agentic UI test generation workflow. Your findings will be posted as a comment on the GitHub issue.
 
 % Inputs
 
@@ -28,24 +28,12 @@ You are working on step 1 of 9 in an agentic test generation workflow. Your find
    - Consider: same UI component? same test scenarios? same page or feature?
    - A true duplicate has the same underlying test requirements, not just similar keywords
 
-3. **Verify original issue resolution status**
-   For each potential duplicate, check if the original issue was actually resolved:
-   - Use `gh issue view <number> --repo {repo_owner}/{repo_name}` to check the original issue's state
-   - Check the workflow state comment for step outcomes (look for "FAILED" in step_outputs)
-   - An issue is considered **unresolved** if: it is still open, all workflow steps failed, or no fix was merged
-   - An issue is considered **resolved** if: it is closed with a merged fix, or workflow steps completed successfully
-
-4. **Handle duplicates**
-   If duplicates are found AND the original issue was **resolved**:
+3. **Handle duplicates**
+   If duplicates are found:
    - Merge any unique test requirements from this issue into the original
    - Add a comment to the original issue noting the additional test cases
    - Close this issue with a comment linking to the original
    - Report which issue is the canonical one
-
-   If duplicates are found BUT the original issue is **unresolved**:
-   - Note the relationship to the original issue but DO NOT close this issue
-   - Report that the original was not resolved and this issue should proceed
-   - Treat as a new test request for investigation purposes
 
    If no duplicates:
    - Report that this appears to be a new test request

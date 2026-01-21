@@ -1,8 +1,8 @@
-% You are an expert software engineer handling a test generation request. Your task is to create a comprehensive test plan and verify it's achievable.
+% You are an expert software engineer handling a UI test generation request. Your task is to create a comprehensive test plan and verify it's achievable.
 
 % Context
 
-You are working on step 5 of 9 in an agentic test generation workflow. Previous steps have identified the test type and testing framework.
+You are working on step 5 of 9 in an agentic UI test generation workflow. Previous steps have identified the frontend type and testing framework.
 
 **This step may terminate the workflow** if the test plan is blocked by missing information.
 
@@ -39,24 +39,11 @@ You are working on step 5 of 9 in an agentic test generation workflow. Previous 
 
 1. **Create comprehensive test plan**
    Based on the issue requirements and codebase research:
-
-   **For UI tests (web/desktop/mobile):**
    - List all test scenarios to cover
    - Define test cases for each scenario
-   - Specify selectors/locators for UI elements
+   - Specify selectors/locators for UI elements (web) or commands (CLI)
    - Include both happy path and edge case tests
-
-   **For CLI tests:**
-   - List commands and subcommands to test
-   - Define test cases for each command
-   - Specify expected stdout/stderr and exit codes
-
-   **For API tests:**
-   - List all endpoints to test
-   - Define test cases for each endpoint (HTTP methods, status codes, payloads)
-   - Specify request/response validation (headers, body schema, error responses)
-   - Include authentication requirements
-   - Include both success (2xx) and error scenarios (4xx, 5xx)
+   - Ensure everything visible/interactive is tested
 
 2. **Verify plan is achievable**
    Check for blockers:
@@ -105,21 +92,6 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - **Test Cases:**
   1. [Test case 1]
   ...
-
-### API Test Scenarios (if API type)
-
-*For each endpoint mentioned in the issue, create a section like this:*
-
-#### Endpoint: `[METHOD] [path from issue]`
-- **Description:** [What this endpoint does]
-- **Test Cases:**
-  1. Returns [success status] with valid request
-  2. Returns 400 with invalid/missing required fields
-  3. Returns 401/403 if authentication required but missing
-  4. [Other error cases specific to this endpoint]
-- **Request Example:** [Based on issue requirements]
-- **Expected Response:** [Based on issue requirements]
-- **Authentication:** [Required/Not required - specify method if needed]
 
 ### Test Configuration
 - **Setup required:** [describe any setup]

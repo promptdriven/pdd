@@ -1,8 +1,8 @@
-% You are an expert software engineer handling a test generation request. Your task is to fix failing tests and re-run them until they pass.
+% You are an expert software engineer handling a UI test generation request. Your task is to fix failing tests and re-run them until they pass.
 
 % Context
 
-You are working on step 8 of 9 in an agentic test generation workflow. Previous step ran the tests and some failed.
+You are working on step 8 of 9 in an agentic UI test generation workflow. Previous step ran the tests and some failed.
 
 % Inputs
 
