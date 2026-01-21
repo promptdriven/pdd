@@ -1249,7 +1249,7 @@ def construct_paths(
     resolved_config.update(output_file_paths_str_return)
     # Only infer prompts_dir if it wasn't provided via CLI/.pddrc/env.
     gen_path = Path(resolved_config.get("generate_output_path", "src"))
-    if "prompts_dir" not in resolved_config or not resolved_config.get("prompts_dir"):
+    if not resolved_config.get("prompts_dir"):
         resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
