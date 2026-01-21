@@ -137,12 +137,12 @@ def _parse_changed_files(output: str) -> List[str]:
     # Look for FILES_CREATED: path, path
     created_match = re.search(r"FILES_CREATED:\s*(.*)", output)
     if created_match:
-        files.extend([f.strip() for f in created_match.group(1).split(",") if f.strip()])
+        files.extend([f.strip().strip("*").strip() for f in created_match.group(1).split(",") if f.strip()])
     
     # Look for FILES_MODIFIED: path, path
     modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", output)
     if modified_match:
-        files.extend([f.strip() for f in modified_match.group(1).split(",") if f.strip()])
+        files.extend([f.strip().strip("*").strip() for f in modified_match.group(1).split(",") if f.strip()])
         
     return list(set(files)) # Deduplicate
 
