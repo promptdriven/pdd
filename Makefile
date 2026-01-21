@@ -649,8 +649,8 @@ release: check-deps check-suspicious-files
 	@claude --dangerously-skip-permissions -p "Update CHANGELOG.md for the latest release. Steps: \
 1. Run 'git tag | tail -2' to find the prior and current version tags. \
 2. Run 'git diff <prior>..HEAD --stat' and 'git log <prior>..HEAD --oneline' to see all changes. \
-3. Check for external contributor PRs: look at sync commits ('git log --oneline | grep sync') and use 'gh pr list --repo promptdriven/pdd --state merged --limit 20' to find upstream PRs with their authors. \
-4. For each external contributor, credit them by name and PR number (e.g., 'Thanks Xavier Yin! (PR #317)'). Use 'gh pr view <num> --repo promptdriven/pdd --json author' to get author info. \
+3. IMPORTANT: PR numbers in merge commits (e.g., 'Merge pull request #337') are from the FORK (gltanaka/pdd), NOT the public repo (promptdriven/pdd). Do NOT include fork PR numbers in the CHANGELOG - they will confuse users who look them up on the public repo. \
+4. For external contributor credits ONLY: use 'gh pr list --repo promptdriven/pdd --state merged --limit 20' to find upstream PRs. Verify PRs exist with 'gh pr view <num> --repo promptdriven/pdd --json state,title'. Only credit PRs that are actually merged on promptdriven/pdd. \
 5. Organize changes into sections: Feat, Fix, Build, Refactor, Docs. \
 6. Keep descriptions concise but complete. Don't miss any significant changes - check the diff stat for large file changes. \
 We are using a prompt driven development approach: docs/prompting_guide.md."
