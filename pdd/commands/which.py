@@ -199,7 +199,7 @@ def which(
     prompts_candidates_raw.append(str(env_prompts_dir or ""))
     # .pddrc / resolved config (lowest among explicit settings)
     prompts_candidates_raw.append(str(_get_resolved_path("prompts_dir", "prompt_dir") or ""))
-    prompts_candidates_raw.append(str(_get_resolved_path("prompt_path",) or ""))
+    prompts_candidates_raw.append(str(_get_resolved_path("prompt_path") or ""))
 
     # Conventional fallbacks construct_paths commonly implies
     # (relative to config_base)
@@ -218,9 +218,9 @@ def which(
     tests_candidates_raw.append(str(os.environ.get("PDD_TEST_OUTPUT_PATH", "")))
     generate_candidates_raw.append(str(os.environ.get("PDD_GENERATE_OUTPUT_PATH", "")))
 
-    examples_candidates_raw.append(str(_get_resolved_path("example_output_path",) or ""))
-    tests_candidates_raw.append(str(_get_resolved_path("test_output_path",) or ""))
-    generate_candidates_raw.append(str(_get_resolved_path("generate_output_path",) or ""))
+    examples_candidates_raw.append(str(_get_resolved_path("example_output_path") or ""))
+    tests_candidates_raw.append(str(_get_resolved_path("test_output_path") or ""))
+    generate_candidates_raw.append(str(_get_resolved_path("generate_output_path") or ""))
 
     # Conventional defaults (relative)
     examples_candidates_raw.append("context")
