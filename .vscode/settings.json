@@ -1,12 +1,12 @@
 {
     "makefile.configureOnOpen": false,
+    "python.testing.pytestPath": "${workspaceFolder}/scripts/pytest-infisical.sh",
     "python.testing.pytestArgs": [
         "-n",
         "auto",
-        "--run-all",
         "tests"
     ],
-    "python.testing.unittestEnabled": false, 
+    "python.testing.unittestEnabled": false,
     "python.testing.nosetestsEnabled": false,
     "python.testing.pytestEnabled": true,
     "pythonTestExplorer.testFramework": "pytest",
