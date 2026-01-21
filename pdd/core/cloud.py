@@ -46,7 +46,7 @@ def get_cloud_timeout() -> int:
         Timeout in seconds as an integer.
 
     Example:
-        # Use default (600 seconds)
+        # Use default (900 seconds)
         timeout = get_cloud_timeout()
 
         # Override via environment variable
