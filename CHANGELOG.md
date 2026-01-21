@@ -1,3 +1,14 @@
+## v0.0.124 (2026-01-20)
+
+### Feat
+
+- Add configurable cloud timeout via PDD_CLOUD_TIMEOUT env var (#347)
+
+### Fix
+
+- Correct docstring example to match 900s default timeout
+- Authentication error handling, agentic fix agent detection, and test isolation
+
 ## v0.0.123 (2026-01-20)
 
 ### Feat
