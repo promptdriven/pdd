@@ -98,7 +98,15 @@ Code generation happens separately via `pdd sync` after the PR is merged.
      - Code: `pdd/module_name.py`
      ```
 
-5. **Track changes**
+5. **Final Validation: No Code Duplication (CRITICAL)**
+   Before completing, verify:
+   - Each new prompt creates functionality that does NOT exist elsewhere in the codebase
+   - No prompt duplicates logic from another module (if it does, extend the existing module instead)
+   - The dependency graph makes sense (no circular dependencies, proper layering)
+
+   If duplication is detected, STOP and recommend modifying an existing prompt instead of creating a new one.
+
+6. **Track changes**
    - Report all files modified with `FILES_MODIFIED:` prefix
    - Report all files created with `FILES_CREATED:` prefix
 
