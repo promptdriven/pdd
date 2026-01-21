@@ -1,0 +1,12 @@
+Write Python utility functions for basic mathematical operations.
+
+The module should include a `divide_numbers` function that:
+- Accepts two parameters: numerator and denominator
+- Returns the result of dividing numerator by denominator
+- Raises ValueError with message "Cannot divide by zero" when denominator is zero
+- Handles both integer and float zero values
+- Works correctly for all other valid division operations (positive, negative, float numbers)
+
+The module should also include:
+- `add_numbers(a, b)`: Add two numbers together
+- `multiply_numbers(a, b)`: Multiply two numbers together
