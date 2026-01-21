@@ -68,7 +68,6 @@ def test_extract_includes_empty_file(tmp_path):
 @pytest.mark.parametrize("include_path, expected", [
     ("prompts/cli_python.prompt", "cli"),
     ("prompts/api_typescript.prompt", "api"),
-    ("prompts/logic_LLM.prompt", "logic"),
     ("context/llm_invoke_example.py", "llm_invoke"),
     ("context/utils_example.ts", "utils"),
     ("simple_python.prompt", "simple"),
@@ -79,9 +78,10 @@ def test_extract_module_valid(include_path, expected):
     assert sync_order.extract_module_from_include(include_path) == expected
 
 @pytest.mark.parametrize("include_path", [
-    "context/preamble.prompt",  # No language suffix (_python/_typescript/_LLM), should be excluded
+    "context/preamble.prompt",  # No language suffix, should be excluded
     "context/shared.py",        # Not a prompt file
     "README.md",                # Not a prompt file
+    "prompts/logic_LLM.prompt", # LLM prompts are runtime, not code generation
 ])
 def test_extract_module_invalid(include_path):
     """Test that invalid paths return None."""
@@ -92,6 +92,25 @@ def test_extract_module_suffix_stripping_order():
     # Code logic: strips language first, then _example.
     # e.g. "foo_example_python" -> strip _python -> "foo_example" -> strip _example -> "foo"
     assert sync_order.extract_module_from_include("foo_example_python.prompt") == "foo"
+
+
+def test_extract_module_excludes_llm_includes_all_languages():
+    """
+    Test that extract_module_from_include:
+    - Returns None for LLM prompts (runtime, not code generation)
+    - Works for ANY language suffix (python, typescript, java, go, rust, etc.)
+    """
+    # LLM prompts should return None
+    assert sync_order.extract_module_from_include("prompts/foo_LLM.prompt") is None
+    assert sync_order.extract_module_from_include("agentic_step9_LLM.prompt") is None
+
+    # All code generation languages should work
+    assert sync_order.extract_module_from_include("prompts/foo_python.prompt") == "foo"
+    assert sync_order.extract_module_from_include("prompts/bar_typescript.prompt") == "bar"
+    assert sync_order.extract_module_from_include("prompts/baz_java.prompt") == "baz"
+    assert sync_order.extract_module_from_include("prompts/qux_go.prompt") == "qux"
+    assert sync_order.extract_module_from_include("prompts/quux_rust.prompt") == "quux"
+
 
 # ==============================================================================
 # Unit Tests: build_dependency_graph
@@ -159,6 +178,32 @@ def test_build_dependency_graph_nested_directories(temp_prompts_dir):
     # Verify dependency parsing works for nested paths
     assert "foo" in graph["bar"], f"bar should depend on foo: {graph}"
     assert graph["foo"] == [], f"foo should have no dependencies: {graph}"
+
+
+def test_build_dependency_graph_excludes_llm_includes_all_languages(temp_prompts_dir):
+    """
+    Test that build_dependency_graph:
+    - Excludes LLM prompts from the graph
+    - Includes prompts for ANY language (not just python/typescript)
+    """
+    # Create various prompt types
+    (temp_prompts_dir / "foo_python.prompt").write_text("% foo", encoding="utf-8")
+    (temp_prompts_dir / "bar_typescript.prompt").write_text("% bar", encoding="utf-8")
+    (temp_prompts_dir / "baz_java.prompt").write_text("% baz", encoding="utf-8")
+    (temp_prompts_dir / "qux_go.prompt").write_text("% qux", encoding="utf-8")
+    (temp_prompts_dir / "runtime_LLM.prompt").write_text("% runtime", encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph(temp_prompts_dir)
+
+    # All code generation prompts should be in the graph
+    assert "foo" in graph, f"foo (python) not found: {graph}"
+    assert "bar" in graph, f"bar (typescript) not found: {graph}"
+    assert "baz" in graph, f"baz (java) not found: {graph}"
+    assert "qux" in graph, f"qux (go) not found: {graph}"
+
+    # LLM prompts should NOT be in the graph
+    assert "runtime" not in graph, f"runtime (LLM) should not be in graph: {graph}"
+
 
 # ==============================================================================
 # Unit Tests: topological_sort
