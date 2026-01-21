@@ -79,10 +79,34 @@ def setup_file_logging(log_file_path=None):
 # Function to set verbose logging
 def set_verbose_logging(verbose=False):
     """Set verbose logging based on flag or environment variable"""
-    if verbose or os.getenv("PDD_VERBOSE_LOGGING") == "1":
+    want_verbose = bool(verbose) or os.getenv("PDD_VERBOSE_LOGGING") == "1"
+
+    # Python logging levels
+    if want_verbose:
         logger.setLevel(logging.DEBUG)
         litellm_logger.setLevel(logging.DEBUG)
-        logger.debug("Verbose logging enabled")
+    else:
+        # Restore defaults
+        if PRODUCTION_MODE:
+            logger.setLevel(logging.WARNING)
+        else:
+            logger.setLevel(getattr(logging, PDD_LOG_LEVEL, logging.INFO))
+        litellm_logger.setLevel(getattr(logging, litellm_log_level, logging.WARNING))
+
+    # LiteLLM internal verbosity/debug info
+    # By default we suppress the noisy "Give Feedback / Get Help" debug banner.
+    # When PDD is run with --verbose, re-enable LiteLLM verbose+debug outputs.
+    try:
+        if hasattr(litellm, "set_verbose"):
+            litellm.set_verbose = want_verbose
+        if hasattr(litellm, "suppress_debug_info"):
+            litellm.suppress_debug_info = not want_verbose
+    except Exception:
+        # If these attributes don't exist in this LiteLLM version, ignore.
+        pass
+
+    if want_verbose:
+        logger.debug("Verbose logging enabled (including LiteLLM debug output)")
     
 # --- End Logging Configuration ---
 
