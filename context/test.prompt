@@ -168,6 +168,41 @@
       YES → Use module-level save/mock/import/restore pattern (PATTERN 7, Section 9)
       NO  → Use fixture-based mocking with patch() context manager
 
+% 12. RESTORING MUTABLE CONTAINERS (DICTS, LISTS):
+    - When saving/restoring shared mutable containers, use IN-PLACE operations, not reference assignment
+    - Other modules may hold references to the original object - replacing the reference doesn't update them
+    - This applies to: dicts, lists, sets, and any mutable object shared across modules
+
+    - BAD (reference assignment - causes test pollution):
+        @pytest.fixture(autouse=True)
+        def restore_commands():
+            original = cli.commands.copy()  # shallow copy
+            yield
+            cli.commands = original  # ❌ Replaces reference, but other modules still see old object!
+
+    - GOOD (in-place restoration):
+        @pytest.fixture(autouse=True)
+        def restore_commands():
+            original = cli.commands.copy()
+            yield
+            cli.commands.clear()           # ✅ Modify the SAME object
+            cli.commands.update(original)  # ✅ Other modules see the restored state
+
+    - For lists:
+        BAD:  my_list = original_list      # Reference replacement
+        GOOD: my_list.clear(); my_list.extend(original_list)  # In-place
+
+    - For sets:
+        BAD:  my_set = original_set        # Reference replacement
+        GOOD: my_set.clear(); my_set.update(original_set)     # In-place
+
+    - WHY THIS MATTERS:
+        Module A: cli.commands = {}        # Creates dict, holds reference
+        Module B: from A import cli        # B now references SAME dict object
+        Test:     cli.commands = backup    # A.cli.commands points to backup
+                                           # But B's reference still points to original!
+        Result:   Tests in B see corrupted state → flaky tests
+
 <isolation_example>
 <include>context/pytest_isolation_example.py</include>
 </isolation_example>
