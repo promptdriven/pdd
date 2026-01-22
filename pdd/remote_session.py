@@ -571,6 +571,7 @@ class RemoteSessionManager:
             update_interval = 2.0  # Send updates every 2 seconds (was 3)
             last_stdout_len = 0
             last_stderr_len = 0
+            sync_state_sent = False  # Track if we've sent sync_state at least once
 
             while True:
                 # Check for cancellation BEFORE polling - this is critical for responsiveness
@@ -602,20 +603,27 @@ class RemoteSessionManager:
                         print(new_stdout, end="", flush=True)
                         last_stdout_len = len(stdout)
 
-                    # Send periodic output updates to cloud
+                    # Send output updates to cloud:
+                    # - Immediately when sync_state is first detected (for visualization)
+                    # - Otherwise every update_interval seconds
                     current_time = asyncio.get_event_loop().time()
-                    if current_time - last_update_time >= update_interval:
-                        if stdout or stderr or sync_state:
-                            try:
-                                await self._update_command_output(
-                                    cmd.command_id,
-                                    stdout=stdout,
-                                    stderr=stderr,
-                                    sync_state=sync_state
-                                )
-                                last_update_time = current_time
-                            except Exception:
-                                pass  # Don't clutter output with cloud update errors
+                    should_update = current_time - last_update_time >= update_interval
+                    if sync_state and not sync_state_sent:
+                        should_update = True  # Send immediately on first sync_state
+
+                    if should_update and (stdout or stderr or sync_state):
+                        try:
+                            await self._update_command_output(
+                                cmd.command_id,
+                                stdout=stdout,
+                                stderr=stderr,
+                                sync_state=sync_state
+                            )
+                            last_update_time = current_time
+                            if sync_state:
+                                sync_state_sent = True
+                        except Exception:
+                            pass  # Don't clutter output with cloud update errors
 
                 if job_status in ("completed", "failed", "cancelled"):
                     # Get final output
@@ -765,6 +773,9 @@ class RemoteSessionManager:
                 "files_created": result.get("files_created", []) if isinstance(result, dict) else [],
                 "cost": response_data.get("cost", 0.0),
             }
+            # Include sync_state from the job result (read from temp file by job status endpoint)
+            if isinstance(result, dict) and result.get("sync_state"):
+                formatted_response["sync_state"] = result["sync_state"]
 
             final_status = "completed" if job_status == "completed" else "failed"
             await self.update_command(
