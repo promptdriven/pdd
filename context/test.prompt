@@ -197,7 +197,7 @@
         GOOD: my_set.clear(); my_set.update(original_set)     # In-place
 
     - WHY THIS MATTERS:
-        Module A: cli.commands = {}        # Creates dict, holds reference
+        Module A: cli.commands = {{}}        # Creates dict, holds reference
         Module B: from A import cli        # B now references SAME dict object
         Test:     cli.commands = backup    # A.cli.commands points to backup
                                            # But B's reference still points to original!

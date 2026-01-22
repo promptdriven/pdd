@@ -184,6 +184,12 @@ def run_agentic_change_orchestrator(
     timeout_adder: float = 0.0,
     use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
+    """
+    Orchestrates the 13-step agentic change workflow.
+
+    Returns:
+        (success, final_message, total_cost, model_used, changed_files)
+    """
     if not quiet:
         console.print(f"Implementing change for issue #{issue_number}: \"{issue_title}\"")
 
@@ -249,6 +255,19 @@ def run_agentic_change_orchestrator(
     for step_num, name, description in steps_config:
         if step_num < start_step: continue
         if step_num == 9:
+            # Check current branch before creating worktree
+            try:
+                current_branch = subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                ).stdout.strip()
+                if current_branch not in ["main", "master"] and not quiet:
+                    console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
+            except subprocess.CalledProcessError:
+                pass  # Ignore if git command fails, worktree setup will likely catch issues
             wt_path, err = _setup_worktree(cwd, issue_number, quiet)
             if not wt_path: return False, f"Failed to create worktree: {err}", total_cost, model_used, []
             worktree_path = wt_path
@@ -272,6 +291,21 @@ def run_agentic_change_orchestrator(
         state["total_cost"] = total_cost
         state["model_used"] = model_used
 
+        if not step_success:
+            # Check if it's a hard stop condition that caused "failure" or just agent error
+            stop_reason = _check_hard_stop(step_num, step_output)
+            if stop_reason:
+                if not quiet:
+                    console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
+                # Save state so we don't re-run previous steps
+                state["last_completed_step"] = step_num
+                state["step_outputs"][str(step_num)] = step_output
+                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
+            # Soft failure - warn but continue
+            console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
+
+        # Check hard stops on success too
         stop_reason = _check_hard_stop(step_num, step_output)
         if stop_reason:
             if not quiet: console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
@@ -305,6 +339,13 @@ def run_agentic_change_orchestrator(
 
         save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result: github_comment_id = save_result; state["github_comment_id"] = github_comment_id
+
+        if not quiet:
+            # Brief result summary
+            lines = step_output.strip().split('\n')
+            brief = lines[-1] if lines else "Done"
+            if len(brief) > 80: brief = brief[:77] + "..."
+            console.print(f"   -> {escape(brief)}")
 
     if "files_to_stage" not in context:
         s9_out = context.get("step9_output", "")
@@ -365,6 +406,8 @@ def run_agentic_change_orchestrator(
                     script_path = worktree_path / "sync_order.sh"
                     sync_order_list = generate_sync_order_script(affected, script_path, worktree_path)
                     sync_order_script = str(script_path)
+                    if not quiet:
+                        console.print(f"[dim]Generated sync order script: {script_path}[/dim]")
             except Exception as e:
                 if not quiet: console.print(f"[yellow]Warning: Could not generate sync order: {e}[/yellow]")
     context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
@@ -384,7 +427,12 @@ def run_agentic_change_orchestrator(
         if not quiet:
             console.print("\n[green]Change workflow complete[/green]")
             console.print(f"   Total cost: ${total_cost:.4f}")
+            console.print(f"   Files changed: {', '.join(changed_files)}")
             console.print(f"   PR: {pr_url}")
+            console.print(f"   Review iterations: {review_iteration}")
+            console.print("\nNext steps:")
+            console.print("   1. Review and merge the PR")
+            console.print("   2. Run `./sync_order.sh` after merge (or see PR for manual commands)")
         clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
         return True, f"PR Created: {pr_url}", total_cost, model_used, changed_files
     return True, "Workflow already completed", total_cost, model_used, changed_files
