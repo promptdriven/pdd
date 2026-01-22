@@ -43,7 +43,7 @@ def test_report_core_api_success(mock_console_print, mock_github_config, mock_cr
         mock_post_issue.return_value = "https://github.com/promptdriven/pdd/issues/123"
 
         # Act
-        result = runner.invoke(cli, ["report-core", "--api"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", "--api", "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -68,7 +68,7 @@ def test_report_core_api_gist_failure_fallback(mock_console_print, mock_github_c
         mock_post_issue.return_value = "https://github.com/promptdriven/pdd/issues/123" # Issue still succeeds
 
         # Act
-        result = runner.invoke(cli, ["report-core", "--api"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", "--api", "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -93,7 +93,7 @@ def test_report_core_api_issue_failure_fallback_to_browser(mock_console_print, m
         mock_post_issue.return_value = None  # Simulate issue creation failure
 
         # Act
-        result = runner.invoke(cli, ["report-core", "--api"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", "--api", "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -118,7 +118,7 @@ def test_report_core_specific_file_browser(mock_console_print, mock_github_confi
         mock_github_config.return_value = None # No github auth
 
         # Act
-        result = runner.invoke(cli, ["report-core", str(dump_path)], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", str(dump_path), "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -143,7 +143,7 @@ def test_report_core_with_description(mock_console_print, mock_github_config, mo
         mock_github_config.return_value = None  # Simulate no GitHub auth for browser fallback
 
         # Act
-        result = runner.invoke(cli, ["report-core", "-d", "This is a test description."], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
+        result = runner.invoke(cli, ["report-core", "-d", "This is a test description.", "--repo", "promptdriven/pdd"], env={"PDD_AUTO_UPDATE": "false", "HOME": td})
 
         # Assert
         assert result.exit_code == 0
@@ -151,3 +151,38 @@ def test_report_core_with_description(mock_console_print, mock_github_config, mo
         args, kwargs = mock_webbrowser_open.call_args
         assert "body=" in args[0]
         assert "This%20is%20a%20test%20description." in args[0] # Ensure description is in the body
+
+
+@mock.patch("webbrowser.open")
+@mock.patch("pdd.commands.report._github_config")
+def test_report_core_no_repo_should_error(mock_github_config, mock_webbrowser_open, runner):
+    """Test that report-core raises UsageError when no repo is provided.
+
+    This test verifies the fix for issue #340. When neither --repo flag nor
+    PDD_GITHUB_REPO environment variable is provided, the command should raise
+    a clear error instead of silently defaulting to 'promptdriven/pdd'.
+
+    This test will FAIL on the buggy code (which has the hardcoded default)
+    and PASS after the fix is applied.
+    """
+    with runner.isolated_filesystem() as td:
+        # Arrange: Create a core dump file
+        create_dummy_core_dump(td)
+        mock_github_config.return_value = None  # No GitHub auth (browser mode)
+
+        # Act: Invoke report-core WITHOUT --repo flag and WITHOUT PDD_GITHUB_REPO env var
+        # Explicitly ensure PDD_GITHUB_REPO is not set
+        result = runner.invoke(
+            cli,
+            ["report-core"],
+            env={"PDD_AUTO_UPDATE": "false", "HOME": td}
+            # Note: Not setting PDD_GITHUB_REPO in env
+        )
+
+        # Assert: Should get a UsageError (exit code 2) with helpful message
+        assert result.exit_code == 2, f"Expected exit code 2 (UsageError), got {result.exit_code}"
+        assert "Error" in result.output or "required" in result.output.lower(), \
+            f"Expected error message about missing repo, got: {result.output}"
+
+        # The command should fail before trying to open a browser
+        mock_webbrowser_open.assert_not_called()
