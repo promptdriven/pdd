@@ -225,6 +225,8 @@ class Job:
     # Live output during execution (updated in real-time)
     live_stdout: str = ""
     live_stderr: str = ""
+    # Path to sync state file (for web UI visualization)
+    sync_state_file: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -447,6 +449,11 @@ class JobManager:
         env['PDD_SKIP_UPDATE_CHECK'] = '1'  # Skip update prompts
         env['PDD_WEB_MODE'] = '1'  # Emit structured state for web UI visualization
         env['PYTHONUNBUFFERED'] = '1'  # Ensure real-time output capture (no pipe buffering)
+        # Set sync state file path for cross-process state sharing
+        import tempfile
+        sync_state_file = os.path.join(tempfile.gettempdir(), f'pdd_sync_state_{job.id}.json')
+        env['PDD_SYNC_STATE_FILE'] = sync_state_file
+        job.sync_state_file = sync_state_file
 
         stdout_lines = []
         stderr_lines = []
