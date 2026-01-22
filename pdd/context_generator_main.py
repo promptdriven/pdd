@@ -11,7 +11,7 @@ import httpx
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
-from .construct_paths import construct_paths
+from .construct_paths import construct_paths, BUILTIN_EXT_MAP
 from .context_generator import context_generator
 from .core.cloud import CloudConfig
 # get_jwt_token imports removed - using CloudConfig.get_jwt_token() instead
@@ -98,15 +98,33 @@ async def _run_cloud_generation(prompt_content: str, code_content: str, language
         except Exception as e:
             return None, 0.0, f"Cloud error: {e}"
 
-def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str]) -> Tuple[str, float, str]:
+def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str], format: Optional[str] = None) -> Tuple[str, float, str]:
     try:
         input_file_paths = {"prompt_file": prompt_file, "code_file": code_file}
         command_options = {"output": output}
+        if format is not None:
+            command_options["format"] = format
         resolved_config, input_strings, output_file_paths, language = construct_paths(input_file_paths=input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="example", command_options=command_options, context_override=ctx.obj.get('context'), confirm_callback=ctx.obj.get('confirm_callback'))
         prompt_content = input_strings.get("prompt_file", "")
         code_content = input_strings.get("code_file", "")
         if output and not output.endswith("/") and not Path(output).is_dir():
-            resolved_output = output
+            # When format is specified, ensure the output path uses the correct extension
+            if format is not None:
+                output_path = Path(output)
+                format_lower = format.lower()
+                if format_lower == "md":
+                    # Replace extension with .md to match format constraint
+                    resolved_output = str(output_path.with_suffix(".md"))
+                elif format_lower == "code":
+                    # For code format, determine the correct language extension based on language
+                    lang_key = language.lower() if language else ''
+                    lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
+                    resolved_output = str(output_path.with_suffix(lang_ext))
+                else:
+                    # Fallback (shouldn't happen due to click.Choice validation)
+                    resolved_output = output
+            else:
+                resolved_output = output
         else:
             resolved_output = output_file_paths.get("output")
         is_local = ctx.obj.get("local", False)
@@ -173,7 +191,8 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
             generated_code, total_cost, model_name = context_generator(code_module=code_content, prompt=prompt_content, language=language, strength=strength, temperature=temperature, verbose=not quiet, source_file_path=source_file_path, example_file_path=example_file_path, module_name=module_name, time=ctx.obj.get('time'))
         if not generated_code:
             raise click.UsageError("Example generation failed, no code produced.")
-        if language and language.lower() == "python":
+        # Only validate Python syntax when format is "code" (default) or None, not when format is "md"
+        if language and language.lower() == "python" and (format is None or format.lower() == "code"):
             generated_code = _validate_and_fix_python_syntax(generated_code, quiet)
         if resolved_output:
             out_path = Path(resolved_output)
