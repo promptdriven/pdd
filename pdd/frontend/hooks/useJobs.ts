@@ -540,30 +540,39 @@ export function useJobs(options: UseJobsOptions = {}) {
               const updated = new Map(prev);
               const currentJob = updated.get(job.id);
               if (currentJob && currentJob.status === 'running') {
-                // Parse stdout and stderr into lines
+                // Parse stdout line by line, extracting sync_state markers
                 const newLines: string[] = [];
+                let latestSyncState: SyncState | undefined = currentJob.syncState;
+                const SYNC_MARKER = '@@PDD_SYNC_STATE@@';
 
                 if (status.response?.stdout) {
                   const stdoutLines = status.response.stdout.split('\n').filter((l: string) => l.trim());
-                  newLines.push(...stdoutLines);
+                  for (const line of stdoutLines) {
+                    if (line.startsWith(SYNC_MARKER)) {
+                      try {
+                        const payload = JSON.parse(line.slice(SYNC_MARKER.length));
+                        latestSyncState = {
+                          operation: payload.operation || '',
+                          cost: payload.cost || 0,
+                          budget: payload.budget ?? null,
+                          basename: payload.basename || '',
+                          elapsedSeconds: payload.elapsedSeconds || 0,
+                          paths: payload.paths || { prompt: '', code: '', example: '', tests: '' },
+                          colors: payload.colors,
+                          status: payload.status || 'running',
+                        };
+                      } catch {
+                        // Ignore malformed markers
+                      }
+                    } else {
+                      newLines.push(line);
+                    }
+                  }
                 }
                 if (status.response?.stderr) {
                   const stderrLines = status.response.stderr.split('\n').filter((l: string) => l.trim());
                   newLines.push(...stderrLines.map((l: string) => `[stderr] ${l}`));
                 }
-
-                // Read sync_state directly from response (set by server from temp file)
-                const syncStateFromResponse = status.response?.sync_state;
-                const latestSyncState: SyncState | undefined = syncStateFromResponse ? {
-                  operation: syncStateFromResponse.operation || '',
-                  cost: syncStateFromResponse.cost || 0,
-                  budget: syncStateFromResponse.budget ?? null,
-                  basename: syncStateFromResponse.basename || '',
-                  elapsedSeconds: syncStateFromResponse.elapsedSeconds || 0,
-                  paths: syncStateFromResponse.paths || { prompt: '', code: '', example: '', tests: '' },
-                  colors: syncStateFromResponse.colors,
-                  status: syncStateFromResponse.status || 'running',
-                } : currentJob.syncState;
 
                 if (newLines.length > 0 || latestSyncState !== currentJob.syncState) {
                   const isPlaceholder = currentJob.output.length <= 3 &&
@@ -595,12 +604,34 @@ export function useJobs(options: UseJobsOptions = {}) {
               const currentJob = updated.get(job.id);
               // Allow update from running or queued status
               if (currentJob && (currentJob.status === 'running' || currentJob.status === 'queued')) {
+                // Parse stdout line by line, extracting sync_state markers
                 const finalOutput: string[] = [];
+                let finalSyncState: SyncState | undefined = currentJob.syncState;
+                const SYNC_MARKER = '@@PDD_SYNC_STATE@@';
 
-                // Add final output from response
                 if (status.response?.stdout) {
                   const stdoutLines = status.response.stdout.split('\n').filter((l: string) => l.trim());
-                  finalOutput.push(...stdoutLines);
+                  for (const line of stdoutLines) {
+                    if (line.startsWith(SYNC_MARKER)) {
+                      try {
+                        const payload = JSON.parse(line.slice(SYNC_MARKER.length));
+                        finalSyncState = {
+                          operation: payload.operation || '',
+                          cost: payload.cost || 0,
+                          budget: payload.budget ?? null,
+                          basename: payload.basename || '',
+                          elapsedSeconds: payload.elapsedSeconds || 0,
+                          paths: payload.paths || { prompt: '', code: '', example: '', tests: '' },
+                          colors: payload.colors,
+                          status: success ? 'completed' : 'failed',
+                        };
+                      } catch {
+                        // Ignore malformed markers
+                      }
+                    } else {
+                      finalOutput.push(line);
+                    }
+                  }
                 }
                 if (status.response?.stderr) {
                   const stderrLines = status.response.stderr.split('\n').filter((l: string) => l.trim());
@@ -616,23 +647,10 @@ export function useJobs(options: UseJobsOptions = {}) {
                   finalOutput.push('', `✗ Command failed: ${status.response?.message || 'Unknown error'}`);
                 }
 
-                // Read sync_state directly from response (set by server from temp file)
-                let finalSyncState: SyncState | undefined = currentJob.syncState;
-                const syncStateFromResponse = status.response?.sync_state;
-                if (syncStateFromResponse) {
+                // Update sync state status if we had one from streaming
+                if (!finalSyncState && currentJob.syncState) {
                   finalSyncState = {
-                    operation: syncStateFromResponse.operation || '',
-                    cost: syncStateFromResponse.cost || 0,
-                    budget: syncStateFromResponse.budget ?? null,
-                    basename: syncStateFromResponse.basename || '',
-                    elapsedSeconds: syncStateFromResponse.elapsedSeconds || 0,
-                    paths: syncStateFromResponse.paths || { prompt: '', code: '', example: '', tests: '' },
-                    colors: syncStateFromResponse.colors,
-                    status: success ? 'completed' : 'failed',
-                  };
-                } else if (finalSyncState) {
-                  finalSyncState = {
-                    ...finalSyncState,
+                    ...currentJob.syncState,
                     status: success ? 'completed' : 'failed',
                   };
                 }
