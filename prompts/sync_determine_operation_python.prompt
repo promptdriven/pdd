@@ -137,6 +137,7 @@ Log mode performs the complete analysis (reading fingerprints, calculating hashe
         -   If a test file exists → return `fix`.
         -   If the test file is missing → return `test` to (re)generate tests.
     -   If `exit_code != 0` (runtime error):
+        -   **IMPORTANT**: If tests passed successfully (`tests_failed == 0` AND `tests_passed > 0`), treat this as a tooling issue (e.g., pytest-cov warning) rather than a runtime error. Skip to the coverage check below instead of returning `fix` or `crash`.
         -   If the example has previously run successfully (based on fingerprint/run reports history) → return `fix`.
         -   Otherwise → return `crash`.
     -   If `coverage < target_coverage` and `skip_tests=False`:

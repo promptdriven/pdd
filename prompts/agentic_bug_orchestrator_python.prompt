@@ -112,7 +112,7 @@ After Step 5.5, parse output for:
 
 % Git Worktree Isolation
 
-Before Step 7, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
+Before Step 5.5, create an isolated git worktree for prompt fixes, test generation, and PR creation. This prevents the workflow from disturbing the user's current branch.
 
 1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/fix-issue-{issue_number}/` relative to git root
@@ -123,11 +123,11 @@ Before Step 7, create an isolated git worktree for test generation and PR creati
    - Create worktree: `git worktree add -b {branch} {path} HEAD`
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
-2. In orchestrator loop, before Step 7:
+2. In orchestrator loop, before Step 5.5:
    - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
    - Call `_setup_worktree(cwd, issue_number, quiet)`
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
-   - Switch working directory to worktree path for Steps 7-10
+   - Switch working directory to worktree path for Steps 5.5-10
    - Add `worktree_path` to context dict (for Step 10 prompt formatting)
    - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
 
