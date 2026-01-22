@@ -49,6 +49,51 @@ def _validate_inputs(
         raise ValueError("Language must be a non-empty string")
 
 
+def _inject_sys_path_preamble(code: str) -> str:
+    """
+    Injects sys.path isolation preamble into Python code.
+    Ensures it appears after __future__ imports but before other imports.
+    """
+    preamble = (
+        "\nimport sys\n"
+        "from pathlib import Path\n\n"
+        "# Add project root to sys.path to ensure local code is prioritized\n"
+        "# This allows testing local changes without installing the package\n"
+        "project_root = Path(__file__).resolve().parents[1]\n"
+        "sys.path.insert(0, str(project_root))\n"
+    )
+    
+    lines = code.splitlines()
+    insert_idx = 0
+    
+    # Skip shebang
+    if lines and len(lines) > insert_idx and lines[insert_idx].startswith("#!"):
+        insert_idx += 1
+        
+    # Skip encoding
+    if lines and len(lines) > insert_idx and lines[insert_idx].startswith("# -*-"):
+        insert_idx += 1
+        
+    # Skip __future__ imports and initial comments/blanks
+    while insert_idx < len(lines):
+        line = lines[insert_idx].strip()
+        if not line:
+            insert_idx += 1
+            continue
+        if line.startswith("#"):
+            insert_idx += 1
+            continue
+        if line.startswith("from __future__"):
+            insert_idx += 1
+            continue
+        
+        # Found something that is not a comment, empty, or future import.
+        break
+            
+    lines.insert(insert_idx, preamble)
+    return "\n".join(lines)
+
+
 def generate_test(
     prompt: str,
     code: Optional[str] = None,
@@ -245,6 +290,10 @@ def generate_test(
             best_match = max(matches, key=len)
 
         unit_test = best_match if best_match else current_text
+
+    # --- Step 6.5: Inject sys.path isolation for Python ---
+    if language.lower() == 'python' and unit_test.strip() and "sys.path.insert" not in unit_test:
+        unit_test = _inject_sys_path_preamble(unit_test)
 
     # --- Step 7: Final Cost Reporting ---
     if verbose:
