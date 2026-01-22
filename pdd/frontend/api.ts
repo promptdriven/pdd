@@ -464,6 +464,16 @@ export interface RemoteCommandStatus {
     cost?: number;
     streaming?: boolean;  // True when this is a streaming update (intermediate output)
     error?: string;
+    sync_state?: {
+      operation: string;
+      cost: number;
+      budget: number | null;
+      basename: string;
+      elapsedSeconds: number;
+      paths: Record<string, string>;
+      colors: Record<string, string>;
+      status: 'running' | 'completed' | 'failed';
+    };
   };
 }
 

@@ -177,7 +177,7 @@ export interface PddrcConfig {
   contexts: Record<string, PddrcContext>;
 }
 
-// Sync visualization state emitted by the backend via @@PDD_SYNC_STATE@@ markers
+// Sync visualization state read from temp file via job status endpoint
 export interface SyncState {
   operation: string;
   cost: number;

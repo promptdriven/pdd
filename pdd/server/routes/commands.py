@@ -332,6 +332,19 @@ async def get_job_status(
             "exit_code": None,  # Not yet available
         }
 
+    # Include sync state if available (read from temp file written by subprocess)
+    if job.sync_state_file:
+        try:
+            import json as _json
+            with open(job.sync_state_file, 'r') as f:
+                sync_state = _json.load(f)
+            if result is None:
+                result = {}
+            if isinstance(result, dict):
+                result["sync_state"] = sync_state
+        except (OSError, ValueError):
+            pass  # File doesn't exist yet or is being written
+
     return JobResult(
         job_id=job.id,
         status=job.status,
