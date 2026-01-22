@@ -21,25 +21,7 @@ def main():
     print("-" * 60)
 
     # Mock the agentic task execution to avoid real API calls
-    # We also mock _check_gh_cli, _fetch_issue_data, and _ensure_repo_context to avoid environment dependencies
-    with patch("pdd.agentic_test.run_agentic_test_orchestrator") as mock_orchestrator, \
-         patch("pdd.agentic_test._check_gh_cli", return_value=True), \
-         patch("pdd.agentic_test._fetch_issue_data") as mock_fetch, \
-         patch("pdd.agentic_test._ensure_repo_context") as mock_context:
-        
-        # Mock issue data
-        mock_fetch.return_value = ({
-            "title": "Test Issue",
-            "user": {"login": "tester"},
-            "body": "Fix the login bug",
-            "full_content_with_comments": "State: open\nLabels: bug\n\nFix the login bug",
-            "labels": [{"name": "bug"}],
-            "state": "open"
-        }, None)
-        
-        # Mock repo context
-        mock_context.return_value = (True, "/tmp/mock/repo")
-
+    with patch("pdd.agentic_test.run_agentic_test_orchestrator") as mock_orchestrator:
         # Simulate successful 9-step workflow
         mock_orchestrator.return_value = (
             True,  # success
