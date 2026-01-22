@@ -273,15 +273,21 @@ class TestLoopModeNoLogFile:
 
 
 class TestLoopModeLogFileE2E:
-    """E2E tests for issue #360: Verify CLI behavior when log file is passed in loop mode.
+    """E2E tests for issue #360: Verify CLI behavior in loop mode.
 
-    These tests exercise the full CLI path to verify that passing a .log file
-    as a positional argument in --loop mode causes pytest to fail with collection
-    errors. This is the actual user-facing bug behavior.
+    The unit tests in TestLoopModeNoLogFile verify that the prompt templates
+    do NOT include the problematic log file argument.
 
-    The unit tests in TestLoopModeNoLogFile check the prompt templates.
-    These E2E tests verify the CLI behavior that results from following
-    those buggy prompt instructions.
+    This E2E test class verifies the correct CLI behavior when pdd fix --loop
+    is called without a log file argument (the expected usage pattern after
+    the prompt fix).
+
+    Note: The original test_loop_mode_with_log_file_causes_pytest_collection_error
+    was removed because it explicitly passed a log file to the CLI, which will
+    always cause the "bug" regardless of what the prompts say. The bug is in
+    the prompt templates (now fixed), not in the CLI behavior. The CLI correctly
+    treats all positional args after CODE as test files in loop mode (documented
+    in CHANGELOG v0.0.119).
     """
 
     @pytest.fixture
@@ -292,7 +298,6 @@ class TestLoopModeLogFileE2E:
         - prompt_file: A minimal prompt file
         - code_file: A simple code file with a bug
         - test_file: A passing test file
-        - log_file: An empty .log file (the problematic extra argument)
         """
         # Create a minimal prompt file
         prompt_content = """% Language: Python
@@ -321,88 +326,12 @@ def test_add():
         test_file = tmp_path / "test_calculator.py"
         test_file.write_text(test_content)
 
-        # Create the problematic log file (what the buggy prompt instructs LLM to create)
-        log_file = tmp_path / "pdd_fix_errors_calculator.log"
-        log_file.write_text("")  # Empty log file
-
         return {
             "prompt_file": str(prompt_file),
             "code_file": str(code_file),
             "test_file": str(test_file),
-            "log_file": str(log_file),
             "tmp_path": tmp_path,
         }
-
-    def test_loop_mode_with_log_file_causes_pytest_collection_error(
-        self, loop_mode_test_files, monkeypatch
-    ):
-        """E2E Test: Passing a .log file to pdd fix --loop causes pytest failures.
-
-        Issue #360: The prompts instruct the LLM to run:
-            pdd fix --manual PROMPT CODE TEST /tmp/pdd_fix_errors.log --loop
-
-        In loop mode, fix.py treats ALL args after CODE as test files:
-            unit_test_files = args[2:]  # [TEST, /tmp/.../errors.log]
-
-        Then pytest is invoked with both files, and fails because it cannot
-        collect tests from the .log file (exit code 4 = collection error).
-
-        This E2E test verifies this bug by:
-        1. Calling the CLI with the exact pattern from the buggy prompts
-        2. Checking that the command fails due to pytest collection errors
-        3. Verifying the error message mentions the log file
-
-        The test FAILS on buggy code (the bug causes the error we're testing for).
-        The test PASSES once the prompts are fixed (no log file = no error).
-        """
-        from click.testing import CliRunner
-        from pdd import cli
-
-        files = loop_mode_test_files
-        monkeypatch.chdir(files["tmp_path"])
-        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-        monkeypatch.setenv("OPENAI_API_KEY", "fake-key-for-testing")
-
-        runner = CliRunner()
-
-        # This is the exact command pattern from the buggy prompts (Step 1 & Step 8):
-        # pdd fix --manual PROMPT CODE TEST LOG_FILE --loop
-        # Note: The log file comes BEFORE --loop, making it a positional arg
-        result = runner.invoke(
-            cli.cli,
-            [
-                "--local",
-                "--force",
-                "fix",
-                "--manual",
-                "--loop",
-                files["prompt_file"],
-                files["code_file"],
-                files["test_file"],
-                files["log_file"],  # This is the bug: log file as positional arg
-            ],
-            catch_exceptions=False,
-        )
-
-        # THE BUG: The command should NOT fail with collection errors
-        # But on buggy code, pytest tries to collect from .log file and fails
-
-        # Check if the output mentions the log file being processed as a test file
-        # This pattern indicates the bug: pytest treating .log as test file
-        log_file_in_output = "pdd_fix_errors_calculator.log" in result.output
-        processing_multiple_files = "Processing test file" in result.output and "/2" in result.output
-
-        # If either condition is true, the bug is present
-        bug_is_present = log_file_in_output or processing_multiple_files
-
-        # This assertion is designed to FAIL when the bug exists
-        # (which means it correctly detects the bug on buggy code)
-        assert not bug_is_present, (
-            "BUG DETECTED (Issue #360): The log file was incorrectly treated as a test file!\n\n"
-            f"Command output shows the .log file being processed:\n{result.output}\n\n"
-            "This happens because fix.py in loop mode treats ALL args after CODE as test files.\n"
-            "The prompts should NOT include the log file argument when using --loop mode."
-        )
 
     def test_loop_mode_without_log_file_processes_single_test_file(
         self, loop_mode_test_files, monkeypatch
@@ -411,13 +340,10 @@ def test_add():
 
         This test verifies the CORRECT behavior: when pdd fix --manual --loop
         is called with just PROMPT CODE TEST (no log file), it should only
-        process one test file, not two.
+        process one test file.
 
-        This is a contrast to test_loop_mode_with_log_file_causes_pytest_collection_error
-        which shows "Processing test file 1/2" due to the bug.
-
-        This test should PASS on both buggy and fixed code - it's a baseline
-        to ensure the fix doesn't break the normal case.
+        This test serves as a baseline to ensure the correct usage pattern
+        (no log file argument in loop mode) works as expected.
         """
         from click.testing import CliRunner
         from pdd import cli
