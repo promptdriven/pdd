@@ -15,9 +15,6 @@ DEFAULT_TEMPERATURE = 0.0
 
 DEFAULT_TIME = 0.25
 
-# Define constants used across the package
-DEFAULT_LLM_MODEL = "gpt-5.1-codex-mini"
-
 # Public OAuth credentials for cloud mode
 # These are safe to embed as they are public client identifiers:
 # - Firebase API keys are designed to be public (client-side)
