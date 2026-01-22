@@ -34,7 +34,14 @@ You are working on step 2 of 9 in an agentic test generation workflow. Previous 
    - Identify any authentication or setup requirements
    - Note any existing test infrastructure (playwright.config, pytest fixtures, etc.)
 
-3. **Document your findings**
+3. **For API testing (if issue mentions endpoints/API)**
+   - Find base URL configuration (check `.env`, `.env.example`, config files, README)
+   - Identify authentication method (API keys, OAuth, bearer tokens, session cookies)
+   - Look for existing API client code or test patterns
+   - Check for API documentation (OpenAPI/Swagger specs, Postman collections)
+   - Note any environment-specific URLs (dev/staging/prod)
+
+4. **Document your findings**
    - List the files and components relevant to testing
    - Note any existing test patterns the new tests should follow
    - Identify potential test data or fixtures needed
@@ -68,6 +75,11 @@ Your comment should follow this format:
 - Config file: [path if found]
 - Existing fixtures: [list if any]
 - Test patterns: [describe patterns found]
+
+### API Configuration (if API testing)
+- Base URL source: [e.g., `.env` variable `API_BASE_URL`, config file, hardcoded]
+- Authentication: [method found, e.g., "Bearer token from env var `API_KEY`"]
+- API docs: [path to OpenAPI spec, Postman collection, or "none found"]
 
 ### Notes
 [Any additional observations relevant to test generation]

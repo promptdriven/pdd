@@ -99,29 +99,28 @@ You are now working in an isolated git worktree at: {worktree_path}
    import pytest
    import requests
 
-   BASE_URL = "http://localhost:3000"
+   # Use BASE_URL from test plan (Step 5) or environment
+   BASE_URL = "..."  # e.g., from env var or test config
 
-   class TestUsersEndpoint:
-       def test_create_user_returns_201(self):
-           response = requests.post(
-               f"{BASE_URL}/api/users",
-               json={"email": "test@example.com", "name": "Test User"}
+   class TestEndpointName:
+       """Test the endpoint specified in the test plan."""
+
+       def test_success_case(self):
+           # Use method, path, and payload from test plan
+           response = requests.post(  # or get, put, delete per plan
+               f"{BASE_URL}/path/from/plan",
+               json={...}  # payload structure from test plan
            )
-           assert response.status_code == 201
-           data = response.json()
-           assert "id" in data
-           assert data["email"] == "test@example.com"
+           assert response.status_code == ...  # expected status from plan
+           # Validate response structure per test plan
 
-       def test_create_user_returns_400_for_missing_email(self):
+       def test_error_case(self):
+           # Test error scenarios from test plan
            response = requests.post(
-               f"{BASE_URL}/api/users",
-               json={"name": "Test User"}
+               f"{BASE_URL}/path/from/plan",
+               json={...}  # invalid payload per test plan
            )
-           assert response.status_code == 400
-
-       def test_get_user_returns_404_for_nonexistent(self):
-           response = requests.get(f"{BASE_URL}/api/users/nonexistent-id")
-           assert response.status_code == 404
+           assert response.status_code == 400  # or other error code
    ```
 
 6. **For API (pytest + httpx for async):**
@@ -129,15 +128,16 @@ You are now working in an isolated git worktree at: {worktree_path}
    import pytest
    import httpx
 
-   BASE_URL = "http://localhost:3000"
+   # Use BASE_URL from test plan (Step 5) or environment
+   BASE_URL = "..."  # e.g., from env var or test config
 
    @pytest.mark.asyncio
-   async def test_get_users():
+   async def test_endpoint_from_plan():
        async with httpx.AsyncClient() as client:
-           response = await client.get(f"{BASE_URL}/api/users")
-           assert response.status_code == 200
-           data = response.json()
-           assert isinstance(data, list)
+           # Use method and path from test plan
+           response = await client.get(f"{BASE_URL}/path/from/plan")
+           assert response.status_code == ...  # expected status from plan
+           # Validate response per test plan
    ```
 
 % Output
