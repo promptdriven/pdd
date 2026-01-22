@@ -4,7 +4,7 @@
 Write the `pdd/agentic_test.py` module.
 
 % Role & Scope
-CLI entry point for the agentic UI test generation workflow. Fetches a GitHub issue, extracts content and metadata describing what needs to be tested, then invokes the orchestrator to run the 9-step UI test generation process.
+CLI entry point for the agentic test generation workflow. Fetches a GitHub issue, extracts content and metadata describing what needs to be tested, then invokes the orchestrator to run the 9-step test generation process (supports UI, CLI, and API tests).
 
 % Requirements
 1. Function: `run_agentic_test(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
