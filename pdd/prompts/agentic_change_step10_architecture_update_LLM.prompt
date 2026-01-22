@@ -145,28 +145,28 @@ No new or modified prompt files require architecture metadata updates.
 **Example `<pdd-interface>` tag (module type):**
 ```xml
 <pdd-interface>
-{
+{{
   "type": "module",
-  "module": {
+  "module": {{
     "functions": [
-      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, ...)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {{"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, ...)", "returns": "Tuple[bool, str, float, str, List[str]]"}}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 ```
 
 **Example `<pdd-interface>` tag (cli type):**
 ```xml
 <pdd-interface>
-{
+{{
   "type": "cli",
-  "cli": {
+  "cli": {{
     "commands": [
-      {"name": "change", "description": "Implement a GitHub issue as prompt changes"}
+      {{"name": "change", "description": "Implement a GitHub issue as prompt changes"}}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 ```
 
