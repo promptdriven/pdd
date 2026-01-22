@@ -320,6 +320,46 @@ def test_get_affected_modules_none_modified():
     graph = {"a": []}
     assert sync_order.get_affected_modules(["a"], set(), graph) == []
 
+
+def test_get_affected_modules_includes_cyclic_modules():
+    """
+    Test that modified modules in cycles are included in affected list.
+
+    Regression test for bug where cyclic modules were excluded from sync_order.sh
+    because topological_sort excludes them from sorted_modules, and
+    get_affected_modules filtered to only sorted_modules.
+    """
+    # Graph with a cycle: A depends on B, B depends on C, C depends on A
+    graph = {
+        "module_a": ["module_b"],
+        "module_b": ["module_c"],
+        "module_c": ["module_a"],
+        "module_d": [],  # Not in cycle, no dependencies
+    }
+
+    sorted_modules, cycles = sync_order.topological_sort(graph)
+
+    # Verify test setup: only module_d should be in sorted_modules
+    assert sorted_modules == ["module_d"]
+    assert len(cycles) == 1
+    cyclic_set = set(cycles[0])
+    assert cyclic_set == {"module_a", "module_b", "module_c"}
+
+    # If we modify module_a (in cycle), all cyclic modules should be affected
+    modified = {"module_a"}
+
+    affected = sync_order.get_affected_modules(sorted_modules, modified, graph, cyclic_set)
+
+    # All modules in the cycle should be included
+    assert "module_a" in affected
+    assert "module_b" in affected  # depends on c which depends on a
+    assert "module_c" in affected  # depends on a directly
+    # module_d should NOT be affected (independent of cycle)
+    assert "module_d" not in affected
+    # Verify deterministic order (alphabetical for cyclic modules)
+    assert affected == ["module_a", "module_b", "module_c"]
+
+
 # ==============================================================================
 # Unit Tests: generate_sync_order_script
 # ==============================================================================
