@@ -822,8 +822,7 @@ class TestCumulativeCostDisplay:
         monkeypatch.setattr(fcl_module, "rprint", capturing_rprint)
 
         # Call fix_code_loop with remaining_budget (simulating what sync_orchestration does)
-        # NOTE: The current API doesn't have a prior_cost parameter - this is the bug!
-        # After the fix, we should be able to pass prior_cost=3.00
+        # The prior_cost parameter allows the display to show cumulative costs
         success, final_program, final_code, attempts, total_cost, model = fix_code_loop(
             code_file=str(code_file),
             prompt="Test prompt",
@@ -834,7 +833,7 @@ class TestCumulativeCostDisplay:
             budget=remaining_budget,  # $17.00 remaining
             error_log_file=str(error_log),
             verbose=True,
-            # prior_cost=prior_cost,  # This parameter doesn't exist yet - that's the bug!
+            prior_cost=prior_cost,  # Pass prior cost to show cumulative total (Issue #364 fix)
         )
 
         # Find the cost display line in captured output
