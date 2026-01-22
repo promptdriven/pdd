@@ -8,8 +8,8 @@ without making actual LLM calls or requiring a real GitHub issue.
 
 Scenario:
     We simulate an issue where a user reports a "ZeroDivisionError" in a calculator app.
-    The orchestrator will step through the 9-step process, finding the bug, generating a test,
-    and creating a fix.
+    The orchestrator will step through the 11-step process (including step 5.5 for prompt
+    classification), finding the bug, generating a test, and creating a fix.
 """
 
 import sys
@@ -39,43 +39,46 @@ def mock_load_prompt_template(template_name: str) -> str:
     return f"MOCK PROMPT FOR: {template_name}\nContext: {{issue_content}}"
 
 
-def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: bool, label: str):
+def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: bool, label: str, **kwargs):
     """
     Mock implementation of run_agentic_task.
-    Simulates the output of an LLM agent for each step of the workflow.
+    Simulates the output of an LLM agent for each step of the 11-step workflow.
     """
-    step_num = label.replace("step", "")
-    
+    # Convert step label to identifier (step5_5 -> "5_5", step7 -> "7")
+    step_id = label.replace("step", "")
+
     # Default return values
     success = True
     cost = 0.15  # Simulated cost per step
     provider = "gpt-4-mock"
-    files = []
     output = ""
 
-    if step_num == "1":
+    if step_id == "1":
         output = "No duplicate issues found. Proceeding."
-    elif step_num == "2":
+    elif step_id == "2":
         output = "Checked documentation. This behavior is not documented, likely a bug."
-    elif step_num == "3":
+    elif step_id == "3":
         output = "Sufficient information provided in the issue description."
-    elif step_num == "4":
+    elif step_id == "4":
         output = "Successfully reproduced the ZeroDivisionError with input (10, 0)."
-    elif step_num == "5":
+    elif step_id == "5":
         output = "Root cause identified: 'divide' function lacks check for denominator == 0."
-    elif step_num == "6":
+    elif step_id == "5_5":
+        output = "DEFECT_TYPE: code\nThis is a code bug - the prompt specifies division by zero should raise ValueError."
+    elif step_id == "6":
         output = "Plan: Create a test case 'test_divide_zero' asserting ValueError is raised."
-    elif step_num == "7":
-        output = "Generated file 'tests/test_calculator_bug.py'."
-        files = ["tests/test_calculator_bug.py"]
-    elif step_num == "8":
+    elif step_id == "7":
+        output = "Generated file 'tests/test_calculator_bug.py'.\nFILES_CREATED: tests/test_calculator_bug.py"
+    elif step_id == "8":
         output = "Verification successful: The new test fails as expected against current code."
-    elif step_num == "9":
+    elif step_id == "9":
+        output = "E2E test created and verified.\nE2E_FILES_CREATED: tests/e2e/test_calculator_e2e.py"
+    elif step_id == "10":
         output = "Created draft PR #101 linking to issue #42."
     else:
         output = "Unknown step executed."
 
-    return success, output, cost, provider, files
+    return success, output, cost, provider
 
 
 def main():

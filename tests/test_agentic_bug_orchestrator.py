@@ -2,7 +2,7 @@
 Test Plan for pdd.agentic_bug_orchestrator
 
 1. **Happy Path Execution**:
-   - Verify that the orchestrator runs through all 10 steps when no hard stops are triggered.
+   - Verify that the orchestrator runs through all 11 steps (including 5.5) when no hard stops are triggered.
    - Verify that costs are accumulated correctly.
    - Verify that changed files are aggregated correctly.
    - Verify that the final success message is returned.
@@ -11,6 +11,7 @@ Test Plan for pdd.agentic_bug_orchestrator
    - **Step 1 (Duplicate)**: Verify early exit if output contains "Duplicate of #".
    - **Step 2 (Not a Bug)**: Verify early exit for "Feature Request" or "User Error".
    - **Step 3 (Needs Info)**: Verify early exit for "Needs More Info".
+   - **Step 5.5 (Prompt Review)**: Verify early exit if output contains "PROMPT_REVIEW:".
    - **Step 7 (No Test File)**: Verify early exit if no files are generated in step 7.
    - **Step 8 (Verification Failed)**: Verify early exit if output contains "FAIL: Test does not work as expected".
 
@@ -89,7 +90,7 @@ def default_args(tmp_path):
 
 def test_happy_path_execution(mock_dependencies, default_args):
     """
-    Test that all 10 steps execute successfully when no stop conditions are met.
+    Test that all 11 steps execute successfully when no stop conditions are met.
     """
     mock_run, mock_load, _ = mock_dependencies
 
@@ -107,9 +108,9 @@ def test_happy_path_execution(mock_dependencies, default_args):
 
     assert success is True
     assert "Investigation complete" in msg
-    assert mock_run.call_count == 10
+    assert mock_run.call_count == 11  # 11 steps including step 5.5
     # Use approx for floating point comparison
-    assert cost == pytest.approx(1.0)  # 10 steps × 0.1 each
+    assert cost == pytest.approx(1.1)  # 11 steps × 0.1 each
     assert files == ["test_file.py"]
     assert model == "gpt-4"
 
@@ -157,20 +158,68 @@ def test_hard_stop_step_3_needs_info(mock_dependencies, default_args):
     Test early exit at Step 3 if more info is needed.
     """
     mock_run, _, _ = mock_dependencies
-    
+
     # Steps 1-2 pass, Step 3 fails
     mock_run.side_effect = [
         (True, "Step 1 ok", 0.1, "model"),
         (True, "Step 2 ok", 0.1, "model"),
         (True, "Cannot proceed. Needs More Info from user.", 0.1, "model")
     ]
-    
+
     success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
-    
+
     assert success is False
     assert "Stopped at Step 3" in msg
     assert "information" in msg.lower() or "info" in msg.lower()
     assert mock_run.call_count == 3
+
+
+def test_hard_stop_step_5_5_prompt_review(mock_dependencies, default_args):
+    """
+    Test early exit at Step 5.5 if prompt needs human review.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    # Steps 1-5 pass, Step 5.5 triggers hard stop
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step5_5':
+            return (True, "PROMPT_REVIEW: Ambiguous whether to fix code or prompt", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at Step 5.5" in msg
+    assert "Ambiguous" in msg or "prompt" in msg.lower()
+    # Should stop at step 5.5, so 6 calls (1, 2, 3, 4, 5, 5.5)
+    assert mock_run.call_count == 6
+
+
+def test_step_5_5_prompt_fixed_tracking(mock_dependencies, default_args):
+    """
+    Test that PROMPT_FIXED: output from step 5.5 is tracked in changed_files.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step5_5':
+            return (True, "DEFECT_TYPE: prompt\nPROMPT_FIXED: prompts/my_module_python.prompt", 0.1, "model")
+        if label == 'step7':
+            return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, _, _, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    # Both the prompt file and test file should be tracked
+    assert "prompts/my_module_python.prompt" in changed_files
+    assert "tests/test_fix.py" in changed_files
 
 
 def test_hard_stop_step_7_no_file_generated(mock_dependencies, default_args):
@@ -178,8 +227,8 @@ def test_hard_stop_step_7_no_file_generated(mock_dependencies, default_args):
     Test early exit at Step 7 if no test file is generated.
     """
     mock_run, _, _ = mock_dependencies
-    
-    # Steps 1-6 pass generic
+
+    # Steps 1-6 (including 5.5) pass generic
     # Step 7 returns no FILES_CREATED line
     def side_effect(*args, **kwargs):
         label = kwargs.get('label', '')
@@ -188,14 +237,14 @@ def test_hard_stop_step_7_no_file_generated(mock_dependencies, default_args):
         return (True, "ok", 0.1, "model")
 
     mock_run.side_effect = side_effect
-    
+
     success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
-    
+
     assert success is False
     assert "Stopped at Step 7" in msg
     assert "No test file" in msg or "no test" in msg.lower()
-    # Should stop at step 7, so 7 calls total
-    assert mock_run.call_count == 7
+    # Should stop at step 7, so 8 calls total (1, 2, 3, 4, 5, 5.5, 6, 7)
+    assert mock_run.call_count == 8
 
 
 def test_hard_stop_step_8_verification_failed(mock_dependencies, default_args):
@@ -203,7 +252,7 @@ def test_hard_stop_step_8_verification_failed(mock_dependencies, default_args):
     Test early exit at Step 8 if test verification fails.
     """
     mock_run, _, _ = mock_dependencies
-    
+
     def side_effect(*args, **kwargs):
         label = kwargs.get('label', '')
         if label == 'step7':
@@ -213,22 +262,23 @@ def test_hard_stop_step_8_verification_failed(mock_dependencies, default_args):
         return (True, "ok", 0.1, "model")
 
     mock_run.side_effect = side_effect
-    
+
     success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
-    
+
     assert success is False
     assert "Stopped at Step 8" in msg
     assert "verification" in msg.lower() or "fail" in msg.lower()
-    assert mock_run.call_count == 8
+    # Step 8 is 9th call (1, 2, 3, 4, 5, 5.5, 6, 7, 8)
+    assert mock_run.call_count == 9
 
 
 def test_soft_failure_continuation(mock_dependencies, default_args):
     """
-    Test that the workflow continues if a step returns success=False 
+    Test that the workflow continues if a step returns success=False
     but does NOT trigger a hard stop condition string.
     """
     mock_run, _, _ = mock_dependencies
-    
+
     # Step 1 fails (agent error) but no hard stop text
     # Step 7 needs to return a file to avoid hard stop there
     def side_effect(*args, **kwargs):
@@ -240,13 +290,13 @@ def test_soft_failure_continuation(mock_dependencies, default_args):
         return (True, "ok", 0.1, "model")
 
     mock_run.side_effect = side_effect
-    
+
     success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
-    
+
     # The overall workflow should succeed because soft failures are allowed
     assert success is True
     assert "Investigation complete" in msg
-    assert mock_run.call_count == 10
+    assert mock_run.call_count == 11  # 11 steps including 5.5
 
 
 def test_template_loading_failure(mock_dependencies, default_args):
@@ -375,7 +425,7 @@ def test_step7_files_modified_for_append(mock_dependencies, default_args):
     assert "Investigation complete" in msg
     # The modified file should be tracked
     assert "tests/test_existing_module.py" in changed_files
-    assert mock_run.call_count == 10
+    assert mock_run.call_count == 11  # 11 steps including 5.5
 
 
 def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_args):
@@ -401,15 +451,16 @@ def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_arg
 
     run_agentic_bug_orchestrator(**default_args)
 
-    # Verify timeout is passed for each step
-    assert mock_run.call_count == 10
+    # Verify timeout is passed for each step (11 steps including 5.5)
+    assert mock_run.call_count == 11
 
     for call_obj in mock_run.call_args_list:
         label = call_obj.kwargs.get('label', '')
         timeout = call_obj.kwargs.get('timeout')
 
-        # Extract step number from label (e.g., 'step7' -> 7)
-        step_num = int(label.replace('step', ''))
+        # Extract step number from label (e.g., 'step7' -> 7.0, 'step5_5' -> 5.5)
+        step_str = label.replace('step', '').replace('_', '.')
+        step_num = float(step_str)
         expected_timeout = BUG_STEP_TIMEOUTS.get(step_num, 340.0)
 
         assert timeout == expected_timeout, (
@@ -561,8 +612,8 @@ def test_hard_stop_step_9_e2e_fail(mock_dependencies, default_args):
     assert success is False
     assert "Stopped at Step 9" in msg
     assert "E2E test does not catch bug" in msg
-    # Should stop at step 9, not reach step 10
-    assert mock_run.call_count == 9
+    # Should stop at step 9, not reach step 10 (10 calls: 1, 2, 3, 4, 5, 5.5, 6, 7, 8, 9)
+    assert mock_run.call_count == 10
 
 
 def test_e2e_files_accumulated(mock_dependencies, default_args):
@@ -682,8 +733,8 @@ def test_resume_skips_completed_steps(mock_dependencies, default_args, tmp_path)
 
     assert success is True
 
-    # Should only call steps 5-10 (6 steps), not 1-4
-    assert mock_run.call_count == 6
+    # Should only call steps 5, 5.5, 6-10 (7 steps), not 1-4
+    assert mock_run.call_count == 7
 
     # Verify the labels of called steps
     called_labels = [call.kwargs['label'] for call in mock_run.call_args_list]
@@ -692,6 +743,7 @@ def test_resume_skips_completed_steps(mock_dependencies, default_args, tmp_path)
     assert 'step3' not in called_labels
     assert 'step4' not in called_labels
     assert 'step5' in called_labels
+    assert 'step5_5' in called_labels
     assert 'step10' in called_labels
 
 
@@ -817,7 +869,9 @@ def test_failed_step_not_marked_completed(mock_dependencies, default_args, tmp_p
     # Step 6 fails (simulating Gemini timeout/failure)
     def side_effect_run(*args, **kwargs):
         label = kwargs.get('label', '')
-        step_num = int(label.replace('step', '')) if label.startswith('step') else 0
+        # Parse step number: step5_5 -> 5.5, step6 -> 6
+        step_str = label.replace('step', '').replace('_', '.')
+        step_num = float(step_str) if '.' in step_str else int(step_str) if step_str else 0
         if step_num == 6:
             return (False, "All agent providers failed", 0.0, "")
         if step_num == 7:
@@ -839,9 +893,10 @@ def test_failed_step_not_marked_completed(mock_dependencies, default_args, tmp_p
     step6_state = next((s for s in saved_states if "6" in s.get("step_outputs", {})), None)
     assert step6_state is not None, "State should have been saved after step 6"
 
-    # Key assertion: last_completed_step should be 5, not 6 (because step 6 failed)
-    assert step6_state["last_completed_step"] == 5, \
-        f"Expected last_completed_step=5 after step 6 failed, got {step6_state['last_completed_step']}"
+    # Key assertion: last_completed_step should be 5.5, not 6 (because step 6 failed)
+    # Step 5.5 is the step before step 6
+    assert step6_state["last_completed_step"] == 5.5, \
+        f"Expected last_completed_step=5.5 after step 6 failed, got {step6_state['last_completed_step']}"
 
     # The failed output should be prefixed with "FAILED:"
     assert step6_state["step_outputs"]["6"].startswith("FAILED:"), \
@@ -851,7 +906,7 @@ def test_failed_step_not_marked_completed(mock_dependencies, default_args, tmp_p
 def test_resume_reruns_failed_step(mock_dependencies, default_args, tmp_path):
     """
     Issue #190: Resume should re-run a failed step, not skip it.
-    If last_completed_step=5 and step 6 has "FAILED:" output, resume should re-run step 6.
+    If last_completed_step=5 and step 5.5/6 has "FAILED:" output, resume should re-run from step 5.5.
     """
     import json
     from pdd.agentic_bug_orchestrator import _get_state_dir
@@ -859,7 +914,7 @@ def test_resume_reruns_failed_step(mock_dependencies, default_args, tmp_path):
     mock_run, mock_load, _ = mock_dependencies
     default_args["cwd"] = tmp_path
 
-    # Create state file where step 5 completed but step 6 failed
+    # Create state file where step 5 completed but step 5.5 failed
     state_dir = _get_state_dir(tmp_path)
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / f"bug_state_{default_args['issue_number']}.json"
@@ -868,10 +923,10 @@ def test_resume_reruns_failed_step(mock_dependencies, default_args, tmp_path):
         "workflow": "bug",
         "issue_number": default_args["issue_number"],
         "issue_url": default_args["issue_url"],
-        "last_completed_step": 5,  # Step 6 failed, so last COMPLETED is 5
+        "last_completed_step": 5,  # Step 5.5 failed, so last COMPLETED is 5
         "step_outputs": {
             "1": "ok", "2": "ok", "3": "ok", "4": "ok", "5": "ok",
-            "6": "FAILED: All agent providers failed"  # Failed output stored
+            "5.5": "FAILED: All agent providers failed"  # Failed output stored
         },
         "total_cost": 0.5,
         "model_used": "gpt-4",
@@ -894,9 +949,9 @@ def test_resume_reruns_failed_step(mock_dependencies, default_args, tmp_path):
 
     success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
 
-    # Step 6 should be re-executed (not skipped) because last_completed_step=5
-    assert "step6" in executed_steps, \
-        f"Step 6 should be re-executed on resume, but executed steps were: {executed_steps}"
+    # Step 5.5 should be re-executed (not skipped) because last_completed_step=5
+    assert "step5_5" in executed_steps, \
+        f"Step 5.5 should be re-executed on resume, but executed steps were: {executed_steps}"
 
     # Steps 1-5 should NOT be executed (skipped due to resume)
     assert "step1" not in executed_steps, "Step 1 should be skipped on resume"
@@ -905,6 +960,6 @@ def test_resume_reruns_failed_step(mock_dependencies, default_args, tmp_path):
     assert "step4" not in executed_steps, "Step 4 should be skipped on resume"
     assert "step5" not in executed_steps, "Step 5 should be skipped on resume"
 
-    # Steps 6-10 should all be executed (5 steps)
-    assert len(executed_steps) == 5, \
-        f"Expected 5 steps to be executed (6-10), but got {len(executed_steps)}: {executed_steps}"
+    # Steps 5.5, 6-10 should all be executed (6 steps)
+    assert len(executed_steps) == 6, \
+        f"Expected 6 steps to be executed (5.5, 6-10), but got {len(executed_steps)}: {executed_steps}"
