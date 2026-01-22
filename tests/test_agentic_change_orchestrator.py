@@ -898,11 +898,15 @@ def test_sync_order_generation_dict(mock_dependencies_dict, tmp_path):
     prompts_dir = worktree_dir / "prompts"
     prompts_dir.mkdir(parents=True)
     
+    # Create the prompt file matching the pattern that works in other tests
+    (prompts_dir / "foo_python.prompt").write_text("% foo module")
+
     existing_state = {
         "last_completed_step": 12, 
         "step_outputs": {str(i): "out" for i in range(1, 13)}, 
         "worktree_path": str(worktree_dir)
     }
+    # Update state to reference the file we created
     existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo_python.prompt"
     mocks["load"].return_value = (existing_state, 123)
     
@@ -910,7 +914,6 @@ def test_sync_order_generation_dict(mock_dependencies_dict, tmp_path):
     mocks["gen_script"].return_value = "echo sync"
     mocks["run"].return_value = (True, "PR Created", 0.1, "gpt-4")
     
-    # We don't need to patch Path.exists anymore since we created the dirs
     run_agentic_change_orchestrator(
         issue_url="http://issue", issue_content="Fix bug", repo_owner="owner", 
         repo_name="repo", issue_number=1, issue_author="me", issue_title="Bug Fix", 
