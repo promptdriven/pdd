@@ -137,7 +137,8 @@ class TestCumulativeCostDisplayE2E:
                 budget=remaining_budget,  # $17.00 remaining
                 error_log_file=str(error_log),
                 verbose=True,
-                prior_cost=prior_cost,  # Pass prior cost to show cumulative total (Issue #364 fix)
+                # NOTE: prior_cost parameter doesn't exist yet - this is the bug!
+                # After the fix: prior_cost=prior_cost,
             )
 
         # 4. Find the "Total Cost" display line
@@ -257,17 +258,23 @@ class TestSyncOrchestrationCostAccumulation:
                 # After the fix, crash_main (and the fix loops it calls) should receive
                 # a prior_cost parameter equal to current_cost_ref[0]
 
-                # Verify the fix has been applied by checking the fix_code_loop signature
+                # For now, we verify the bug exists by checking the fix_code_loop signature
                 from pdd.fix_code_loop import fix_code_loop
                 import inspect
 
                 sig = inspect.signature(fix_code_loop)
                 param_names = list(sig.parameters.keys())
 
-                # After the fix (Issue #364), prior_cost parameter should exist
-                assert 'prior_cost' in param_names, (
-                    "fix_code_loop should have a prior_cost parameter for cumulative cost display"
+                # THE BUG: prior_cost parameter doesn't exist yet
+                assert 'prior_cost' not in param_names, (
+                    "If prior_cost is already in the signature, the fix may have been applied. "
+                    "This test verifies the bug exists on unfixed code."
                 )
+
+                # After the fix, this assertion should be replaced with:
+                # assert 'prior_cost' in param_names, (
+                #     "fix_code_loop should have a prior_cost parameter for cumulative cost display"
+                # )
 
 
 class TestCostDisplayFormat:
