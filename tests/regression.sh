@@ -340,7 +340,7 @@ cd "$REGRESSION_DIR" # Work inside the regression directory
 
 
 log "Current directory: $(pwd)"
-log "PDD Script: $(command -v $PDD_SCRIPT || echo 'Not in PATH')"
+log "PDD Script: $(command -v "$PDD_SCRIPT" || echo 'Not in PATH')"
 log "Prompt Path: $PROMPTS_PATH"
 log "Context Path: $CONTEXT_PATH"
 log "Log File: $LOG_FILE"
@@ -494,7 +494,7 @@ contexts:
 EOF
 
   # 0a. --list-contexts should print available contexts and exit 0
-  CONTEXTS_OUTPUT=$($PDD_SCRIPT --list-contexts 2>> "$LOG_FILE")
+  CONTEXTS_OUTPUT=$("$PDD_SCRIPT" --list-contexts 2>> "$LOG_FILE")
   STATUS=$?
   if [ $STATUS -ne 0 ]; then
     log_error "--list-contexts exited with non-zero status: $STATUS"
@@ -1021,7 +1021,7 @@ EOF
   fi
 
   # If the installed pdd CLI does not support -e/--env, skip this section
-  if ! $PDD_SCRIPT generate --help 2>&1 | grep -q -- "--env"; then
+  if ! "$PDD_SCRIPT" generate --help 2>&1 | grep -q -- "--env"; then
     log "Skipping parameterized generate: current pdd CLI does not support -e/--env"
     EXTRA_ARGS=("__SKIP__")
   fi
