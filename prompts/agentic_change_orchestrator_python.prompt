@@ -103,6 +103,39 @@ Context for review loop:
 | 12 | agentic_change_step12_fix_issues_LLM | Fix identified issues (loop end) |
 | 13 | agentic_change_step13_create_pr_LLM | Create PR and link to issue |
 
+% Project Configuration Context (.pddrc)
+Before the step loop begins, load `.pddrc` configuration to provide context keys needed by step templates (especially Step 6):
+
+1. **Imports**: Add to existing imports:
+   - `from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context`
+   - `from pdd.get_extension import get_extension`
+
+2. **Helper function** `_load_pddrc_context(cwd: Path) -> Dict[str, str]`:
+   - Define sensible defaults: `{"language": "python", "source_dir": "src/", "test_dir": "tests/", "example_dir": "context/", "ext": "py", "lang": "_python"}`
+   - Call `_find_pddrc_file(cwd)` to locate `.pddrc`
+   - If not found, return defaults
+   - Call `_load_pddrc_config(pddrc_path)` to parse YAML
+   - Call `_detect_context(cwd, config)` to detect context name (NOTE: argument order is `cwd` first, then `config`)
+   - Extract from context's `defaults` nested key:
+     - `language` from `default_language`
+     - `source_dir` from `generate_output_path`
+     - `test_dir` from `test_output_path`
+     - `example_dir` from `example_output_path`
+   - Derive `ext` using `get_extension(language)` (strip leading dot if present)
+   - Derive `lang` as `f"_{language}"`
+   - Return dict with all 6 keys
+   - On any exception, return defaults
+
+3. **Add to context dict** before step loop:
+   ```python
+   pddrc_context = _load_pddrc_context(cwd)
+   context = {
+       "issue_url": issue_url,
+       # ... other issue fields ...
+       **pddrc_context,  # Adds: language, source_dir, test_dir, example_dir, ext, lang
+   }
+   ```
+
 % Context Accumulation
 - Step 1 receives: issue_content
 - Step 2 receives: issue_content, step1_output

@@ -892,16 +892,31 @@ def test_file_parsing_step9_and_10_dict(mock_dependencies_dict, tmp_path):
 
 def test_sync_order_generation_dict(mock_dependencies_dict, tmp_path):
     mocks = mock_dependencies_dict
-    existing_state = {"last_completed_step": 12, "step_outputs": {str(i): "out" for i in range(1, 13)}, "worktree_path": str(tmp_path / "wt")}
-    existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo.prompt"
+    
+    # Create real directories so .exists() checks pass
+    worktree_dir = tmp_path / "wt"
+    prompts_dir = worktree_dir / "prompts"
+    prompts_dir.mkdir(parents=True)
+    
+    existing_state = {
+        "last_completed_step": 12, 
+        "step_outputs": {str(i): "out" for i in range(1, 13)}, 
+        "worktree_path": str(worktree_dir)
+    }
+    existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo_python.prompt"
     mocks["load"].return_value = (existing_state, 123)
-    # mocks["extract_mod"].return_value = "foo" # Removed patch
+    
     mocks["get_affected"].return_value = ["foo", "bar"]
     mocks["gen_script"].return_value = "echo sync"
     mocks["run"].return_value = (True, "PR Created", 0.1, "gpt-4")
-    with patch("pathlib.Path.exists", return_value=True):
-        run_agentic_change_orchestrator(issue_url="http://issue", issue_content="Fix bug", repo_owner="owner", repo_name="repo", issue_number=1, issue_author="me", issue_title="Bug Fix", cwd=tmp_path, quiet=True)
-    # mocks["extract_mod"].assert_called() # Removed assertion
+    
+    # We don't need to patch Path.exists anymore since we created the dirs
+    run_agentic_change_orchestrator(
+        issue_url="http://issue", issue_content="Fix bug", repo_owner="owner", 
+        repo_name="repo", issue_number=1, issue_author="me", issue_title="Bug Fix", 
+        cwd=tmp_path, quiet=True
+    )
+    
     mocks["build_graph"].assert_called()
     mocks["get_affected"].assert_called()
     mocks["gen_script"].assert_called()
@@ -970,17 +985,37 @@ def test_orchestrator_populates_pddrc_context_keys_before_step6(mock_dependencie
 
     mock_run.side_effect = side_effect_run
 
-    success, msg, cost, model, files = run_agentic_change_orchestrator(
-        issue_url="http://url",
-        issue_content="Add new feature",
-        repo_owner="owner",
-        repo_name="repo",
-        issue_number=221,
-        issue_author="me",
-        issue_title="New Feature",
-        cwd=temp_cwd,
-        quiet=True
-    )
+    # Mock the config loading functions to ensure deterministic behavior
+    with patch("pdd.agentic_change_orchestrator._find_pddrc_file") as mock_find, \
+         patch("pdd.agentic_change_orchestrator._load_pddrc_config") as mock_load_config, \
+         patch("pdd.agentic_change_orchestrator._detect_context") as mock_detect:
+        
+        mock_find.return_value = Path("/path/to/.pddrc")
+        mock_load_config.return_value = {
+            "contexts": {
+                "default": {
+                    "defaults": {
+                        "default_language": "python",
+                        "generate_output_path": "src/",
+                        "test_output_path": "tests/",
+                        "example_output_path": "examples/"
+                    }
+                }
+            }
+        }
+        mock_detect.return_value = "default"
+
+        success, msg, cost, model, files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Add new feature",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=221,
+            issue_author="me",
+            issue_title="New Feature",
+            cwd=temp_cwd,
+            quiet=True
+        )
 
     # Find the context used for step 6 (6th template.format call, 0-indexed = 5)
     assert len(captured_contexts) >= 6, f"Expected at least 6 template formats, got {len(captured_contexts)}"
