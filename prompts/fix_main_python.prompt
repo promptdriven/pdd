@@ -98,7 +98,7 @@
     %  1. If `ctx.obj.get('local')` is True, use local execution directly.
     %  2. Otherwise, attempt cloud execution first for single-pass mode:
     %     - Obtain JWT via `CloudConfig.get_jwt_token(verbose=verbose)`.
-    %     - Use request timeout of 400 seconds.
+    %     - Use request timeout from `get_cloud_timeout()` (default 900 seconds, configurable via `PDD_CLOUD_TIMEOUT` environment variable).
     %     - POST to the `fixCode` cloud endpoint with JSON payload:
     %       `{ "unitTest": <unit_test>, "code": <code>, "prompt": <prompt>, "errors": <errors>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "time": <time>, "verbose": <verbose> }`
     %     - Expected response fields: `success`, `fixedUnitTest`, `fixedCode`, `analysis`, `updateUnitTest`, `updateCode`, `totalCost`, `modelName`.

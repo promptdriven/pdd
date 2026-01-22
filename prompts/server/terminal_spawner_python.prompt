@@ -29,7 +29,7 @@ to the user in a new terminal window rather than captured by the server.
      - Opens with Terminal.app via `open -a Terminal <script>`
 
    - `_linux(command, job_id, server_port) -> bool`: Linux implementation
-     - Tries terminal emulators in order: gnome-terminal, xfce4-terminal, konsole, xterm
+     - Tries terminal emulators in order: gnome-terminal, xfce4-terminal, konsole, alacritty, kitty, tilix, terminator, xterm
      - Uses shutil.which() to check availability
      - Builds command with callback if job_id provided (same as macOS)
      - Each terminal runs: bash -c "{command_with_callback}; exec bash"
@@ -41,12 +41,21 @@ to the user in a new terminal window rather than captured by the server.
      - Includes callback via Invoke-RestMethod if job_id provided
      - Returns True if either succeeds
 
-2. **Callback URL Construction**:
+2. **Python Environment Preservation**:
+   - Detect if parent process is running in a conda environment (check CONDA_PREFIX and CONDA_DEFAULT_ENV env vars)
+   - Detect if parent process is running in a virtualenv (check VIRTUAL_ENV env var)
+   - When spawning terminal, prepend environment activation commands to the generated script:
+     - For conda: `conda activate <env_name>` (or `source <conda_prefix>/bin/activate` as fallback)
+     - For virtualenv: `source <venv_path>/bin/activate` (Unix) or `<venv_path>\Scripts\Activate.ps1` (Windows PowerShell)
+   - This ensures the spawned terminal inherits the same Python environment as the parent process
+   - If no virtual environment is detected, skip activation (allow normal system Python)
+
+3. **Callback URL Construction**:
    - Default server_port: 9876
    - Callback endpoint: /api/v1/commands/spawned-jobs/{job_id}/complete
    - JSON payload: {"success": <exit_code==0>, "exit_code": <exit_code>}
 
-3. **Error handling**:
+4. **Error handling**:
    - All methods catch exceptions and return False
    - Print error message on failure for debugging
 
@@ -62,6 +71,7 @@ to the user in a new terminal window rather than captured by the server.
 - Keep terminal open after command completes (exec bash / -NoExit)
 - Use unique script names to avoid conflicts between concurrent spawns
 - Handle FileNotFoundError gracefully when terminal not found
+- Environment activation must happen before the user's command runs
 
 % Deliverables
 - Code: `pdd/server/terminal_spawner.py`
