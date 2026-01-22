@@ -112,6 +112,67 @@ def test_extract_module_excludes_llm_includes_all_languages():
     assert sync_order.extract_module_from_include("prompts/quux_rust.prompt") == "quux"
 
 
+def test_extract_module_non_language_suffixes_return_none():
+    """
+    Test that prompts with non-language suffixes are NOT treated as module prompts.
+
+    Regression test for bug where any _suffix was treated as a language suffix,
+    causing 'command_logging.prompt' to incorrectly extract as module 'command'
+    instead of returning None.
+    """
+    # Context/shared prompts with underscores in names should return None
+    # (they're not language-specific module prompts)
+    assert sync_order.extract_module_from_include("context/command_logging.prompt") is None
+    assert sync_order.extract_module_from_include("context/data_processor.prompt") is None
+    assert sync_order.extract_module_from_include("context/python_preamble.prompt") is None
+    assert sync_order.extract_module_from_include("shared/config_settings.prompt") is None
+
+    # But prompts with KNOWN language suffixes should still work
+    assert sync_order.extract_module_from_include("prompts/command_logging_python.prompt") == "command_logging"
+    assert sync_order.extract_module_from_include("prompts/data_processor_python.prompt") == "data_processor"
+
+
+def test_extract_module_known_languages_comprehensive():
+    """
+    Test that known programming language suffixes are recognized.
+
+    Languages come from data/language_format.csv and the built-in fallback set
+    in construct_paths._is_known_language(). Note that the CSV uses display names
+    like 'C++', 'C#', 'F#' but the fallback uses common suffixes like 'cpp', 'csharp'.
+    """
+    # Languages from the built-in fallback that are commonly used as file suffixes
+    # (These work even when PDD_PATH is not set or CSV lookup fails)
+    known_languages = [
+        'python', 'java', 'go', 'rust', 'typescript', 'javascript',
+        'cpp', 'csharp', 'ruby', 'swift', 'kotlin', 'scala', 'php',
+        'c', 'lua', 'perl', 'r', 'bash', 'shell', 'sql',
+        # Languages from CSV that match case-insensitively
+        'haskell', 'elixir', 'clojure', 'dart', 'julia', 'nim', 'ocaml',
+        'groovy', 'fortran', 'erlang', 'lisp', 'scheme', 'ada'
+    ]
+
+    for lang in known_languages:
+        path = f"prompts/my_module_{lang}.prompt"
+        result = sync_order.extract_module_from_include(path)
+        assert result == "my_module", f"Expected 'my_module' for {lang}, got {result}"
+
+
+def test_extract_module_preserves_underscores_in_module_names():
+    """
+    Test that underscores in module names are preserved correctly.
+
+    Example: 'code_generator_main_python.prompt' should extract as 'code_generator_main'
+    """
+    # Module names with underscores
+    assert sync_order.extract_module_from_include("prompts/code_generator_main_python.prompt") == "code_generator_main"
+    assert sync_order.extract_module_from_include("prompts/auth_service_handler_python.prompt") == "auth_service_handler"
+    assert sync_order.extract_module_from_include("prompts/get_jwt_token_python.prompt") == "get_jwt_token"
+
+    # Example files with underscores in module names
+    assert sync_order.extract_module_from_include("context/code_generator_main_example.py") == "code_generator_main"
+    assert sync_order.extract_module_from_include("context/auth_service_handler_example.py") == "auth_service_handler"
+
+
 # ==============================================================================
 # Unit Tests: build_dependency_graph
 # ==============================================================================
