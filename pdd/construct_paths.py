@@ -917,13 +917,16 @@ def construct_paths(
             if not example_path_str:
                 example_path_str = "context"
 
-            # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
-            # If it ends with / or has no file extension, treat as directory; otherwise use parent
+            # Extract ROOT directory (first component) for scan scope
+            # This ensures auto-deps scans all example files, not just a subdirectory
+            # e.g., "context/commands/" -> "context", "examples/foo.py" -> "examples"
+            # Fix for Issue #332: Using full subdirectory path caused CSV truncation
             example_path = Path(example_path_str)
-            if example_path_str.endswith('/') or '.' not in example_path.name:
-                resolved_config["examples_dir"] = example_path_str.rstrip('/')
+            parts = example_path.parts
+            if parts and parts[0] not in ('/', '.', '..'):
+                resolved_config["examples_dir"] = parts[0]
             else:
-                resolved_config["examples_dir"] = str(example_path.parent)
+                resolved_config["examples_dir"] = "context"  # Fallback for edge cases
 
         except Exception as e:
             console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
@@ -1250,13 +1253,16 @@ def construct_paths(
     if not example_path_str:
         example_path_str = "context"
 
-    # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
-    # If it ends with / or has no file extension, treat as directory; otherwise use parent
+    # Extract ROOT directory (first component) for scan scope
+    # This ensures auto-deps scans all example files, not just a subdirectory
+    # e.g., "context/commands/" -> "context", "examples/foo.py" -> "examples"
+    # Fix for Issue #332: Using full subdirectory path caused CSV truncation
     example_path = Path(example_path_str)
-    if example_path_str.endswith('/') or '.' not in example_path.name:
-        resolved_config["examples_dir"] = example_path_str.rstrip('/')
+    parts = example_path.parts
+    if parts and parts[0] not in ('/', '.', '..'):
+        resolved_config["examples_dir"] = parts[0]
     else:
-        resolved_config["examples_dir"] = str(example_path.parent)
+        resolved_config["examples_dir"] = "context"  # Fallback for edge cases
 
 
     return resolved_config, input_strings, output_file_paths_str_return, language
