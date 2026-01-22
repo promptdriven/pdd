@@ -197,13 +197,17 @@ def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_f
 # ---------------------------------------------------------------------
 
 
-def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
+def run_pytest_on_file(test_file: str, extra_files: list[str] | None = None) -> tuple[int, int, int, str]:
     """
     Run pytest on the specified test file using the subprocess-based runner.
     Returns a tuple: (failures, errors, warnings, logs)
+
+    Args:
+        test_file: Primary test file path.
+        extra_files: Optional additional test files to run together (Bug #360).
     """
     # Use the subprocess-based runner to avoid module caching issues
-    output_data = run_pytest_and_capture_output(test_file)
+    output_data = run_pytest_and_capture_output(test_file, extra_files=extra_files)
     
     # Extract results
     results = output_data.get("test_results", [{}])[0]
@@ -273,7 +277,8 @@ def fix_error_loop(unit_test_file: str,
                    time: float = DEFAULT_TIME,
                    agentic_fallback: bool = True,
                    protect_tests: bool = False,
-                   use_cloud: bool = False):
+                   use_cloud: bool = False,
+                   test_files: list[str] | None = None):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations,
     counting only the number of times we actually call the LLM fix function.
@@ -302,6 +307,9 @@ def fix_error_loop(unit_test_file: str,
         agentic_fallback: Whether to trigger cli agentic fallback when fix fails.
         protect_tests: When True, prevents the LLM from modifying test files.
         use_cloud: If True, use cloud LLM for fix calls while keeping test execution local.
+        test_files: Optional list of ALL test files to run together (Bug #360).
+            When provided, pytest runs all files together to detect test isolation
+            failures that only manifest when multiple test files interact.
     Outputs:
         success: Boolean indicating if the overall process succeeded.
         final_unit_test: String contents of the final unit test file.
@@ -319,6 +327,16 @@ def fix_error_loop(unit_test_file: str,
         return False, "", "", 0, 0.0, ""
     if verbose:
         rprint("[cyan]Starting fix error loop process.[/cyan]")
+
+    # Bug #360: Compute extra test files to run alongside the primary file.
+    # This ensures test isolation failures (tests that only fail when run together)
+    # are detected by the fix loop, not just in the post-fix combined run.
+    extra_files = None
+    if test_files:
+        resolved_unit = str(Path(unit_test_file).resolve())
+        extra_files = [f for f in test_files if str(Path(f).resolve()) != resolved_unit]
+        if not extra_files:
+            extra_files = None
 
     # Remove existing error log file if it exists.
     if os.path.exists(error_log_file):
@@ -365,7 +383,7 @@ def fix_error_loop(unit_test_file: str,
     # Run an initial test to determine starting state
     try:
         if is_python:
-            initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file)
+            initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file, extra_files=extra_files)
         else:
             # For non-Python files, run the verification program to get an initial error state
             rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
@@ -779,7 +797,7 @@ def fix_error_loop(unit_test_file: str,
 
         # Run pytest for the next iteration
         try:
-            fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
+            fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file, extra_files=extra_files)
             
             # Update post-test output in structured log
             log_structure["iterations"][-1]["post_test_output"] = pytest_output
