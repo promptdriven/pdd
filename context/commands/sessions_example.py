@@ -14,6 +14,15 @@ from rich.console import Console
 
 # --- MOCKING DEPENDENCIES START ---
 # We need to mock the internal pdd modules that sessions.py imports
+# CRITICAL: Save originals BEFORE patching to avoid polluting sys.modules during pytest collection
+# See context/pytest_isolation_example.py Pattern 7 for the correct approach
+_saved = {}
+_saved["pdd"] = sys.modules.get("pdd")
+_saved["pdd.core"] = sys.modules.get("pdd.core")
+_saved["pdd.core.cloud"] = sys.modules.get("pdd.core.cloud")
+_saved["pdd.remote_session"] = sys.modules.get("pdd.remote_session")
+_saved["pdd.utils"] = sys.modules.get("pdd.utils")
+
 sys.modules["pdd"] = MagicMock()
 sys.modules["pdd.core"] = MagicMock()
 sys.modules["pdd.core.cloud"] = MagicMock()
@@ -73,6 +82,14 @@ def mock_handle_error(e):
 
 
 sys.modules["pdd.utils"].handle_error = mock_handle_error
+
+# RESTORE originals immediately after setting up mocks
+# This prevents polluting sys.modules for other test files during pytest collection
+for key, original in _saved.items():
+    if original is None:
+        sys.modules.pop(key, None)
+    else:
+        sys.modules[key] = original
 # --- MOCKING DEPENDENCIES END ---
 
 # Now we can import the module code provided in the prompt.
