@@ -4,7 +4,7 @@
 Write the `pdd/agentic_test_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 9-step agentic UI test generation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost. Generates UI tests (Playwright for web, pytest for CLI, etc.) from GitHub issue descriptions.
+Orchestrator for the 9-step agentic test generation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost. Generates tests (Playwright for web, pytest for CLI, pytest+requests for API, etc.) from GitHub issue descriptions.
 
 % Requirements
 1. Function: `run_agentic_test_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
@@ -47,9 +47,9 @@ For each step (1-9):
 | 1 | agentic_test_step1_duplicate_LLM | Search for duplicate test requests |
 | 2 | agentic_test_step2_docs_LLM | Review codebase to understand what to test |
 | 3 | agentic_test_step3_clarify_LLM | Determine if enough info, ask clarifying questions if needed |
-| 4 | agentic_test_step4_detect_frontend_LLM | Identify frontend type (web/CLI/desktop) and testing framework |
+| 4 | agentic_test_step4_detect_frontend_LLM | Identify test type (web/CLI/desktop/api) and testing framework |
 | 5 | agentic_test_step5_test_plan_LLM | Create comprehensive test plan |
-| 6 | agentic_test_step6_generate_tests_LLM | Generate UI tests in worktree |
+| 6 | agentic_test_step6_generate_tests_LLM | Generate tests in worktree |
 | 7 | agentic_test_step7_run_tests_LLM | Execute generated tests |
 | 8 | agentic_test_step8_fix_iterate_LLM | Fix failing tests and re-run |
 | 9 | agentic_test_step9_submit_pr_LLM | Create draft PR and link to issue |
@@ -126,7 +126,7 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 1. **Header** (at start):
    ```
-   Generating UI tests for issue #{issue_number}: "{issue_title}"
+   Generating tests for issue #{issue_number}: "{issue_title}"
    ```
 
 2. **Step progress** (before each step):
@@ -151,7 +151,7 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 6. **Final summary** (at end):
    ```
-   UI test generation complete  (or UI test generation failed)
+   Test generation complete  (or Test generation failed)
       Total cost: ${total_cost:.4f}
       Files created: {comma_separated_list}
       Worktree: {worktree_path}  (if worktree was created)
@@ -207,7 +207,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., needs mor
 
 5. **Console output for resumption**:
    ```
-   Resuming UI test generation for issue #123
+   Resuming test generation for issue #123
       Steps 1-4 already complete (cached)
       Starting from Step 5: Create Test Plan
    ```
