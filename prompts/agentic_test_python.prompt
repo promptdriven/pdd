@@ -29,6 +29,7 @@ When `--manual` flag is used, fall back to the existing `cmd_test_main` function
 % Dependencies
 <pdd.agentic_test_orchestrator><include>context/agentic_test_orchestrator_example.py</include></pdd.agentic_test_orchestrator>
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.cmd_test_main><include>context/cmd_test_main_example.py</include></pdd.cmd_test_main>
 
 % Error Handling
 - Return `(False, "gh CLI not found", 0.0, "", [])` if `gh` command not available
