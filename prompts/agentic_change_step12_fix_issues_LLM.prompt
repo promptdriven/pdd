@@ -2,9 +2,9 @@
 
 % Context
 
-You are working on step 11 of 12 in an agentic change workflow. Previous step identified issues with the prompt/documentation changes. This step fixes those issues.
+You are working on step 12 of 13 in an agentic change workflow. Previous step identified issues with the prompt/documentation changes. This step fixes those issues.
 
-**This step is part of a review loop.** After fixing, Step 10 will run again to check for remaining issues. The loop continues until no issues are found (max 5 iterations).
+**This step is part of a review loop.** After fixing, Step 11 will run again to check for remaining issues. The loop continues until no issues are found (max 5 iterations).
 
 % PDD Background
 
@@ -25,17 +25,17 @@ You are working on step 11 of 12 in an agentic change workflow. Previous step id
 {issue_content}
 </issue_content>
 
-% Issues to Fix (from Step 10)
-<step10_output>
-{step10_output}
-</step10_output>
+% Issues to Fix (from Step 11)
+<step11_output>
+{step11_output}
+</step11_output>
 
 % Your Task
 
 1. **Navigate to worktree**
    - All modifications happen in: {worktree_path}
 
-2. **Fix each issue identified in Step 10**
+2. **Fix each issue identified in Step 11**
    For each issue listed:
    - Read the file containing the issue
    - Apply the fix described
@@ -61,7 +61,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 
 **If all fixes applied successfully:**
 ```markdown
-## Step 11: Fix Issues (Iteration {review_iteration}/5)
+## Step 12: Fix Issues (Iteration {review_iteration}/5)
 
 **Status:** Fixes Applied
 
@@ -83,12 +83,12 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 Applied {{N}} fixes successfully.
 
 ---
-*Returning to Step 10 for re-verification*
+*Returning to Step 11 for re-verification*
 ```
 
 **If some fixes could not be applied:**
 ```markdown
-## Step 11: Fix Issues (Iteration {review_iteration}/5)
+## Step 12: Fix Issues (Iteration {review_iteration}/5)
 
 **Status:** Partial Fixes Applied
 
@@ -107,14 +107,14 @@ Applied {{N}} fixes successfully.
 Applied {{N}} of {{M}} fixes. {{remaining}} issues require manual intervention.
 
 ---
-*Returning to Step 10 for re-verification*
+*Returning to Step 11 for re-verification*
 ```
 
 % Important
 
 - Work in the worktree directory, not the main repo
-- Apply fixes exactly as described in Step 10 output
+- Apply fixes exactly as described in Step 11 output
 - If a fix seems wrong or would break something, skip it and explain why
 - Don't introduce new issues while fixing existing ones
-- After fixes, Step 10 will verify - the loop continues until no issues remain
+- After fixes, Step 11 will verify - the loop continues until no issues remain
 - Maximum 5 iterations to prevent infinite loops
