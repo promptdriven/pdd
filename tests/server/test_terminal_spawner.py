@@ -5,6 +5,7 @@ These tests verify the cross-platform terminal spawning functionality.
 Most tests use mocking to avoid actually spawning terminal windows.
 """
 
+import os
 import sys
 import pytest
 from pathlib import Path
@@ -593,3 +594,314 @@ class TestCallbackJsonFormat:
                        '\\"success\\": $SUCCESS_JSON' in full_command or \
                        'SUCCESS_JSON="true"' in full_command, \
                     f"JSON should use boolean true/false for success field. Command:\n{full_command}"
+
+
+# ============================================================================
+# Tests for Python Environment Preservation (Issue #347)
+# ============================================================================
+
+
+class TestPythonEnvironmentPreservation:
+    """
+    Tests for Python environment (conda/virtualenv) preservation in spawned terminals.
+
+    Issue #347: When pdd connect spawns local terminals, they don't inherit
+    the conda/virtualenv environment from the parent process. This causes
+    commands like 'pdd' to fail if they're only available in the virtual env.
+
+    These tests verify that the TerminalSpawner detects and activates the
+    parent process's Python environment in the spawned terminal.
+    """
+
+    # --------------------------------------------------------------------------
+    # Conda Environment Detection Tests
+    # --------------------------------------------------------------------------
+
+    def test_darwin_detects_conda_environment(self):
+        """
+        FAILING TEST: macOS spawner should detect CONDA_PREFIX and activate the env.
+
+        When CONDA_PREFIX is set, the generated script should include
+        'conda activate <env>' or 'source <conda_prefix>/bin/activate' before
+        the user's command.
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    with patch.dict(os.environ, {
+                        'CONDA_PREFIX': '/opt/anaconda3/envs/myenv',
+                        'CONDA_DEFAULT_ENV': 'myenv'
+                    }):
+                        TerminalSpawner._darwin("pdd sync foo")
+
+                        script_content = mock_write.call_args[0][0]
+
+                        # The script should activate the conda environment
+                        # Either using 'conda activate' or 'source .../activate'
+                        has_conda_activation = (
+                            'conda activate' in script_content or
+                            'source' in script_content and 'activate' in script_content
+                        )
+
+                        assert has_conda_activation, (
+                            f"Script should activate conda environment.\n"
+                            f"Expected 'conda activate myenv' or "
+                            f"'source /opt/anaconda3/envs/myenv/bin/activate'\n"
+                            f"Got script:\n{script_content}"
+                        )
+
+    def test_darwin_conda_activation_precedes_command(self):
+        """
+        Test that conda activation happens BEFORE the user's command.
+
+        The activation must come first so the command runs in the correct env.
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    with patch.dict(os.environ, {
+                        'CONDA_PREFIX': '/opt/anaconda3/envs/testenv',
+                        'CONDA_DEFAULT_ENV': 'testenv'
+                    }):
+                        TerminalSpawner._darwin("pdd generate module.prompt")
+
+                        script_content = mock_write.call_args[0][0]
+
+                        # Find the position of activation and command
+                        activation_patterns = [
+                            'conda activate',
+                            'source',  # source .../activate
+                        ]
+                        command_marker = 'pdd generate module.prompt'
+
+                        activation_pos = -1
+                        for pattern in activation_patterns:
+                            pos = script_content.find(pattern)
+                            if pos != -1:
+                                activation_pos = pos
+                                break
+
+                        command_pos = script_content.find(command_marker)
+
+                        assert activation_pos != -1, (
+                            f"No conda activation found in script:\n{script_content}"
+                        )
+                        assert activation_pos < command_pos, (
+                            f"Conda activation must come BEFORE user command.\n"
+                            f"Activation at position {activation_pos}, "
+                            f"command at position {command_pos}\n"
+                            f"Script:\n{script_content}"
+                        )
+
+    def test_linux_detects_conda_environment(self):
+        """
+        FAILING TEST: Linux spawner should detect CONDA_PREFIX and activate the env.
+        """
+        with patch('shutil.which', return_value="/usr/bin/gnome-terminal"):
+            with patch('subprocess.Popen') as mock_popen:
+                with patch.dict(os.environ, {
+                    'CONDA_PREFIX': '/home/user/miniconda3/envs/devenv',
+                    'CONDA_DEFAULT_ENV': 'devenv'
+                }):
+                    TerminalSpawner._linux("pdd sync foo")
+
+                    call_args = mock_popen.call_args[0][0]
+                    full_command = " ".join(str(arg) for arg in call_args)
+
+                    has_conda_activation = (
+                        'conda activate' in full_command or
+                        'source' in full_command and 'activate' in full_command
+                    )
+
+                    assert has_conda_activation, (
+                        f"Command should activate conda environment.\n"
+                        f"Got command:\n{full_command}"
+                    )
+
+    def test_windows_detects_conda_environment(self):
+        """
+        FAILING TEST: Windows spawner should detect CONDA_PREFIX and activate the env.
+        """
+        with patch('subprocess.Popen') as mock_popen:
+            with patch.dict(os.environ, {
+                'CONDA_PREFIX': r'C:\Users\test\anaconda3\envs\myenv',
+                'CONDA_DEFAULT_ENV': 'myenv'
+            }):
+                TerminalSpawner._windows("pdd sync foo")
+
+                call_args = mock_popen.call_args[0][0]
+                full_command = " ".join(str(arg) for arg in call_args)
+
+                # Windows conda activation uses 'conda activate' or
+                # 'Scripts\activate.bat'
+                has_conda_activation = (
+                    'conda activate' in full_command or
+                    'activate' in full_command.lower()
+                )
+
+                assert has_conda_activation, (
+                    f"Command should activate conda environment.\n"
+                    f"Got command:\n{full_command}"
+                )
+
+    # --------------------------------------------------------------------------
+    # Virtualenv Detection Tests
+    # --------------------------------------------------------------------------
+
+    def test_darwin_detects_virtualenv(self):
+        """
+        FAILING TEST: macOS spawner should detect VIRTUAL_ENV and activate it.
+
+        When VIRTUAL_ENV is set, the generated script should include
+        'source <venv>/bin/activate' before the user's command.
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    # Clear conda env vars to test pure virtualenv
+                    env_vars = {
+                        'VIRTUAL_ENV': '/Users/test/myproject/.venv',
+                    }
+                    # Also need to clear CONDA vars if they exist
+                    with patch.dict(os.environ, env_vars, clear=False):
+                        # Temporarily remove conda vars for this test
+                        conda_prefix = os.environ.pop('CONDA_PREFIX', None)
+                        conda_env = os.environ.pop('CONDA_DEFAULT_ENV', None)
+                        try:
+                            TerminalSpawner._darwin("python script.py")
+
+                            script_content = mock_write.call_args[0][0]
+
+                            # Should source the virtualenv activate script
+                            assert 'source' in script_content and 'activate' in script_content, (
+                                f"Script should activate virtualenv.\n"
+                                f"Expected 'source /Users/test/myproject/.venv/bin/activate'\n"
+                                f"Got script:\n{script_content}"
+                            )
+                        finally:
+                            # Restore conda vars
+                            if conda_prefix:
+                                os.environ['CONDA_PREFIX'] = conda_prefix
+                            if conda_env:
+                                os.environ['CONDA_DEFAULT_ENV'] = conda_env
+
+    def test_linux_detects_virtualenv(self):
+        """
+        FAILING TEST: Linux spawner should detect VIRTUAL_ENV and activate it.
+        """
+        with patch('shutil.which', return_value="/usr/bin/gnome-terminal"):
+            with patch('subprocess.Popen') as mock_popen:
+                env_vars = {
+                    'VIRTUAL_ENV': '/home/user/project/venv',
+                }
+                with patch.dict(os.environ, env_vars, clear=False):
+                    conda_prefix = os.environ.pop('CONDA_PREFIX', None)
+                    conda_env = os.environ.pop('CONDA_DEFAULT_ENV', None)
+                    try:
+                        TerminalSpawner._linux("python script.py")
+
+                        call_args = mock_popen.call_args[0][0]
+                        full_command = " ".join(str(arg) for arg in call_args)
+
+                        assert 'source' in full_command and 'activate' in full_command, (
+                            f"Command should activate virtualenv.\n"
+                            f"Got command:\n{full_command}"
+                        )
+                    finally:
+                        if conda_prefix:
+                            os.environ['CONDA_PREFIX'] = conda_prefix
+                        if conda_env:
+                            os.environ['CONDA_DEFAULT_ENV'] = conda_env
+
+    def test_windows_detects_virtualenv(self):
+        """
+        FAILING TEST: Windows spawner should detect VIRTUAL_ENV and activate it.
+        """
+        with patch('subprocess.Popen') as mock_popen:
+            env_vars = {
+                'VIRTUAL_ENV': r'C:\Users\test\project\.venv',
+            }
+            with patch.dict(os.environ, env_vars, clear=False):
+                conda_prefix = os.environ.pop('CONDA_PREFIX', None)
+                conda_env = os.environ.pop('CONDA_DEFAULT_ENV', None)
+                try:
+                    TerminalSpawner._windows("python script.py")
+
+                    call_args = mock_popen.call_args[0][0]
+                    full_command = " ".join(str(arg) for arg in call_args)
+
+                    # Windows virtualenv uses Scripts\Activate.ps1
+                    assert 'activate' in full_command.lower(), (
+                        f"Command should activate virtualenv.\n"
+                        f"Got command:\n{full_command}"
+                    )
+                finally:
+                    if conda_prefix:
+                        os.environ['CONDA_PREFIX'] = conda_prefix
+                    if conda_env:
+                        os.environ['CONDA_DEFAULT_ENV'] = conda_env
+
+    # --------------------------------------------------------------------------
+    # No Environment Tests (Regression)
+    # --------------------------------------------------------------------------
+
+    def test_darwin_no_env_still_works(self):
+        """
+        Regression test: When no conda/venv is active, spawner should still work.
+
+        This ensures adding environment detection doesn't break the base case.
+        """
+        mock_popen = MagicMock()
+
+        with patch('subprocess.Popen', mock_popen):
+            with patch.object(Path, 'write_text') as mock_write:
+                with patch.object(Path, 'chmod'):
+                    # Remove all environment variables
+                    env_without_python_env = os.environ.copy()
+                    env_without_python_env.pop('CONDA_PREFIX', None)
+                    env_without_python_env.pop('CONDA_DEFAULT_ENV', None)
+                    env_without_python_env.pop('VIRTUAL_ENV', None)
+
+                    with patch.dict(os.environ, env_without_python_env, clear=True):
+                        result = TerminalSpawner._darwin("echo hello")
+
+                        assert result is True
+                        script_content = mock_write.call_args[0][0]
+                        assert "echo hello" in script_content
+
+    def test_linux_no_env_still_works(self):
+        """
+        Regression test: Linux spawner works without conda/venv.
+        """
+        with patch('shutil.which', return_value="/usr/bin/gnome-terminal"):
+            with patch('subprocess.Popen') as mock_popen:
+                env_without_python_env = os.environ.copy()
+                env_without_python_env.pop('CONDA_PREFIX', None)
+                env_without_python_env.pop('CONDA_DEFAULT_ENV', None)
+                env_without_python_env.pop('VIRTUAL_ENV', None)
+
+                with patch.dict(os.environ, env_without_python_env, clear=True):
+                    result = TerminalSpawner._linux("echo hello")
+
+                    assert result is True
+
+    def test_windows_no_env_still_works(self):
+        """
+        Regression test: Windows spawner works without conda/venv.
+        """
+        with patch('subprocess.Popen') as mock_popen:
+            env_without_python_env = os.environ.copy()
+            env_without_python_env.pop('CONDA_PREFIX', None)
+            env_without_python_env.pop('CONDA_DEFAULT_ENV', None)
+            env_without_python_env.pop('VIRTUAL_ENV', None)
+
+            with patch.dict(os.environ, env_without_python_env, clear=True):
+                result = TerminalSpawner._windows("echo hello")
+
+                assert result is True
