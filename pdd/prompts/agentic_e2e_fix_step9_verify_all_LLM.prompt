@@ -123,8 +123,8 @@ All bugs fixed successfully in {cycle_number} cycle(s).
 **Status:** MAX_CYCLES_REACHED
 
 ### Test Results
-- Unit tests: {N}/{M} pass ({K} still failing)
-- E2E tests: {N}/{M} pass ({K} still failing)
+- Unit tests: {{N}}/{{M}} pass ({{K}} still failing)
+- E2E tests: {{N}}/{{M}} pass ({{K}} still failing)
 
 ### Remaining Failures
 | Test | Failure Type |
