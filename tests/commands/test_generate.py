@@ -32,99 +32,35 @@ from click.testing import CliRunner
 from z3 import Solver, Bool, Not, And, Or, Implies, unsat
 
 # --------------------------------------------------------------------------------
-# MOCK DECORATORS BEFORE IMPORT (WITH CLEANUP)
+# MOCK DEPENDENCIES BEFORE IMPORT
 # --------------------------------------------------------------------------------
-# The module under test imports decorators at module load time. We must mock
-# those imports for this module only, and restore sys.modules immediately after
-# import to avoid polluting other tests during collection.
+# The module under test uses relative imports and decorators at the top level.
+# We must mock these in sys.modules before importing the module to avoid ImportErrors
+# and to isolate the tests from the actual implementation of these dependencies.
 
 mock_track_cost = MagicMock()
 mock_track_cost.track_cost = lambda x: x  # Identity decorator
+sys.modules["pdd.track_cost"] = mock_track_cost
 
 mock_op_log = MagicMock()
-# Accept *args to handle positional arguments like @log_operation("crash")
+# FIX: Accept *args to handle positional arguments like @log_operation("crash")
 mock_op_log.log_operation = lambda *args, **kwargs: lambda x: x  # Decorator factory
+sys.modules["pdd.operation_log"] = mock_op_log
 
 mock_core_errors = MagicMock()
 mock_core_errors.handle_error = MagicMock()
+sys.modules["pdd.core.errors"] = mock_core_errors
 
-_import_mocks = {
-    "pdd.track_cost": mock_track_cost,
-    "pdd.operation_log": mock_op_log,
-    "pdd.core.errors": mock_core_errors,
-}
+# Mock the functional modules that are imported inside the commands
+sys.modules["pdd.code_generator_main"] = MagicMock()
+sys.modules["pdd.templates"] = MagicMock()
+sys.modules["pdd.context_generator_main"] = MagicMock()
+sys.modules["pdd.cmd_test_main"] = MagicMock()
+sys.modules["pdd.agentic_test"] = MagicMock()
 
-_saved_modules = {}
-for _mod_name, _mock in _import_mocks.items():
-    _saved_modules[_mod_name] = sys.modules.get(_mod_name)
-    sys.modules[_mod_name] = _mock
-
-# Preserve any existing module to restore later
-_saved_generate_module = sys.modules.pop("pdd.commands.generate", None)
-_saved_commands_modules = {
-    name: module
-    for name, module in sys.modules.items()
-    if name.startswith("pdd.commands")
-}
-_saved_commands_pkg = sys.modules.get("pdd.commands")
-_saved_commands_attrs = None
-if _saved_commands_pkg is not None:
-    _saved_commands_attrs = {
-        "generate": getattr(_saved_commands_pkg, "generate", None),
-        "test": getattr(_saved_commands_pkg, "test", None),
-        "example": getattr(_saved_commands_pkg, "example", None),
-    }
-
-try:
-    # Import the module under test
-    # We use importlib to avoid potential namespace shadowing if pdd.commands exports 'generate'
-    generate_module = importlib.import_module("pdd.commands.generate")
-finally:
-    # Restore mocked modules immediately to prevent pollution
-    for _mod_name in _import_mocks:
-        if _saved_modules[_mod_name] is not None:
-            sys.modules[_mod_name] = _saved_modules[_mod_name]
-        else:
-            sys.modules.pop(_mod_name, None)
-
-    # Restore pdd.commands module tree to its prior state to avoid polluting
-    # later imports with mocked decorators.
-    for _name in [n for n in sys.modules if n.startswith("pdd.commands")]:
-        if _name not in _saved_commands_modules:
-            sys.modules.pop(_name, None)
-    for _name, _module in _saved_commands_modules.items():
-        sys.modules[_name] = _module
-
-    # Restore original package attributes if the package existed pre-import.
-    if _saved_commands_pkg is not None and _saved_commands_attrs is not None:
-        _commands_pkg = sys.modules.get("pdd.commands")
-        if _commands_pkg is not None:
-            for _attr, _value in _saved_commands_attrs.items():
-                if _value is None:
-                    if hasattr(_commands_pkg, _attr):
-                        delattr(_commands_pkg, _attr)
-                else:
-                    setattr(_commands_pkg, _attr, _value)
-
-    # Restore or remove pdd.commands.generate to avoid leaking mocked decorators
-    if _saved_generate_module is not None:
-        sys.modules["pdd.commands.generate"] = _saved_generate_module
-    else:
-        sys.modules.pop("pdd.commands.generate", None)
-
-    # Evict any pdd.core.* modules that were imported as side effects during the
-    # mocking window (e.g. pdd.core.dump imported via pdd.commands.report).
-    # These bound MagicMock attributes from the mocked pdd.core.errors and must
-    # be re-imported fresh with the real module.
-    _core_side_effects = [
-        n for n in sys.modules
-        if n.startswith("pdd.core.") and n not in _import_mocks
-        and n not in _saved_modules
-    ]
-    for _name in _core_side_effects:
-        sys.modules.pop(_name, None)
-
-del _import_mocks, _saved_modules, _saved_generate_module, _saved_commands_modules, _saved_commands_pkg, _saved_commands_attrs, _mod_name
+# Import the module under test
+# We use importlib to avoid potential namespace shadowing if pdd.commands exports 'generate'
+generate_module = importlib.import_module("pdd.commands.generate")
 
 # --------------------------------------------------------------------------------
 # Z3 FORMAL VERIFICATION
@@ -173,12 +109,6 @@ def test_z3_generate_argument_logic():
 def runner():
     return CliRunner()
 
-@pytest.fixture(autouse=True)
-def reset_generate_module_state():
-    generate_module.code_generator_main = None
-    generate_module._DEFAULT_CODE_GENERATOR_MAIN = None
-    yield
-
 @pytest.fixture
 def mock_code_gen():
     with patch("pdd.code_generator_main.code_generator_main") as m:
@@ -186,13 +116,13 @@ def mock_code_gen():
         yield m
 
 @pytest.fixture
-def mock_load_template():
-    with patch("pdd.template_registry.load_template") as m:
+def mock_resolve_template():
+    with patch("pdd.templates.resolve_template_path") as m:
         yield m
 
 @pytest.fixture
 def mock_context_gen():
-    with patch.object(generate_module, "context_generator_main") as m:
+    with patch("pdd.context_generator_main.context_generator_main") as m:
         m.return_value = ("example", 0.0, "model")
         yield m
 
@@ -238,25 +168,25 @@ def test_generate_success_prompt_file(runner, mock_code_gen):
         assert call_kwargs["prompt_file"] == "my_prompt.txt"
         assert call_kwargs["force_incremental_flag"] is False
 
-def test_generate_success_template(runner, mock_code_gen, mock_load_template):
+def test_generate_success_template(runner, mock_code_gen, mock_resolve_template):
     """Test successful generation using a template."""
-    mock_load_template.return_value = {"path": "/path/to/resolved/template.txt"}
-
+    mock_resolve_template.return_value = "/path/to/resolved/template.txt"
+    
     result = runner.invoke(generate_module.generate, ["--template", "basic-flask"])
-
+    
     assert result.exit_code == 0
-    mock_load_template.assert_called_with("basic-flask")
+    mock_resolve_template.assert_called_with("basic-flask")
     mock_code_gen.assert_called_once()
     assert mock_code_gen.call_args[1]["prompt_file"] == "/path/to/resolved/template.txt"
 
-def test_generate_template_not_found(runner, mock_load_template):
+def test_generate_template_not_found(runner, mock_resolve_template):
     """Test error when template cannot be resolved."""
-    mock_load_template.side_effect = FileNotFoundError("missing")
-
+    mock_resolve_template.return_value = None
+    
     result = runner.invoke(generate_module.generate, ["--template", "missing"])
-
+    
     assert result.exit_code != 0
-    assert "Failed to load template 'missing'" in result.output
+    assert "Template 'missing' not found" in result.output
 
 def test_generate_env_vars(runner, mock_code_gen):
     """Test environment variable parsing and setting."""
