@@ -439,7 +439,8 @@ def run_agentic_bug_orchestrator(
                     extracted_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
             
             changed_files.extend(extracted_files)
-            changed_files = list(set(changed_files))  # Deduplicate
+            # Deduplicate while preserving insertion order for consistent git staging
+            changed_files = list(dict.fromkeys(changed_files))
             # Pass explicit file list to Step 9 and 10 for precise git staging
             context["files_to_stage"] = ", ".join(changed_files)
 

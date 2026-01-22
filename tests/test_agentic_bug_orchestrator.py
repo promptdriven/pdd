@@ -458,9 +458,9 @@ def test_step_timeouts_passed_to_run_agentic_task(mock_dependencies, default_arg
         label = call_obj.kwargs.get('label', '')
         timeout = call_obj.kwargs.get('timeout')
 
-        # Extract step number from label (e.g., 'step7' -> 7, 'step5_5' -> 5.5)
+        # Extract step number from label (e.g., 'step7' -> 7.0, 'step5_5' -> 5.5)
         step_str = label.replace('step', '').replace('_', '.')
-        step_num = float(step_str) if '.' in step_str else int(step_str)
+        step_num = float(step_str)
         expected_timeout = BUG_STEP_TIMEOUTS.get(step_num, 340.0)
 
         assert timeout == expected_timeout, (
