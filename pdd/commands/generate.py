@@ -15,6 +15,11 @@ from ..core.errors import handle_error
 # Initialize console
 console = Console(file=sys.stdout)
 
+# Lazily imported in generate() to avoid heavy imports at module load time.
+# Exposed at module scope so tests can patch it safely.
+code_generator_main = None
+_DEFAULT_CODE_GENERATOR_MAIN = None
+
 class GenerateCommand(click.Command):
     """
     Custom command class to handle the conditional requirement of PROMPT_FILE.
@@ -56,7 +61,12 @@ def generate(
     Create runnable code from a prompt file.
     """
     # Defer imports to avoid circular dependencies
-    from ..code_generator_main import code_generator_main
+    global code_generator_main, _DEFAULT_CODE_GENERATOR_MAIN
+    from ..code_generator_main import code_generator_main as _code_generator_main
+    if _DEFAULT_CODE_GENERATOR_MAIN is None:
+        _DEFAULT_CODE_GENERATOR_MAIN = _code_generator_main
+    if code_generator_main is None or code_generator_main is _DEFAULT_CODE_GENERATOR_MAIN:
+        code_generator_main = _code_generator_main
     
     # Try to import template resolver, fallback if not available (e.g. during bootstrapping)
     try:
@@ -108,6 +118,7 @@ def generate(
             output=output,
             original_prompt_file_path=original_prompt,
             force_incremental_flag=incremental,
+            env_vars=env_vars if env_vars else None,
             unit_test_file=unit_test,
             exclude_tests=exclude_tests
         )
