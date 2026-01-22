@@ -206,7 +206,7 @@ def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[
     return sorted_list, cycles
 
 
-def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]]) -> List[str]:
+def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]], cyclic_modules: Optional[Set[str]] = None) -> List[str]:
     """
     Identifies modules that need syncing based on modified modules and dependencies.
 
@@ -214,9 +214,13 @@ def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: D
         sorted_modules: Full list of modules in topological order.
         modified: Set of module names that have changed.
         graph: Dependency graph (module -> dependencies).
+        cyclic_modules: Optional set of modules that are part of dependency cycles.
+            These are excluded from sorted_modules by topological sort but should
+            still be included if they're affected.
 
     Returns:
-        List of modules to sync, preserving topological order.
+        List of modules to sync, preserving topological order for non-cyclic modules,
+        with cyclic modules appended at the end in alphabetical order.
     """
     if not modified:
         return []
@@ -246,7 +250,12 @@ def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: D
 
     # Filter sorted_modules to keep only affected ones, preserving order
     result = [m for m in sorted_modules if m in affected]
-    
+
+    # Include affected modules that are in cycles (append at end, sorted for determinism)
+    if cyclic_modules:
+        cyclic_affected = sorted([m for m in cyclic_modules if m in affected and m not in result])
+        result.extend(cyclic_affected)
+
     return result
 
 

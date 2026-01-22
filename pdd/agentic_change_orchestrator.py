@@ -585,7 +585,8 @@ def run_agentic_change_orchestrator(
                 sorted_modules, cycles = topological_sort(graph)
                 if cycles and not quiet:
                     console.print(f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]")
-                affected = get_affected_modules(sorted_modules, modified_modules, graph)
+                cyclic_modules = set(cycles[0]) if cycles else set()
+                affected = get_affected_modules(sorted_modules, modified_modules, graph, cyclic_modules)
                 if affected:
                     script_path = worktree_path / "sync_order.sh"
                     sync_order_list = generate_sync_order_script(affected, script_path, worktree_path)
