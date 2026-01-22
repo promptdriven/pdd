@@ -94,9 +94,15 @@ class TestStep10LoopModeCommandSyntax:
         content_lower = step10_prompt_content.lower()
 
         # Check for problematic instructions
+        # Be specific: look for an error log path that uses a fix-issue-*.log filename,
+        # rather than any occurrence of "error log", ".log", and "fix command".
+        error_log_fix_issue_pattern = re.compile(
+            r"error log(?: path)?:?\s+`?fix-issue-[^`\s]+\.log`?",
+            re.IGNORECASE,
+        )
         has_error_log_instruction = any([
             "error log path" in content_lower and "fix-issue-" in content_lower,
-            "error log" in content_lower and ".log" in content_lower and "fix command" in content_lower,
+            bool(error_log_fix_issue_pattern.search(step10_prompt_content)),
         ])
 
         assert not has_error_log_instruction, (
