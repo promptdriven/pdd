@@ -128,6 +128,31 @@ class TestPromptFormatting:
             "Step 8 prompt should include --protect-tests flag when enabled"
 
 
+    def test_step9_prompt_formats_without_error(self, base_context):
+        """Step 9 template should format successfully with orchestrator context.
+
+        Regression test for issue #357: The "max cycles reached" section of the
+        template at lines 126-127 uses single braces {N}/{M} instead of double
+        braces {{N}}/{{M}}, causing KeyError: 'N' when formatting.
+        """
+        # Add all required step outputs (steps 1-8)
+        for i in range(1, 9):
+            base_context[f"step{i}_output"] = f"Step {i} output"
+        base_context["next_cycle"] = 2  # Required for "more cycles needed" section
+
+        template = load_prompt_template("agentic_e2e_fix_step9_verify_all_LLM")
+        assert template is not None, "Template should load"
+
+        # This should NOT raise KeyError: 'N'
+        # Bug: Lines 126-127 have {N}/{M} instead of {{N}}/{{M}}
+        formatted = template.format(**base_context)
+
+        # Verify escaped placeholders remain as literals in output
+        assert "{N}" in formatted, "Escaped {{N}} should become {N} literal in output"
+        assert "{M}" in formatted, "Escaped {{M}} should become {M} literal in output"
+        assert "{K}" in formatted, "Escaped {{K}} should become {K} literal in output"
+
+
 def test_run_agentic_e2e_fix_orchestrator_has_protect_tests_parameter():
     """run_agentic_e2e_fix_orchestrator should accept protect_tests parameter.
 

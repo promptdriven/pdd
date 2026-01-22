@@ -4,7 +4,7 @@
 Write the `pdd/agentic_bug.py` module.
 
 % Role & Scope
-CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 10-step investigation process.
+CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 11-step investigation process.
 
 % Requirements
 1. Function: `run_agentic_bug(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
