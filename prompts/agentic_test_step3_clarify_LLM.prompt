@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 3 of 9 in an agentic UI test generation workflow. Previous steps checked for duplicates and researched the codebase.
+You are working on step 3 of 9 in an agentic test generation workflow. Previous steps checked for duplicates and researched the codebase.
 
 **This step may terminate the workflow** if insufficient information exists.
 
