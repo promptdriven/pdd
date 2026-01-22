@@ -478,12 +478,46 @@ def run_agentic_e2e_fix_orchestrator(
                     final_message = "All tests passed during e2e check."
                     break
 
-                # Check Loop Control (Step 9)
+                # Check Early Exit (Step 8) - Issue #365 fix
+                # When pdd fix reports tests pass, exit the loop
+                # instead of waiting for Step 9's LLM token
+                if step_num == 8:
+                    # Pattern 1: Tests already pass (no work needed)
+                    if "All tests already pass" in step_output and "No fixes needed" in step_output:
+                        console.print("[green]All tests already pass detected in Step 8. Exiting loop.[/green]")
+                        success = True
+                        final_message = "All tests passed (detected from pdd fix output)."
+                        break
+                    # Pattern 2: Tests were just fixed and now pass
+                    output_lower = step_output.lower()
+                    if "tests now pass" in output_lower or ("fixed" in output_lower and "pass" in output_lower):
+                        console.print("[green]Tests fixed and passing detected in Step 8. Exiting loop.[/green]")
+                        success = True
+                        final_message = "All tests passed after fixes (detected from pdd fix output)."
+                        break
+
+                # Check Loop Control (Step 9) - Issue #365 fix
+                # Also detect common test-passing patterns, not just exact tokens
                 if step_num == 9:
+                    # Check for explicit ALL_TESTS_PASS token
                     if "ALL_TESTS_PASS" in step_output:
                         console.print("[green]ALL_TESTS_PASS detected in Step 9.[/green]")
                         success = True
                         final_message = "All tests passed after fixes."
+                        break
+                    # Check for common patterns indicating tests pass (case insensitive)
+                    output_lower = step_output.lower()
+                    tests_pass_patterns = [
+                        "tests passing",
+                        "tests pass",
+                        "all tests pass",
+                        "no issues found",
+                        "verification complete",
+                    ]
+                    if any(pattern in output_lower for pattern in tests_pass_patterns) and "fail" not in output_lower:
+                        console.print("[green]Tests passing pattern detected in Step 9. Exiting loop.[/green]")
+                        success = True
+                        final_message = "All tests passed after fixes (pattern detected)."
                         break
                     elif "MAX_CYCLES_REACHED" in step_output:
                         console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
