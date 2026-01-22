@@ -2,33 +2,26 @@
 
 ### Feat
 
-- Add step 5.5 (prompt classification) to bug orchestrator
-- Add prompt classification step (5.5) to agentic bug workflow (#330)
-- Integrate .pddrc project configuration loading into the agentic orchestrator, update prompt path variables, and enhance related tests.
-- Implement .pddrc configuration loading for agentic orchestrator context and update step 6 prompt to utilize these new context variables.
-- Enhance agentic change orchestration with pre-worktree branch checks, refined hard stop conditions, and improved user feedback.
-- Enhance the agentic change orchestrator by updating its implementation, tests, and examples, and adding new context files to project dependencies.
-- Add a new architecture update step (Step 10) to the agentic change workflow, expanding it to 13 steps and renumbering subsequent steps.
-- Add reuse-first guidance to pdd change workflow (#343)
-- Update changelog with new features, fixes, refactors, and documentation, enhance changelog generation instructions, and add an error log.
+- **Prompt Classification Step (5.5):** New step in `pdd bug` workflow classifies defects as code bugs vs prompt defects. If a prompt defect is detected, the agent auto-fixes the prompt file; otherwise, proceeds with code fix. Expands bug workflow to 11 steps.
+- **Architecture Update Step:** New Step 10 in `pdd change` workflow adds PDD architecture metadata tags (`<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`) to new/modified prompts. Expands change workflow to 13 steps.
+- **.pddrc Configuration Loading:** `pdd change` now reads `.pddrc` to auto-detect project structure (source_dir, test_dir, example_dir, language) and passes these to step templates.
+- **Reuse-First Guidance:** Step 6 (dev unit discovery) now requires justification for creating new modules and documents which existing modules were considered.
+- **Dependency Context in Step 6:** Module dependency graph is now passed to Step 6 to help identify transitively affected modules.
+- **Pre-Worktree Branch Checks:** `pdd change` validates branch/worktree state before setup, with cleaner error messages for conflicts.
 
 ### Fix
 
-- Update tests to expect exit code 2 for UsageError
-- pdd report-core should have no default repo
-- pdd test should generate tests that isolate local code under test
-- Add save/restore pattern to prevent sys.modules pollution (#349)
-- PDD sync doesn't accumulate cost when comparing with the max-budget
-- Remove obsolete E2E test and update prompts for loop mode (#360)
-- agentic_e2e_fix: Steps 1 & 8 pass unnecessary log file to pdd fix --loop causing workflow failures
-- Ensure `sync_order` correctly includes modified modules within dependency cycles and add `gh pr` commands to allowed bash commands.
-- KeyError 'N' in step 9 prompt template + tests (#357)
-- Update tests for 11-step workflow (step 5.5)
+- **No Default Repo for report-core:** `pdd report-core` now requires explicit `--repo` or `PDD_GITHUB_REPO` env var. Thanks Serhan Asad! (PR #345)
+- **sys.path Isolation in Generated Tests:** `pdd test` injects `sys.path.insert(0, project_root)` preamble to ensure local code is tested, not installed packages.
+- **sys.modules Pollution Prevention:** Added save/restore pattern in test collection to prevent module pollution across pytest runs.
+- **Cumulative Cost Display:** `pdd sync --max-budget` now correctly accumulates cost from prior operations (e.g., auto-deps).
+- **Loop Mode Log File Bug:** Removed non-existent `--log-file` argument from `pdd fix --loop` calls in e2e fix workflow. Thanks Serhan Asad! (PR #354)
+- **Cyclic Module Inclusion:** `sync_order` now correctly includes modified modules that are part of dependency cycles.
+- **Step 9 KeyError:** Fixed KeyError 'N' when formatting step 9 prompt template. Thanks James Levin for your contribution!
 
 ### Refactor
 
-- Apply Copilot review suggestions
-- Generalize pdd change prompts to work with any codebase
+- **Generalized Change Prompts:** All `pdd change` step prompts now work with any language/codebase, not just Python. Prompts reference `.pddrc` paths dynamically.
 
 ## v0.0.125 (2026-01-20)
 
