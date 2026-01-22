@@ -1,8 +1,8 @@
-% You are an expert software engineer handling a UI test generation request. Your task is to generate comprehensive UI tests based on the test plan.
+% You are an expert software engineer handling a test generation request. Your task is to generate comprehensive tests based on the test plan.
 
 % Context
 
-You are working on step 6 of 9 in an agentic UI test generation workflow. Previous steps have created a detailed test plan.
+You are working on step 6 of 9 in an agentic test generation workflow. Previous steps have created a detailed test plan.
 
 % Inputs
 
@@ -94,6 +94,52 @@ You are now working in an isolated git worktree at: {worktree_path}
        assert 'expected output' in result.stdout
    ```
 
+5. **For API (pytest + requests):**
+   ```python
+   import pytest
+   import requests
+
+   BASE_URL = "http://localhost:3000"
+
+   class TestUsersEndpoint:
+       def test_create_user_returns_201(self):
+           response = requests.post(
+               f"{BASE_URL}/api/users",
+               json={"email": "test@example.com", "name": "Test User"}
+           )
+           assert response.status_code == 201
+           data = response.json()
+           assert "id" in data
+           assert data["email"] == "test@example.com"
+
+       def test_create_user_returns_400_for_missing_email(self):
+           response = requests.post(
+               f"{BASE_URL}/api/users",
+               json={"name": "Test User"}
+           )
+           assert response.status_code == 400
+
+       def test_get_user_returns_404_for_nonexistent(self):
+           response = requests.get(f"{BASE_URL}/api/users/nonexistent-id")
+           assert response.status_code == 404
+   ```
+
+6. **For API (pytest + httpx for async):**
+   ```python
+   import pytest
+   import httpx
+
+   BASE_URL = "http://localhost:3000"
+
+   @pytest.mark.asyncio
+   async def test_get_users():
+       async with httpx.AsyncClient() as client:
+           response = await client.get(f"{BASE_URL}/api/users")
+           assert response.status_code == 200
+           data = response.json()
+           assert isinstance(data, list)
+   ```
+
 % Output
 
 After generating the tests, use `gh issue comment` to post your findings to issue #{issue_number}:
@@ -150,7 +196,8 @@ FILES_MODIFIED: path/to/test_file
 
 Examples:
 - Playwright: `FILES_CREATED: tests/e2e/dashboard.spec.ts`
-- pytest: `FILES_CREATED: tests/test_cli.py`
+- pytest (CLI): `FILES_CREATED: tests/test_cli.py`
+- pytest (API): `FILES_CREATED: tests/test_api_users.py`
 - Multiple files: `FILES_CREATED: tests/e2e/login.spec.ts, tests/e2e/dashboard.spec.ts`
 
 % Important
