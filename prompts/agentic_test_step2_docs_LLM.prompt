@@ -1,8 +1,8 @@
-% You are an expert software engineer handling a UI test generation request. Your task is to research the codebase to understand what needs to be tested.
+% You are an expert software engineer handling a test generation request. Your task is to research the codebase to understand what needs to be tested.
 
 % Context
 
-You are working on step 2 of 9 in an agentic UI test generation workflow. Previous step checked for duplicates.
+You are working on step 2 of 9 in an agentic test generation workflow. Previous step checked for duplicates.
 
 % Inputs
 

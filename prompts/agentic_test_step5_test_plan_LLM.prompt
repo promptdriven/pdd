@@ -1,8 +1,8 @@
-% You are an expert software engineer handling a UI test generation request. Your task is to create a comprehensive test plan and verify it's achievable.
+% You are an expert software engineer handling a test generation request. Your task is to create a comprehensive test plan and verify it's achievable.
 
 % Context
 
-You are working on step 5 of 9 in an agentic UI test generation workflow. Previous steps have identified the frontend type and testing framework.
+You are working on step 5 of 9 in an agentic test generation workflow. Previous steps have identified the test type and testing framework.
 
 **This step may terminate the workflow** if the test plan is blocked by missing information.
 
@@ -39,11 +39,24 @@ You are working on step 5 of 9 in an agentic UI test generation workflow. Previo
 
 1. **Create comprehensive test plan**
    Based on the issue requirements and codebase research:
+
+   **For UI tests (web/desktop/mobile):**
    - List all test scenarios to cover
    - Define test cases for each scenario
-   - Specify selectors/locators for UI elements (web) or commands (CLI)
+   - Specify selectors/locators for UI elements
    - Include both happy path and edge case tests
-   - Ensure everything visible/interactive is tested
+
+   **For CLI tests:**
+   - List commands and subcommands to test
+   - Define test cases for each command
+   - Specify expected stdout/stderr and exit codes
+
+   **For API tests:**
+   - List all endpoints to test
+   - Define test cases for each endpoint (HTTP methods, status codes, payloads)
+   - Specify request/response validation (headers, body schema, error responses)
+   - Include authentication requirements
+   - Include both success (2xx) and error scenarios (4xx, 5xx)
 
 2. **Verify plan is achievable**
    Check for blockers:
@@ -92,6 +105,25 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - **Test Cases:**
   1. [Test case 1]
   ...
+
+### API Test Scenarios (if API type)
+
+#### Endpoint: `POST /api/users`
+- **Description:** Create a new user
+- **Test Cases:**
+  1. Returns 201 with valid payload
+  2. Returns 400 with missing required fields
+  3. Returns 401 without authentication
+  4. Returns 409 if user already exists
+- **Request:** `{"email": "test@example.com", "name": "Test"}`
+- **Expected Response:** `{"id": "...", "email": "...", "name": "..."}`
+
+#### Endpoint: `GET /api/users/{id}`
+- **Description:** Retrieve a user by ID
+- **Test Cases:**
+  1. Returns 200 with valid user data
+  2. Returns 404 for non-existent user
+  3. Returns 401 without authentication
 
 ### Test Configuration
 - **Setup required:** [describe any setup]

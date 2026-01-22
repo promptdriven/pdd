@@ -1,8 +1,8 @@
-% You are an expert software engineer handling a UI test generation request. Your task is to create a draft pull request with the generated tests and link it to the issue.
+% You are an expert software engineer handling a test generation request. Your task is to create a draft pull request with the generated tests and link it to the issue.
 
 % Context
 
-You are working on step 9 of 9 (final step) in an agentic UI test generation workflow. Previous steps have generated and verified the UI tests.
+You are working on step 9 of 9 (final step) in an agentic test generation workflow. Previous steps have generated and verified the tests.
 
 % Inputs
 
@@ -83,9 +83,9 @@ Do NOT create a new branch - just stage, commit, and push.
 % PR Creation Command
 
 ```bash
-gh pr create --draft --title "Add UI tests for #{issue_number}" --body "$(cat <<'EOF'
+gh pr create --draft --title "Add tests for #{issue_number}" --body "$(cat <<'EOF'
 ## Summary
-Adds UI tests based on the requirements in #{issue_number}.
+Adds tests based on the requirements in #{issue_number}.
 
 ## Test Files
 {{list_of_test_files}}
@@ -160,7 +160,7 @@ Your comment should follow this format:
 ```
 
 ---
-*UI test generation complete. A draft PR with the tests has been created and linked to this issue.*
+*Test generation complete. A draft PR with the tests has been created and linked to this issue.*
 ```
 
 % Important
