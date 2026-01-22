@@ -20,11 +20,9 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
-    validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
 from pdd.load_prompt_template import load_prompt_template
-from pdd.preprocess import preprocess
 
 # Initialize console for rich output
 console = Console()
@@ -154,28 +152,18 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
             shutil.rmtree(worktree_path)
 
     # Clean up branch if it exists
-    branch_exists = _branch_exists(cwd, branch_name)
-    if branch_exists:
-        success, _err = _delete_branch(cwd, branch_name)
-        if success:
-            branch_exists = False
+    if _branch_exists(cwd, branch_name):
+        _delete_branch(cwd, branch_name)
 
     # Create worktree
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        if branch_exists:
-            # Branch couldn't be deleted (e.g. currently checked out) — use existing
-            # --force required: git refuses to checkout a branch already in use
-            subprocess.run(
-                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
-                cwd=git_root, capture_output=True, check=True
-            )
-        else:
-            # Branch was deleted or didn't exist — create new
-            subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
-                cwd=git_root, capture_output=True, check=True
-            )
+        subprocess.run(
+            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+            cwd=git_root,
+            capture_output=True,
+            check=True
+        )
         if not quiet:
             console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
         return worktree_path, None
@@ -262,14 +250,8 @@ def run_agentic_test_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
-
-        # Issue #467: Validate cached state — correct last_completed_step
-        # if any cached step outputs have "FAILED:" prefix.
-        last_completed_step = validate_cached_state(
-            last_completed_step, step_outputs, quiet=quiet
-        )
     else:
-        state = {"step_outputs": {}, "last_completed_step": 0}
+        state = {"step_outputs": {}}
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
@@ -286,7 +268,7 @@ def run_agentic_test_orchestrator(
         "issue_author": issue_author,
         "issue_title": issue_title,
     }
-
+    
     # Populate context with previous step outputs
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out
@@ -306,10 +288,6 @@ def run_agentic_test_orchestrator(
 
     if changed_files:
         context["files_to_stage"] = ", ".join(changed_files)
-        context["test_files"] = "\n".join(f"- {f}" for f in changed_files)
-
-    if "step7_output" in context:
-        context["test_results"] = context["step7_output"]
 
     start_step = last_completed_step + 1
     
@@ -389,11 +367,6 @@ def run_agentic_test_orchestrator(
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        # Preprocess to expand <include> tags and escape curly braces
-        # Exclude context keys from escaping so they can be substituted
-        exclude_keys = list(context.keys())
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-
         try:
             formatted_prompt = prompt_template.format(**context)
         except KeyError as e:
@@ -434,11 +407,7 @@ def run_agentic_test_orchestrator(
             extracted_files = _parse_changed_files(step_output)
             changed_files = extracted_files
             context["files_to_stage"] = ", ".join(changed_files)
-            context["test_files"] = "\n".join(f"- {f}" for f in changed_files) if changed_files else "No test files detected"
-
-        if step_num == 7:
-            context["test_results"] = step_output
-
+        
         if step_num == 8:
             # Update files if fixes created new ones
             new_files = _parse_changed_files(step_output)
