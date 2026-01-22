@@ -715,7 +715,8 @@ Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts a
 | Task Type | Where to Start | The Workflow |
 | :--- | :--- | :--- |
 | **New Feature** | **The Prompt** | 1. Add/Update Requirements in Prompt.<br>2. Regenerate Code (LLM sees existing tests).<br>3. Write new Tests to verify. |
-| **Bug Fix** | **The Test File** | 1. Use `pdd bug` to create a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case if needed.<br>3. Run `pdd fix` (LLM sees the new test and must pass it).<br>**Tip:** Use `pdd fix --protect-tests` if the tests from `pdd bug` are correct and you want to prevent the LLM from modifying them. |
+| **Bug Fix (Code)** | **The Test File** | 1. Use `pdd bug` to create a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case if needed.<br>3. Run `pdd fix` (LLM sees the new test and must pass it).<br>**Tip:** Use `pdd fix --protect-tests` if the tests from `pdd bug` are correct and you want to prevent the LLM from modifying them. |
+| **Bug Fix (Prompt Defect)** | **The Prompt** | When `pdd bug` determines the prompt specification itself is wrong (Step 5.5), it auto-fixes the prompt file. The workflow then continues to generate tests based on the corrected prompt. |
 
 **Key insight:** When you run `pdd generate` after adding a test, the LLM sees that test as context. This means the generated code is constrained to pass it - the test acts as a specification, not just a verification.
 
@@ -742,6 +743,31 @@ After a successful fix, ask: "Where should this knowledge live?"
 - "There was a bug with null handling" → Add test; grounding captures the fix
 - "The code style was inconsistent" → Update preamble (not prompt)
 - "I prefer different variable names" → Update preamble/prompt
+
+### Prompt Defects vs. Code Bugs
+
+In PDD, the prompt is the source of truth. However, prompts themselves can contain defects. The `pdd bug` agentic workflow (Step 5.5: Prompt Classification) distinguishes between two types of bugs:
+
+| Defect Type | Definition | Detection | Action |
+|-------------|------------|-----------|--------|
+| **Code Bug** | Code doesn't match the prompt specification | Tests fail because implementation diverges from requirements | Fix the code via `pdd fix` |
+| **Prompt Defect** | Prompt doesn't match the intended behavior | User-reported expected behavior contradicts the prompt | Fix the prompt, then regenerate |
+
+**How Prompt Classification Works:**
+
+After root cause analysis (Step 5), the workflow examines whether:
+1. The code correctly implements the prompt, but the prompt is wrong (→ Prompt Defect)
+2. The code incorrectly implements the prompt (→ Code Bug)
+
+**Output markers** for automation:
+- `DEFECT_TYPE: code` - Proceed with normal test generation
+- `DEFECT_TYPE: prompt` - Auto-fix the prompt file first
+- `PROMPT_FIXED: path/to/file.prompt` - Indicates which prompt was modified
+- `PROMPT_REVIEW: reason` - Request human review for ambiguous cases
+
+**Default behavior:** When classification is uncertain, the workflow defaults to "code bug" to preserve backward compatibility.
+
+This classification prevents the "test oracle problem" - where tests generated from a flawed prompt would encode incorrect behavior, causing `pdd fix` to "fix" correct code to match the buggy specification.
 
 ---
 

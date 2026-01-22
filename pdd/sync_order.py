@@ -11,6 +11,8 @@ from collections import deque, defaultdict
 
 from rich.console import Console
 
+from pdd.construct_paths import _is_known_language
+
 # Initialize rich console
 console = Console()
 
@@ -67,13 +69,23 @@ def extract_module_from_include(include_path: str) -> Optional[str]:
 
     # Check if it looks like a module file:
     # - Example files contain "_example" in the stem
-    # - Prompt files must have a language suffix (e.g., _python, _java, _go, _rust)
+    # - Prompt files must have a KNOWN language suffix (e.g., _python, _java, _go, _rust)
     # - LLM prompts (_LLM) are runtime prompts, NOT code generation prompts
+    # - Exclude 'prompt' suffix as it's not a programming language
     is_example = "_example" in stem
     suffix_match = re.search(r'_([a-zA-Z0-9]+)$', stem)
-    is_llm_prompt = suffix_match and suffix_match.group(1).lower() == 'llm'
-    has_language_suffix = suffix_match is not None and not is_llm_prompt
-    is_module_prompt = filename.endswith(".prompt") and has_language_suffix
+    suffix_value = suffix_match.group(1).lower() if suffix_match else None
+
+    # Exclude special suffixes that are in the CSV but aren't programming languages
+    excluded_suffixes = {'llm', 'prompt'}
+    if suffix_value in excluded_suffixes:
+        # LLM and prompt suffixes are NOT code generation prompts
+        is_lang_suffix = False
+    else:
+        # Check if it's a known programming language from data/language_format.csv
+        is_lang_suffix = _is_known_language(suffix_value) if suffix_value else False
+
+    is_module_prompt = filename.endswith(".prompt") and is_lang_suffix
 
     if not (is_example or is_module_prompt):
         return None
@@ -82,8 +94,9 @@ def extract_module_from_include(include_path: str) -> Optional[str]:
     # Order matters: remove language specific suffixes first, then _example
     clean_name = stem
 
-    # Remove language suffix (generic pattern)
-    clean_name = re.sub(r'_[a-zA-Z0-9]+$', '', clean_name)
+    # Only remove suffix if it's a known language suffix
+    if is_lang_suffix:
+        clean_name = re.sub(r'_[a-zA-Z0-9]+$', '', clean_name)
 
     # Remove example suffix
     clean_name = re.sub(r'_example$', '', clean_name, flags=re.IGNORECASE)
@@ -206,7 +219,7 @@ def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[
     return sorted_list, cycles
 
 
-def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]]) -> List[str]:
+def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]], cyclic_modules: Optional[Set[str]] = None) -> List[str]:
     """
     Identifies modules that need syncing based on modified modules and dependencies.
 
@@ -214,9 +227,13 @@ def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: D
         sorted_modules: Full list of modules in topological order.
         modified: Set of module names that have changed.
         graph: Dependency graph (module -> dependencies).
+        cyclic_modules: Optional set of modules that are part of dependency cycles.
+            These are excluded from sorted_modules by topological sort but should
+            still be included if they're affected.
 
     Returns:
-        List of modules to sync, preserving topological order.
+        List of modules to sync, preserving topological order for non-cyclic modules,
+        with cyclic modules appended at the end in alphabetical order.
     """
     if not modified:
         return []
@@ -246,7 +263,12 @@ def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: D
 
     # Filter sorted_modules to keep only affected ones, preserving order
     result = [m for m in sorted_modules if m in affected]
-    
+
+    # Include affected modules that are in cycles (append at end, sorted for determinism)
+    if cyclic_modules:
+        cyclic_affected = sorted([m for m in cyclic_modules if m in affected and m not in result])
+        result.extend(cyclic_affected)
+
     return result
 
 
