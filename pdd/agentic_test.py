@@ -39,22 +39,30 @@ def _parse_github_url(url: str) -> Optional[Tuple[str, str, int]]:
     - https://www.github.com/{owner}/{repo}/issues/{number}
     - github.com/{owner}/{repo}/issues/{number}
     """
-    # Ensure scheme exists for urlparse
-    if not url.startswith("http"):
+    # Ensure scheme exists for urlparse to correctly identify netloc vs path
+    if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
 
     parsed = urlparse(url)
-    path_parts = parsed.path.strip("/").split("/")
+    # Split path and filter out empty strings (e.g. from leading/trailing slashes)
+    path_parts = [p for p in parsed.path.split("/") if p]
 
-    # Expected path: owner/repo/issues/number
-    if len(path_parts) >= 4 and path_parts[2] == "issues":
-        try:
-            owner = path_parts[0]
-            repo = path_parts[1]
-            number = int(path_parts[3])
-            return owner, repo, number
-        except ValueError:
-            return None
+    # Expected path structure: owner/repo/issues/number
+    # We look for the 'issues' segment to anchor our parsing
+    try:
+        if "issues" in path_parts:
+            issues_index = path_parts.index("issues")
+            # We need at least 2 parts before 'issues' (owner, repo) and 1 after (number)
+            if issues_index >= 2 and len(path_parts) > issues_index + 1:
+                owner = path_parts[issues_index - 2]
+                repo = path_parts[issues_index - 1]
+                number_str = path_parts[issues_index + 1]
+                # Handle cases where number might be followed by fragment or query (though urlparse handles those)
+                # or if there's a trailing slash that resulted in an empty part (handled by list comp)
+                return owner, repo, int(number_str)
+    except ValueError:
+        return None
+        
     return None
 
 
@@ -81,18 +89,21 @@ def _fetch_issue_data(owner: str, repo: str, number: int) -> Tuple[Optional[Dict
         comments_url = issue_json.get("comments_url")
         comments_text = ""
         if comments_url:
-            # The comments_url is a full URL, we need the path relative to API root or pass full URL to gh api
-            # gh api accepts full URLs
+            # The comments_url is a full URL. gh api accepts full URLs.
             cmd_comments = ["gh", "api", comments_url]
+            # We don't check=True here because comment fetching failure shouldn't block the whole process
             res_comments = subprocess.run(cmd_comments, capture_output=True, text=True, check=False)
             if res_comments.returncode == 0:
-                comments_data = json.loads(res_comments.stdout)
-                if isinstance(comments_data, list):
-                    comments_text = "\n\n--- Comments ---\n"
-                    for comment in comments_data:
-                        user = comment.get("user", {}).get("login", "Unknown")
-                        body = comment.get("body", "")
-                        comments_text += f"\nUser: {user}\n{body}\n"
+                try:
+                    comments_data = json.loads(res_comments.stdout)
+                    if isinstance(comments_data, list):
+                        comments_text = "\n\n--- Comments ---\n"
+                        for comment in comments_data:
+                            user = comment.get("user", {}).get("login", "Unknown")
+                            body = comment.get("body", "")
+                            comments_text += f"\nUser: {user}\n{body}\n"
+                except json.JSONDecodeError:
+                    pass # Ignore comment parsing errors
 
         # Combine body, metadata, and comments
         meta_info = f"State: {state}\nLabels: {', '.join(labels)}\n"
@@ -114,6 +125,7 @@ def _ensure_repo_context(owner: str, repo: str, cwd: Path, quiet: bool) -> Tuple
     """
     Ensure we are in the correct repository.
     If the current directory is not the repo, clone it to a temp directory.
+    Returns (success, path_or_error_msg).
     """
     # Check current git remote
     try:
@@ -126,13 +138,18 @@ def _ensure_repo_context(owner: str, repo: str, cwd: Path, quiet: bool) -> Tuple
         if res.returncode == 0:
             remote_url = res.stdout.strip()
             # Simple check if owner/repo is in the remote URL
+            # Matches github.com/owner/repo or github.com:owner/repo
             if f"{owner}/{repo}" in remote_url or f"{owner}:{repo}" in remote_url:
                 return True, str(cwd)
     except FileNotFoundError:
         pass  # git not installed or not in path, handled later
 
     # If we are not in the repo, clone it into a temp dir.
-    temp_dir = Path(tempfile.mkdtemp(prefix=f"pdd_test_{repo}_"))
+    try:
+        temp_dir = Path(tempfile.mkdtemp(prefix=f"pdd_test_{repo}_"))
+    except Exception as e:
+        return False, f"Failed to create temp directory: {e}"
+
     if not quiet:
         console.print(f"[yellow]Current directory does not match {owner}/{repo}. Cloning to {temp_dir}...[/yellow]")
     
@@ -141,6 +158,8 @@ def _ensure_repo_context(owner: str, repo: str, cwd: Path, quiet: bool) -> Tuple
         subprocess.run(["git", "clone", clone_url, "."], cwd=temp_dir, check=True, capture_output=quiet)
         return True, str(temp_dir)
     except subprocess.CalledProcessError as e:
+        # Clean up empty temp dir if clone failed
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return False, f"Failed to clone repository: {e}"
 
 
@@ -203,6 +222,9 @@ def run_agentic_test(
     is_repo, repo_path_str = _ensure_repo_context(owner, repo, current_cwd, quiet)
     
     if not is_repo:
+        # repo_path_str contains error message in this case
+        if not quiet:
+            console.print(f"[red]{repo_path_str}[/red]")
         return False, repo_path_str, 0.0, "", []
     
     repo_path = Path(repo_path_str)
