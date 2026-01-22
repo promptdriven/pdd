@@ -963,3 +963,186 @@ def test_resume_reruns_failed_step(mock_dependencies, default_args, tmp_path):
     # Steps 5.5, 6-10 should all be executed (6 steps)
     assert len(executed_steps) == 6, \
         f"Expected 6 steps to be executed (5.5, 6-10), but got {len(executed_steps)}: {executed_steps}"
+
+
+# --- Issue #352: Worktree Creation Timing Tests ---
+
+
+def test_worktree_created_before_step_5_5(tmp_path):
+    """
+    Issue #352: Verify that worktree is created BEFORE step 5.5 runs.
+
+    Bug: Step 5.5 (prompt classification) can edit prompt files when it detects
+    a "Prompt Defect" via PROMPT_FIXED marker. However, worktree creation happens
+    at Step 7, so prompt edits made by Step 5.5 land on the main branch instead
+    of the isolated worktree branch.
+
+    This test verifies that _setup_worktree is called BEFORE the run_agentic_task
+    call for step5_5, ensuring any prompt edits happen in the worktree.
+    """
+    # Track the order of calls
+    call_order = []
+    mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree:
+
+        def track_worktree(*args, **kwargs):
+            call_order.append(("_setup_worktree", kwargs.get("issue_number")))
+            return (mock_worktree_path, None)
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            call_order.append(("run_agentic_task", label))
+            if label == "step7":
+                return (True, "FILES_CREATED: test.py", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        mock_worktree.side_effect = track_worktree
+        mock_run.side_effect = track_run
+        mock_load.return_value = "Prompt for {issue_number}"
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True
+        )
+
+    # Find indices of key events
+    step5_5_idx = None
+    worktree_idx = None
+
+    for i, (call_type, arg) in enumerate(call_order):
+        if call_type == "_setup_worktree" and worktree_idx is None:
+            worktree_idx = i
+        if call_type == "run_agentic_task" and arg == "step5_5":
+            step5_5_idx = i
+
+    assert step5_5_idx is not None, "Step 5.5 should have been executed"
+    assert worktree_idx is not None, "Worktree should have been created"
+
+    # Key assertion: worktree must be created BEFORE step 5.5 runs
+    assert worktree_idx < step5_5_idx, (
+        f"Worktree creation (index {worktree_idx}) must happen BEFORE "
+        f"step5_5 execution (index {step5_5_idx}). "
+        f"Call order: {call_order}"
+    )
+
+
+def test_step_5_5_runs_in_worktree_directory(tmp_path):
+    """
+    Issue #352: Verify that step 5.5 runs with the worktree path as cwd.
+
+    Bug: Step 5.5 runs with current_cwd pointing to the main repository,
+    but it should run in the worktree so that any prompt edits land on the
+    isolated branch, not the main branch.
+    """
+    mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree:
+
+        mock_worktree.return_value = (mock_worktree_path, None)
+        mock_load.return_value = "Prompt for {issue_number}"
+
+        def side_effect_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label == "step7":
+                return (True, "FILES_CREATED: test.py", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        mock_run.side_effect = side_effect_run
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True
+        )
+
+    # Find the step 5.5 call
+    step5_5_call = None
+    for call_obj in mock_run.call_args_list:
+        if call_obj.kwargs.get("label") == "step5_5":
+            step5_5_call = call_obj
+            break
+
+    assert step5_5_call is not None, "Step 5.5 should have been called"
+
+    # Key assertion: step 5.5 should run in the worktree, not main repo
+    step5_5_cwd = step5_5_call.kwargs.get("cwd")
+    assert step5_5_cwd == mock_worktree_path, (
+        f"Step 5.5 should run in worktree ({mock_worktree_path}), "
+        f"but ran in {step5_5_cwd}"
+    )
+
+
+def test_steps_1_to_5_run_in_main_directory(tmp_path):
+    """
+    Issue #352 regression test: Steps 1-5 should still run in main directory.
+
+    The fix for #352 should move worktree creation to before Step 5.5,
+    but Steps 1-5 should still run in the main directory since they are
+    read-only analysis steps that don't modify files.
+    """
+    mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree:
+
+        mock_worktree.return_value = (mock_worktree_path, None)
+        mock_load.return_value = "Prompt for {issue_number}"
+
+        def side_effect_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label == "step7":
+                return (True, "FILES_CREATED: test.py", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        mock_run.side_effect = side_effect_run
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True
+        )
+
+    # Verify steps 1-5 ran in main directory (tmp_path)
+    main_dir_steps = ["step1", "step2", "step3", "step4", "step5"]
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        cwd = call_obj.kwargs.get("cwd")
+        if label in main_dir_steps:
+            assert cwd == tmp_path, (
+                f"Step {label} should run in main directory ({tmp_path}), "
+                f"but ran in {cwd}"
+            )
