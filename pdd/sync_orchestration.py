@@ -37,6 +37,7 @@ from .operation_log import (
     save_run_report,
     clear_run_report,
 )
+from .sync_state_emitter import SyncStateEmitter
 from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
@@ -944,6 +945,33 @@ def sync_orchestration(
     example_box_color_ref = ["blue"]
     tests_box_color_ref = ["blue"]
 
+    # Web mode: emit structured state for frontend visualization (remote mode only)
+    web_mode = bool(os.environ.get('PDD_WEB_MODE'))
+    sync_emitter: Optional[SyncStateEmitter] = None
+    if web_mode:
+        sync_emitter = SyncStateEmitter(basename=basename, budget=budget)
+
+    def _emit_state_if_web(operation: Optional[str] = None) -> None:
+        """Emit a state update if running in web mode."""
+        if sync_emitter is None:
+            return
+        sync_emitter.emit_state_update(
+            operation=operation or current_function_name_ref[0],
+            cost=current_cost_ref[0],
+            paths={
+                "prompt": prompt_path_ref[0],
+                "code": code_path_ref[0],
+                "example": example_path_ref[0],
+                "tests": tests_path_ref[0],
+            },
+            colors={
+                "prompt": prompt_box_color_ref[0],
+                "code": code_box_color_ref[0],
+                "example": example_box_color_ref[0],
+                "tests": tests_box_color_ref[0],
+            },
+        )
+
     # Mutable container for the app reference (set after app creation)
     # This allows the worker to access app.request_confirmation()
     app_ref: List[Optional['SyncApp']] = [None]
@@ -963,6 +991,10 @@ def sync_orchestration(
         that uses click.confirm AND sets user_confirmed_overwrite[0] = True,
         so subsequent calls auto-confirm instead of prompting repeatedly.
         """
+        # Web mode: auto-confirm all prompts (user chose this by using remote mode)
+        if web_mode:
+            return lambda msg, title: True
+
         if user_confirmed_overwrite[0]:
             # User already confirmed, return a callback that always returns True
             return lambda msg, title: True
@@ -1014,7 +1046,16 @@ def sync_orchestration(
         try:
             with SyncLock(basename, language):
                 log_event(basename, language, "lock_acquired", {"pid": os.getpid()}, invocation_mode="sync")
-                
+
+                # Emit sync_start for web mode visualization
+                if sync_emitter:
+                    sync_emitter.emit_sync_start(paths={
+                        "prompt": prompt_path_ref[0],
+                        "code": code_path_ref[0],
+                        "example": example_path_ref[0],
+                        "tests": tests_path_ref[0],
+                    })
+
                 while True:
                     budget_remaining = budget - current_cost_ref[0]
                     if current_cost_ref[0] >= budget:
@@ -1130,6 +1171,7 @@ def sync_orchestration(
 
                     if operation in ['all_synced', 'nothing', 'fail_and_request_manual_merge', 'error', 'analyze_conflict']:
                         current_function_name_ref[0] = "synced" if operation in ['all_synced', 'nothing'] else "conflict"
+                        _emit_state_if_web("synced" if operation in ['all_synced', 'nothing'] else "conflict")
                         success = operation in ['all_synced', 'nothing']
                         error_msg = None
                         if operation == 'fail_and_request_manual_merge':
@@ -1183,6 +1225,7 @@ def sync_orchestration(
                         continue
 
                     current_function_name_ref[0] = operation
+                    _emit_state_if_web(operation)
                     ctx = _create_mock_context(
                         force=force, strength=strength, temperature=temperature, time=time_param,
                         verbose=verbose, quiet=quiet, output_cost=output_cost,
@@ -1538,6 +1581,9 @@ def sync_orchestration(
                             else:
                                 success = result is not None
 
+                            # Emit updated cost to web frontend
+                            _emit_state_if_web(operation)
+
                         except click.Abort:
                             errors.append(f"Operation '{operation}' was cancelled (user declined or non-interactive environment)")
                             success = False
@@ -1625,6 +1671,13 @@ def sync_orchestration(
                 log_event(basename, language, "lock_released", {"pid": os.getpid(), "total_cost": current_cost_ref[0]}, invocation_mode="sync")
             except: pass
             
+        # Emit sync_complete for web mode visualization
+        if sync_emitter:
+            sync_emitter.emit_sync_complete(
+                cost=current_cost_ref[0],
+                success=not errors,
+            )
+
         # Return result dict
         return {
             'success': not errors,
@@ -1638,8 +1691,8 @@ def sync_orchestration(
             'model_name': last_model_name,
         }
 
-    # Detect headless mode (no TTY, CI environment, or quiet mode)
-    headless = quiet or not sys.stdout.isatty() or os.environ.get('CI')
+    # Detect headless mode (no TTY, CI environment, quiet mode, or web mode)
+    headless = quiet or not sys.stdout.isatty() or os.environ.get('CI') or web_mode
 
     if headless:
         # Set PDD_FORCE to also skip API key prompts in headless mode

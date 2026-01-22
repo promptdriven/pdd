@@ -636,6 +636,7 @@ async def run_command_in_terminal(
         env['CI'] = '1'  # Triggers headless mode in sync
         env['PDD_FORCE'] = '1'  # Skip confirmation prompts
         env['TERM'] = 'dumb'  # Disable fancy terminal features
+        env['PDD_WEB_MODE'] = '1'  # Emit structured state for web UI visualization
 
         # Start subprocess - output goes directly to terminal (inherit stdio)
         # Use project_root as cwd to ensure correct .pddrc and context detection

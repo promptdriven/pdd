@@ -176,3 +176,25 @@ export interface PddrcConfig {
   version?: string;
   contexts: Record<string, PddrcContext>;
 }
+
+// Sync visualization state emitted by the backend via @@PDD_SYNC_STATE@@ markers
+export interface SyncState {
+  operation: string;
+  cost: number;
+  budget: number | null;
+  basename: string;
+  elapsedSeconds: number;
+  paths: {
+    prompt: string;
+    code: string;
+    example: string;
+    tests: string;
+  };
+  colors?: {
+    prompt?: string;
+    code?: string;
+    example?: string;
+    tests?: string;
+  };
+  status: 'running' | 'completed' | 'failed';
+}
