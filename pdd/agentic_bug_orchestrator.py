@@ -4,7 +4,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Union
 
 from rich.console import Console
 
@@ -20,19 +20,20 @@ from .load_prompt_template import load_prompt_template
 # Initialize console
 console = Console()
 
-# Per-step timeouts for the 10-step agentic bug workflow (Issue #256)
-# Complex steps (reproduce, root cause, generate, e2e) get more time.
-BUG_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 240.0,   # Duplicate Check
-    2: 400.0,   # Docs Check
-    3: 400.0,   # Triage
-    4: 600.0,   # Reproduce (Complex)
-    5: 600.0,   # Root Cause (Complex)
-    6: 340.0,   # Test Plan
-    7: 1000.0,  # Generate Unit Test (Most Complex)
-    8: 600.0,   # Verify Unit Test
-    9: 2000.0,  # E2E Test (Complex - needs to discover env & run tests)
-    10: 240.0,  # Create PR
+# Per-step timeouts for the 11-step agentic bug workflow (Issue #256)
+# Complex steps (reproduce, root cause, prompt classification, generate, e2e) get more time.
+BUG_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
+    1: 240.0,    # Duplicate Check
+    2: 400.0,    # Docs Check
+    3: 400.0,    # Triage
+    4: 600.0,    # Reproduce (Complex)
+    5: 600.0,    # Root Cause (Complex)
+    5.5: 600.0,  # Prompt Classification (may auto-fix prompts)
+    6: 340.0,    # Test Plan
+    7: 1000.0,   # Generate Unit Test (Most Complex)
+    8: 600.0,    # Verify Unit Test
+    9: 2000.0,   # E2E Test (Complex - needs to discover env & run tests)
+    10: 240.0,   # Create PR
 }
 
 
@@ -207,8 +208,8 @@ def run_agentic_bug_orchestrator(
     use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 10-step agentic bug investigation workflow.
-    
+    Orchestrates the 11-step agentic bug investigation workflow.
+
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
     """
@@ -283,13 +284,14 @@ def run_agentic_bug_orchestrator(
         if changed_files:
             context["files_to_stage"] = ", ".join(changed_files)
 
-    # Step Definitions
-    steps = [
+    # Step Definitions (11 steps with 5.5 for prompt classification)
+    steps: List[Tuple[Union[int, float], str, str]] = [
         (1, "duplicate", "Searching for duplicate issues"),
         (2, "docs", "Checking documentation for user error"),
         (3, "triage", "Assessing information completeness"),
         (4, "reproduce", "Attempting to reproduce the bug"),
         (5, "root_cause", "Analyzing root cause"),
+        (5.5, "prompt_classification", "Classifying defect: code bug vs prompt defect"),
         (6, "test_plan", "Designing test strategy"),
         (7, "generate", "Generating failing unit test"),
         (8, "verify", "Verifying test catches the bug"),
@@ -297,10 +299,18 @@ def run_agentic_bug_orchestrator(
         (10, "pr", "Creating draft PR"),
     ]
 
+    # Determine correct start step (handle step 5.5)
+    if last_completed_step == 5:
+        start_step: Union[int, float] = 5.5
+    elif last_completed_step == 5.5:
+        start_step = 6
+    else:
+        start_step = last_completed_step + 1
+
     for step_num, name, description in steps:
 
         # Skip already completed steps (resume support)
-        if step_num <= last_completed_step:
+        if step_num < start_step:
             continue
 
         # --- Pre-Step Logic: Worktree Creation ---
@@ -335,10 +345,14 @@ def run_agentic_bug_orchestrator(
                     console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
 
         # --- Step Execution ---
-        if not quiet:
-            console.print(f"[bold][Step {step_num}/10][/bold] {description}...")
+        # Format step label for display and template name (5.5 -> "5.5" for display, "5_5" for template)
+        step_display = f"{step_num}" if isinstance(step_num, int) else f"{step_num}"
+        step_suffix = str(step_num).replace(".", "_")  # 5.5 -> "5_5"
 
-        template_name = f"agentic_bug_step{step_num}_{name}_LLM"
+        if not quiet:
+            console.print(f"[bold][Step {step_display}/11][/bold] {description}...")
+
+        template_name = f"agentic_bug_step{step_suffix}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
         
         if not prompt_template:
@@ -356,7 +370,7 @@ def run_agentic_bug_orchestrator(
             cwd=current_cwd,
             verbose=verbose,
             quiet=quiet,
-            label=f"step{step_num}",
+            label=f"step{step_suffix}",
             timeout=BUG_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder,
             max_retries=DEFAULT_MAX_RETRIES,
         )
@@ -364,7 +378,7 @@ def run_agentic_bug_orchestrator(
         # Update tracking
         total_cost += cost
         last_model_used = model
-        context[f"step{step_num}_output"] = output
+        context[f"step{step_suffix}_output"] = output
 
         # --- Post-Step Logic: Hard Stops & Parsing ---
 
@@ -392,6 +406,29 @@ def run_agentic_bug_orchestrator(
             if not quiet: console.print(f"⏹️  {msg}")
             return False, msg, total_cost, last_model_used, changed_files
 
+        # Step 5.5: Prompt Classification - Hard stop if needs human review
+        if step_num == 5.5 and "PROMPT_REVIEW:" in output:
+            # Extract reason if available
+            for line in output.splitlines():
+                if line.startswith("PROMPT_REVIEW:"):
+                    reason = line.split(":", 1)[1].strip()
+                    break
+            else:
+                reason = "Prompt defect needs human review"
+            msg = f"Stopped at Step 5.5: {reason}"
+            if not quiet: console.print(f"⏹️  {msg}")
+            return False, msg, total_cost, last_model_used, changed_files
+
+        # Step 5.5: Parse PROMPT_FIXED to track changed prompt files
+        if step_num == 5.5:
+            for line in output.splitlines():
+                if line.startswith("PROMPT_FIXED:"):
+                    fixed_file = line.split(":", 1)[1].strip()
+                    if fixed_file and fixed_file not in changed_files:
+                        changed_files.append(fixed_file)
+                        context["files_to_stage"] = ", ".join(changed_files)
+                    break
+
         # Step 7: File Extraction
         if step_num == 7:
             # Parse output for FILES_CREATED or FILES_MODIFIED
@@ -401,7 +438,9 @@ def run_agentic_bug_orchestrator(
                     file_list = line.split(":", 1)[1].strip()
                     extracted_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
             
-            changed_files = extracted_files
+            changed_files.extend(extracted_files)
+            # Deduplicate while preserving insertion order for consistent git staging
+            changed_files = list(dict.fromkeys(changed_files))
             # Pass explicit file list to Step 9 and 10 for precise git staging
             context["files_to_stage"] = ", ".join(changed_files)
 
@@ -450,7 +489,13 @@ def run_agentic_bug_orchestrator(
             last_completed_step_to_save = step_num
         else:
             step_outputs[str(step_num)] = f"FAILED: {output}"
-            last_completed_step_to_save = step_num - 1
+            # Handle step 5.5 specially: previous step is 5, not 4.5
+            if step_num == 5.5:
+                last_completed_step_to_save = 5
+            elif step_num == 6:
+                last_completed_step_to_save = 5.5
+            else:
+                last_completed_step_to_save = step_num - 1
 
         new_state = {
             "workflow": "bug",

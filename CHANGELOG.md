@@ -1,21 +1,59 @@
+## v0.0.126 (2026-01-21)
+
+### Feat
+
+- Add step 5.5 (prompt classification) to bug orchestrator
+- Add prompt classification step (5.5) to agentic bug workflow (#330)
+- Integrate .pddrc project configuration loading into the agentic orchestrator, update prompt path variables, and enhance related tests.
+- Implement .pddrc configuration loading for agentic orchestrator context and update step 6 prompt to utilize these new context variables.
+- Enhance agentic change orchestration with pre-worktree branch checks, refined hard stop conditions, and improved user feedback.
+- Enhance the agentic change orchestrator by updating its implementation, tests, and examples, and adding new context files to project dependencies.
+- Add a new architecture update step (Step 10) to the agentic change workflow, expanding it to 13 steps and renumbering subsequent steps.
+- Add reuse-first guidance to pdd change workflow (#343)
+- Update changelog with new features, fixes, refactors, and documentation, enhance changelog generation instructions, and add an error log.
+
+### Fix
+
+- Update tests to expect exit code 2 for UsageError
+- pdd report-core should have no default repo
+- pdd test should generate tests that isolate local code under test
+- Add save/restore pattern to prevent sys.modules pollution (#349)
+- PDD sync doesn't accumulate cost when comparing with the max-budget
+- Remove obsolete E2E test and update prompts for loop mode (#360)
+- agentic_e2e_fix: Steps 1 & 8 pass unnecessary log file to pdd fix --loop causing workflow failures
+- Ensure `sync_order` correctly includes modified modules within dependency cycles and add `gh pr` commands to allowed bash commands.
+- KeyError 'N' in step 9 prompt template + tests (#357)
+- Update tests for 11-step workflow (step 5.5)
+
+### Refactor
+
+- Apply Copilot review suggestions
+- Generalize pdd change prompts to work with any codebase
+
 ## v0.0.125 (2026-01-20)
 
 ### Feat
 
-- Display selected example info in verbose generate output
+- **Verbose Example Info:** Display selected example info (ID and title) in verbose generate output. Shows pinned example if present in prompt.
 
 ### Fix
 
-- Prevent architecture graph position collapse on save
-- Use first available provider as fallback model name
-- Strip markdown bold from file paths in agentic orchestrator's parsing logic, add a regression test, and update VS Code pytest arguments.
-- Use first available provider as fallback model name
-- Remove duplicate {protect_tests} placeholder in test mocks
+- **Architecture Graph Position Collapse:** Prevent graph positions from collapsing on save by capturing Dagre-calculated positions before entering edit mode; added hybrid position handling for mixed saved/unsaved positions.
+- **Agentic Model Fallback:** Use first available provider as fallback model name when preferred provider unavailable.
+- **Markdown Path Parsing:** Strip markdown bold (`**`) from file paths in agentic orchestrator's parsing logic.
+- **Test Mock Placeholder:** Remove duplicate `{protect_tests}` placeholder in test mocks.
+- **Flaky Test Fix:** Use in-place dict operations (`clear()`/`update()`) instead of reference assignment when restoring mutable containers in test fixtures.
+- **Sync Order Language Support:** Generalize module extraction to support any language suffix (Go, Rust, Java, etc.); explicitly exclude `_LLM` prompts as runtime prompts.
 
 ### Refactor
 
-- Cache allHavePositions to avoid redundant filtering
-- Align agentic_fix.py with agentic_crash.py patterns
+- **Agentic Fix Simplification:** Align `agentic_fix.py` with `agentic_crash.py` patterns; use shared `run_agentic_task()` helper, remove `AGENT_COST_PER_CALL`, `AGENT_PROVIDER_PREFERENCE`, and harvest-only mode (deleted `agentic_fix_harvest_only_LLM.prompt`), simplify primary LLM prompt.
+- **Frontend Optimization:** Cache `allHavePositions` computation in `DependencyViewer.tsx`; persist positions when entering edit mode.
+
+### Docs
+
+- **Test Isolation Guidelines:** Add section 12 to `context/test.prompt` documenting in-place mutable container restoration patterns for dicts, lists, and sets.
+- **VS Code Test Config:** Configure VS Code to run all pytest tests via `.vscode/settings.json`.
 
 ## v0.0.124 (2026-01-20)
 

@@ -1,0 +1,140 @@
+% You are an expert software engineer. Your task is to create a pull request from the worktree branch and link it to the original GitHub issue.
+
+% Context
+
+You are working on step 13 of 13 in an agentic change workflow. This is the final step. All prompt changes have been made and verified. Now you create a PR for review.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Title: {issue_title}
+- Worktree Path: {worktree_path}
+- Branch Name: change/issue-{issue_number}
+- Files Changed: {files_to_stage}
+- Sync Order Script: {sync_order_script}
+- Sync Order Commands: {sync_order_list}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Change Summary (from previous steps)
+<step8_output>
+{step8_output}
+</step8_output>
+
+% Your Task
+
+1. **Stage all changes**
+   ```bash
+   cd {worktree_path}
+   git add -A
+   ```
+
+2. **Create commit**
+   - Use a clear commit message referencing the issue
+   - Format: `feat: [brief description] (#{issue_number})`
+
+3. **Push branch**
+   ```bash
+   git push -u origin change/issue-{issue_number}
+   ```
+
+4. **Create pull request**
+   Use `gh pr create` to create a PR that:
+   - References the original issue
+   - Summarizes the prompt changes made
+   - Lists files modified
+   - Includes next steps for reviewer
+
+5. **Link PR to issue**
+   - The PR body should include `Closes #{issue_number}` or `Fixes #{issue_number}`
+   - This ensures the issue is automatically closed when PR is merged
+
+% Output
+
+Create the PR using the gh CLI:
+
+```bash
+gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base main --head change/issue-{issue_number}
+```
+
+Then post a final comment to the issue:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+**PR Body Format:**
+```markdown
+## Summary
+
+[1-2 sentence description of what this PR does]
+
+Closes #{issue_number}
+
+## Changes Made
+
+### Prompts Modified
+- `prompts/xxx_python.prompt` - [brief description]
+- `prompts/yyy_python.prompt` - [brief description]
+
+### Documentation Updated
+- `README.md` - [brief description]
+
+## Review Checklist
+
+- [ ] Prompt syntax is valid
+- [ ] PDD conventions followed
+- [ ] Documentation is up to date
+
+## Next Steps After Merge
+
+1. Regenerate code from modified prompts in dependency order:
+   ```bash
+   ./sync_order.sh
+   ```
+   Or manually:
+   ```
+   {sync_order_list}
+   ```
+2. Run tests to verify functionality
+3. Deploy if applicable
+
+---
+*Created by pdd change workflow*
+```
+
+**Issue Comment Format:**
+```markdown
+## Step 13: Pull Request Created
+
+**Status:** PR Ready for Review
+
+### Pull Request
+[PR #{{pr_number}}]({{pr_url}})
+
+### Summary
+- Branch: `change/issue-{issue_number}`
+- Files changed: {{N}}
+- Ready for review
+
+### What's Next
+1. Review the PR
+2. Run `./sync_order.sh` after merge to regenerate code in dependency order
+3. Run tests to verify
+
+---
+*Agentic change workflow complete. Total cost: ${{total_cost:.4f}}*
+```
+
+% Important
+
+- Always link the PR to the issue using "Closes #N" or "Fixes #N"
+- Push to origin before creating PR
+- Include clear next steps for the reviewer
+- Report the PR URL in the issue comment
+- This is the final step - workflow is complete after this
