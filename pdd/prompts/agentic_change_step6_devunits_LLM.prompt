@@ -42,6 +42,16 @@ You are working on step 6 of 12 in an agentic change workflow. Previous steps co
 {step5_output}
 </step5_output>
 
+% Module Dependency Graph (Auto-Generated)
+
+The following shows which modules depend on which other modules. When you identify a module that needs modification, ALL modules that depend on it (directly or transitively) may also need updates.
+
+<dependency_context>
+{dependency_context}
+</dependency_context>
+
+**IMPORTANT:** Use this dependency information to identify transitively affected modules. For example, if module A depends on module B, and you're modifying B, then A should be listed in the Dependencies section.
+
 % Your Task
 
 1. **Understand the change request**
@@ -70,10 +80,11 @@ You are working on step 6 of 12 in an agentic change workflow. Previous steps co
    - Document which existing modules were considered and why they can/cannot be reused
 
 4. **Explore the codebase**
-   - List existing prompts in `prompts/`
+   - List existing prompts in `prompts/` AND ALL SUBDIRECTORIES (e.g., `prompts/commands/`, `prompts/agentic_steps/`)
    - Identify prompts related to the requested functionality
    - Check the example directory (from .pddrc or discovery) for related examples
    - Look for existing tests in the test directory (from .pddrc or discovery)
+   - **Cross-reference with the dependency graph above** to identify modules that will be affected by changes
 
 5. **Identify affected dev units**
    For each affected module, identify the complete dev unit using paths from step 2:
@@ -88,6 +99,8 @@ You are working on step 6 of 12 in an agentic change workflow. Previous steps co
    - **MODIFY**: Existing dev units that need changes - ALWAYS prefer this when possible
    - **CREATE**: New dev units - ONLY when no existing module can be extended to provide the functionality
    - **DEPENDENCY**: Dev units that are dependencies (may need interface updates)
+     - **Use the dependency graph above** to identify modules that depend on the modules being modified
+     - If module X is being modified and module Y depends on X (per the graph), add Y to Dependencies
 
    **Anti-duplication check:** For each CREATE, you MUST justify why MODIFY is not possible. List specific existing modules that were considered and explain why they cannot be extended.
 

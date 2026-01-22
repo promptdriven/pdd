@@ -283,6 +283,69 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         # On any error, return defaults
         return defaults
 
+
+def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
+    """
+    Build a formatted string describing the module dependency graph.
+
+    This is used to provide Step 6 with structured dependency information
+    so it can identify transitively affected modules.
+
+    Args:
+        prompts_dir: Path to the prompts directory
+        quiet: Whether to suppress logging
+
+    Returns:
+        Formatted string describing dependencies, or empty string if unavailable
+    """
+    if not prompts_dir.exists():
+        return ""
+
+    try:
+        graph = build_dependency_graph(prompts_dir)
+        if not graph:
+            return ""
+
+        # Build reverse dependencies (module -> list of modules that depend on it)
+        reverse_deps: Dict[str, List[str]] = {}
+        for module, deps in graph.items():
+            for dep in deps:
+                if dep not in reverse_deps:
+                    reverse_deps[dep] = []
+                reverse_deps[dep].append(module)
+
+        # Format as readable text for the LLM
+        lines = []
+        lines.append("## Module Dependency Graph")
+        lines.append("")
+        lines.append("When a module is modified, all modules that depend on it (directly or transitively) may also need updates.")
+        lines.append("")
+
+        # Show modules with dependents (these are the ones that matter for ripple effects)
+        modules_with_dependents = {k: v for k, v in reverse_deps.items() if v}
+        if modules_with_dependents:
+            lines.append("### Modules and their dependents (modules that will be affected if changed):")
+            lines.append("")
+            # Sort by number of dependents (most impactful first)
+            for module in sorted(modules_with_dependents.keys(),
+                               key=lambda m: len(modules_with_dependents[m]),
+                               reverse=True)[:30]:  # Limit to top 30
+                dependents = modules_with_dependents[module]
+                lines.append(f"- **{module}** → affects: {', '.join(sorted(dependents)[:10])}")
+                if len(dependents) > 10:
+                    lines.append(f"  (and {len(dependents) - 10} more)")
+
+        lines.append("")
+        lines.append(f"Total modules tracked: {len(graph)}")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        if not quiet:
+            console.print(f"[yellow]Warning: Could not build dependency context: {e}[/yellow]")
+        return ""
+
+
 def run_agentic_change_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -409,6 +472,15 @@ def run_agentic_change_orchestrator(
     for step_num, name, description in steps_config:
         if step_num < start_step:
             continue
+
+        # Before Step 6, build dependency context to help identify transitively affected modules
+        if step_num == 6:
+            prompts_dir = cwd / "prompts"
+            if prompts_dir.exists():
+                dep_context = _build_dependency_context(prompts_dir, quiet=quiet)
+                context["dependency_context"] = dep_context
+            else:
+                context["dependency_context"] = ""
 
         if step_num == 9:
             if worktree_path and worktree_path.exists():
