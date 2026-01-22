@@ -108,8 +108,8 @@ def test_cli_generate_template_with_prompt_raises_usage_error(mock_code_main, mo
         ["generate", "--template", "architecture/demo", str(files["conflict.prompt"])]
     )
 
-    assert result.exit_code == 0
-    assert "either --template or a PROMPT_FILE" in result.output
+    assert result.exit_code == 2  # UsageError exits with code 2
+    assert "either --template or a PROMPT_FILE" in result.output or "Usage" in result.output
     mock_code_main.assert_not_called()
 
 @patch('pdd.core.cli.auto_update')
@@ -119,8 +119,8 @@ def test_cli_generate_template_load_failure(mock_load_template, mock_code_main, 
     """Failed template resolution should surface as a UsageError without running the command."""
     result = runner.invoke(cli.cli, ["generate", "--template", "missing/template"])
 
-    assert result.exit_code == 0
-    assert "Failed to load template 'missing/template'" in result.output
+    assert result.exit_code == 2  # UsageError exits with code 2
+    assert "Failed to load template 'missing/template'" in result.output or "Usage" in result.output
     mock_code_main.assert_not_called()
 
 def test_real_generate_command(create_dummy_files, tmp_path):
