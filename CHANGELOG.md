@@ -1,3 +1,35 @@
+## v0.0.126 (2026-01-21)
+
+### Feat
+
+- Add step 5.5 (prompt classification) to bug orchestrator
+- Add prompt classification step (5.5) to agentic bug workflow (#330)
+- Integrate .pddrc project configuration loading into the agentic orchestrator, update prompt path variables, and enhance related tests.
+- Implement .pddrc configuration loading for agentic orchestrator context and update step 6 prompt to utilize these new context variables.
+- Enhance agentic change orchestration with pre-worktree branch checks, refined hard stop conditions, and improved user feedback.
+- Enhance the agentic change orchestrator by updating its implementation, tests, and examples, and adding new context files to project dependencies.
+- Add a new architecture update step (Step 10) to the agentic change workflow, expanding it to 13 steps and renumbering subsequent steps.
+- Add reuse-first guidance to pdd change workflow (#343)
+- Update changelog with new features, fixes, refactors, and documentation, enhance changelog generation instructions, and add an error log.
+
+### Fix
+
+- Update tests to expect exit code 2 for UsageError
+- pdd report-core should have no default repo
+- pdd test should generate tests that isolate local code under test
+- Add save/restore pattern to prevent sys.modules pollution (#349)
+- PDD sync doesn't accumulate cost when comparing with the max-budget
+- Remove obsolete E2E test and update prompts for loop mode (#360)
+- agentic_e2e_fix: Steps 1 & 8 pass unnecessary log file to pdd fix --loop causing workflow failures
+- Ensure `sync_order` correctly includes modified modules within dependency cycles and add `gh pr` commands to allowed bash commands.
+- KeyError 'N' in step 9 prompt template + tests (#357)
+- Update tests for 11-step workflow (step 5.5)
+
+### Refactor
+
+- Apply Copilot review suggestions
+- Generalize pdd change prompts to work with any codebase
+
 ## v0.0.125 (2026-01-20)
 
 ### Feat

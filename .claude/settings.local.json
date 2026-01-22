@@ -74,7 +74,9 @@
       "Bash(git push:*)",
       "Bash(find:*)",
       "Bash(python3:*)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
