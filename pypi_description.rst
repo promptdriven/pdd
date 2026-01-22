@@ -1,4 +1,4 @@
-.. image:: https://img.shields.io/badge/pdd--cli-v0.0.125-blue
+.. image:: https://img.shields.io/badge/pdd--cli-v0.0.126-blue
    :alt: PDD-CLI Version
 
 .. image:: https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white&link=https://discord.gg/Yp4RTh8bG7
@@ -75,7 +75,7 @@ After installation, verify:
 
    pdd --version
 
-You'll see the current PDD version (e.g., 0.0.125).
+You'll see the current PDD version (e.g., 0.0.126).
 
 Getting Started with Examples
 -----------------------------
