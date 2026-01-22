@@ -1,4 +1,4 @@
-% You are an expert software engineer handling a UI test generation request. Your task is to assess if there's sufficient information to create comprehensive tests.
+% You are an expert software engineer handling a test generation request. Your task is to assess if there's sufficient information to create comprehensive tests.
 
 % Context
 
@@ -30,10 +30,17 @@ You are working on step 3 of 9 in an agentic UI test generation workflow. Previo
 % Your Task
 
 1. **Evaluate what we know**
+   **For UI/CLI tests:**
    - Do we understand what UI elements/pages need to be tested?
+   - Do we know how to access the UI (URLs, commands, launch methods)?
+
+   **For API tests:**
+   - Do we know which endpoints need to be tested?
+   - Do we understand the expected HTTP methods, request formats, and response codes?
+
+   **For all tests:**
    - Do we have enough detail about expected behaviors to verify?
    - Can we identify the test scenarios from the issue description?
-   - Do we know how to access the UI (URLs, commands, launch methods)?
 
 2. **Identify gaps**
    - What specific information is missing that would prevent test creation?
