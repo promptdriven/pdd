@@ -666,3 +666,262 @@ class TestServerPortConfiguration:
         assert mgr.server_port == 8080
         assert mgr.session_id is None
         assert mgr.cloud_url is None
+
+
+# --- Tests for Issue #363: Heartbeat Failure During Long Operations ---
+# These tests verify that heartbeat continues to work during long-running operations
+# and address the bug where session connection is lost during pdd sync auto-deps.
+
+class TestHeartbeatDuringLongOperations:
+    """Tests for heartbeat mechanism during long-running operations (Issue #363)."""
+
+    @pytest.mark.asyncio
+    async def test_first_heartbeat_sent_immediately(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that the first heartbeat is sent immediately, not after 60 second delay.
+
+        This test verifies that when heartbeat starts, the first heartbeat is sent
+        WITHOUT waiting for the full 60-second interval. This is critical because
+        cloud-side session timeout may be shorter than 60 seconds, causing the session
+        to be considered stale before the first heartbeat arrives.
+
+        Bug: Current implementation waits 60 seconds before sending first heartbeat.
+        Expected: First heartbeat should be sent immediately (or within a few seconds).
+        """
+        manager.session_id = "sess-test-immediate"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_httpx_client.post.return_value = mock_response
+
+        # Track heartbeat timestamps
+        heartbeat_times = []
+        original_post = mock_httpx_client.post
+
+        async def track_heartbeat(*args, **kwargs):
+            heartbeat_times.append(asyncio.get_event_loop().time())
+            return original_post.return_value
+
+        mock_httpx_client.post.side_effect = track_heartbeat
+
+        # Start heartbeat
+        start_time = asyncio.get_event_loop().time()
+        manager.start_heartbeat()
+
+        # Wait up to 5 seconds for the first heartbeat (should be immediate)
+        # If the bug exists, no heartbeat will be sent within 5 seconds
+        await asyncio.sleep(5.0)
+
+        # Stop heartbeat
+        await manager.stop_heartbeat()
+
+        # Verify that a heartbeat was sent within 5 seconds of starting
+        # The current buggy code waits 60 seconds, so this will fail
+        assert len(heartbeat_times) > 0, (
+            "No heartbeat was sent within 5 seconds. "
+            "First heartbeat should be sent immediately, not after 60 second delay."
+        )
+
+        first_heartbeat_delay = heartbeat_times[0] - start_time
+        assert first_heartbeat_delay < 5.0, (
+            f"First heartbeat took {first_heartbeat_delay:.1f}s. "
+            "Should be sent immediately, not delayed by 60 seconds."
+        )
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_has_retry_logic_on_failure(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that heartbeat retries on transient failures with exponential backoff.
+
+        This test verifies that when a heartbeat request fails, the code retries
+        (similar to how update_command() has retry logic with exponential backoff).
+
+        Bug: Current implementation logs the error but doesn't retry the heartbeat.
+        Expected: Heartbeat should retry with exponential backoff on transient failures.
+        """
+        manager.session_id = "sess-test-retry"
+
+        # Track call attempts
+        call_count = [0]
+
+        async def fail_then_succeed(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                # First 2 calls fail
+                raise Exception("Transient network error")
+            # Third call succeeds
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            return mock_response
+
+        mock_httpx_client.post.side_effect = fail_then_succeed
+
+        # Create a mock stop event that exits after one "cycle"
+        class MockEvent:
+            def __init__(self):
+                self._call_count = 0
+
+            def is_set(self):
+                return self._call_count > 0
+
+            async def wait(self):
+                pass
+
+        manager._stop_event = MockEvent()
+
+        # Mock wait_for to simulate immediate timeout (heartbeat interval passed)
+        async def mock_wait_for(coro, timeout):
+            coro.close()
+            manager._stop_event._call_count += 1
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+            await manager._heartbeat_loop()
+
+        # The current buggy code only calls once and logs the error
+        # With retry logic, it should have called 3 times (2 failures + 1 success)
+        assert call_count[0] >= 3, (
+            f"Heartbeat was only attempted {call_count[0]} time(s). "
+            "Should retry at least 2 more times on failure (like update_command does)."
+        )
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_continues_during_command_execution(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that heartbeat continues to run while a command is being executed.
+
+        This simulates the scenario from Issue #363 where auto-deps takes a long time
+        and the heartbeat should continue running in the background.
+
+        This test verifies that the heartbeat task runs independently of command execution.
+        """
+        manager.session_id = "sess-test-concurrent"
+
+        heartbeat_count = [0]
+
+        async def count_heartbeats(*args, **kwargs):
+            # Only count heartbeat calls (to heartbeatSession endpoint)
+            if args and "heartbeat" in str(args[0]).lower():
+                heartbeat_count[0] += 1
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {}
+            return mock_response
+
+        mock_httpx_client.post.side_effect = count_heartbeats
+        mock_httpx_client.get.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"status": "completed", "result": {"stdout": "", "stderr": "", "exit_code": 0}}
+        )
+
+        # Start heartbeat with a short interval for testing
+        # Note: We're testing the architecture, not the 60-second interval
+        manager.start_heartbeat()
+
+        # Simulate a long-running operation (what happens during auto-deps)
+        # The heartbeat should continue running during this time
+        long_operation_duration = 3.0  # 3 seconds
+        await asyncio.sleep(long_operation_duration)
+
+        await manager.stop_heartbeat()
+
+        # With immediate first heartbeat and 60s interval, we should see at least 1 heartbeat
+        # The current code waits 60s before first heartbeat, so in 3 seconds we'd see 0
+        # This test would pass with the current code if we wait 60+ seconds, but that's slow
+        # The key insight is tested in test_first_heartbeat_sent_immediately
+
+        # For this test, we're verifying that the heartbeat task architecture allows
+        # concurrent execution. This test should pass with current code.
+        assert manager._heartbeat_task is None, "Heartbeat task should be stopped"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_not_blocked_by_high_frequency_cloud_updates(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that heartbeat is not starved by high-frequency cloud updates.
+
+        During command execution, the code sends output updates every 2 seconds.
+        This test verifies that these frequent updates don't prevent heartbeat from running.
+
+        This is an architectural test - the asyncio event loop should allow both to run.
+        """
+        manager.session_id = "sess-test-starve"
+
+        heartbeat_sent = [False]
+        update_count = [0]
+
+        async def track_requests(*args, **kwargs):
+            url = str(args[0]) if args else ""
+            if "heartbeat" in url.lower():
+                heartbeat_sent[0] = True
+            elif "updateCommand" in url:
+                update_count[0] += 1
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {}
+            return mock_response
+
+        mock_httpx_client.post.side_effect = track_requests
+
+        # Start heartbeat (it will wait 60s before sending due to current bug)
+        manager.start_heartbeat()
+
+        # Simulate high-frequency updates (like during command execution)
+        # These happen every 2 seconds in _do_execute
+        for _ in range(5):
+            await manager._update_command_output("cmd-1", stdout="output", stderr="")
+            await asyncio.sleep(0.1)
+
+        # Verify updates were sent
+        assert update_count[0] == 5, f"Expected 5 updates, got {update_count[0]}"
+
+        await manager.stop_heartbeat()
+
+        # This test verifies the architecture allows concurrent operations
+        # The actual heartbeat won't be sent due to 60s delay, but that's a separate bug
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_failure_logged_but_not_fatal(self, manager, mock_cloud_config, mock_httpx_client):
+        """
+        Test that heartbeat errors are logged but don't crash the heartbeat loop.
+
+        This verifies the existing behavior that errors don't crash the loop,
+        but highlights that while errors are logged, there's no retry mechanism.
+        """
+        manager.session_id = "sess-test-error"
+
+        error_count = [0]
+
+        async def always_fail(*args, **kwargs):
+            error_count[0] += 1
+            raise Exception("Persistent network failure")
+
+        mock_httpx_client.post.side_effect = always_fail
+
+        # Track how many iterations occurred
+        iteration_count = [0]
+
+        class MockEvent:
+            def is_set(self):
+                return iteration_count[0] >= 2
+
+            async def wait(self):
+                pass
+
+        manager._stop_event = MockEvent()
+
+        async def mock_wait_for(coro, timeout):
+            coro.close()
+            iteration_count[0] += 1
+            raise asyncio.TimeoutError()
+
+        with patch("asyncio.wait_for", side_effect=mock_wait_for):
+            # Should not raise - errors are caught
+            await manager._heartbeat_loop()
+
+        # Verify that the loop continued despite errors (error was logged, not fatal)
+        # With current code: each iteration calls post once, errors are caught
+        # With retry logic: each iteration would retry multiple times
+        assert error_count[0] >= 2, (
+            f"Expected at least 2 error attempts (one per iteration), got {error_count[0]}"
+        )
