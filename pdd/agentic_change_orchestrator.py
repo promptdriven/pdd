@@ -30,6 +30,8 @@ from pdd.sync_order import (
     generate_sync_order_script,
     extract_module_from_include,
 )
+from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
+from pdd.get_extension import get_extension
 
 # Initialize console for rich output
 console = Console()
@@ -69,6 +71,70 @@ def _get_git_root(cwd: Path) -> Optional[Path]:
     except subprocess.CalledProcessError:
         return None
 
+def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
+    """Check if path is in git worktree list --porcelain output."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False
+    try:
+        wt_list = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=git_root,
+            capture_output=True,
+            text=True
+        ).stdout
+        return str(worktree_path) in wt_list
+    except Exception:
+        return False
+
+def _branch_exists(cwd: Path, branch: str) -> bool:
+    """Check via git show-ref --verify refs/heads/{branch}."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False
+    try:
+        subprocess.run(
+            ["git", "show-ref", "--verify", f"refs/heads/{branch}"],
+            cwd=git_root,
+            check=True,
+            capture_output=True
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
+    """Remove via git worktree remove --force."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False, "Not a git repository"
+    try:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            cwd=git_root,
+            capture_output=True,
+            check=True
+        )
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        return False, str(e)
+
+def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
+    """Delete via git branch -D."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False, "Not a git repository"
+    try:
+        subprocess.run(
+            ["git", "branch", "-D", branch],
+            cwd=git_root,
+            capture_output=True,
+            check=True
+        )
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        return False, str(e)
+
 def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]:
     """
     Create an isolated git worktree for the issue.
@@ -82,38 +148,25 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
     worktree_rel_path = Path(".pdd") / "worktrees" / f"change-issue-{issue_number}"
     worktree_path = git_root / worktree_rel_path
 
+    # Clean up existing directory if it exists
     if worktree_path.exists():
-        is_worktree = False
-        try:
-            wt_list = subprocess.run(
-                ["git", "worktree", "list", "--porcelain"],
-                cwd=git_root,
-                capture_output=True,
-                text=True
-            ).stdout
-            if str(worktree_path) in wt_list:
-                is_worktree = True
-        except Exception:
-            pass
-
-        if is_worktree:
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", str(worktree_path)],
-                cwd=git_root,
-                capture_output=True
-            )
+        if _worktree_exists(cwd, worktree_path):
+            success, err = _remove_worktree(cwd, worktree_path)
+            if not success:
+                # Fallback to rmtree if git command fails but dir exists
+                try:
+                    shutil.rmtree(worktree_path)
+                except Exception:
+                    pass
         else:
+            # Just a directory
             shutil.rmtree(worktree_path)
 
-    try:
-        subprocess.run(
-            ["git", "branch", "-D", branch_name],
-            cwd=git_root,
-            capture_output=True
-        )
-    except Exception:
-        pass
+    # Clean up branch if it exists
+    if _branch_exists(cwd, branch_name):
+        _delete_branch(cwd, branch_name)
 
+    # Create worktree
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
@@ -131,19 +184,22 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
 def _parse_changed_files(output: str) -> List[str]:
     """Extract file paths from FILES_CREATED or FILES_MODIFIED lines."""
     files = []
+    # Look for FILES_CREATED: path, path
     created_match = re.search(r"FILES_CREATED:\s*(.*)", output)
     if created_match:
         files.extend([f.strip().strip("*").strip() for f in created_match.group(1).split(",") if f.strip()])
     
+    # Look for FILES_MODIFIED: path, path
     modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", output)
     if modified_match:
         files.extend([f.strip().strip("*").strip() for f in modified_match.group(1).split(",") if f.strip()])
     
+    # Look for ARCHITECTURE_FILES_MODIFIED: path, path (Step 10)
     arch_match = re.search(r"ARCHITECTURE_FILES_MODIFIED:\s*(.*)", output)
     if arch_match:
         files.extend([f.strip().strip("*").strip() for f in arch_match.group(1).split(",") if f.strip()])
         
-    return list(set(files))
+    return list(set(files)) # Deduplicate
 
 def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     """Check output for hard stop conditions."""
@@ -169,6 +225,64 @@ def _get_state_dir(cwd: Path) -> Path:
     root = _get_git_root(cwd) or cwd
     return root / ".pdd" / "change-state"
 
+def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
+    """
+    Load .pddrc configuration and return context keys for step templates.
+
+    Returns dict with: language, source_dir, test_dir, example_dir, ext, lang
+    Falls back to sensible defaults if no .pddrc found.
+    """
+    defaults = {
+        "language": "python",
+        "source_dir": "src/",
+        "test_dir": "tests/",
+        "example_dir": "context/",
+        "ext": "py",
+        "lang": "_python",
+    }
+
+    try:
+        pddrc_path = _find_pddrc_file(cwd)
+        if not pddrc_path:
+            return defaults
+
+        config = _load_pddrc_config(pddrc_path)
+        if not config:
+            return defaults
+
+        # Detect the appropriate context
+        context_name = _detect_context(config, cwd)
+        contexts = config.get("contexts", {})
+        ctx_config = contexts.get(context_name, contexts.get("default", {}))
+
+        # Config values may be at top level or nested under "defaults"
+        ctx_defaults = ctx_config.get("defaults", ctx_config)
+
+        language = ctx_defaults.get("default_language", defaults["language"])
+        source_dir = ctx_defaults.get("generate_output_path", defaults["source_dir"])
+        test_dir = ctx_defaults.get("test_output_path", defaults["test_dir"])
+        example_dir = ctx_defaults.get("example_output_path", defaults["example_dir"])
+
+        # Derive ext from language
+        ext = get_extension(language) if language else defaults["ext"]
+        if ext.startswith("."):
+            ext = ext[1:]  # Remove leading dot if present
+
+        # Derive lang suffix
+        lang = f"_{language}" if language else defaults["lang"]
+
+        return {
+            "language": language,
+            "source_dir": source_dir,
+            "test_dir": test_dir,
+            "example_dir": example_dir,
+            "ext": ext,
+            "lang": lang,
+        }
+    except Exception:
+        # On any error, return defaults
+        return defaults
+
 def run_agentic_change_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -186,16 +300,22 @@ def run_agentic_change_orchestrator(
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 13-step agentic change workflow.
-
+    
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
     """
+    
     if not quiet:
         console.print(f"Implementing change for issue #{issue_number}: \"{issue_title}\"")
 
     state_dir = _get_state_dir(cwd)
-    state, loaded_gh_id = load_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
 
+    # Load state
+    state, loaded_gh_id = load_workflow_state(
+        cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
+    )
+
+    # Initialize variables from state or defaults
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
@@ -213,11 +333,44 @@ def run_agentic_change_orchestrator(
         github_comment_id = None
         worktree_path = None
     
-    context = {"issue_url": issue_url, "issue_content": issue_content, "repo_owner": repo_owner, "repo_name": repo_name, "issue_number": issue_number, "issue_author": issue_author, "issue_title": issue_title}
+    pddrc_context = _load_pddrc_context(cwd)
+
+    context = {
+        "issue_url": issue_url,
+        "issue_content": issue_content,
+        "repo_owner": repo_owner,
+        "repo_name": repo_name,
+        "issue_number": issue_number,
+        "issue_author": issue_author,
+        "issue_title": issue_title,
+        **pddrc_context,
+    }
+    
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out
 
+    changed_files = []
+    
+    if "step9_output" in context:
+        s9_out = context["step9_output"]
+        extracted_files = _parse_changed_files(s9_out)
+        changed_files.extend(extracted_files)
+        created_match = re.search(r"FILES_CREATED:\s*(.*)", s9_out)
+        modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", s9_out)
+        context["files_created"] = created_match.group(1).strip() if created_match else ""
+        context["files_modified"] = modified_match.group(1).strip() if modified_match else ""
+    
+    if "step10_output" in context:
+        s10_out = context["step10_output"]
+        arch_files = _parse_changed_files(s10_out)
+        new_files = [f for f in arch_files if f not in changed_files]
+        changed_files.extend(new_files)
+
+    if changed_files:
+        context["files_to_stage"] = ", ".join(changed_files)
+
     start_step = last_completed_step + 1
+    
     if last_completed_step > 0 and not quiet:
         console.print(f"Resuming change workflow for issue #{issue_number}")
         console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
@@ -237,54 +390,76 @@ def run_agentic_change_orchestrator(
     ]
 
     current_work_dir = cwd
-    changed_files = []
 
     if start_step >= 9:
         if worktree_path and worktree_path.exists():
-             if not quiet: console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")
+             if not quiet:
+                console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")
              current_work_dir = worktree_path
              context["worktree_path"] = str(worktree_path)
         else:
             wt_path, err = _setup_worktree(cwd, issue_number, quiet)
-            if not wt_path: return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
+            if not wt_path:
+                return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
             worktree_path = wt_path
             current_work_dir = worktree_path
             state["worktree_path"] = str(worktree_path)
             context["worktree_path"] = str(worktree_path)
 
     for step_num, name, description in steps_config:
-        if step_num < start_step: continue
-        if step_num == 9:
-            # Check current branch before creating worktree
-            try:
-                current_branch = subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    cwd=cwd,
-                    capture_output=True,
-                    text=True,
-                    check=True
-                ).stdout.strip()
-                if current_branch not in ["main", "master"] and not quiet:
-                    console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
-            except subprocess.CalledProcessError:
-                pass  # Ignore if git command fails, worktree setup will likely catch issues
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet)
-            if not wt_path: return False, f"Failed to create worktree: {err}", total_cost, model_used, []
-            worktree_path = wt_path
-            current_work_dir = worktree_path
-            state["worktree_path"] = str(worktree_path)
-            context["worktree_path"] = str(worktree_path)
+        if step_num < start_step:
+            continue
 
-        if not quiet: console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
+        if step_num == 9:
+            if worktree_path and worktree_path.exists():
+                 current_work_dir = worktree_path
+                 if not quiet:
+                     console.print(f"[blue]Using existing worktree: {worktree_path}[/blue]")
+            else:
+                try:
+                    current_branch = subprocess.run(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=cwd,
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    ).stdout.strip()
+                    if current_branch not in ["main", "master"] and not quiet:
+                        console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
+                except subprocess.CalledProcessError:
+                    pass
+
+                wt_path, err = _setup_worktree(cwd, issue_number, quiet)
+                if not wt_path:
+                    return False, f"Failed to create worktree: {err}", total_cost, model_used, []
+                worktree_path = wt_path
+                current_work_dir = worktree_path
+                state["worktree_path"] = str(worktree_path)
+                context["worktree_path"] = str(worktree_path)
+
+        if not quiet:
+            console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
+
         template_name = f"agentic_change_step{step_num}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
-        if not prompt_template: return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
+        if not prompt_template:
+            return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        try: formatted_prompt = prompt_template.format(**context)
-        except KeyError as e: return False, f"Context missing key for step {step_num}: {e}", total_cost, model_used, []
+        try:
+            formatted_prompt = prompt_template.format(**context)
+        except KeyError as e:
+            return False, f"Context missing key for step {step_num}: {e}", total_cost, model_used, []
 
         timeout = CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
-        step_success, step_output, step_cost, step_model = run_agentic_task(instruction=formatted_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout, label=f"step{step_num}", max_retries=DEFAULT_MAX_RETRIES)
+        step_success, step_output, step_cost, step_model = run_agentic_task(
+            instruction=formatted_prompt,
+            cwd=current_work_dir,
+            verbose=verbose,
+            quiet=quiet,
+            timeout=timeout,
+            label=f"step{step_num}",
+            max_retries=DEFAULT_MAX_RETRIES,
+        )
 
         total_cost += step_cost
         model_used = step_model
@@ -292,23 +467,20 @@ def run_agentic_change_orchestrator(
         state["model_used"] = model_used
 
         if not step_success:
-            # Check if it's a hard stop condition that caused "failure" or just agent error
             stop_reason = _check_hard_stop(step_num, step_output)
             if stop_reason:
                 if not quiet:
                     console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-                # Save state so we don't re-run previous steps
                 state["last_completed_step"] = step_num
                 state["step_outputs"][str(step_num)] = step_output
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
-            # Soft failure - warn but continue
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
-        # Check hard stops on success too
         stop_reason = _check_hard_stop(step_num, step_output)
         if stop_reason:
-            if not quiet: console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
+            if not quiet:
+                console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
             state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = step_output
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
@@ -317,12 +489,13 @@ def run_agentic_change_orchestrator(
         if step_num == 9:
             extracted_files = _parse_changed_files(step_output)
             changed_files = extracted_files
-            if not changed_files: return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
             context["files_to_stage"] = ", ".join(changed_files)
             created_match = re.search(r"FILES_CREATED:\s*(.*)", step_output)
             modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", step_output)
             context["files_created"] = created_match.group(1).strip() if created_match else ""
             context["files_modified"] = modified_match.group(1).strip() if modified_match else ""
+            if not changed_files:
+                return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
         if step_num == 10:
             arch_files = _parse_changed_files(step_output)
@@ -338,10 +511,11 @@ def run_agentic_change_orchestrator(
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
 
         save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-        if save_result: github_comment_id = save_result; state["github_comment_id"] = github_comment_id
+        if save_result:
+            github_comment_id = save_result
+            state["github_comment_id"] = github_comment_id
 
         if not quiet:
-            # Brief result summary
             lines = step_output.strip().split('\n')
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
@@ -362,29 +536,37 @@ def run_agentic_change_orchestrator(
         while review_iteration < MAX_REVIEW_ITERATIONS:
             review_iteration += 1
             state["review_iteration"] = review_iteration
-            if not quiet: console.print(f"[bold][Step 11/13][/bold] Identifying issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
+            if not quiet:
+                console.print(f"[bold][Step 11/13][/bold] Identifying issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
             s11_template = load_prompt_template("agentic_change_step11_identify_issues_LLM")
             context["review_iteration"] = review_iteration
             context["previous_fixes"] = previous_fixes
             s11_prompt = s11_template.format(**context)
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
-            s11_success, s11_output, s11_cost, s11_model = run_agentic_task(instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES)
+            s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
+                instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
+            )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
             if "No Issues Found" in s11_output:
                 if not quiet: console.print("   -> No issues found. Proceeding to PR.")
                 context["step11_output"] = s11_output; break
             if not quiet: console.print("   -> Issues found. Proceeding to fix.")
-            if not quiet: console.print(f"[bold][Step 12/13][/bold] Fixing issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
+            if not quiet:
+                console.print(f"[bold][Step 12/13][/bold] Fixing issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
             s12_template = load_prompt_template("agentic_change_step12_fix_issues_LLM")
             context["step11_output"] = s11_output
             s12_prompt = s12_template.format(**context)
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
-            s12_success, s12_output, s12_cost, s12_model = run_agentic_task(instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES)
+            s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
+                instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
+            )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
-            previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"; state["previous_fixes"] = previous_fixes
+            previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
+            state["previous_fixes"] = previous_fixes
             save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if save_result: github_comment_id = save_result; state["github_comment_id"] = github_comment_id
-        if review_iteration >= MAX_REVIEW_ITERATIONS: console.print("[yellow]Warning: Maximum review iterations reached. Proceeding to PR creation.[/yellow]")
+        if review_iteration >= MAX_REVIEW_ITERATIONS:
+            console.print("[yellow]Warning: Maximum review iterations reached. Proceeding to PR creation.[/yellow]")
 
     sync_order_script = ""; sync_order_list = "No modules to sync"
     files_to_stage_str = context.get("files_to_stage", "")
@@ -394,22 +576,24 @@ def run_agentic_change_orchestrator(
         if file_path.startswith("prompts/") and file_path.endswith(".prompt"):
             module = extract_module_from_include(file_path)
             if module: modified_modules.add(module)
+
     if worktree_path:
         prompts_dir = worktree_path / "prompts"
         if prompts_dir.exists() and modified_modules:
             try:
                 graph = build_dependency_graph(prompts_dir)
                 sorted_modules, cycles = topological_sort(graph)
-                if cycles and not quiet: console.print(f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]")
+                if cycles and not quiet:
+                    console.print(f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]")
                 affected = get_affected_modules(sorted_modules, modified_modules, graph)
                 if affected:
                     script_path = worktree_path / "sync_order.sh"
                     sync_order_list = generate_sync_order_script(affected, script_path, worktree_path)
                     sync_order_script = str(script_path)
-                    if not quiet:
-                        console.print(f"[dim]Generated sync order script: {script_path}[/dim]")
+                    if not quiet: console.print(f"[dim]Generated sync order script: {script_path}[/dim]")
             except Exception as e:
                 if not quiet: console.print(f"[yellow]Warning: Could not generate sync order: {e}[/yellow]")
+
     context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
 
     if last_completed_step < 13:
@@ -417,9 +601,12 @@ def run_agentic_change_orchestrator(
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
         s13_prompt = s13_template.format(**context)
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
-        s13_success, s13_output, s13_cost, s13_model = run_agentic_task(instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES)
+        s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
+            instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES,
+        )
         total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
         if not s13_success:
+             console.print("[red]Step 13 (PR Creation) failed.[/red]")
              save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
              return False, "PR Creation failed", total_cost, model_used, changed_files
         pr_url = "Unknown"; url_match = re.search(r"https://github.com/\S+/pull/\d+", s13_output)
@@ -436,3 +623,4 @@ def run_agentic_change_orchestrator(
         clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
         return True, f"PR Created: {pr_url}", total_cost, model_used, changed_files
     return True, "Workflow already completed", total_cost, model_used, changed_files
+""

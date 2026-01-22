@@ -295,6 +295,7 @@ Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_w
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
 
 % Deliverables
 - Code: `pdd/agentic_change_orchestrator.py`

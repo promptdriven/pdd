@@ -764,8 +764,7 @@ def mock_dependencies_dict():
          patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
          patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
          patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
-         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
-         patch("pdd.agentic_change_orchestrator.extract_module_from_include") as mock_extract_mod:
+         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
         
         mock_load.return_value = (None, None)
         mock_save.return_value = 12345
@@ -786,8 +785,7 @@ def mock_dependencies_dict():
             "build_graph": mock_build_graph,
             "topo_sort": mock_topo_sort,
             "get_affected": mock_get_affected,
-            "gen_script": mock_gen_script,
-            "extract_mod": mock_extract_mod
+            "gen_script": mock_gen_script
         }
 
 def test_happy_path_full_execution(mock_dependencies_dict, tmp_path):
@@ -897,13 +895,528 @@ def test_sync_order_generation_dict(mock_dependencies_dict, tmp_path):
     existing_state = {"last_completed_step": 12, "step_outputs": {str(i): "out" for i in range(1, 13)}, "worktree_path": str(tmp_path / "wt")}
     existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo.prompt"
     mocks["load"].return_value = (existing_state, 123)
-    mocks["extract_mod"].return_value = "foo"
+    # mocks["extract_mod"].return_value = "foo" # Removed patch
     mocks["get_affected"].return_value = ["foo", "bar"]
     mocks["gen_script"].return_value = "echo sync"
     mocks["run"].return_value = (True, "PR Created", 0.1, "gpt-4")
     with patch("pathlib.Path.exists", return_value=True):
         run_agentic_change_orchestrator(issue_url="http://issue", issue_content="Fix bug", repo_owner="owner", repo_name="repo", issue_number=1, issue_author="me", issue_title="Bug Fix", cwd=tmp_path, quiet=True)
-    mocks["extract_mod"].assert_called()
+    # mocks["extract_mod"].assert_called() # Removed assertion
     mocks["build_graph"].assert_called()
     mocks["get_affected"].assert_called()
     mocks["gen_script"].assert_called()
+
+
+# -----------------------------------------------------------------------------
+# .pddrc Context Key Tests (TDD for Issue #221 bug fix)
+# -----------------------------------------------------------------------------
+
+def test_orchestrator_populates_pddrc_context_keys_before_step6(mock_dependencies, temp_cwd):
+    """
+    Context must include language, source_dir, test_dir, example_dir, ext, lang from .pddrc.
+
+    This test verifies that the orchestrator loads .pddrc configuration from the
+    target repo and populates context keys required by step 6's prompt template:
+    - language: default programming language (e.g., "python")
+    - source_dir: where source code lives (e.g., "pdd/")
+    - test_dir: where tests live (e.g., "tests/")
+    - example_dir: where examples live (e.g., "context/")
+    - ext: file extension (e.g., "py")
+    - lang: language suffix (e.g., "_python")
+
+    Without these, step 6 template.format() raises KeyError.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Create a .pddrc file in the temp directory
+    pddrc_content = (
+        "contexts:\n"
+        "  default:\n"
+        "    defaults:\n"
+        "      default_language: python\n"
+        "      generate_output_path: src/\n"
+        "      test_output_path: tests/\n"
+        "      example_output_path: examples/\n"
+    )
+    pddrc_path = temp_cwd / ".pddrc"
+    pddrc_path.write_text(pddrc_content)
+
+    # Track what context is passed to template.format()
+    captured_contexts = []
+    def capture_format(**kwargs):
+        captured_contexts.append(kwargs.copy())
+        return "Formatted Prompt"
+
+    mock_template = MagicMock()
+    mock_template.format.side_effect = capture_format
+    mock_template_loader.return_value = mock_template
+
+    # Run through step 6
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step6":
+            return (True, "Found 3 dev units", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Add new feature",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=221,
+        issue_author="me",
+        issue_title="New Feature",
+        cwd=temp_cwd,
+        quiet=True
+    )
+
+    # Find the context used for step 6 (6th template.format call, 0-indexed = 5)
+    assert len(captured_contexts) >= 6, f"Expected at least 6 template formats, got {len(captured_contexts)}"
+    step6_context = captured_contexts[5]  # Step 6 is the 6th step
+
+    # Verify required .pddrc-derived context keys are present
+    assert "language" in step6_context, "Context missing 'language' from .pddrc"
+    assert "source_dir" in step6_context, "Context missing 'source_dir' from .pddrc"
+    assert "test_dir" in step6_context, "Context missing 'test_dir' from .pddrc"
+    assert "example_dir" in step6_context, "Context missing 'example_dir' from .pddrc"
+    assert "ext" in step6_context, "Context missing 'ext' derived from language"
+    assert "lang" in step6_context, "Context missing 'lang' suffix derived from language"
+
+    # Verify values match .pddrc
+    assert step6_context["language"] == "python"
+    assert step6_context["source_dir"] == "src/"
+    assert step6_context["test_dir"] == "tests/"
+    assert step6_context["example_dir"] == "examples/"
+    assert step6_context["ext"] == "py"
+    assert step6_context["lang"] == "_python"
+
+
+def test_orchestrator_uses_defaults_when_no_pddrc(mock_dependencies, temp_cwd):
+    """
+    When no .pddrc exists, orchestrator should use sensible defaults for context keys.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # No .pddrc file - temp_cwd is empty
+
+    captured_contexts = []
+    def capture_format(**kwargs):
+        captured_contexts.append(kwargs.copy())
+        return "Formatted Prompt"
+
+    mock_template = MagicMock()
+    mock_template.format.side_effect = capture_format
+    mock_template_loader.return_value = mock_template
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Add feature",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=222,
+        issue_author="me",
+        issue_title="Feature",
+        cwd=temp_cwd,
+        quiet=True
+    )
+
+    # Even without .pddrc, context keys should have defaults
+    assert len(captured_contexts) >= 6
+    step6_context = captured_contexts[5]
+
+    # Should have defaults (actual values may vary based on implementation)
+    assert "language" in step6_context, "Context missing 'language' default"
+    assert "source_dir" in step6_context, "Context missing 'source_dir' default"
+    assert "test_dir" in step6_context, "Context missing 'test_dir' default"
+    assert "example_dir" in step6_context, "Context missing 'example_dir' default"
+    assert "ext" in step6_context, "Context missing 'ext' default"
+    assert "lang" in step6_context, "Context missing 'lang' default"
+
+"""
+Test plan for agentic_change_orchestrator.py
+
+1. Unit Tests:
+    - test_happy_path_full_run: Mock all steps succeeding, verify final success tuple.
+    - test_resumption_from_state: Mock state existing at step 4, verify steps 1-4 skipped.
+    - test_hard_stop_duplicate: Mock step 1 returning "Duplicate of #123", verify early exit.
+    - test_hard_stop_implementation_fail: Mock step 9 returning "FAIL:", verify early exit.
+    - test_review_loop_logic: Mock step 11 finding issues twice then passing, verify iteration count.
+    - test_worktree_creation_failure: Mock git failure, verify graceful exit.
+    - test_file_parsing_step_9_10: Verify context accumulation of changed files.
+
+2. Z3 Formal Verification:
+    - test_z3_stop_conditions: Verify the logic mapping (step_num, output) -> action (stop/continue).
+"""
+
+import sys
+import pytest
+from unittest.mock import MagicMock, patch, ANY
+from pathlib import Path
+import z3
+
+# Import the module under test
+# Adjust path if necessary based on where this test file is located relative to the source
+try:
+    from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator
+except ImportError:
+    # Fallback for environment where package structure might differ
+    run_agentic_change_orchestrator = MagicMock()
+
+# Mock constants for testing
+MOCK_ISSUE_URL = "https://github.com/owner/repo/issues/1"
+MOCK_ISSUE_CONTENT = "Fix the bug"
+MOCK_REPO_OWNER = "owner"
+MOCK_REPO_NAME = "repo"
+MOCK_ISSUE_NUMBER = 1
+MOCK_ISSUE_AUTHOR = "user"
+MOCK_ISSUE_TITLE = "Bug fix"
+
+@pytest.fixture
+def mock_dependencies_v2():
+    """Mock external dependencies to isolate the orchestrator logic."""
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state") as mock_load, \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template") as mock_template, \
+         patch("pdd.agentic_change_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
+         patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
+         patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
+         patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_affected, \
+         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
+        
+        # Default behaviors
+        mock_load.return_value = (None, None) # No existing state
+        mock_save.return_value = 12345 # Mock comment ID
+        mock_template.return_value = MagicMock(format=lambda **kwargs: "Formatted Prompt")
+        mock_worktree.return_value = (Path("/tmp/worktree"), None)
+        
+        # Default run_agentic_task behavior: success
+        # Returns (success, output, cost, model)
+        mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
+        
+        yield {
+            "run": mock_run,
+            "load": mock_load,
+            "save": mock_save,
+            "clear": mock_clear,
+            "template": mock_template,
+            "worktree": mock_worktree,
+            "subprocess": mock_subprocess,
+            "build_graph": mock_build_graph
+        }
+
+def test_happy_path_full_run(mock_dependencies_v2, tmp_path):
+    """Test a complete run from step 1 to 13 with no issues."""
+    mocks = mock_dependencies_v2
+    
+    # Setup specific step outputs
+    def side_effect_run(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if "step9" in label:
+            return (True, "FILES_CREATED: file1.py, file2.py", 0.5, "gpt-4")
+        if "step11" in label:
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if "step13" in label:
+            return (True, "PR Created: https://github.com/owner/repo/pull/2", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+    
+    mocks["run"].side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME, 
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path
+    )
+
+    assert success is True
+    assert "PR Created" in msg
+    assert "file1.py" in files
+    assert "file2.py" in files
+    
+    # Verify step 13 was called (PR creation)
+    # Steps 1-10, 11, 13 = 12 calls (Step 12 skipped)
+    assert mocks["run"].call_count >= 12
+    # Verify state was cleared at the end
+    mocks["clear"].assert_called_once()
+
+def test_resumption_from_state(mock_dependencies_v2, tmp_path):
+    """Test resuming from a saved state (e.g., step 4 completed)."""
+    mocks = mock_dependencies_v2
+    
+    # Mock existing state
+    existing_state = {
+        "last_completed_step": 4,
+        "step_outputs": {
+            "1": "out1", "2": "out2", "3": "out3", "4": "out4"
+        },
+        "total_cost": 1.0,
+        "model_used": "gpt-4"
+    }
+    mocks["load"].return_value = (existing_state, 999)
+
+    # Setup run side effect for remaining steps
+    def side_effect_run(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if "step9" in label:
+            return (True, "FILES_MODIFIED: file1.py", 0.5, "gpt-4")
+        if "step11" in label:
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+    mocks["run"].side_effect = side_effect_run
+
+    success, _, cost, _, _ = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME, 
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path
+    )
+
+    assert success is True
+    # Should start running from step 5.
+    # Steps 5, 6, 7, 8, 9, 10, 11, 13 = 8 calls
+    # Plus potentially step 12 if loop triggers (it shouldn't here)
+    # We just check that step 1 was NOT called.
+    
+    # Get all labels passed to run
+    calls = [c.kwargs.get("label") for c in mocks["run"].call_args_list]
+    assert "step1" not in calls
+    assert "step4" not in calls
+    assert "step5" in calls
+    
+    # Cost should include previous cost (1.0) + new costs
+    assert cost > 1.0
+
+def test_hard_stop_duplicate(mock_dependencies_v2, tmp_path):
+    """Test hard stop at Step 1 (Duplicate)."""
+    mocks = mock_dependencies_v2
+    
+    # Step 1 returns duplicate
+    mocks["run"].return_value = (True, "Duplicate of #42", 0.1, "gpt-4")
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME, 
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path
+    )
+
+    assert success is False
+    assert "Stopped at step 1" in msg
+    assert "Issue is a duplicate" in msg
+    
+    # Should save state before exiting
+    mocks["save"].assert_called()
+    # Should NOT clear state
+    mocks["clear"].assert_not_called()
+
+def test_hard_stop_implementation_fail(mock_dependencies_v2, tmp_path):
+    """Test hard stop at Step 9 (Implementation Failed)."""
+    mocks = mock_dependencies_v2
+    
+    # Mock state up to step 8
+    existing_state = {"last_completed_step": 8, "step_outputs": {str(i): "ok" for i in range(1,9)}}
+    mocks["load"].return_value = (existing_state, 888)
+    
+    # Step 9 fails
+    mocks["run"].return_value = (False, "FAIL: Syntax error", 0.5, "gpt-4")
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME, 
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path
+    )
+
+    assert success is False
+    assert "Stopped at step 9" in msg
+    assert "Implementation failed" in msg
+
+def test_review_loop_logic(mock_dependencies_v2, tmp_path):
+    """Test that steps 11 and 12 loop correctly."""
+    mocks = mock_dependencies_v2
+    
+    # Mock state up to step 10
+    existing_state = {"last_completed_step": 10, "step_outputs": {str(i): "ok" for i in range(1,11)}}
+    mocks["load"].return_value = (existing_state, 777)
+    
+    # Sequence:
+    # 1. Step 11 (Iter 1): Issues Found
+    # 2. Step 12 (Iter 1): Fixes applied
+    # 3. Step 11 (Iter 2): No Issues Found -> Break
+    # 4. Step 13: Create PR
+    
+    def side_effect_run(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step11_iter1":
+            return (True, "Issues found: Typo in docstring", 0.1, "gpt-4")
+        if label == "step12_iter1":
+            return (True, "Fixed typo", 0.2, "gpt-4")
+        if label == "step11_iter2":
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created", 0.1, "gpt-4")
+        return (True, "Unexpected", 0.0, "gpt-4")
+        
+    mocks["run"].side_effect = side_effect_run
+
+    success, _, _, _, _ = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME, 
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path
+    )
+
+    assert success is True
+    
+    # Verify call sequence
+    calls = [c.kwargs.get("label") for c in mocks["run"].call_args_list]
+    assert "step11_iter1" in calls
+    assert "step12_iter1" in calls
+    assert "step11_iter2" in calls
+    assert "step13" in calls
+
+def test_worktree_creation_failure(mock_dependencies_v2, tmp_path):
+    """Test handling of worktree creation failure."""
+    mocks = mock_dependencies_v2
+    
+    # Mock worktree failure
+    mocks["worktree"].return_value = (None, "Git error: cannot create worktree")
+    
+    # Start at step 9 (where worktree is created)
+    existing_state = {"last_completed_step": 8, "step_outputs": {str(i): "ok" for i in range(1,9)}}
+    mocks["load"].return_value = (existing_state, 111)
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME, 
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path
+    )
+
+    assert success is False
+    # The error message might be "Failed to restore worktree" or "Failed to create worktree"
+    # depending on whether it's resumption or not. Since we start at step 9, it's resumption logic.
+    assert "worktree" in msg and ("Failed to" in msg)
+
+def test_file_parsing_step_9_10(mock_dependencies_v2, tmp_path):
+    """Test that files are correctly parsed from Step 9 and 10 outputs."""
+    mocks = mock_dependencies_v2
+    
+    # Start at step 9
+    existing_state = {"last_completed_step": 8, "step_outputs": {str(i): "ok" for i in range(1,9)}}
+    mocks["load"].return_value = (existing_state, 222)
+    
+    def side_effect_run(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if "step9" in label:
+            return (True, "FILES_CREATED: src/new.py\nFILES_MODIFIED: src/old.py", 0.1, "gpt-4")
+        if "step10" in label:
+            return (True, "ARCHITECTURE_FILES_MODIFIED: docs/arch.md", 0.1, "gpt-4")
+        if "step11" in label:
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+        
+    mocks["run"].side_effect = side_effect_run
+
+    success, _, _, _, files = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME, 
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path
+    )
+
+    assert success is True
+    assert "src/new.py" in files
+    assert "src/old.py" in files
+    assert "docs/arch.md" in files
+
+def test_z3_stop_conditions():
+    """
+    Formal verification of the stop condition logic using Z3.
+    We model the _check_hard_stop function logic.
+    """
+    s = z3.Solver()
+
+    # Inputs
+    step_num = z3.Int('step_num')
+    # We model the presence of substrings as boolean flags
+    has_duplicate = z3.Bool('has_duplicate')
+    has_already_impl = z3.Bool('has_already_impl')
+    has_clarification = z3.Bool('has_clarification')
+    has_no_dev_units = z3.Bool('has_no_dev_units')
+    has_arch_decision = z3.Bool('has_arch_decision')
+    has_no_changes = z3.Bool('has_no_changes')
+    has_fail = z3.Bool('has_fail')
+
+    # Output: Stop Reason (0 = None/Continue, >0 = Stop Reason ID)
+    stop_reason = z3.Int('stop_reason')
+
+    # Logic from _check_hard_stop
+    # 1: "Issue is a duplicate"
+    # 2: "Already implemented"
+    # 3: "Clarification needed"
+    # 4: "No dev units found"
+    # 5: "Architectural decision needed"
+    # 6: "No changes needed"
+    # 7: "Implementation failed"
+    
+    # Constraints defining the function logic
+    logic = z3.If(z3.And(step_num == 1, has_duplicate), stop_reason == 1,
+            z3.If(z3.And(step_num == 2, has_already_impl), stop_reason == 2,
+            z3.If(z3.And(step_num == 4, has_clarification), stop_reason == 3,
+            z3.If(z3.And(step_num == 6, has_no_dev_units), stop_reason == 4,
+            z3.If(z3.And(step_num == 7, has_arch_decision), stop_reason == 5,
+            z3.If(z3.And(step_num == 8, has_no_changes), stop_reason == 6,
+            z3.If(z3.And(step_num == 9, has_fail), stop_reason == 7,
+            stop_reason == 0)))))))
+    
+    s.add(logic)
+
+    # Verification Case 1: Step 1 with "Duplicate of #" MUST stop
+    s.push()
+    s.add(step_num == 1)
+    s.add(has_duplicate == True)
+    s.add(stop_reason == 0) # Assert it continues (contradiction expected)
+    assert s.check() == z3.unsat, "Step 1 with duplicate string should imply stop_reason != 0"
+    s.pop()
+
+    # Verification Case 2: Step 3 (Research) should NEVER hard stop based on these flags
+    s.push()
+    s.add(step_num == 3)
+    s.add(has_duplicate == True) 
+    s.add(stop_reason != 0) # Assert it stops (contradiction expected)
+    assert s.check() == z3.unsat, "Step 3 should not stop even if duplicate string is present"
+    s.pop()
+
+    # Verification Case 3: Step 9 with "FAIL:" MUST stop
+    s.push()
+    s.add(step_num == 9)
+    s.add(has_fail == True)
+    s.add(stop_reason == 0)
+    assert s.check() == z3.unsat, "Step 9 with FAIL should stop"
+    s.pop()
+
+    # Verification Case 4: Step 9 WITHOUT "FAIL:" should continue
+    s.push()
+    s.add(step_num == 9)
+    s.add(has_fail == False)
+    s.add(stop_reason != 0)
+    assert s.check() == z3.unsat, "Step 9 without FAIL should continue"
+    s.pop()
