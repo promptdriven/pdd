@@ -251,7 +251,7 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
             return defaults
 
         # Detect the appropriate context
-        context_name = _detect_context(config, cwd)
+        context_name = _detect_context(cwd, config)
         contexts = config.get("contexts", {})
         ctx_config = contexts.get(context_name, contexts.get("default", {}))
 

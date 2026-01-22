@@ -129,14 +129,14 @@ Your comment should follow this format:
 ### Dev Units to MODIFY
 | Prompt | Code | Example | Test |
 |--------|------|---------|------|
-| `prompts/xxx_{lang}.prompt` | `{source}/xxx.{ext}` | `{examples}/xxx_example.{ext}` | `{tests}/test_xxx.{ext}` |
+| `prompts/xxx_{lang}.prompt` | `{source_dir}/xxx.{ext}` | `{example_dir}/xxx_example.{ext}` | `{test_dir}/test_xxx.{ext}` |
 
 *(Use actual paths from project structure above)*
 
 ### Dev Units to CREATE
 | Prompt | Code | Example | Test |
 |--------|------|---------|------|
-| `prompts/yyy_{lang}.prompt` | `{source}/yyy.{ext}` | `{examples}/yyy_example.{ext}` | `{tests}/test_yyy.{ext}` |
+| `prompts/yyy_{lang}.prompt` | `{source_dir}/yyy.{ext}` | `{example_dir}/yyy_example.{ext}` | `{test_dir}/test_yyy.{ext}` |
 
 *(Use actual paths from project structure above)*
 
