@@ -22,25 +22,31 @@ import { useTaskQueue, TaskQueueItem } from './hooks/useTaskQueue';
 import { useToast } from './components/Toast';
 import { useAudioNotification } from './hooks/useAudioNotification';
 
-type View = 'architecture' | 'prompts' | 'bug' | 'fix' | 'change' | 'settings';
+type View = 'devunits' | 'bug' | 'fix' | 'change' | 'settings';
+type DevUnitsSubView = 'graph' | 'list';
 
 // Parse URL hash to get initial view and prompt path
-const parseHash = (): { view: View; promptPath?: string } => {
+const parseHash = (): { view: View; promptPath?: string; subView?: DevUnitsSubView } => {
   const hash = window.location.hash.slice(1); // Remove #
-  if (!hash) return { view: 'architecture' };
+  if (!hash) return { view: 'devunits', subView: 'graph' };
 
   const [viewPart, ...promptParts] = hash.split('/');
   const promptPath = promptParts.length > 0 ? promptParts.join('/') : undefined;
 
-  const validViews: View[] = ['architecture', 'prompts', 'bug', 'fix', 'change', 'settings'];
-  const view = validViews.includes(viewPart as View) ? (viewPart as View) : 'architecture';
+  // Map legacy views to new structure
+  if (viewPart === 'architecture') return { view: 'devunits', subView: 'graph', promptPath };
+  if (viewPart === 'prompts') return { view: 'devunits', subView: 'list', promptPath };
 
-  return { view, promptPath };
+  const validViews: View[] = ['devunits', 'bug', 'fix', 'change', 'settings'];
+  const view = validViews.includes(viewPart as View) ? (viewPart as View) : 'devunits';
+
+  return { view, promptPath, subView: view === 'devunits' ? 'graph' : undefined };
 };
 
 const App: React.FC = () => {
   const initialState = parseHash();
   const [view, setView] = useState<View>(initialState.view);
+  const [devUnitsSubView, setDevUnitsSubView] = useState<DevUnitsSubView>(initialState.subView || 'graph');
   const [pendingPromptPath, setPendingPromptPath] = useState<string | undefined>(initialState.promptPath);
   const [selectedPrompt, setSelectedPrompt] = useState<PromptInfo | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<PromptInfo | null>(null);
@@ -227,16 +233,19 @@ const App: React.FC = () => {
   useEffect(() => {
     if (editingPrompt) {
       window.location.hash = `prompts/${editingPrompt.prompt}`;
+    } else if (view === 'devunits') {
+      window.location.hash = devUnitsSubView === 'graph' ? 'architecture' : 'prompts';
     } else {
       window.location.hash = view;
     }
-  }, [view, editingPrompt]);
+  }, [view, editingPrompt, devUnitsSubView]);
 
   // Handle browser back/forward navigation
   useEffect(() => {
     const handleHashChange = () => {
-      const { view: newView, promptPath } = parseHash();
+      const { view: newView, promptPath, subView } = parseHash();
       setView(newView);
+      if (subView) setDevUnitsSubView(subView);
       if (promptPath) {
         setPendingPromptPath(promptPath);
       } else {
@@ -819,24 +828,14 @@ const App: React.FC = () => {
             {/* View switcher - centered on larger screens */}
             <div className="flex gap-1 sm:gap-2 bg-surface-800/50 p-1 rounded-xl max-w-[280px] xs:max-w-none overflow-x-auto scrollbar-hide">
               <button
-                onClick={() => setView('architecture')}
+                onClick={() => setView('devunits')}
                 className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
-                  view === 'architecture'
+                  view === 'devunits'
                     ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
                     : 'text-surface-300 hover:text-white hover:bg-surface-700'
                 }`}
               >
-                <Squares2X2Icon className="hidden sm:inline w-4 h-4 mr-1" />Architecture
-              </button>
-              <button
-                onClick={() => setView('prompts')}
-                className={`px-2 xs:px-3 sm:px-4 py-1 xs:py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
-                  view === 'prompts'
-                    ? 'bg-accent-600 text-white shadow-lg shadow-accent-500/25'
-                    : 'text-surface-300 hover:text-white hover:bg-surface-700'
-                }`}
-              >
-                <DocumentTextIcon className="hidden sm:inline w-4 h-4 mr-1" />Prompts
+                <Squares2X2Icon className="hidden sm:inline w-4 h-4 mr-1" />Dev Units
               </button>
               <button
                 onClick={() => setView('bug')}
@@ -1100,35 +1099,58 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {view === 'architecture' ? (
+        {view === 'devunits' ? (
           <div className="animate-fade-in">
-            <ArchitectureView
-              serverConnected={serverConnected}
-              isExecuting={isExecuting}
-              onOpenPromptSpace={(prompt) => setEditingPrompt(prompt)}
-              onBatchStart={handleBatchOperationStart}
-              onBatchProgress={handleBatchOperationProgress}
-              onBatchComplete={handleBatchOperationComplete}
-              executionMode={executionMode}
-              selectedRemoteSession={selectedRemoteSession}
-              onRemoteJobSubmitted={(displayCommand, commandType, commandId, sessionId) => {
-                addSpawnedJob(displayCommand, commandType, commandId, { remote: true, sessionId });
-              }}
-            />
-          </div>
-        ) : view === 'prompts' ? (
-          <div className="animate-fade-in">
-            <div className="mb-4 sm:mb-6">
-              <p className="text-surface-400 text-xs sm:text-sm">
-                Select a prompt and click a command to run. Output appears in your terminal.
-              </p>
+            {/* Graph/List toggle */}
+            <div className="flex items-center justify-between mb-4 sm:mb-6">
+              <div className="flex bg-surface-800/60 p-1 rounded-lg border border-surface-700/50">
+                <button
+                  onClick={() => setDevUnitsSubView('graph')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    devUnitsSubView === 'graph'
+                      ? 'bg-accent-600 text-white shadow-md'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
+                  }`}
+                >
+                  <Squares2X2Icon className="inline w-4 h-4 mr-1.5" />Graph View
+                </button>
+                <button
+                  onClick={() => setDevUnitsSubView('list')}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
+                    devUnitsSubView === 'list'
+                      ? 'bg-accent-600 text-white shadow-md'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
+                  }`}
+                >
+                  <DocumentTextIcon className="inline w-4 h-4 mr-1.5" />List View
+                </button>
+              </div>
             </div>
-            <PromptSelector
-              onSelectPrompt={setSelectedPrompt}
-              onEditPrompt={setEditingPrompt}
-              onCreatePrompt={setEditingPrompt}
-              selectedPrompt={selectedPrompt}
-            />
+
+            {devUnitsSubView === 'graph' ? (
+              <ArchitectureView
+                serverConnected={serverConnected}
+                isExecuting={isExecuting}
+                onOpenPromptSpace={(prompt) => setEditingPrompt(prompt)}
+                onBatchStart={handleBatchOperationStart}
+                onBatchProgress={handleBatchOperationProgress}
+                onBatchComplete={handleBatchOperationComplete}
+                executionMode={executionMode}
+                selectedRemoteSession={selectedRemoteSession}
+                onRemoteJobSubmitted={(displayCommand, commandType, commandId, sessionId) => {
+                  addSpawnedJob(displayCommand, commandType, commandId, { remote: true, sessionId });
+                }}
+                onAddToQueue={handleAddToQueue}
+              />
+            ) : (
+              <div>
+                <PromptSelector
+                  onEditPrompt={(prompt) => { setSelectedPrompt(prompt); setEditingPrompt(prompt); }}
+                  onCreatePrompt={setEditingPrompt}
+                  selectedPrompt={selectedPrompt}
+                />
+              </div>
+            )}
           </div>
         ) : view === 'settings' ? (
           <div className="animate-fade-in">

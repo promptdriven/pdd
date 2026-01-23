@@ -32,6 +32,7 @@ interface DependencyViewerProps {
   appName?: string;
   onRegenerate: () => void;
   onModuleClick: (module: ArchitectureModule) => void;
+  onModuleSync?: (module: ArchitectureModule) => void;
   onGeneratePrompts?: () => void;
   isGeneratingPrompts?: boolean;
   existingPrompts?: Set<string>;
@@ -131,6 +132,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
   appName,
   onRegenerate,
   onModuleClick,
+  onModuleSync,
   onGeneratePrompts,
   isGeneratingPrompts = false,
   existingPrompts = new Set(),
@@ -189,6 +191,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
           hasPrompt,
           colors: getCategoryColors(category),
           onClick: onModuleClick,
+          onSync: onModuleSync,
           editMode,
           onEdit: onModuleEdit,
           onDelete: onModuleDelete,
@@ -481,31 +484,6 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
             <p className="text-xs text-surface-400">{architecture.length} modules</p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-            {onGeneratePrompts && (
-              <Tooltip content="Generate prompt files for all modules">
-                <button
-                  onClick={onGeneratePrompts}
-                  disabled={isGeneratingPrompts}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isGeneratingPrompts ? (
-                    <SpinnerIcon className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <DocumentArrowDownIcon className="w-3.5 h-3.5" />
-                  )}
-                  <span>{isGeneratingPrompts ? 'Generating...' : 'Generate Prompts'}</span>
-                </button>
-              </Tooltip>
-            )}
-            <Tooltip content="Regenerate architecture from PRD">
-              <button
-                onClick={onRegenerate}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent-600 text-white hover:bg-accent-500 transition-colors"
-              >
-                <SparklesIcon className="w-3.5 h-3.5" />
-                <span>Regenerate</span>
-              </button>
-            </Tooltip>
             <Tooltip content={isPrdVisible ? 'Collapse' : 'Expand'}>
               <button
                 onClick={() => setIsPrdVisible(!isPrdVisible)}

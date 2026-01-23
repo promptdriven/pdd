@@ -9,8 +9,9 @@ import ModuleEditModal from './ModuleEditModal';
 import AddModuleModal from './AddModuleModal';
 import SyncFromPromptModal from './SyncFromPromptModal';
 import { useArchitectureHistory } from '../hooks/useArchitectureHistory';
-import { GLOBAL_DEFAULTS, GLOBAL_OPTIONS } from '../constants';
-import { GlobalOption, CommandOption } from '../types';
+import { GLOBAL_DEFAULTS, GLOBAL_OPTIONS, COMMANDS } from '../constants';
+import { GlobalOption, CommandOption, CommandType } from '../types';
+import { buildDisplayCommand } from '../lib/commandBuilder';
 
 interface ArchitectureViewProps {
   serverConnected: boolean;
@@ -25,6 +26,8 @@ interface ArchitectureViewProps {
   selectedRemoteSession: string | null;
   // Callback to add remote jobs to job dashboard
   onRemoteJobSubmitted?: (displayCommand: string, commandType: string, commandId: string, sessionId: string) => void;
+  // Callback to add tasks to the job queue
+  onAddToQueue?: (commandType: CommandType, prompt: PromptInfo, rawOptions: Record<string, any>, displayCommand: string) => void;
 }
 
 type EditorMode = 'empty' | 'editor' | 'graph';
@@ -131,6 +134,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   executionMode,
   selectedRemoteSession,
   onRemoteJobSubmitted,
+  onAddToQueue,
 }) => {
   // Architecture state
   const [architecture, setArchitecture] = useState<ArchitectureModule[] | null>(null);
@@ -480,6 +484,71 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     if (!architecture || architecture.length === 0) return;
     setShowOrderModal(true);
   }, [architecture]);
+
+  // Compute how many modules still need syncing (missing code, test, or example)
+  const remainingModulesCount = useMemo(() => {
+    if (!architecture) return 0;
+    const promptMap = new Map<string, PromptInfo>();
+    promptsInfo.forEach(p => {
+      const filename = p.prompt.split('/').pop() || '';
+      promptMap.set(filename, p);
+    });
+    return architecture.filter(module => {
+      const info = promptMap.get(module.filename);
+      if (!info) return true;
+      return !info.code || !info.test || !info.example;
+    }).length;
+  }, [architecture, promptsInfo]);
+
+  // Queue sync for all remaining modules (sorted by priority)
+  const handleSyncAll = useCallback(() => {
+    if (!architecture || !onAddToQueue) return;
+
+    const promptMap = new Map<string, PromptInfo>();
+    promptsInfo.forEach(p => {
+      const filename = p.prompt.split('/').pop() || '';
+      promptMap.set(filename, p);
+    });
+
+    const modulesToSync = architecture
+      .filter(module => {
+        const info = promptMap.get(module.filename);
+        if (!info) return true;
+        return !info.code || !info.test || !info.example;
+      })
+      .sort((a, b) => a.priority - b.priority);
+
+    if (modulesToSync.length === 0) return;
+
+    // Build rawOptions matching what CommandOptionsModal produces for SYNC:
+    // Include command-specific defaults (max-attempts, budget)
+    const syncConfig = COMMANDS[CommandType.SYNC];
+    const rawOptions: Record<string, any> = {};
+    syncConfig.options.forEach(opt => {
+      if (opt.defaultValue !== undefined) {
+        rawOptions[opt.name] = opt.defaultValue;
+      }
+    });
+
+    modulesToSync.forEach(module => {
+      const match = module.filename.match(/_([A-Za-z]+)\.prompt$/);
+      const language = match ? match[1].toLowerCase() : undefined;
+      const basename = module.filename.replace(/_[A-Za-z]+\.prompt$/, '');
+
+      // Use the full PromptInfo from promptsInfo if available (has context, test, example)
+      // Otherwise construct a minimal one from the architecture module
+      const existingPrompt = promptMap.get(module.filename);
+      const promptInfo: PromptInfo = existingPrompt || {
+        prompt: `prompts/${module.filename}`,
+        sync_basename: basename,
+        language,
+        code: module.filepath,
+      };
+
+      const displayCommand = buildDisplayCommand(CommandType.SYNC, promptInfo, { ...rawOptions });
+      onAddToQueue(CommandType.SYNC, promptInfo, { ...rawOptions }, displayCommand);
+    });
+  }, [architecture, promptsInfo, onAddToQueue]);
 
   // Handle generation with user-selected order
   const handleConfirmGeneratePrompts = useCallback(async (orderedModules: ArchitectureModule[]) => {
@@ -1219,6 +1288,58 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 )}
               </div>
 
+              {/* Generate Prompts Button - only when architecture exists */}
+              {architecture && architecture.length > 0 && (
+                <div className="p-3 border-t border-surface-700/50">
+                  <button
+                    onClick={handleGeneratePrompts}
+                    disabled={isGeneratingPrompts || isExecuting || !serverConnected}
+                    className={`w-full px-4 py-2.5 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 ${
+                      isGeneratingPrompts || isExecuting || !serverConnected
+                        ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white shadow-lg shadow-emerald-500/25'
+                    }`}
+                  >
+                    {isGeneratingPrompts ? (
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    )}
+                    {isGeneratingPrompts ? 'Generating...' : 'Generate Prompts'}
+                  </button>
+                </div>
+              )}
+
+              {/* Sync All/Remaining Button */}
+              {architecture && architecture.length > 0 && onAddToQueue && (
+                <div className="p-3 border-t border-surface-700/50">
+                  <button
+                    onClick={handleSyncAll}
+                    disabled={remainingModulesCount === 0}
+                    className={`w-full px-4 py-2.5 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 ${
+                      remainingModulesCount === 0
+                        ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/25'
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    {remainingModulesCount === 0
+                      ? 'All Synced'
+                      : remainingModulesCount === architecture.length
+                        ? `Sync All (${remainingModulesCount})`
+                        : `Sync Remaining (${remainingModulesCount})`
+                    }
+                  </button>
+                </div>
+              )}
+
               {/* Load Different Architecture File */}
               <div className="border-t border-surface-700/50">
                 <div className="p-3">
@@ -1396,6 +1517,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 appName={appName}
                 onRegenerate={handleRegenerate}
                 onModuleClick={handleModuleClick}
+                onModuleSync={handleModuleClick}
                 onGeneratePrompts={handleGeneratePrompts}
                 isGeneratingPrompts={isGeneratingPrompts}
                 existingPrompts={existingPrompts}
