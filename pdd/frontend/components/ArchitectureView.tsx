@@ -572,9 +572,50 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
     });
 
     // Notify parent that batch operation is starting (for job dashboard)
-    onBatchStart?.('Generating Prompts', moduleRequests.length);
+    onBatchStart?.('Generating Prompts', moduleRequests.length + 1); // +1 for .pddrc generation
 
     try {
+      // Step 1: Generate .pddrc from architecture.json before generating prompts
+      setPromptGenerationProgress({ current: 0, total: moduleRequests.length, currentModule: '.pddrc' });
+
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Remote: submit .pddrc generation command first
+        try {
+          const pddrcOptions: Record<string, any> = {
+            template: 'generic/generate_pddrc',
+            env: ['ARCHITECTURE_FILE=architecture.json'],
+            output: '.pddrc',
+          };
+          if (globalOptions?.force) pddrcOptions.force = true;
+
+          const { commandId } = await api.submitRemoteCommand({
+            sessionId: selectedRemoteSession,
+            type: 'generate',
+            payload: { args: {}, options: pddrcOptions },
+          });
+
+          onRemoteJobSubmitted?.(
+            '[Remote] pdd generate --template generic/generate_pddrc -o .pddrc',
+            'generate',
+            commandId,
+            selectedRemoteSession
+          );
+        } catch (e) {
+          console.warn('Failed to submit .pddrc generation to remote:', e);
+        }
+      } else {
+        // Local: generate .pddrc and wait for completion
+        try {
+          await api.generatePddrcFromArchitecture({
+            architectureFile: 'architecture.json',
+            globalOptions,
+          });
+        } catch (e) {
+          console.warn('Failed to generate .pddrc:', e);
+        }
+      }
+
+      // Step 2: Generate prompts
       // Check if we're in remote mode
       if (executionMode === 'remote' && selectedRemoteSession) {
         // Remote execution: submit each prompt generation command to remote session

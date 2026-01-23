@@ -948,6 +948,44 @@ class PDDApiClient {
   }
 
   /**
+   * Generate .pddrc configuration file from architecture.json using the generic/generate_pddrc template.
+   * This should be called before generating prompts to ensure correct context detection.
+   */
+  async generatePddrcFromArchitecture(request: {
+    architectureFile?: string;
+    outputPath?: string;
+    globalOptions?: GenerationGlobalOptions;
+  }): Promise<RunResult> {
+    const { architectureFile, outputPath, globalOptions } = request;
+
+    const envArgs: string[] = [
+      `ARCHITECTURE_FILE=${architectureFile || 'architecture.json'}`,
+    ];
+
+    const options: Record<string, any> = {
+      template: 'generic/generate_pddrc',
+      env: envArgs,
+      output: outputPath || '.pddrc',
+    };
+
+    if (globalOptions) {
+      const { strength, temperature, time, verbose, quiet, force } = globalOptions;
+      if (strength !== undefined) options.strength = strength;
+      if (temperature !== undefined) options.temperature = temperature;
+      if (time !== undefined) options.time = time;
+      if (verbose) options.verbose = true;
+      if (quiet) options.quiet = true;
+      if (force) options.force = true;
+    }
+
+    return this.runCommand({
+      command: 'generate',
+      args: {},
+      options,
+    });
+  }
+
+  /**
    * Generate a single prompt file from architecture.json using the generic/generate_prompt template.
    */
   async generatePromptFromArchitecture(request: GeneratePromptFromArchRequest): Promise<RunResult> {
