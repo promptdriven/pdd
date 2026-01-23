@@ -1046,6 +1046,36 @@ def test_sync_order_generation_dict(mock_dependencies_dict, tmp_path):
     mocks["gen_script"].assert_called()
 
 
+def test_sync_order_sh_included_in_changed_files(mock_dependencies_dict, tmp_path):
+    """sync_order.sh must appear in changed_files when sync order is generated."""
+    mocks = mock_dependencies_dict
+
+    worktree_dir = tmp_path / "wt"
+    prompts_dir = worktree_dir / "prompts"
+    prompts_dir.mkdir(parents=True)
+    (prompts_dir / "foo_python.prompt").write_text("% foo module")
+
+    existing_state = {
+        "last_completed_step": 12,
+        "step_outputs": {str(i): "out" for i in range(1, 13)},
+        "worktree_path": str(worktree_dir)
+    }
+    existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo_python.prompt"
+    mocks["load"].return_value = (existing_state, 123)
+
+    mocks["get_affected"].return_value = ["foo", "bar"]
+    mocks["gen_script"].return_value = "echo sync"
+    mocks["run"].return_value = (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://issue", issue_content="Fix", repo_owner="o",
+        repo_name="r", issue_number=1, issue_author="me",
+        issue_title="Fix", cwd=tmp_path, quiet=True
+    )
+
+    assert "sync_order.sh" in files
+
+
 # -----------------------------------------------------------------------------
 # .pddrc Context Key Tests (TDD for Issue #221 bug fix)
 # -----------------------------------------------------------------------------

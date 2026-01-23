@@ -710,6 +710,11 @@ def run_agentic_change_orchestrator(
                     worktree_script_path = worktree_path / "sync_order.sh"
                     generate_sync_order_script(affected, worktree_script_path, worktree_path=None)
 
+                    # Ensure sync_order.sh is staged by step 13
+                    if "sync_order.sh" not in changed_files:
+                        changed_files.append("sync_order.sh")
+                    context["files_to_stage"] = ", ".join(changed_files)
+
                     if not quiet:
                         console.print(f"\n[bold]Sync commands (run after merge):[/bold]")
                         for module in affected:
