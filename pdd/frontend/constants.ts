@@ -127,6 +127,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
     shortDescription: "Generate code",
     icon: "⚡",
     requiresPrompt: true,
+    group: "generate",
     options: [
       { name: 'output', type: 'file', placeholder: 'e.g., src/calculator.py', description: 'Where to save generated code' },
       { name: 'incremental', type: 'checkbox', placeholder: '', description: 'Use incremental patching' },
@@ -140,6 +141,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
     icon: "🧪",
     requiresPrompt: true,
     requiresCode: true,
+    group: "generate",
     options: [
       { name: 'output', type: 'file', placeholder: 'e.g., tests/test_calculator.py', description: 'Where to save generated tests' },
       { name: 'target-coverage', type: 'number', placeholder: '80', description: 'Target code coverage %' },
@@ -153,6 +155,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
     icon: "📖",
     requiresPrompt: true,
     requiresCode: true,
+    group: "generate",
     options: [
       { name: 'output', type: 'file', placeholder: 'e.g., examples/calculator_example.py', description: 'Where to save generated example' },
     ]

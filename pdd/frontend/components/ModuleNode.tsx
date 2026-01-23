@@ -15,6 +15,7 @@ export interface ModuleNodeData {
     text: string;
   };
   onClick?: (module: ArchitectureModule) => void;
+  onSync?: (module: ArchitectureModule) => void;
   // Edit mode props
   editMode?: boolean;
   onEdit?: (module: ArchitectureModule) => void;
@@ -23,7 +24,7 @@ export interface ModuleNodeData {
 }
 
 const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos, yPos }) => {
-  const { label, module, promptInfo, hasPrompt, colors, onClick, editMode, onEdit, isHighlighted } = data;
+  const { label, module, promptInfo, hasPrompt, colors, onClick, onSync, editMode, onEdit, isHighlighted } = data;
   const hasCode = !!promptInfo?.code;
   const hasTest = !!promptInfo?.test;
   const hasExample = !!promptInfo?.example;
@@ -38,6 +39,13 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
     e.stopPropagation();
     if (onEdit) {
       onEdit(module);
+    }
+  };
+
+  const handleSyncClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onSync) {
+      onSync(module);
     }
   };
 
@@ -94,9 +102,22 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
             </button>
           )}
 
+          {/* Sync button - visible on hover when prompt exists */}
+          {hasPrompt && onSync && !editMode && (
+            <button
+              onClick={handleSyncClick}
+              className="absolute -top-2 -right-2 w-6 h-6 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center shadow-lg z-20 opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Sync tags from architecture"
+            >
+              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+          )}
+
           {/* Prompt status indicator */}
           {hasPrompt && (
-            <div className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg z-10">
+            <div className={`absolute ${hasPrompt && onSync && !editMode ? '-top-1.5 right-5' : '-top-1.5 -right-1.5'} w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center shadow-lg z-10`}>
               <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
               </svg>

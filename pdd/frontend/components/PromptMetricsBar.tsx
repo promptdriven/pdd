@@ -1,6 +1,5 @@
 import React from 'react';
 import { TokenMetrics, ModelInfo } from '../api';
-import ModelSelector from './ModelSelector';
 
 interface PromptMetricsBarProps {
   rawMetrics: TokenMetrics | null;
@@ -16,9 +15,21 @@ interface PromptMetricsBarProps {
   // Context distribution props (can be derived from selectedModel)
   contextLimit?: number;  // Model context limit (default 200K)
   maxThinkingTokens?: number;  // Max thinking budget (default 128K for Claude)
-  // Model selection props
+  // Model selection props (resolved model passed from parent)
   selectedModel?: ModelInfo | null;
-  onModelChange?: (model: ModelInfo | null) => void;
+  // Code/Test/Example/Preview/Diff button props
+  showCodePanel?: boolean;
+  onToggleCodePanel?: () => void;
+  hasCodeFile?: boolean;
+  showTestPanel?: boolean;
+  onToggleTestPanel?: () => void;
+  hasTestFile?: boolean;
+  showExamplePanel?: boolean;
+  onToggleExamplePanel?: () => void;
+  hasExampleFile?: boolean;
+  showPreview?: boolean;
+  onTogglePreview?: () => void;
+  onShowDiff?: () => void;
 }
 
 const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
@@ -34,7 +45,18 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
   contextLimit: contextLimitProp,
   maxThinkingTokens: maxThinkingTokensProp,
   selectedModel,
-  onModelChange,
+  showCodePanel,
+  onToggleCodePanel,
+  hasCodeFile,
+  showTestPanel,
+  onToggleTestPanel,
+  hasTestFile,
+  showExamplePanel,
+  onToggleExamplePanel,
+  hasExampleFile,
+  showPreview,
+  onTogglePreview,
+  onShowDiff,
 }) => {
   const currentMetrics = viewMode === 'processed' ? processedMetrics : rawMetrics;
 
@@ -98,9 +120,9 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
     <div className="bg-surface-800/30 border-b border-surface-700/50">
       {/* Main metrics row */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 sm:px-4 py-2 sm:py-2.5 gap-2 sm:gap-4">
-        {/* Left side: View toggle */}
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] sm:text-xs text-surface-400">View:</span>
+        {/* Left side: View toggle and action buttons */}
+      <div className="flex items-center gap-3">
+        <span className="text-xs sm:text-sm font-bold text-white">View</span>
         <div className="flex rounded-lg overflow-hidden border border-surface-600/50">
           <button
             onClick={() => onViewModeChange('raw')}
@@ -126,19 +148,113 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
           </button>
         </div>
         {preprocessingError && viewMode === 'processed' && (
-          <span className="text-[10px] sm:text-xs text-red-400 ml-1 sm:ml-2 truncate max-w-[100px] sm:max-w-none" title={preprocessingError}>
+          <span className="text-[10px] sm:text-xs text-red-400 truncate max-w-[100px] sm:max-w-none" title={preprocessingError}>
             Error
           </span>
         )}
-        {/* Model selector */}
-        {onModelChange && (
-          <div className="hidden sm:block ml-2">
-            <ModelSelector
-              selectedModel={selectedModel || null}
-              onModelChange={onModelChange}
-            />
-          </div>
+
+        {/* Separator */}
+        <div className="h-4 w-px bg-surface-600/50 hidden sm:block" />
+
+        {/* Code/Preview/Diff buttons - moved here from path bar */}
+        {onToggleCodePanel && (
+          <button
+            onClick={onToggleCodePanel}
+            disabled={!hasCodeFile}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
+              !hasCodeFile
+                ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                : showCodePanel
+                ? 'bg-blue-600 text-white'
+                : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+            }`}
+            title={!hasCodeFile ? 'No code file available' : showCodePanel ? 'Hide code panel' : 'Show code side-by-side'}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+            </svg>
+            <span className="hidden sm:inline">Code</span>
+          </button>
         )}
+        {onToggleTestPanel && (
+          <button
+            onClick={onToggleTestPanel}
+            disabled={!hasTestFile}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
+              !hasTestFile
+                ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                : showTestPanel
+                ? 'bg-yellow-600 text-white'
+                : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+            }`}
+            title={!hasTestFile ? 'No test file available' : showTestPanel ? 'Hide test panel' : 'Show test side-by-side'}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+            <span className="hidden sm:inline">Test</span>
+          </button>
+        )}
+        {onToggleExamplePanel && (
+          <button
+            onClick={onToggleExamplePanel}
+            disabled={!hasExampleFile}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
+              !hasExampleFile
+                ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                : showExamplePanel
+                ? 'bg-green-600 text-white'
+                : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+            }`}
+            title={!hasExampleFile ? 'No example file available' : showExamplePanel ? 'Hide example panel' : 'Show example side-by-side'}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+            <span className="hidden sm:inline">Example</span>
+          </button>
+        )}
+        {onTogglePreview && (
+          <button
+            onClick={onTogglePreview}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
+              showPreview
+                ? 'bg-accent-600 text-white'
+                : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
+            }`}
+            title={showPreview ? 'Show source code' : 'Show rendered preview'}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {showPreview ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+              ) : (
+                <>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </>
+              )}
+            </svg>
+            <span className="hidden sm:inline">{showPreview ? 'Source' : 'Preview'}</span>
+          </button>
+        )}
+        {onShowDiff && (
+          <button
+            onClick={onShowDiff}
+            disabled={!hasCodeFile}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
+              !hasCodeFile
+                ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
+                : 'bg-gradient-to-r from-purple-600/50 to-blue-600/50 text-purple-200 hover:from-purple-500 hover:to-blue-500 hover:text-white'
+            }`}
+            title={!hasCodeFile ? 'No code file available' : 'View detailed diff analysis'}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+            </svg>
+            <span className="hidden sm:inline">Diff</span>
+          </button>
+        )}
+
       </div>
 
       {/* Right side: Metrics - responsive layout */}
