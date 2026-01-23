@@ -1168,6 +1168,8 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   // Split commands into regular and advanced
   const regularCommands = Object.values(COMMANDS).filter(cmd => cmd.requiresPrompt && !cmd.isAdvanced);
   const advancedCommands = Object.values(COMMANDS).filter(cmd => cmd.isAdvanced);
+  // Commands shown in the vertical command bar (excludes sync/update and generate-group which have dedicated UI)
+  const commandBarCommands = regularCommands.filter(cmd => cmd.group !== 'sync-update' && cmd.group !== 'generate');
 
   // State for mobile sidebar toggle and advanced commands
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1668,11 +1670,11 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                       )}
 
                       {/* Other commands (Fix, Verify, etc.) */}
-                      {regularCommands.filter(cmd => cmd.group !== 'sync-update' && cmd.name !== CommandType.TEST && cmd.name !== CommandType.EXAMPLE && cmd.name !== CommandType.GENERATE).length > 0 && (
+                      {commandBarCommands.length > 0 && (
                         <>
                           <div className="h-2" />
                           <div className="flex flex-col gap-1 p-1.5 rounded-xl bg-surface-700/30 border border-surface-700/50">
-                            {regularCommands.filter(cmd => cmd.group !== 'sync-update' && cmd.name !== CommandType.TEST && cmd.name !== CommandType.EXAMPLE && cmd.name !== CommandType.GENERATE).map(cmd => {
+                            {commandBarCommands.map(cmd => {
                               const missingFiles = getMissingFiles(cmd);
                               const hasMissingFiles = missingFiles.length > 0;
                               return (
