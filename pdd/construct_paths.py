@@ -24,6 +24,18 @@ import csv
 
 console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
 
+# Shared mapping of language → file extension used across the codebase.
+BUILTIN_EXT_MAP = {
+    'python': '.py', 'javascript': '.js', 'typescript': '.ts', 'java': '.java',
+    'cpp': '.cpp', 'c': '.c', 'go': '.go', 'ruby': '.rb', 'rust': '.rs',
+    'kotlin': '.kt', 'swift': '.swift', 'csharp': '.cs', 'php': '.php',
+    'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
+    'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
+    'prompt': '.prompt', 'makefile': '',
+    # Common data/config formats
+    'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini',
+}
+
 # Configuration loading functions
 def _find_pddrc_file(start_path: Optional[Path] = None) -> Optional[Path]:
     """Find .pddrc file by searching upward from the given path."""
@@ -348,6 +360,84 @@ def _resolve_config_hierarchy(
         resolved['outputs'] = context_config['outputs']
 
     return resolved
+
+# New helper for reporting effective config/context exactly as construct_paths would
+def resolve_effective_config(
+    *,
+    cli_options: Optional[Dict[str, Any]] = None,
+    context_override: Optional[str] = None,
+    cwd: Optional[Path] = None,
+    prompt_file: Optional[str] = None,
+    basename_hint: Optional[str] = None,
+    quiet: bool = False,
+) -> Tuple[Optional[str], Optional[Path], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Resolve the effective configuration and context exactly as `construct_paths` would.
+
+    This is intended for commands like `pdd which` that need to report how PDD would
+    resolve context and config without performing path construction.
+
+    Resolution order mirrors `construct_paths`:
+      - Find nearest `.pddrc` (searching upward from `cwd` or CWD)
+      - Load `.pddrc`
+      - Detect context (override > prompt_file > basename_hint > cwd)
+      - Read context defaults
+      - Apply hierarchy (CLI > context > environment > defaults)
+
+    Returns:
+        (context, pddrc_path, context_config, resolved_config, original_context_config)
+    """
+    cli_options = cli_options or {}
+    cwd = cwd or Path.cwd()
+
+    pddrc_path: Optional[Path] = None
+    pddrc_config: Dict[str, Any] = {}
+    context: Optional[str] = None
+    context_config: Dict[str, Any] = {}
+    original_context_config: Dict[str, Any] = {}
+
+    # Find and load .pddrc (if any)
+    pddrc_path = _find_pddrc_file(cwd)
+    if not pddrc_path:
+        # No .pddrc: context stays None; resolved config is CLI-only (env/defaults handled elsewhere)
+        env_vars = dict(os.environ)
+        resolved_config = _resolve_config_hierarchy(cli_options, {}, env_vars)
+        resolved_config["_matched_context"] = "none"
+        return None, None, {}, resolved_config, {}
+
+    pddrc_config = _load_pddrc_config(pddrc_path)
+
+    # Detect appropriate context
+    if context_override:
+        # Delegate validation to _detect_context to avoid duplicate validation logic
+        context = _detect_context(cwd, pddrc_config, context_override)
+    else:
+        # Prefer file-based detection when a prompt file is provided
+        if prompt_file and Path(prompt_file).exists():
+            detected_context, _ = detect_context_for_file(prompt_file)
+            if detected_context:
+                context = detected_context
+            else:
+                context = _detect_context(cwd, pddrc_config, None)
+        elif basename_hint:
+            detected_context = _detect_context_from_basename(basename_hint, pddrc_config)
+            if detected_context:
+                context = detected_context
+            else:
+                context = _detect_context(cwd, pddrc_config, None)
+        else:
+            context = _detect_context(cwd, pddrc_config, None)
+
+    context_config = _get_context_config(pddrc_config, context)
+    original_context_config = context_config.copy()
+
+    if (not quiet) and context:
+        console.print(f"[info]Using .pddrc context:[/info] {context}")
+
+    env_vars = dict(os.environ)
+    resolved_config = _resolve_config_hierarchy(cli_options, context_config, env_vars)
+    resolved_config["_matched_context"] = context or "default"
+
+    return context, pddrc_path, context_config, resolved_config, original_context_config
 
 
 def get_tests_dir_from_config(start_path: Optional[Path] = None) -> Optional[Path]:
@@ -975,17 +1065,20 @@ def construct_paths(
         if not file_extension and (language or '').lower() != 'prompt':
             raise ValueError('empty extension')
     except Exception:
-        builtin_ext_map = {
-            'python': '.py', 'javascript': '.js', 'typescript': '.ts', 'java': '.java',
-            'cpp': '.cpp', 'c': '.c', 'go': '.go', 'ruby': '.rb', 'rust': '.rs',
-            'kotlin': '.kt', 'swift': '.swift', 'csharp': '.cs', 'php': '.php',
-            'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
-            'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
-            'prompt': '.prompt', 'makefile': '',
-            # Common data/config formats
-            'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini'
-        }
-        file_extension = builtin_ext_map.get(language.lower(), f".{language.lower()}" if language else '')
+        file_extension = BUILTIN_EXT_MAP.get(language.lower(), f".{language.lower()}" if language else '')
+    
+    # Handle --format option for commands that support it (e.g., example)
+    format_option = command_options.get("format")
+    if format_option and command == "example":
+        format_lower = format_option.lower()
+        if format_lower == "md":
+            file_extension = ".md"
+        elif format_lower == "code":
+            # Keep the language-based extension (file_extension already set above)
+            pass
+        else:
+            # This should not happen due to click.Choice validation, but handle it anyway
+            raise click.UsageError(f"Unknown format '{format_option}'. Valid values: code, md")
 
 
 

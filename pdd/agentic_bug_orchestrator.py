@@ -314,7 +314,8 @@ def run_agentic_bug_orchestrator(
             continue
 
         # --- Pre-Step Logic: Worktree Creation ---
-        if step_num == 7:
+        # Issue #352: Create worktree before Step 5.5 so prompt fixes are isolated
+        if step_num == 5.5:
             # Only create worktree if not already set (from resume)
             if worktree_path is None:
                 # Check current branch before creating worktree

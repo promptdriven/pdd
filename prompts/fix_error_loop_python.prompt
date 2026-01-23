@@ -66,7 +66,9 @@ def fix_error_loop(
     verbose: bool = False,
     time: float = DEFAULT_TIME,
     agentic_fallback: bool = True,
-    protect_tests: bool = False
+    protect_tests: bool = False,
+    use_cloud: bool = False,
+    test_files: list[str] | None = None
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
@@ -74,11 +76,13 @@ def fix_error_loop(
     Args:
         protect_tests: When True, prevents the LLM from modifying test files. The LLM will
                       only fix code, treating tests as read-only specifications. Default is False.
+        use_cloud: If True, use cloud LLM for fix calls while keeping test execution local.
+        test_files: Optional list of all test files to run together for test isolation detection.
     """
 ```
 
 ### Control Flow Summary:
-1. Validate files exist, determine `is_python` before try block, initialize stats with `sys.maxsize` for best iteration comparison
+1. Validate files exist, determine `is_python` before try block, initialize stats with `sys.maxsize` for best iteration comparison. Compute `extra_files` from `test_files`.
 2. Run initial test (pytest for Python, `default_verify_cmd_for` for non-Python)
    - If initial test throws exception and `agentic_fallback=True`: trigger agentic fallback directly, return result
 3. Non-Python files: if initial verification fails, trigger agentic fallback directly; if passes, return success
@@ -86,7 +90,7 @@ def fix_error_loop(
    - If tests pass, read files and break (set `best_iteration=0`)
    - Otherwise: create timestamped backups in `.pdd/backups/`, update best iteration tracker, call `fix_errors_from_unit_tests`, write files, run verification, re-run pytest
 5. Post-loop: restore best iteration if final state is worse; set `best_iteration="final"` if current is best
-6. Agentic fallback: if not success and budget remains, ensure error_log_file exists (write initial state if no iterations ran), then call `_safe_run_agentic_fix` with `cwd=None` (project root) 
+6. Agentic fallback: if not success and budget remains, ensure error_log_file exists (write initial state if no iterations ran), then call `_safe_run_agentic_fix` with `cwd=None` (project root). After success, re-verify with combined files if `extra_files` present.
 7. Return 6-tuple
 
 ### Control Flow Diagram:
@@ -182,7 +186,7 @@ Notes:
 </internal_modules>
 
 ### Instructions:
-1.  **Implement `run_pytest_on_file(test_file)`**: Use `run_pytest_and_capture_output`. Extract failures, errors, and warnings from the first result in the JSON. Combine `standard_output` and `standard_error` for the log.
+1.  **Implement `run_pytest_on_file(test_file, extra_files=None)`**: Use `run_pytest_and_capture_output(test_file, extra_files=extra_files)`. Extract failures, errors, and warnings from the first result in the JSON. Combine `standard_output` and `standard_error` for the log.
 2.  **Implement `format_log_for_output(log_structure)`**: Convert the iteration list into a string. Include model name in `<fix_attempt>` tags. Ensure the first iteration includes the initial test output. Use XML tags with `iteration=n` attributes.
 3.  **Implement `cloud_fix_errors`**:
     *   Get JWT token using `CloudConfig.get_jwt_token(verbose=verbose)`. Raise `RuntimeError` if token is not available.
@@ -193,7 +197,7 @@ Notes:
     *   Return the 7-tuple matching `fix_errors_from_unit_tests` interface.
     *   Handle errors gracefully: HTTP errors, timeouts, and JSON parsing errors should raise `RuntimeError` with descriptive messages.
 4.  **Implement `fix_error_loop`**:
-    *   **Initialization**: Setup stats, best iteration tracker (using `sys.maxsize` for initial comparison), and the structured log.
+    *   **Initialization**: Setup stats, best iteration tracker (using `sys.maxsize` for initial comparison), and the structured log. Compute `extra_files` from `test_files` (exclude primary file by resolved path). Pass `extra_files` to all `run_pytest_on_file` calls.
     *   **Initial Check**: Run pytest (or verification for non-Python). If initially passing, exit early per the output contract.
     *   **The Loop**:
         *   Create timestamped backups in `.pdd/backups/{code_basename}/{timestamp}/` with format: `test_{iter}_{errors}_{fails}_{warnings}.py` and `code_{iter}_{errors}_{fails}_{warnings}.py`
@@ -206,6 +210,7 @@ Notes:
     * Ensure the `error_log_file` is written to disk before the agent is called.
     * If no iterations were run, write the initial state and pytest output to the log file.
     * Log the list of `agent_changed_files` to the console if the agent modifies files.
+    * After agentic success, if `extra_files` and `is_python`, re-run combined test. If still fails, set `success = False`.
 6.  **Console Output**: Use `rich.print` (as `rprint`). Implement an `escape_brackets` helper to prevent Rich from parsing square brackets in logs.
 
 ### Deliverables:

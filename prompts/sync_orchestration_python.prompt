@@ -240,6 +240,8 @@ Support running multiple test files (e.g., `test_module.py`, `test_module_1.py`)
 - Run pytest on all matching test files
 - Store test file hashes in `test_file_hashes` dict in RunReport
 - Use `extract_failing_files_from_output()` to identify which test file to pass to fix_main
+- When calling `fix_main`, set `output_test` to the identified failing file (not always the primary test file)
+- Pass all test files to `fix_main` via `test_files` parameter so `fix_error_loop` runs them together for test isolation detection
 
 ### Example Error Detection
 
