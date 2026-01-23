@@ -7,7 +7,6 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api, JobHandle, CommandRequest } from '../api';
-import { SyncState } from '../types';
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -28,7 +27,6 @@ export interface JobInfo {
   startedAt: Date;
   completedAt: Date | null;
   error: string | null;
-  syncState?: SyncState;
   metadata?: {
     remote?: boolean;
     sessionId?: string;
@@ -542,40 +540,16 @@ export function useJobs(options: UseJobsOptions = {}) {
               if (currentJob && currentJob.status === 'running') {
                 // Parse stdout and stderr into lines
                 const newLines: string[] = [];
-                let latestSyncState: SyncState | undefined = currentJob.syncState;
-                const SYNC_MARKER = '@@PDD_SYNC_STATE@@';
-
                 if (status.response?.stdout) {
                   const stdoutLines = status.response.stdout.split('\n').filter((l: string) => l.trim());
-                  for (const line of stdoutLines) {
-                    if (line.startsWith(SYNC_MARKER)) {
-                      // Parse sync state marker
-                      try {
-                        const payload = JSON.parse(line.slice(SYNC_MARKER.length));
-                        latestSyncState = {
-                          operation: payload.operation || '',
-                          cost: payload.cost || 0,
-                          budget: payload.budget ?? null,
-                          basename: payload.basename || '',
-                          elapsedSeconds: payload.elapsedSeconds || 0,
-                          paths: payload.paths || { prompt: '', code: '', example: '', tests: '' },
-                          colors: payload.colors,
-                          status: payload.status || 'running',
-                        };
-                      } catch {
-                        // Ignore malformed markers
-                      }
-                    } else {
-                      newLines.push(line);
-                    }
-                  }
+                  newLines.push(...stdoutLines);
                 }
                 if (status.response?.stderr) {
                   const stderrLines = status.response.stderr.split('\n').filter((l: string) => l.trim());
                   newLines.push(...stderrLines.map((l: string) => `[stderr] ${l}`));
                 }
 
-                if (newLines.length > 0 || latestSyncState !== currentJob.syncState) {
+                if (newLines.length > 0) {
                   // Replace the placeholder message with actual output
                   const isPlaceholder = currentJob.output.length <= 3 &&
                     currentJob.output.some((line: string) =>
@@ -584,8 +558,7 @@ export function useJobs(options: UseJobsOptions = {}) {
 
                   updated.set(job.id, {
                     ...currentJob,
-                    output: newLines.length > 0 ? (isPlaceholder ? newLines : newLines) : currentJob.output,
-                    syncState: latestSyncState,
+                    output: isPlaceholder ? newLines : newLines,
                   });
                 }
               }
@@ -606,35 +579,13 @@ export function useJobs(options: UseJobsOptions = {}) {
               const currentJob = updated.get(job.id);
               // Allow update from running or queued status
               if (currentJob && (currentJob.status === 'running' || currentJob.status === 'queued')) {
-                // Parse final output line by line, filtering sync state markers
+                // Parse final output line by line
                 const finalOutput: string[] = [];
-                let finalSyncState: SyncState | undefined = currentJob.syncState;
-                const SYNC_MARKER = '@@PDD_SYNC_STATE@@';
 
                 // Add final output from response, parsed line by line
                 if (status.response?.stdout) {
                   const stdoutLines = status.response.stdout.split('\n').filter((l: string) => l.trim());
-                  for (const line of stdoutLines) {
-                    if (line.startsWith(SYNC_MARKER)) {
-                      try {
-                        const payload = JSON.parse(line.slice(SYNC_MARKER.length));
-                        finalSyncState = {
-                          operation: payload.operation || '',
-                          cost: payload.cost || 0,
-                          budget: payload.budget ?? null,
-                          basename: payload.basename || '',
-                          elapsedSeconds: payload.elapsedSeconds || 0,
-                          paths: payload.paths || { prompt: '', code: '', example: '', tests: '' },
-                          colors: payload.colors,
-                          status: payload.status || (success ? 'completed' : 'failed'),
-                        };
-                      } catch {
-                        // Ignore malformed markers
-                      }
-                    } else {
-                      finalOutput.push(line);
-                    }
-                  }
+                  finalOutput.push(...stdoutLines);
                 }
                 if (status.response?.stderr) {
                   const stderrLines = status.response.stderr.split('\n').filter((l: string) => l.trim());
@@ -650,14 +601,6 @@ export function useJobs(options: UseJobsOptions = {}) {
                   finalOutput.push('', `✗ Command failed: ${status.response?.message || 'Unknown error'}`);
                 }
 
-                // Update sync state status to reflect completion
-                if (finalSyncState) {
-                  finalSyncState = {
-                    ...finalSyncState,
-                    status: success ? 'completed' : 'failed',
-                  };
-                }
-
                 const completedJob: JobInfo = {
                   ...currentJob,
                   status: cancelled ? 'cancelled' : (success ? 'completed' : 'failed'),
@@ -665,7 +608,6 @@ export function useJobs(options: UseJobsOptions = {}) {
                   output: finalOutput.length > 0 ? finalOutput : currentJob.output,
                   cost: status.response?.cost || 0,
                   error: success ? null : (status.response?.message || 'Command failed'),
-                  syncState: finalSyncState,
                 };
                 updated.set(job.id, completedJob);
 
