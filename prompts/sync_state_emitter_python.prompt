@@ -1,46 +1,39 @@
-% You are an expert Python programmer. Your goal is to write a class 'SyncStateEmitter' that writes structured JSON state to a temp file for cross-process communication, enabling the web frontend to visualize sync progress in remote mode.
+% You are an expert Python programmer. Your goal is to write a class 'SyncStateEmitter' that outputs structured JSON state to stdout with a unique marker prefix, enabling the web frontend to parse sync progress from the remote command output stream.
 
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Writes structured sync state to a temp file for web UI visualization in remote mode.</pdd-reason>
+<pdd-reason>Emits structured sync state markers to stdout for web UI visualization in remote mode.</pdd-reason>
 
 <pdd-dependency>sync_orchestration_python.prompt</pdd-dependency>
 
 % Role & Scope
-  A lightweight emitter that writes JSON-encoded sync state to a temp file for cross-process IPC. When running in remote/web mode (PDD_WEB_MODE=1), the TUI is not visible, so this emitter provides structured data that the server reads on each status poll and forwards to the frontend SyncVisualization component.
-
-  Architecture:
-    sync subprocess → writes temp file atomically → server reads on poll → includes in job status response → frontend renders
+  A lightweight emitter that writes JSON-encoded sync state to stdout with a special marker prefix (@@PDD_SYNC_STATE@@). When running in remote/web mode (PDD_WEB_MODE=1), the TUI is not visible, so this emitter provides structured data for the frontend SyncVisualization component to parse from the text stream.
 
 % Requirements
   1) Class: SyncStateEmitter(basename, budget) - initialized with module name and optional budget
-  2) State file path: reads PDD_SYNC_STATE_FILE env var, falls back to /tmp/pdd_sync_state_{pid}.json
-  3) Method emit_sync_start(paths) - writes operation="initializing", cost=0, budget, basename, elapsedSeconds=0, paths, colors={}, status="running"
-  4) Method emit_state_update(operation, cost, paths, colors) - writes current operation name, accumulated cost (rounded to 4 decimals), elapsed seconds from init, paths dict, colors dict, status="running"
-  5) Method emit_sync_complete(cost, success) - writes final cost, status="completed"|"failed", last operation tracked, empty paths/colors
-  6) Method cleanup() - removes the state file (best-effort, ignores OSError)
-  7) Atomic writes: write to .tmp file first, then os.replace() to target path
-  8) JSON uses compact separators (no spaces) to minimize file size
-  9) Elapsed time computed from instance creation timestamp
-  10) Tracks last_operation internally so sync_complete can report it
-  11) All write errors are silently caught (best-effort state reporting)
-  12) No external dependencies beyond json, os, tempfile, time from stdlib
+  2) Marker constant: "@@PDD_SYNC_STATE@@" as a class-level constant
+  3) Method emit_sync_start(paths) - emits type="sync_start" with basename, budget, paths, elapsedSeconds=0
+  4) Method emit_state_update(operation, cost, paths, colors) - emits type="state_update" with operation name, accumulated cost (rounded to 4 decimals), elapsed seconds from init, paths dict, colors dict, status="running"
+  5) Method emit_sync_complete(cost, success) - emits type="sync_complete" with final cost, status="completed"|"failed", last operation tracked
+  6) All output is a single line: "{MARKER}{compact_json}" printed with flush=True
+  7) JSON uses compact separators (no spaces) to minimize output size
+  8) Elapsed time computed from instance creation timestamp
+  9) Tracks last_operation internally so sync_complete can report it
+  10) No external dependencies beyond json and time from stdlib
 
 % Inputs/Outputs
   - Input: Sync progress data (operation names, costs, file paths, box colors)
-  - Output: JSON file at PDD_SYNC_STATE_FILE path, atomically updated
+  - Output: Stdout lines with marker prefix containing JSON payloads
 
 % Dependencies
-  <sync_state_emitter_example>
-    <include>context/sync_state_emitter_example.py</include>
-  </sync_state_emitter_example>
+  <sync_animation>
+    <include>context/sync_animation_example.py</include>
+  </sync_animation>
 
 % Instructions
   - Implement in pdd/sync_state_emitter.py
   - Export SyncStateEmitter class
-  - Use json.dump with separators=(',', ':') for compact output
-  - Each emit atomically replaces the state file content
+  - Use json.dumps with separators=(',', ':') for compact output
+  - Each emit writes exactly one line to stdout via print(..., flush=True)
   - The paths parameter is a dict with keys: prompt, code, example, tests
   - The colors parameter is an optional dict with same keys, values are color names
-  - The server (jobs.py) sets PDD_SYNC_STATE_FILE env var before launching sync subprocess
-  - The server (commands.py) reads this file on each job status poll and includes it in response
