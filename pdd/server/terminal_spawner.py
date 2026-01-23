@@ -57,6 +57,43 @@ class TerminalSpawner:
         return False
 
     @staticmethod
+    def _get_env_activation(is_windows: bool = False) -> str:
+        """
+        Detect active Python environment (conda/venv) and return activation command.
+        """
+        # Check for Conda
+        conda_prefix = os.environ.get('CONDA_PREFIX')
+        conda_env = os.environ.get('CONDA_DEFAULT_ENV')
+        
+        if conda_prefix and conda_env:
+            if is_windows:
+                # Windows Conda activation
+                activate_script = os.path.join(conda_prefix, "Scripts", "activate.bat")
+                if os.path.exists(activate_script):
+                    return f'call "{activate_script}"'
+                return f"conda activate {conda_env}"
+            else:
+                # Unix Conda activation
+                activate_script = os.path.join(conda_prefix, "bin", "activate")
+                if os.path.exists(activate_script):
+                    return f"source '{activate_script}'"
+                return f"conda activate {conda_env}"
+
+        # Check for Virtualenv
+        virtual_env = os.environ.get('VIRTUAL_ENV')
+        if virtual_env:
+            if is_windows:
+                # Windows venv activation (PowerShell)
+                activate_script = os.path.join(virtual_env, "Scripts", "Activate.ps1")
+                return f'. "{activate_script}"'
+            else:
+                # Unix venv activation
+                activate_script = os.path.join(virtual_env, "bin", "activate")
+                return f"source '{activate_script}'"
+
+        return ""
+
+    @staticmethod
     def _darwin(
         command: str,
         job_id: Optional[str] = None,
@@ -84,10 +121,10 @@ else
     SUCCESS_JSON="false"
 fi
 echo "[DEBUG] Sending callback to http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete"
-echo "[DEBUG] Payload: {{\\"success\\": $SUCCESS_JSON, \\"exit_code\\": $EXIT_CODE}}"
+echo "[DEBUG] Payload: {{\\\"success\\\": $SUCCESS_JSON, \\\"exit_code\\\": $EXIT_CODE}}"
 CURL_RESPONSE=$(curl -s -w "\\n[HTTP_STATUS:%{{http_code}}]" -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \\
   -H "Content-Type: application/json" \\
-  -d "{{\\"success\\": $SUCCESS_JSON, \\"exit_code\\": $EXIT_CODE}}" 2>&1)
+  -d "{{\\\"success\\\": $SUCCESS_JSON, \\\"exit_code\\\": $EXIT_CODE}}" 2>&1)
 echo "[DEBUG] Curl response: $CURL_RESPONSE"
 
 # Show result to user
@@ -102,9 +139,13 @@ echo ""
             else:
                 callback_section = ""
 
+            # Add environment activation if needed
+            env_activation = TerminalSpawner._get_env_activation(is_windows=False)
+            full_command = f"{env_activation}\n{command}" if env_activation else command
+
             # Script that runs command and optionally reports status
             script_content = f"""#!/bin/bash
-{command}
+{full_command}
 EXIT_CODE=$?
 {callback_section}
 exec bash
@@ -133,6 +174,9 @@ exec bash
         If job_id is provided, calls back to server with completion status.
         """
         try:
+            # Add environment activation if needed
+            env_activation = TerminalSpawner._get_env_activation(is_windows=False)
+            
             # Build callback section if job_id provided
             if job_id:
                 callback_cmd = f'''
@@ -142,14 +186,21 @@ if [ "$EXIT_CODE" -eq 0 ]; then SUCCESS_JSON="true"; else SUCCESS_JSON="false"; 
 echo "[DEBUG] Sending callback to http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete"
 CURL_RESPONSE=$(curl -s -w "\\n[HTTP_STATUS:%{{http_code}}]" -X POST "http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete" \\
   -H "Content-Type: application/json" \\
-  -d "{{\\"success\\": $SUCCESS_JSON, \\"exit_code\\": $EXIT_CODE}}" 2>&1)
+  -d "{{\\\"success\\\": $SUCCESS_JSON, \\\"exit_code\\\": $EXIT_CODE}}" 2>&1)
 echo "[DEBUG] Curl response: $CURL_RESPONSE"
 echo ""
 if [ "$EXIT_CODE" -eq 0 ]; then echo -e "\\033[32m✓ Command completed successfully\\033[0m"; else echo -e "\\033[31m✗ Command failed (exit code: $EXIT_CODE)\\033[0m"; fi
 '''
-                full_cmd = f"{command}; {callback_cmd}; exec bash"
+                # Combine activation, command, callback, and shell keep-alive
+                if env_activation:
+                    full_cmd = f"{env_activation}; {command}; {callback_cmd}; exec bash"
+                else:
+                    full_cmd = f"{command}; {callback_cmd}; exec bash"
             else:
-                full_cmd = f"{command}; exec bash"
+                if env_activation:
+                    full_cmd = f"{env_activation}; {command}; exec bash"
+                else:
+                    full_cmd = f"{command}; exec bash"
 
             terminals = [
                 ("gnome-terminal", ["gnome-terminal", "--", "bash", "-c", full_cmd]),
@@ -183,6 +234,9 @@ if [ "$EXIT_CODE" -eq 0 ]; then echo -e "\\033[32m✓ Command completed successf
         If job_id is provided, calls back to server with completion status.
         """
         try:
+            # Add environment activation if needed
+            env_activation = TerminalSpawner._get_env_activation(is_windows=True)
+
             # Build callback section if job_id provided
             if job_id:
                 callback_cmd = f'''
@@ -192,9 +246,15 @@ Invoke-RestMethod -Uri "http://localhost:{server_port}/api/v1/commands/spawned-j
 Write-Host ""
 if ($exitCode -eq 0) {{ Write-Host "✓ Command completed successfully" -ForegroundColor Green }} else {{ Write-Host "✗ Command failed (exit code: $exitCode)" -ForegroundColor Red }}
 '''
-                full_cmd = f"{command}; {callback_cmd}"
+                if env_activation:
+                    full_cmd = f"{env_activation}; {command}; {callback_cmd}"
+                else:
+                    full_cmd = f"{command}; {callback_cmd}"
             else:
-                full_cmd = command
+                if env_activation:
+                    full_cmd = f"{env_activation}; {command}"
+                else:
+                    full_cmd = command
 
             # Try Windows Terminal first (modern)
             try:

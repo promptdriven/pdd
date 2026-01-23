@@ -2405,6 +2405,8 @@ def test_llm_invoke_time_none_does_not_crash(mock_load_models, mock_set_llm_cach
             assert response['result'] == "Mocked response"
 
 
+
+
 # ==============================================================================
 # Issue #295: OpenAI strict mode requires additionalProperties: false
 # ==============================================================================
@@ -2460,6 +2462,7 @@ def test_openai_strict_mode_schema_includes_additional_properties_false(mock_loa
                 assert schema.get('additionalProperties') == False, \
                     "Schema must include 'additionalProperties': false for OpenAI strict mode. " \
                     "Without this, OpenAI returns: 'additionalProperties' is required to be supplied and to be false."
+
 
 
 def test_no_warning_for_removed_base_model(mock_set_llm_cache, caplog):
