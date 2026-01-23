@@ -68,11 +68,11 @@ def generate(
     if code_generator_main is None or code_generator_main is _DEFAULT_CODE_GENERATOR_MAIN:
         code_generator_main = _code_generator_main
     
-    # Try to import template resolver, fallback if not available (e.g. during bootstrapping)
+    # Try to import template registry
     try:
-        from ..templates import resolve_template_path
+        from ..template_registry import load_template
     except ImportError:
-        resolve_template_path = None
+        load_template = None
 
     try:
         # 1. Validate Mutex: Template vs Prompt File
@@ -85,13 +85,16 @@ def generate(
         # 2. Resolve Template if used
         target_prompt_file = prompt_file
         if template:
-            if resolve_template_path is None:
+            if load_template is None:
                 raise click.UsageError("Template support is not available in this installation.")
-            
+
             try:
-                target_prompt_file = resolve_template_path(template)
+                template_meta = load_template(template)
+                target_prompt_file = template_meta.get("path")
                 if not target_prompt_file:
                     raise click.UsageError(f"Template '{template}' not found.")
+            except FileNotFoundError:
+                raise click.UsageError(f"Failed to load template '{template}'")
             except Exception as e:
                 raise click.UsageError(f"Error resolving template '{template}': {str(e)}")
 
