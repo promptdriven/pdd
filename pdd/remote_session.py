@@ -593,7 +593,6 @@ class RemoteSessionManager:
                 if isinstance(result, dict):
                     stdout = result.get("stdout", "")
                     stderr = result.get("stderr", "")
-                    sync_state = result.get("sync_state")
 
                     # Print incremental stdout (raw, preserving formatting)
                     if stdout and len(stdout) > last_stdout_len:
@@ -605,13 +604,12 @@ class RemoteSessionManager:
                     # Send periodic output updates to cloud
                     current_time = asyncio.get_event_loop().time()
                     if current_time - last_update_time >= update_interval:
-                        if stdout or stderr or sync_state:
+                        if stdout or stderr:
                             try:
                                 await self._update_command_output(
                                     cmd.command_id,
                                     stdout=stdout,
-                                    stderr=stderr,
-                                    sync_state=sync_state
+                                    stderr=stderr
                                 )
                                 last_update_time = current_time
                             except Exception:
@@ -651,8 +649,7 @@ class RemoteSessionManager:
         self,
         command_id: str,
         stdout: str = "",
-        stderr: str = "",
-        sync_state: dict = None
+        stderr: str = ""
     ) -> None:
         """
         Update cloud with intermediate command output for log streaming.
@@ -661,26 +658,21 @@ class RemoteSessionManager:
             command_id: The command ID to update.
             stdout: Current stdout output.
             stderr: Current stderr output.
-            sync_state: Optional sync visualization state dict.
         """
         if not self.session_id:
             return
 
         endpoint = CloudConfig.get_endpoint_url("updateCommand")
 
-        response_payload = {
-            "stdout": stdout,
-            "stderr": stderr,
-            "streaming": True,  # Indicate this is a streaming update
-        }
-        if sync_state:
-            response_payload["sync_state"] = sync_state
-
         payload = {
             "sessionId": self.session_id,
             "commandId": command_id,
             "status": "processing",  # Keep status as processing
-            "response": response_payload,
+            "response": {
+                "stdout": stdout,
+                "stderr": stderr,
+                "streaming": True,  # Indicate this is a streaming update
+            }
         }
 
         try:

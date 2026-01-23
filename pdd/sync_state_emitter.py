@@ -1,21 +1,22 @@
 # pdd/sync_state_emitter.py
 """
-Writes sync state to a temp file for the server to read and forward to the frontend.
+Emits structured sync state to stdout with special markers for frontend parsing.
 
-This replicates what the TUI does with shared mutable refs, but across process
-boundaries (subprocess → server). The server polls the file and includes the
-state in job status responses, which flow to the frontend via the cloud.
+When running in remote/web mode (PDD_WEB_MODE=1), the TUI is not visible.
+This emitter writes JSON-encoded state updates to stdout with a unique marker
+prefix, allowing the frontend to parse structured data from the text stream
+and render the SyncVisualization component.
 """
 
 import json
-import os
-import tempfile
 import time
 from typing import Optional, Dict, Any
 
 
 class SyncStateEmitter:
-    """Writes sync state to a temp file for cross-process communication."""
+    """Writes JSON-encoded sync state to stdout with a marker prefix."""
+
+    MARKER = "@@PDD_SYNC_STATE@@"
 
     def __init__(self, basename: str, budget: Optional[float] = None):
         """Initialize the emitter.
@@ -29,37 +30,23 @@ class SyncStateEmitter:
         self._start_time = time.time()
         self._last_operation: Optional[str] = None
 
-        # Use the file path from env (set by job manager) or a default
-        self._state_file = os.environ.get(
-            'PDD_SYNC_STATE_FILE',
-            os.path.join(tempfile.gettempdir(), f'pdd_sync_state_{os.getpid()}.json')
-        )
-
-    def _write_state(self, data: Dict[str, Any]) -> None:
-        """Atomically write state to the temp file."""
-        tmp_path = self._state_file + '.tmp'
-        try:
-            with open(tmp_path, 'w') as f:
-                json.dump(data, f, separators=(',', ':'))
-            os.replace(tmp_path, self._state_file)
-        except OSError:
-            pass  # Non-fatal: best-effort state reporting
+    def _emit(self, data: Dict[str, Any]) -> None:
+        """Write a marker line to stdout."""
+        line = json.dumps(data, separators=(',', ':'))
+        print(f"{self.MARKER}{line}", flush=True)
 
     def emit_sync_start(self, paths: Dict[str, str]) -> None:
-        """Write initial sync state.
+        """Emit the sync_start message at the beginning of sync.
 
         Args:
             paths: Dict with keys prompt, code, example, tests mapping to file paths.
         """
-        self._write_state({
-            "operation": "initializing",
-            "cost": 0,
-            "budget": self._budget,
+        self._emit({
+            "type": "sync_start",
             "basename": self._basename,
-            "elapsedSeconds": 0,
+            "budget": self._budget,
             "paths": paths,
-            "colors": {},
-            "status": "running",
+            "elapsedSeconds": 0,
         })
 
     def emit_state_update(
@@ -69,7 +56,7 @@ class SyncStateEmitter:
         paths: Dict[str, str],
         colors: Optional[Dict[str, str]] = None,
     ) -> None:
-        """Write updated state when operation or cost changes.
+        """Emit a state_update message when operation or cost changes.
 
         Args:
             operation: Current operation name (generate, fix, test, etc.).
@@ -79,7 +66,8 @@ class SyncStateEmitter:
         """
         self._last_operation = operation
         elapsed = time.time() - self._start_time
-        self._write_state({
+        self._emit({
+            "type": "state_update",
             "operation": operation,
             "cost": round(cost, 4),
             "budget": self._budget,
@@ -91,27 +79,19 @@ class SyncStateEmitter:
         })
 
     def emit_sync_complete(self, cost: float, success: bool) -> None:
-        """Write final state.
+        """Emit the sync_complete message at the end of sync.
 
         Args:
             cost: Final accumulated cost.
             success: Whether the sync completed successfully.
         """
         elapsed = time.time() - self._start_time
-        self._write_state({
-            "operation": self._last_operation or "done",
+        self._emit({
+            "type": "sync_complete",
             "cost": round(cost, 4),
             "budget": self._budget,
             "basename": self._basename,
             "elapsedSeconds": round(elapsed, 1),
-            "paths": {},
-            "colors": {},
             "status": "completed" if success else "failed",
+            "operation": self._last_operation or "done",
         })
-
-    def cleanup(self) -> None:
-        """Remove the state file."""
-        try:
-            os.unlink(self._state_file)
-        except OSError:
-            pass
