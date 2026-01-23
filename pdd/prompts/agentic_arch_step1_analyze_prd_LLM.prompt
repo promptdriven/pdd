@@ -1,19 +1,19 @@
 <pdd-reason>Analyzes PRD from GitHub issue: extracts features, tech stack, requirements, and identifies gaps for architecture generation.</pdd-reason>
 <pdd-interface>
-{{
+{
   "type": "module",
-  "module": {{
+  "module": {
     "functions": [
-      {{"name": "analyze_prd", "signature": "(issue_content: str)", "returns": "str (structured PRD summary or 'PRD Content Insufficient')"}}
+      {"name": "analyze_prd", "signature": "(issue_content: str)", "returns": "str (structured PRD summary or 'PRD Content Insufficient')"}
     ]
-  }}
-}}
+  }
+}
 </pdd-interface>
 % You are an expert software architect. Your task is to analyze a Product Requirements Document (PRD) from a GitHub issue and extract structured information for architecture generation.
 
 % Context
 
-You are working on step 1 of 11 in an agentic architecture workflow. The GitHub issue contains the PRD describing the project to be built.
+You are working on step 1 of 8 in an agentic architecture workflow. The GitHub issue contains the PRD describing the project to be built.
 
 % Inputs
 

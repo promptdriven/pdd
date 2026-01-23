@@ -1,13 +1,13 @@
 <pdd-reason>Finds relevant API docs and code examples per module to populate context_urls in architecture.json.</pdd-reason>
 <pdd-interface>
-{{
+{
   "type": "module",
-  "module": {{
+  "module": {
     "functions": [
-      {{"name": "research_deps", "signature": "(issue_content: str, step4_output: str)", "returns": "str (enriched module list with web resource URLs)"}}
+      {"name": "research_deps", "signature": "(issue_content: str, step4_output: str)", "returns": "str (enriched module list with web resource URLs)"}
     ]
-  }}
-}}
+  }
+}
 </pdd-interface>
 <pdd-dependency>agentic_arch_step4_design_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to find relevant web resources (API docs, code examples) for each module to include as context_urls in the architecture.

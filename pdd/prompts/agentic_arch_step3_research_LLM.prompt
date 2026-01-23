@@ -1,13 +1,13 @@
 <pdd-reason>Researches tech stack documentation, project structure conventions, and best practices via web search.</pdd-reason>
 <pdd-interface>
-{{
+{
   "type": "module",
-  "module": {{
+  "module": {
     "functions": [
-      {{"name": "research_tech_stack", "signature": "(issue_content: str, step1_output: str, step2_output: str)", "returns": "str (research findings with documentation URLs)"}}
+      {"name": "research_tech_stack", "signature": "(issue_content: str, step1_output: str, step2_output: str)", "returns": "str (research findings with documentation URLs)"}
     ]
-  }}
-}}
+  }
+}
 </pdd-interface>
 <pdd-dependency>agentic_arch_step2_analyze_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to research the identified tech stack to find documentation, project structure conventions, and best practices.
