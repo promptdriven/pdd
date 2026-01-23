@@ -1458,3 +1458,224 @@ def test_z3_stop_conditions():
     s.add(stop_reason != 0)
     assert s.check() == z3.unsat, "Step 9 without FAIL should continue"
     s.pop()
+
+
+# -----------------------------------------------------------------------------
+# Tests for Issue #376: Template Injection Bug
+# -----------------------------------------------------------------------------
+
+def test_template_injection_json_in_step3_fails_at_step5(mock_dependencies, temp_cwd):
+    """
+    Test that reproduces issue #376: Template injection bug when step outputs contain JSON.
+
+    The bug occurs when:
+    1. Steps 1-4 produce outputs containing JSON with braces like {"type": "error"}
+    2. These outputs are added to context without escaping braces (line 412-413)
+    3. Step 5's prompt template references {step3_output}
+    4. During format(), Python interprets JSON braces as template variables
+    5. KeyError: '\n  "type"' is raised
+
+    This test should PASS (by detecting the KeyError) before the fix,
+    and FAIL (no KeyError) after implementing brace escaping.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Simulate step outputs for steps 1-4
+    # Step 3 contains JSON with braces - this triggers the bug
+    step_outputs = {
+        "1": "Duplicate check complete.",
+        "2": "Documentation check complete.",
+        "3": '''Analysis complete. Result:
+{
+  "type": "bug",
+  "severity": "high",
+  "root_cause": "template injection"
+}''',
+        "4": "Triage complete."
+    }
+
+    # Mock the template loader to return different templates for each step
+    # For steps 1-4, return a simple template
+    # For step 5, return a template that references step3_output (triggering the bug)
+    def template_loader_side_effect(template_name):
+        mock_template = MagicMock()
+
+        if "step5" in template_name:
+            # Step 5 template references step3_output
+            def format_step5(**context):
+                template_str = "Step 5: Review the analysis from step 3:\n{step3_output}\n\nProceed with implementation."
+                # This format() call will trigger the bug because context['step3_output'] contains unescaped braces
+                return template_str.format(**context)
+            mock_template.format.side_effect = format_step5
+        else:
+            # Other steps use simple templates without referencing step outputs
+            mock_template.format.return_value = "Simple prompt template"
+
+        return mock_template
+
+    mock_template_loader.side_effect = template_loader_side_effect
+
+    # Mock step execution to return our test outputs for steps 1-4
+    call_count = [0]
+    def side_effect_run(**kwargs):
+        call_count[0] += 1
+        step = call_count[0]
+        if step <= 4:
+            return (True, step_outputs[str(step)], 0.1, "gpt-4")
+        # Step 5 shouldn't be reached due to template formatting error
+        return (True, "Step 5 output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Run the orchestrator - it should fail at step 5 with KeyError
+    success, message, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/promptdriven/pdd/issues/376",
+        issue_content="Test issue content for template injection bug",
+        repo_owner="promptdriven",
+        repo_name="pdd",
+        issue_number=376,
+        issue_author="test",
+        issue_title="Template injection bug",
+        cwd=temp_cwd,
+        verbose=False,
+        quiet=True,
+    )
+
+    # The orchestrator should fail with a context missing key error
+    assert not success, "Expected orchestrator to fail due to template injection bug"
+    assert "Context missing key" in message, f"Expected KeyError message, got: {message}"
+    # The exact error should mention the JSON key that Python tried to interpret as a template variable
+    assert '"type"' in message or 'type' in message, f"Expected error to reference JSON key 'type', got: {message}"
+
+
+def test_template_injection_multiple_steps_with_nested_json(mock_dependencies, temp_cwd):
+    """
+    Test template injection with multiple step outputs containing nested JSON.
+
+    This test verifies that the bug affects any step output with braces,
+    not just step 3.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Multiple steps with JSON outputs
+    step_outputs = {
+        "1": '{"status": "checked", "result": "no duplicates"}',
+        "2": '{"documented": false, "action": "add docs"}',
+        "3": '''{"analysis": {"root_cause": "format bug", "location": "line 521"}}''',
+    }
+
+    mock_template = MagicMock()
+
+    def format_side_effect(**context):
+        # Template references step1, step2, and step3 outputs
+        template_str = """
+Review all previous steps:
+Step 1: {step1_output}
+Step 2: {step2_output}
+Step 3: {step3_output}
+"""
+        return template_str.format(**context)
+
+    mock_template.format.side_effect = format_side_effect
+    mock_template_loader.return_value = mock_template
+
+    call_count = [0]
+    def side_effect_run(**kwargs):
+        call_count[0] += 1
+        step = call_count[0]
+        if step <= 3:
+            return (True, step_outputs[str(step)], 0.1, "gpt-4")
+        return (True, "Output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, message, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/promptdriven/pdd/issues/376",
+        issue_content="Test issue content",
+        repo_owner="promptdriven",
+        repo_name="pdd",
+        issue_number=376,
+        issue_author="test",
+        issue_title="Template injection bug",
+        cwd=temp_cwd,
+        verbose=False,
+        quiet=True,
+    )
+
+    # Should fail with KeyError for one of the JSON keys
+    assert not success, "Expected orchestrator to fail due to template injection"
+    assert "Context missing key" in message, f"Expected context error, got: {message}"
+
+
+def test_template_injection_with_exact_issue_376_json(mock_dependencies, temp_cwd):
+    """
+    Test with the exact JSON structure from issue #376 that caused the bug.
+
+    From the issue report, the error was: KeyError: '\n  "type"'
+    This happened when workflow state JSON was included in step outputs.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Exact JSON structure from issue #376
+    step3_json_output = '''{
+  "step_outputs": {
+    "1": "...",
+    "2": "...",
+    "3": "..."
+  },
+  "total_cost": 1.2660064,
+  "model_used": "anthropic",
+  "last_completed_step": 4
+}'''
+
+    step_outputs = {
+        "1": "Step 1 complete",
+        "2": "Step 2 complete",
+        "3": step3_json_output,
+        "4": "Step 4 complete"
+    }
+
+    mock_template = MagicMock()
+
+    def format_side_effect(**context):
+        # This template simulates step 5's prompt that references step 3
+        template_str = "Analyze the workflow state from step 3:\n{step3_output}\n\nProceed."
+        return template_str.format(**context)
+
+    mock_template.format.side_effect = format_side_effect
+    mock_template_loader.return_value = mock_template
+
+    call_count = [0]
+    def side_effect_run(**kwargs):
+        call_count[0] += 1
+        step = call_count[0]
+        if step <= 4:
+            return (True, step_outputs[str(step)], 0.1, "gpt-4")
+        return (True, "Output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, message, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/promptdriven/pdd/issues/376",
+        issue_content="Test issue content",
+        repo_owner="promptdriven",
+        repo_name="pdd",
+        issue_number=376,
+        issue_author="test",
+        issue_title="Template injection bug",
+        cwd=temp_cwd,
+        verbose=False,
+        quiet=True,
+    )
+
+    # Should fail with the exact error from the issue
+    assert not success, "Expected orchestrator to fail"
+    assert "Context missing key" in message, f"Expected KeyError, got: {message}"
+    # The error should reference the newline + "type" pattern from the issue
+    assert "type" in message.lower(), f"Expected error to mention 'type' key, got: {message}"
