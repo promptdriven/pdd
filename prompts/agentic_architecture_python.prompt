@@ -1,0 +1,48 @@
+<pdd-reason>CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_architecture", "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "_is_github_issue_url", "signature": "(url: str)", "returns": "bool"},
+      {"name": "_parse_github_url", "signature": "(url: str)", "returns": "Optional[Tuple[str, str, int]]"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_architecture_orchestrator_python.prompt</pdd-dependency>
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_architecture.py` module.
+
+% Role & Scope
+CLI entry point for the agentic architecture workflow. Detects GitHub issue URLs, fetches issue content and comments via `gh api`, ensures repository context is available, then invokes the orchestrator to run the 8-step architecture generation process. Follows the same pattern as `agentic_change.py` and `agentic_bug.py`.
+
+% Requirements
+1. Function: `run_agentic_architecture(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, message, total_cost, model_used, output_files)
+3. Helper: `_is_github_issue_url(url: str) -> bool` - Detect GitHub issue URLs
+4. Helper: `_parse_github_url(url: str) -> Optional[Tuple[str, str, int]]` - Extract owner, repo, issue_number
+5. Supported URL formats:
+   - `https://github.com/{owner}/{repo}/issues/{number}`
+   - `https://www.github.com/{owner}/{repo}/issues/{number}`
+   - `github.com/{owner}/{repo}/issues/{number}`
+6. Fetch issue content via `gh api repos/{owner}/{repo}/issues/{number}` (requires `gh` CLI)
+7. Extract from issue: title (as issue_title), body, user.login (as issue_author), comments_url
+8. Fetch comments via `gh api {comments_url}` to get full PRD context
+9. Ensure repo is available locally (clone/checkout if needed)
+10. Call orchestrator: `run_agentic_architecture_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ..., timeout_adder=timeout_adder, use_github_state=use_github_state)`
+
+% Dependencies
+<pdd.agentic_architecture_orchestrator><include>context/agentic_architecture_orchestrator_example.py</include></pdd.agentic_architecture_orchestrator>
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+
+% Error Handling
+- Return `(False, "gh CLI not found", 0.0, "", [])` if `gh` command not available
+- Return `(False, "Invalid GitHub URL", 0.0, "", [])` if URL parsing fails
+- Return `(False, "Issue not found: {error}", 0.0, "", [])` if `gh api` fails
+
+% Deliverables
+- Code: `pdd/agentic_architecture.py`
