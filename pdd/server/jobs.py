@@ -445,8 +445,6 @@ class JobManager:
         env['PDD_FORCE'] = '1'
         env['TERM'] = 'dumb'
         env['PDD_SKIP_UPDATE_CHECK'] = '1'  # Skip update prompts
-        env['PDD_WEB_MODE'] = '1'  # Emit structured state for web UI visualization
-        env['PYTHONUNBUFFERED'] = '1'  # Ensure real-time output capture (no pipe buffering)
 
         stdout_lines = []
         stderr_lines = []
