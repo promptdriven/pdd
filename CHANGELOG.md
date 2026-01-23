@@ -2,31 +2,34 @@
 
 ### Feat
 
-- UI improvements - Dev Units view, model sliders, and Sync All button
-- Add web UI sync visualization for remote mode
-- **example**: add support for --format option in example generation
-- **which**: expose effective config and search paths for prompts and outputs (Fixes #21)
+- **which**: new `pdd which` command exposes effective config and search paths for prompts and outputs (Fixes #21). Thanks Benjamin Knobloch!
+- **example**: add `--format` option to example generation. Thanks Benjamin Knobloch!
+- **frontend**: Dev Units view, model sliders with ELO-based model resolution, and Sync All button
 
 ### Fix
 
+- **fix workflow**: verify agentic fix with combined test run before claiming success (#360)
+- **fix workflow**: run all test files together in fix loop to detect isolation failures (#360)
+- **fix workflow**: direct fix output to actual failing test file, not primary (#360)
+- **terminal_spawner**: preserve conda/venv environment in spawned terminals (#347)
+- **sync**: exit sync loop when tests pass despite non-zero exit code (#349)
+- **bug workflow**: move worktree creation before Step 5.5 for prompt fix isolation (#352)
+- **llm_invoke**: remove warning for user-removed base model; remove hardcoded DEFAULT_LLM_MODEL (Issue #296). Thanks Serhan Asad!
+- **context_generator**: skip Python syntax validation for markdown format in example generation. Thanks Benjamin Knobloch!
+- **regression tests**: support paths with spaces (#334)
 - Remove invalid escape sequence in agentic_langtest_example.py
-- Verify agentic fix with combined test run before claiming success (#360)
-- Run all test files together in fix loop to detect isolation failures (#360)
-- Embed sync_state in stdout as markers for cloud compatibility
-- Include sync_state in final cloud update and send immediately
-- Direct fix output to actual failing test file, not primary (#360)
-- Set PDD_WEB_MODE in correct subprocess path (jobs.py)
-- Preserve conda/venv environment in spawned terminals (#347)
-- Exit sync loop when tests pass despite non-zero exit code (#349)
-- Move worktree creation before Step 5.5 for prompt fix isolation (#352)
-- **context_generator**: skip Python syntax validation for markdown format in example generation
 
 ### Refactor
 
-- extract shared formatCost utility and simplify command filtering
-- Replace stdout markers with temp file IPC for sync state
-- **example generation**: change default output format from 'py' to 'code' and update related documentation
-- **which**: simplify effective config handling and improve tuple unpacking logic
+- **construct_paths**: centralize language extension mapping (`BUILTIN_EXT_MAP`) shared across codebase. Thanks Benjamin Knobloch!
+- **frontend**: extract shared `formatCost` utility and simplify command filtering
+- **example generation**: change default output format from 'py' to 'code'. Thanks Benjamin Knobloch!
+- **which**: simplify effective config handling and improve tuple unpacking logic. Thanks Benjamin Knobloch!
+
+### Docs
+
+- Update prompts to reflect consolidated bug fixes (#347, #349, #352)
+- Update prompts for `test_files`/`extra_files` params
 
 ## v0.0.126 (2026-01-21)
 
