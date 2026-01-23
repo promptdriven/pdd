@@ -73,21 +73,25 @@ const JobDashboard: React.FC<JobDashboardProps> = ({
       >
         {/* Header bar */}
         <div
-          className="flex items-center justify-between px-4 py-3 border-b border-surface-700/50 cursor-pointer"
+          className="flex items-center justify-between px-4 py-3 border-b border-surface-700/50 cursor-pointer bg-gradient-to-r from-surface-800/80 to-surface-900/80"
           onClick={() => setIsCollapsed(!isCollapsed)}
         >
           <div className="flex items-center gap-3">
-            {/* Toggle icon */}
-            <svg
-              className={`w-4 h-4 text-surface-400 transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-            </svg>
+            {/* Toggle icon - enhanced visibility */}
+            <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+              isCollapsed ? 'bg-accent-500/20 text-accent-400' : 'bg-surface-700 text-white'
+            }`}>
+              <svg
+                className={`w-4 h-4 transition-transform duration-200 ${isCollapsed ? '' : 'rotate-180'}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" />
+              </svg>
+            </div>
 
-            <h2 className="text-sm font-medium text-white">
+            <h2 className="text-base font-semibold text-white">
               Jobs Dashboard
             </h2>
 
