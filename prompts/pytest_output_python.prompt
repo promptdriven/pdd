@@ -21,9 +21,12 @@
         - Handle ANSI escape sequences in pytest output (strip them for reliable parsing).
         - If pytest returns a non-zero exit code but parsing detects no failures, ensure at least one failure or error is reported.
 
+% Programmatic API:
+    `run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None = None)` - when `extra_files` is provided, all files are run together in a single pytest invocation.
+
 % This function will do the following:
     Step 1. Validate that the test file exists and has a .py extension.
-    Step 2. Run pytest on the given test file and capture stdout/stderr.
+    Step 2. Run pytest on the given test file(s) and capture stdout/stderr.
     Step 3. Parse the output to extract test counts (passed, failures, errors, warnings).
     Step 4. Build a result dictionary with the following format:
         {
