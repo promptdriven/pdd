@@ -30,6 +30,7 @@
     - `bug_main` from `.bug_main`
     - `crash_main` from `.crash_main`
     - `trace_main` from `.trace_main`
+    - `agentic_test_main` from `.agentic_test`
     - `preprocess_main` from `.preprocess_main`
     - `construct_paths` from `.construct_paths`
     - `fix_verification_main` from `.fix_verification_main`
