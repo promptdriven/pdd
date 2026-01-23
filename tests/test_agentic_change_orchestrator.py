@@ -1414,7 +1414,7 @@ def test_z3_stop_conditions():
     # 5: "Architectural decision needed"
     # 6: "No changes needed"
     # 7: "Implementation failed"
-    
+
     # Constraints defining the function logic
     logic = z3.If(z3.And(step_num == 1, has_duplicate), stop_reason == 1,
             z3.If(z3.And(step_num == 2, has_already_impl), stop_reason == 2,
@@ -1424,7 +1424,7 @@ def test_z3_stop_conditions():
             z3.If(z3.And(step_num == 8, has_no_changes), stop_reason == 6,
             z3.If(z3.And(step_num == 9, has_fail), stop_reason == 7,
             stop_reason == 0)))))))
-    
+
     s.add(logic)
 
     # Verification Case 1: Step 1 with "Duplicate of #" MUST stop
@@ -1438,7 +1438,7 @@ def test_z3_stop_conditions():
     # Verification Case 2: Step 3 (Research) should NEVER hard stop based on these flags
     s.push()
     s.add(step_num == 3)
-    s.add(has_duplicate == True) 
+    s.add(has_duplicate == True)
     s.add(stop_reason != 0) # Assert it stops (contradiction expected)
     assert s.check() == z3.unsat, "Step 3 should not stop even if duplicate string is present"
     s.pop()
@@ -1458,3 +1458,366 @@ def test_z3_stop_conditions():
     s.add(stop_reason != 0)
     assert s.check() == z3.unsat, "Step 9 without FAIL should continue"
     s.pop()
+
+
+# -----------------------------------------------------------------------------
+# Template Injection Bug Tests (Issue #11)
+# -----------------------------------------------------------------------------
+
+def test_template_injection_json_in_step_output(mock_dependencies, temp_cwd):
+    """
+    Test for Issue #11: Template injection when step outputs contain JSON.
+
+    This reproduces the bug where step outputs containing JSON with braces
+    (e.g., {"type": "error"}) cause KeyError at step 5 because Python's
+    .format() tries to interpret the braces as template variables.
+
+    Bug location: agentic_change_orchestrator.py:412-413, 520-523
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Step 3 output contains JSON that will trigger the bug
+    json_output = '''Analysis complete.
+{
+  "type": "error",
+  "message": "Template injection vulnerability"
+}'''
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step1":
+            return (True, "No duplicates found", 0.1, "gpt-4")
+        if label == "step2":
+            return (True, "Confirmed bug", 0.1, "gpt-4")
+        if label == "step3":
+            return (True, json_output, 0.1, "gpt-4")
+        if label == "step4":
+            return (True, "Reproduced successfully", 0.1, "gpt-4")
+        return (True, "Output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Mock template that will receive the context with JSON in step3_output
+    mock_template = MagicMock()
+
+    # This simulates what happens when .format(**context) is called:
+    # 1. {step3_output} gets replaced with the JSON text
+    # 2. Python tries to parse {"type": "error"} as a template variable
+    # 3. KeyError: '\n  "type"' is raised
+    def format_with_injection(**kwargs):
+        # Simulate the template containing {step3_output}
+        if "step3_output" in kwargs:
+            step3 = kwargs["step3_output"]
+            # If step3 contains unescaped braces, Python's .format() will fail
+            # when it tries to process them
+            if "{" in step3 and "{{" not in step3:
+                # This simulates the exact KeyError from the issue
+                raise KeyError('\n  "type"')
+        return "Formatted Prompt"
+
+    mock_template.format = format_with_injection
+    mock_template_loader.return_value = mock_template
+
+    # Run the orchestrator - it should fail at step 5 with KeyError
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=11,
+        issue_author="me",
+        issue_title="Template Injection Bug",
+        cwd=temp_cwd
+    )
+
+    # The bug causes failure with the exact error message from the issue
+    # (Can fail at step 4 or 5 depending on which step first references step3_output)
+    assert success is False
+    assert "Context missing key for step" in msg
+    assert '"type"' in msg
+
+
+def test_template_injection_multiple_json_objects(mock_dependencies, temp_cwd):
+    """
+    Test template injection with multiple JSON objects across different steps.
+
+    Verifies that JSON in any step output (not just step 3) can trigger
+    the template injection bug when referenced in subsequent steps.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Multiple steps contain JSON
+    json_step1 = 'Step 1 output with {"status": "complete"}'
+    json_step2 = 'Step 2 has {"result": "success"}'
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step1":
+            return (True, json_step1, 0.1, "gpt-4")
+        if label == "step2":
+            return (True, json_step2, 0.1, "gpt-4")
+        return (True, "Output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    mock_template = MagicMock()
+
+    def format_check_multiple(**kwargs):
+        # Check if any step output has unescaped braces
+        for key, value in kwargs.items():
+            if key.endswith("_output") and isinstance(value, str):
+                if "{" in value and "{{" not in value:
+                    # Simulate KeyError from the first unescaped brace content
+                    if "status" in value:
+                        raise KeyError('"status"')
+                    elif "result" in value:
+                        raise KeyError('"result"')
+        return "Formatted Prompt"
+
+    mock_template.format = format_check_multiple
+    mock_template_loader.return_value = mock_template
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=11,
+        issue_author="me",
+        issue_title="Multiple JSON Bug",
+        cwd=temp_cwd
+    )
+
+    assert success is False
+    assert "Context missing key" in msg
+    # Should fail with one of the JSON keys
+    assert ('"status"' in msg or '"result"' in msg)
+
+
+def test_template_injection_nested_json(mock_dependencies, temp_cwd):
+    """
+    Test template injection with deeply nested JSON structures.
+
+    Ensures the bug occurs even with complex nested JSON that might
+    appear in workflow state or API responses.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Deeply nested JSON similar to the workflow state from issue #6
+    nested_json = '''{
+  "step_outputs": {
+    "1": "...",
+    "2": "...",
+    "3": "...",
+    "4": "..."
+  },
+  "total_cost": 1.2660064,
+  "model_used": "anthropic",
+  "last_completed_step": 4
+}'''
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, nested_json, 0.1, "gpt-4")
+        return (True, "Output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    mock_template = MagicMock()
+
+    def format_nested(**kwargs):
+        if "step4_output" in kwargs:
+            step4 = kwargs["step4_output"]
+            if "step_outputs" in step4 and "{" in step4:
+                # The nested braces will cause KeyError
+                raise KeyError('"1"')
+        return "Formatted Prompt"
+
+    mock_template.format = format_nested
+    mock_template_loader.return_value = mock_template
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=11,
+        issue_author="me",
+        issue_title="Nested JSON Bug",
+        cwd=temp_cwd
+    )
+
+    assert success is False
+    assert "Context missing key for step" in msg
+
+
+def test_template_injection_mixed_content(mock_dependencies, temp_cwd):
+    """
+    Test template injection with mixed content (text + JSON).
+
+    Real-world outputs often have explanatory text followed by JSON,
+    which should still trigger the bug if braces aren't escaped.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    mixed_output = '''I've analyzed the code and found the following:
+
+Analysis Results:
+{
+  "type": "bug",
+  "severity": "high",
+  "location": "file.py:123"
+}
+
+The issue should be fixed by escaping braces.'''
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step2":
+            return (True, mixed_output, 0.1, "gpt-4")
+        return (True, "Output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    mock_template = MagicMock()
+
+    def format_mixed(**kwargs):
+        if "step2_output" in kwargs:
+            step2 = kwargs["step2_output"]
+            if '"type"' in step2 and "{" in step2:
+                raise KeyError('\n  "type"')
+        return "Formatted Prompt"
+
+    mock_template.format = format_mixed
+    mock_template_loader.return_value = mock_template
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=11,
+        issue_author="me",
+        issue_title="Mixed Content Bug",
+        cwd=temp_cwd
+    )
+
+    assert success is False
+    assert "Context missing key" in msg
+    # Verify the error references the JSON key from the output
+    assert ('"type"' in msg or 'type' in msg)
+
+
+def test_template_no_injection_with_escaped_braces(mock_dependencies, temp_cwd):
+    """
+    Regression test: Verify that properly escaped braces don't cause errors.
+
+    This test ensures that once the fix is applied (escaping braces in
+    step outputs), the workflow completes successfully even with JSON content.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # This output contains JSON but braces are escaped
+    escaped_json = '''Analysis complete.
+{{
+  "type": "error",
+  "message": "Template injection fixed"
+}}'''
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (True, escaped_json, 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created", 0.1, "gpt-4")
+        return (True, "Output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Normal template format - no special error handling needed
+    mock_template = MagicMock()
+    mock_template.format.return_value = "Formatted Prompt"
+    mock_template_loader.return_value = mock_template
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=11,
+        issue_author="me",
+        issue_title="Escaped Braces Test",
+        cwd=temp_cwd
+    )
+
+    # Should complete successfully with escaped braces
+    assert success is True
+    assert "PR Created" in msg
+
+
+def test_template_injection_edge_cases(mock_dependencies, temp_cwd):
+    """
+    Test edge cases: empty braces, malformed JSON, single braces.
+
+    Ensures the bug handling covers various brace patterns that might
+    appear in step outputs.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Various edge cases with braces
+    edge_output = 'Output with {} and {foo} and {bar[0]}'
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step1":
+            return (True, edge_output, 0.1, "gpt-4")
+        return (True, "Output", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    mock_template = MagicMock()
+
+    def format_edge(**kwargs):
+        if "step1_output" in kwargs:
+            step1 = kwargs["step1_output"]
+            # Empty braces {} and {foo} will both cause KeyError
+            if "{}" in step1 or "{foo}" in step1:
+                # Empty braces cause IndexError, which Python converts to KeyError
+                raise KeyError('foo')
+        return "Formatted Prompt"
+
+    mock_template.format = format_edge
+    mock_template_loader.return_value = mock_template
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=11,
+        issue_author="me",
+        issue_title="Edge Cases Bug",
+        cwd=temp_cwd
+    )
+
+    assert success is False
+    assert "Context missing key" in msg
