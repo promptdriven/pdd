@@ -139,12 +139,15 @@ class TestResultCollector:
         sys.stderr = sys.__stderr__
         return self.stdout, self.stderr
 
-def run_pytest_and_capture_output(test_file: str) -> dict:
+def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None = None) -> dict:
     """
-    Runs pytest on the given test file and captures the output.
+    Runs pytest on the given test file(s) and captures the output.
 
     Args:
-        test_file: The path to the test file.
+        test_file: The path to the primary test file.
+        extra_files: Optional list of additional test files to run alongside
+            the primary file. Used for Bug #360 fix where test failures only
+            manifest when multiple test files are run together.
 
     Returns:
         A dictionary containing the pytest output.
@@ -174,7 +177,11 @@ def run_pytest_and_capture_output(test_file: str) -> dict:
         "stdin": subprocess.DEVNULL,
     }
 
-    pytest_args = [python_executable, "-B", "-m", "pytest", str(test_path), "-v"]
+    # Bug #360: Include extra test files to detect test isolation failures
+    all_test_paths = [str(test_path)]
+    if extra_files:
+        all_test_paths.extend(extra_files)
+    pytest_args = [python_executable, "-B", "-m", "pytest"] + all_test_paths + ["-v"]
 
     if project_root is not None:
         # PDD project detected - set up proper environment
