@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ModelInfo } from '../api';
+import { formatCost } from '../lib/format';
 
 interface ModelSlidersProps {
   models: ModelInfo[];
@@ -26,11 +27,6 @@ const ModelSliders: React.FC<ModelSlidersProps> = ({
 
   // Step size: each step = one model
   const strengthStep = models.length > 1 ? 1 / (models.length - 1) : 0.05;
-
-  const formatCost = (cost: number): string => {
-    if (cost < 0.01) return `$${cost.toFixed(3)}`;
-    return `$${cost.toFixed(2)}`;
-  };
 
   return (
     <div className="border-b border-surface-700/50">

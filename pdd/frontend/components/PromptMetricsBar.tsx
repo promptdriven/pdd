@@ -1,5 +1,6 @@
 import React from 'react';
 import { TokenMetrics, ModelInfo } from '../api';
+import { formatCost } from '../lib/format';
 
 interface PromptMetricsBarProps {
   rawMetrics: TokenMetrics | null;
@@ -84,14 +85,6 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
     if (percent < 75) return 'bg-yellow-500';
     if (percent < 90) return 'bg-orange-500';
     return 'bg-red-500';
-  };
-
-  // Format cost
-  const formatCost = (cost: number): string => {
-    if (cost < 0.0001) return `$${cost.toFixed(6)}`;
-    if (cost < 0.01) return `$${cost.toFixed(4)}`;
-    if (cost < 1) return `$${cost.toFixed(3)}`;
-    return `$${cost.toFixed(2)}`;
   };
 
   // Format token count
