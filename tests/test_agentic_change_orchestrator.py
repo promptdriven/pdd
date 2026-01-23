@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -1579,3 +1579,134 @@ def test_z3_stop_conditions():
     s.add(stop_reason != 0)
     assert s.check() == z3.unsat, "Step 9 without FAIL should continue"
     s.pop()
+
+
+# -----------------------------------------------------------------------------
+# Step 9 Worktree Fallback Tests
+# -----------------------------------------------------------------------------
+
+def test_step9_fallback_detects_worktree_changes(mock_dependencies, temp_cwd):
+    """
+    If LLM output lacks FILES_CREATED/FILES_MODIFIED markers but the
+    worktree has actual file changes, orchestrator should use those
+    and NOT fail at step 9.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            # LLM wrote files but forgot markers in final response
+            return (True, "I've implemented the changes and posted to the issue.", 5.0, "anthropic")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "anthropic")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/99", 0.2, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect_run
+
+    # Mock _detect_worktree_changes to return files (simulating real worktree changes)
+    with patch("pdd.agentic_change_orchestrator._detect_worktree_changes",
+               return_value=["prompts/backend/sales_dashboard_python.prompt"]):
+        success, msg, cost, model, files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Show sold examples on dashboard",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=237,
+            issue_author="me",
+            issue_title="Show sold examples",
+            cwd=temp_cwd
+        )
+
+    # Should NOT fail at step 9
+    assert "no file changes" not in (msg or "")
+    # The worktree-detected file should be in the changed files
+    assert "prompts/backend/sales_dashboard_python.prompt" in files
+
+
+def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
+    """
+    _detect_worktree_changes only picks up .prompt and .md files,
+    not .py, .txt, or .agentic_prompt_* temp files.
+    """
+    # Create a real git repo with tracked prompts/ directory (like pdd_cloud)
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+
+    # Create initial tracked files (simulating existing repo structure)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "existing.prompt").write_text("existing")
+    (tmp_path / "main.py").write_text("existing code")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+    # Now simulate LLM changes: new files (untracked) and modified files
+    (tmp_path / "prompts" / "foo_python.prompt").write_text("new prompt")
+    (tmp_path / "prompts" / "existing.prompt").write_text("modified prompt")
+    (tmp_path / "README.md").write_text("docs")
+    (tmp_path / "random.py").write_text("code")
+    (tmp_path / ".agentic_prompt_abc12345.txt").write_text("temp")
+    (tmp_path / "notes.txt").write_text("notes")
+
+    files = _detect_worktree_changes(tmp_path)
+
+    assert "prompts/foo_python.prompt" in files
+    assert "prompts/existing.prompt" in files
+    assert "README.md" in files
+    assert "random.py" not in files
+    assert ".agentic_prompt_abc12345.txt" not in files
+    assert "notes.txt" not in files
+
+
+def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
+    """
+    When step 9 fails (no files from either regex or worktree fallback),
+    the step output is still saved to state for debugging.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_save_state = mocks["save_state"]
+
+    step9_output_text = "I analyzed the codebase but couldn't determine what prompts to change."
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, step9_output_text, 5.0, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch("pdd.agentic_change_orchestrator._detect_worktree_changes", return_value=[]):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=237,
+            issue_author="me",
+            issue_title="Show sold examples",
+            cwd=temp_cwd
+        )
+
+    assert success is False
+    assert "no file changes" in msg
+
+    # Verify save_workflow_state was called with the step 9 output in state
+    assert mock_save_state.called
+    # Find the call that contains step 9 output
+    found_step9_output = False
+    for call_args in mock_save_state.call_args_list:
+        args, kwargs_call = call_args
+        # state is the 4th positional arg
+        if len(args) >= 4:
+            state_arg = args[3]
+            if isinstance(state_arg, dict) and "step_outputs" in state_arg:
+                if state_arg["step_outputs"].get("9") == step9_output_text:
+                    found_step9_output = True
+                    break
+    assert found_step9_output, "Step 9 output should be saved to state on failure"
