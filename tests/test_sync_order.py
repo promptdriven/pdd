@@ -459,6 +459,113 @@ def test_generate_sync_order_script_empty(tmp_path):
     assert not output.exists()
 
 # ==============================================================================
+# TDD Tests: Cycle Detection Cascade Fix
+# ==============================================================================
+
+def test_topological_sort_cascade_not_flagged_as_cycle():
+    """
+    Nodes that DEPEND on a cycle but are NOT in the cycle
+    should NOT be reported as cyclic. They should appear in sorted_list.
+    """
+    # A↔B is a real cycle. C depends on A. D depends on C. E is independent.
+    graph = {
+        "A": ["B"],
+        "B": ["A"],
+        "C": ["A"],       # C depends on A (in cycle) but is NOT cyclic
+        "D": ["C"],       # D depends on C, also NOT cyclic
+        "E": [],          # E is independent
+    }
+    sorted_list, cycles = sync_order.topological_sort(graph)
+
+    # Only A and B should be in cycles
+    all_cyclic = set()
+    for c in cycles:
+        all_cyclic.update(c)
+    assert all_cyclic == {"A", "B"}, f"Expected only A,B cyclic, got {all_cyclic}"
+
+    # C, D, E should all be in sorted_list (not lost)
+    assert "C" in sorted_list, "C (depends on cycle) missing from sorted_list"
+    assert "D" in sorted_list, "D (depends on C) missing from sorted_list"
+    assert "E" in sorted_list, "E (independent) missing from sorted_list"
+
+
+def test_topological_sort_large_cascade_not_all_cyclic():
+    """
+    A small cycle should not cause 50+ nodes to be flagged as cyclic.
+    Simulates the pdd_cloud scenario where a core cycle poisons everything.
+    """
+    # Create a small cycle: X↔Y
+    # Then 50 modules that depend on X (directly)
+    graph = {"X": ["Y"], "Y": ["X"]}
+    for i in range(50):
+        graph[f"mod_{i}"] = ["X"]  # Each depends on X
+
+    sorted_list, cycles = sync_order.topological_sort(graph)
+
+    all_cyclic = set()
+    for c in cycles:
+        all_cyclic.update(c)
+
+    # Only X and Y should be cyclic, not the 50 dependents
+    assert all_cyclic == {"X", "Y"}, f"Expected 2 cyclic nodes, got {len(all_cyclic)}: {all_cyclic}"
+
+    # All 50 mod_N nodes should be in sorted_list
+    for i in range(50):
+        assert f"mod_{i}" in sorted_list, f"mod_{i} missing from sorted_list"
+
+
+def test_topological_sort_non_cyclic_remaining_ordered():
+    """
+    Non-cyclic nodes that depend on cycles should still be
+    included in sorted_list. Independent nodes should come first.
+    """
+    graph = {
+        "cycle_a": ["cycle_b"],
+        "cycle_b": ["cycle_a"],
+        "leaf": ["cycle_a"],        # depends on cycle
+        "independent": [],           # no deps
+    }
+    sorted_list, cycles = sync_order.topological_sort(graph)
+
+    # independent should come before leaf (independent has no deps)
+    assert "independent" in sorted_list
+    assert "leaf" in sorted_list
+    ind_idx = sorted_list.index("independent")
+    leaf_idx = sorted_list.index("leaf")
+    assert ind_idx < leaf_idx, "independent should be processed before leaf"
+
+
+# ==============================================================================
+# TDD Tests: Script Path Fix
+# ==============================================================================
+
+def test_generate_sync_order_script_no_worktree_path(tmp_path):
+    """
+    When worktree_path is None, the script should NOT contain any cd command.
+    """
+    output = tmp_path / "sync_order.sh"
+    content = sync_order.generate_sync_order_script(["mod_a", "mod_b"], output, worktree_path=None)
+
+    assert "cd " not in content
+    assert "pdd sync mod_a" in content
+    assert "pdd sync mod_b" in content
+
+
+def test_generate_sync_order_script_no_absolute_temp_path(tmp_path):
+    """
+    Even when worktree_path is provided, the script should not contain
+    hardcoded absolute paths to temp directories.
+    """
+    worktree = Path("/var/folders/zz/abc123/T/pdd_repo/.pdd/worktrees/change-issue-1")
+    output = tmp_path / "sync_order.sh"
+    content = sync_order.generate_sync_order_script(["mod_a"], output, worktree_path=worktree)
+
+    # Should not hardcode temp paths
+    assert "/var/folders" not in content
+    assert "/tmp/" not in content
+
+
+# ==============================================================================
 # Z3 Formal Verification Tests
 # ==============================================================================
 

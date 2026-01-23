@@ -21,9 +21,12 @@
      - Logic: Call `context_generator_main`.
      - Track cost using `@track_cost`.
      - Log operation using `@log_operation(operation="example", updates_fingerprint=True)`.
-  3. **test**:
-     - Interface: Match the `test` command specification in `README.md`.
-     - Logic: Call `cmd_test_main`.
+  3. **test**: Two modes determined by `--manual` flag:
+     - **Agentic mode (default)**: Takes single GitHub issue URL argument, calls `run_agentic_test(issue_url, verbose, quiet, timeout_adder, use_github_state)`. Returns 5-tuple: (success, message, cost, model, changed_files). Display success status, cost, model used, and list of changed files using click.echo.
+     - **Manual mode (`--manual` flag)**: Legacy behavior. Call `cmd_test_main`. Args: PROMPT_FILE, CODE_OR_EXAMPLE_FILE
+     - Options: `--timeout-adder` (float, default 0.0, agentic mode only), `--no-github-state` (flag, disables GitHub state persistence, agentic mode only), `--verbose`/`--quiet` (agentic mode only)
+     - Agentic mode: exactly 1 arg (issue URL)
+     - Manual mode: exactly 2 args (PROMPT_FILE, CODE_OR_EXAMPLE_FILE)
      - Track cost using `@track_cost`.
      - Log operation using `@log_operation(operation="test", updates_run_report=True)`.
 
@@ -38,6 +41,9 @@
   <cmd_test_main_example>
   <include>context/cmd_test_main_example.py</include>
   </cmd_test_main_example>
+  <agentic_test_example>
+  <include>context/agentic_test_example.py</include>
+  </agentic_test_example>
   <track_cost_example>
   <include>context/track_cost_example.py</include>
   </track_cost_example>
@@ -49,6 +55,7 @@
   - Use `handle_error` for exception management.
   - Re-raise `click.Abort` exceptions to allow user cancellation (e.g., pressing 'no' on
     overwrite prompts) to propagate to the parent CLI for graceful handling.
+  - For `test` command: validate argument count based on mode (1 arg for agentic, 2 args for manual) before calling the appropriate function.
 
 % Deliverables
   - Code: `pdd/commands/generate.py`

@@ -75,6 +75,40 @@ This tutorial walks through implementing a GitHub issue using PDD.
    - The PR is updated with the fix
    - Review and merge when ready
 
+### Method 4: Generating Tests (UI, CLI, or API)
+
+1. **Create a GitHub Issue**
+   - Describe what needs to be tested:
+     - **Web UI**: Webpage URL, screenshots, expected behaviors
+     - **CLI**: Commands to test, expected outputs
+     - **API**: Endpoints to test, HTTP methods, expected responses
+   - Include examples of expected behavior
+   - Specify what elements/interactions/responses should be verified
+
+2. **Generate Tests**
+   ```bash
+   pdd test https://github.com/myorg/myrepo/issues/789
+   ```
+   This analyzes the target and creates comprehensive tests (Playwright for web, pytest for CLI, pytest+requests for API).
+
+3. **Handle Clarifying Questions**
+   - If PDD needs more information (e.g., credentials, test environment setup, API authentication), it posts questions to the issue
+   - Answer them in the GitHub issue comments
+   - Run `pdd test` again to resume
+
+4. **Review the Generated Tests**
+   - The PR contains tests for the specified target:
+     - **Web UI**: Playwright tests
+     - **CLI**: pytest with subprocess
+     - **API**: pytest with requests/httpx
+   - Review and adjust tests as needed
+
+5. **Fix Any Issues Found**
+   ```bash
+   pdd fix https://github.com/myorg/myrepo/issues/789
+   ```
+   Use this if tests reveal bugs that need fixing.
+
 ### Tips
 
 - **Resume from anywhere**: Workflow state is saved to GitHub, so you can continue on any machine

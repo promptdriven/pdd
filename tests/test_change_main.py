@@ -860,3 +860,72 @@ def test_change_main_csv_output_dir_slash_saves_individual_files(
     assert f"Saving individual modified prompts to directory: {output_dir_normalized}" in caplog.text
     assert f"Attempting to save file to: {expected_file_path}" in caplog.text
     assert "Results saved as individual files in directory successfully" in caplog.text
+
+
+# --- Tests for empty modified_prompt in CSV individual file saving ---
+
+@patch('pdd.change_main.process_csv_change')
+@patch('pdd.change_main.construct_paths')
+def test_change_csv_skips_empty_modified_content(mock_construct_paths, mock_process_csv, tmp_path, caplog):
+    """
+    When process_csv_change returns a result with an empty string for
+    modified_prompt, no file should be written for that entry.
+    Regression test for: empty string passes 'is None' check and writes 0-byte file.
+    """
+    import logging
+    caplog.set_level(logging.DEBUG)
+
+    # Setup real files
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    csv_file = tmp_path / "changes.csv"
+    csv_file.write_text("prompt_name,change_instructions\nempty.prompt,Make it better\n")
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    (code_dir / "empty.py").write_text("def placeholder(): pass\n")
+
+    # Mock construct_paths
+    mock_construct_paths.return_value = (
+        {"strength": 0.5, "temperature": 0.0, "time": 0.25},  # resolved_config
+        {"change_prompt_file": "prompt_name,change_instructions\nempty.prompt,Make it better\n"},
+        {"output_prompt_file": str(output_dir)},
+        "python"
+    )
+
+    # Mock process_csv_change to return empty modified_prompt
+    mock_process_csv.return_value = (
+        True,
+        [{"file_name": "empty.prompt", "modified_prompt": ""}],  # Empty string!
+        0.01,
+        "test-model"
+    )
+
+    ctx = create_mock_context(
+        params={"force": True},
+        obj={
+            "strength": 0.5,
+            "temperature": 0.0,
+            "budget": 10.0,
+            "verbose": False,
+            "language": "python",
+            "extension": ".py",
+            "quiet": False,
+            "force": True,
+            "time": 0.25,
+        }
+    )
+
+    result_message, cost, model = change_main(
+        ctx=ctx,
+        change_prompt_file=str(csv_file),
+        input_code=str(code_dir),
+        input_prompt_file=None,
+        output=str(output_dir),
+        use_csv=True,
+        budget=10.0,
+    )
+
+    # The empty.prompt file should NOT be created
+    empty_file = output_dir / "empty.prompt"
+    assert not empty_file.exists(), \
+        f"File {empty_file} should not be written when modified_prompt is empty string"

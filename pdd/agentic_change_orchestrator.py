@@ -201,6 +201,35 @@ def _parse_changed_files(output: str) -> List[str]:
         
     return list(set(files)) # Deduplicate
 
+def _detect_worktree_changes(worktree_path: Path) -> List[str]:
+    """
+    Detect actual file changes in worktree using git status.
+    Fallback for when LLM output lacks FILES_CREATED/FILES_MODIFIED markers.
+    Only returns prompt and documentation files (matching step 9 scope).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree_path,
+            capture_output=True, text=True, check=True
+        )
+        files = []
+        allowed_extensions = {".prompt", ".md"}
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            # git status --porcelain format: "XY filename" (2 status chars + space + path)
+            filepath = line[3:].strip().split(" -> ")[-1]
+            # Skip temp files from run_agentic_task
+            if filepath.startswith(".agentic_prompt_"):
+                continue
+            # Only include prompt and doc files (step 9 scope)
+            if any(filepath.endswith(ext) for ext in allowed_extensions):
+                files.append(filepath)
+        return files
+    except Exception:
+        return []
+
 def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     """Check output for hard stop conditions."""
     if step_num == 1 and "Duplicate of #" in output:
@@ -560,6 +589,11 @@ def run_agentic_change_orchestrator(
 
         if step_num == 9:
             extracted_files = _parse_changed_files(step_output)
+            if not extracted_files and worktree_path:
+                # Fallback: check worktree for actual file changes
+                extracted_files = _detect_worktree_changes(worktree_path)
+                if extracted_files and not quiet:
+                    console.print(f"[yellow]Note: Detected {len(extracted_files)} changed file(s) in worktree (LLM output lacked markers)[/yellow]")
             changed_files = extracted_files
             context["files_to_stage"] = ", ".join(changed_files)
             created_match = re.search(r"FILES_CREATED:\s*(.*)", step_output)
@@ -567,6 +601,10 @@ def run_agentic_change_orchestrator(
             context["files_created"] = created_match.group(1).strip() if created_match else ""
             context["files_modified"] = modified_match.group(1).strip() if modified_match else ""
             if not changed_files:
+                # Save step output for debugging before failing
+                state["step_outputs"][str(step_num)] = step_output
+                state["last_completed_step"] = step_num - 1
+                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
         if step_num == 10:
@@ -660,10 +698,28 @@ def run_agentic_change_orchestrator(
                 cyclic_modules = set(cycles[0]) if cycles else set()
                 affected = get_affected_modules(sorted_modules, modified_modules, graph, cyclic_modules)
                 if affected:
-                    script_path = worktree_path / "sync_order.sh"
-                    sync_order_list = generate_sync_order_script(affected, script_path, worktree_path)
-                    sync_order_script = str(script_path)
-                    if not quiet: console.print(f"[dim]Generated sync order script: {script_path}[/dim]")
+                    # Generate clean command list for PR body (not full bash script)
+                    sync_order_list = "\n".join([f"pdd sync {m}" for m in affected])
+
+                    # Write script to user's CWD (accessible after workflow completes)
+                    user_script_path = cwd / "sync_order.sh"
+                    generate_sync_order_script(affected, user_script_path, worktree_path=None)
+                    sync_order_script = str(user_script_path)
+
+                    # Also generate in worktree for Step 13 to commit
+                    worktree_script_path = worktree_path / "sync_order.sh"
+                    generate_sync_order_script(affected, worktree_script_path, worktree_path=None)
+
+                    # Ensure sync_order.sh is staged by step 13
+                    if "sync_order.sh" not in changed_files:
+                        changed_files.append("sync_order.sh")
+                    context["files_to_stage"] = ", ".join(changed_files)
+
+                    if not quiet:
+                        console.print(f"\n[bold]Sync commands (run after merge):[/bold]")
+                        for module in affected:
+                            console.print(f"  pdd sync {module}")
+                        console.print(f"[green]Sync script saved to: {user_script_path}[/green]")
             except Exception as e:
                 if not quiet: console.print(f"[yellow]Warning: Could not generate sync order: {e}[/yellow]")
 
