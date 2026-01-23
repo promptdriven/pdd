@@ -946,6 +946,15 @@ def fix_error_loop(unit_test_file: str,
             except Exception as e:
                 rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
             success = True
+            # Bug #360: Verify with combined test files if extra_files present.
+            # The agentic fix only runs the primary file in isolation. If the
+            # failure requires all files to manifest (test isolation issue),
+            # the agent's success claim may be false. Re-verify with combined run.
+            if success and extra_files and is_python:
+                verify_fails, verify_errors, _, _ = run_pytest_on_file(unit_test_file, extra_files=extra_files)
+                if verify_fails > 0 or verify_errors > 0:
+                    rprint(f"[yellow]Agentic fix passed single-file test but combined test still fails ({verify_fails} failures, {verify_errors} errors)[/yellow]")
+                    success = False
 
     return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
 
