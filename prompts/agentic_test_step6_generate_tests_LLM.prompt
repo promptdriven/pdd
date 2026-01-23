@@ -73,14 +73,14 @@ You are now working in an isolated git worktree at: {worktree_path}
 
 3. **For Web UI (Playwright):**
    ```typescript
-   import { test, expect } from '@playwright/test';
+   import {{ test, expect }} from '@playwright/test';
 
-   test.describe('Feature Name', () => {
-     test('should do something', async ({ page }) => {
+   test.describe('Feature Name', () => {{
+     test('should do something', async ({{ page }}) => {{
        await page.goto('/path');
        await expect(page.locator('selector')).toBeVisible();
-     });
-   });
+     }});
+   }});
    ```
 
 4. **For CLI (pytest):**
@@ -108,8 +108,8 @@ You are now working in an isolated git worktree at: {worktree_path}
        def test_success_case(self):
            # Use method, path, and payload from test plan
            response = requests.post(  # or get, put, delete per plan
-               f"{BASE_URL}/path/from/plan",
-               json={...}  # payload structure from test plan
+               f"{{BASE_URL}}/path/from/plan",
+               json={{...}}  # payload structure from test plan
            )
            assert response.status_code == ...  # expected status from plan
            # Validate response structure per test plan
@@ -117,8 +117,8 @@ You are now working in an isolated git worktree at: {worktree_path}
        def test_error_case(self):
            # Test error scenarios from test plan
            response = requests.post(
-               f"{BASE_URL}/path/from/plan",
-               json={...}  # invalid payload per test plan
+               f"{{BASE_URL}}/path/from/plan",
+               json={{...}}  # invalid payload per test plan
            )
            assert response.status_code == 400  # or other error code
    ```
@@ -135,7 +135,7 @@ You are now working in an isolated git worktree at: {worktree_path}
    async def test_endpoint_from_plan():
        async with httpx.AsyncClient() as client:
            # Use method and path from test plan
-           response = await client.get(f"{BASE_URL}/path/from/plan")
+           response = await client.get(f"{{BASE_URL}}/path/from/plan")
            assert response.status_code == ...  # expected status from plan
            # Validate response per test plan
    ```

@@ -288,6 +288,10 @@ def run_agentic_test_orchestrator(
 
     if changed_files:
         context["files_to_stage"] = ", ".join(changed_files)
+        context["test_files"] = "\n".join(f"- {f}" for f in changed_files)
+
+    if "step7_output" in context:
+        context["test_results"] = context["step7_output"]
 
     start_step = last_completed_step + 1
     
@@ -407,7 +411,11 @@ def run_agentic_test_orchestrator(
             extracted_files = _parse_changed_files(step_output)
             changed_files = extracted_files
             context["files_to_stage"] = ", ".join(changed_files)
-        
+            context["test_files"] = "\n".join(f"- {f}" for f in changed_files) if changed_files else "No test files detected"
+
+        if step_num == 7:
+            context["test_results"] = step_output
+
         if step_num == 8:
             # Update files if fixes created new ones
             new_files = _parse_changed_files(step_output)

@@ -358,3 +358,133 @@ def test_z3_step_execution_logic():
     result = s.check()
     # Should be unsat because the code logic prevents step 6 from running if step 5 stops
     assert result == z3.unsat, f"Counter-example found: {s.model()}"
+
+
+# --- Template Formatting Tests (Real Templates) ---
+
+@pytest.fixture
+def full_context():
+    """Context dict with all keys the orchestrator would provide through step 8."""
+    return {
+        "issue_url": "http://github.com/o/r/issues/1",
+        "issue_content": "Fix the bug",
+        "repo_owner": "owner",
+        "repo_name": "repo",
+        "issue_number": "1",
+        "issue_author": "user",
+        "issue_title": "Bug title",
+        "step1_output": "No duplicates found.",
+        "step2_output": "Codebase reviewed.",
+        "step3_output": "Enough info available.",
+        "step4_output": "Test type: API (pytest).",
+        "step5_output": "Test plan ready.",
+        "step6_output": "FILES_CREATED: tests/test_api.py",
+        "step7_output": "TEST_RESULTS: PASS\nTESTS_PASSED: 3\nTESTS_FAILED: 0",
+        "step8_output": "FIX_STATUS: COMPLETE",
+        "worktree_path": "/tmp/worktree",
+        "files_to_stage": "tests/test_api.py",
+        "test_files": "- tests/test_api.py",
+        "test_results": "TEST_RESULTS: PASS\nTESTS_PASSED: 3\nTESTS_FAILED: 0",
+    }
+
+
+def _load_real_template(step_num: int, name: str) -> str:
+    """Load a real prompt template file from the prompts directory."""
+    prompts_dir = Path(__file__).parent.parent / "prompts"
+    template_path = prompts_dir / f"agentic_test_step{step_num}_{name}_LLM.prompt"
+    assert template_path.exists(), f"Template not found: {template_path}"
+    return template_path.read_text()
+
+
+def test_step6_template_formats_without_error(full_context):
+    """Step 6 template must format without KeyError (curly braces in code examples must be escaped)."""
+    template = _load_real_template(6, "generate_tests")
+    # This should NOT raise KeyError - currently fails on '{ test, expect }'
+    formatted = template.format(**full_context)
+    assert "import" in formatted
+    assert "playwright" in formatted.lower() or "pytest" in formatted.lower()
+
+
+def test_step7_template_formats_without_error(full_context):
+    """Step 7 template must format without KeyError (requires test_files in context)."""
+    template = _load_real_template(7, "run_tests")
+    # This should NOT raise KeyError on 'test_files'
+    formatted = template.format(**full_context)
+    assert "tests/test_api.py" in formatted
+
+
+def test_step8_template_formats_without_error(full_context):
+    """Step 8 template must format without KeyError (requires test_files and test_results)."""
+    template = _load_real_template(8, "fix_iterate")
+    # This should NOT raise KeyError on 'test_files' or 'test_results'
+    formatted = template.format(**full_context)
+    assert "tests/test_api.py" in formatted
+    assert "PASS" in formatted
+
+
+def test_orchestrator_provides_test_files_context(mock_dependencies, default_args):
+    """After step 6, orchestrator must add 'test_files' to context for step 7."""
+    mocks = mock_dependencies
+
+    # Use real string templates so we can verify context keys
+    def template_side_effect(name):
+        # Return a simple template that uses the relevant keys
+        if "step7" in name:
+            return "Step7: test_files={test_files}"
+        if "step6" in name:
+            return "Step6: worktree={worktree_path}"
+        # Other steps: minimal template
+        return "step"
+
+    mocks['template'].side_effect = template_side_effect
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step6':
+            return (True, "FILES_CREATED: tests/test_api.py, tests/test_auth.py", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mocks['run'].side_effect = run_side_effect
+
+    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    # Verify step 7 was called with instruction containing test_files content
+    step7_call = [c for c in mocks['run'].call_args_list if c[1].get('label') == 'step7']
+    assert len(step7_call) == 1
+    instruction = step7_call[0][1]['instruction']
+    assert "tests/test_api.py" in instruction
+    assert "tests/test_auth.py" in instruction
+
+
+def test_orchestrator_provides_test_results_context(mock_dependencies, default_args):
+    """After step 7, orchestrator must add 'test_results' to context for step 8."""
+    mocks = mock_dependencies
+
+    def template_side_effect(name):
+        if "step8" in name:
+            return "Step8: results={test_results} files={test_files}"
+        if "step6" in name:
+            return "Step6: worktree={worktree_path}"
+        return "step"
+
+    mocks['template'].side_effect = template_side_effect
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step6':
+            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
+        if label == 'step7':
+            return (True, "TEST_RESULTS: FAIL\nTESTS_PASSED: 2\nTESTS_FAILED: 1", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mocks['run'].side_effect = run_side_effect
+
+    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    step8_call = [c for c in mocks['run'].call_args_list if c[1].get('label') == 'step8']
+    assert len(step8_call) == 1
+    instruction = step8_call[0][1]['instruction']
+    assert "TEST_RESULTS: FAIL" in instruction
+    assert "test.py" in instruction
