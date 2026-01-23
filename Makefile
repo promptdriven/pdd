@@ -2,11 +2,16 @@
 _PARENT_DIR := $(notdir $(patsubst %/,%,$(dir $(CURDIR))))
 _CURRENT_DIR := $(notdir $(CURDIR))
 
-# Conda environment: if under worktrees, use current dir name; else default to pdd
-ifeq ($(_PARENT_DIR),worktrees)
-PDD_CONDA_ENV ?= $(_CURRENT_DIR)
-else
-PDD_CONDA_ENV ?= pdd
+# Conda environment precedence:
+#   1. PDD_CONDA_ENV from environment (highest priority)
+#   2. Current directory name if under worktrees/
+#   3. "pdd" (default)
+ifndef PDD_CONDA_ENV
+  ifeq ($(_PARENT_DIR),worktrees)
+    PDD_CONDA_ENV := $(_CURRENT_DIR)
+  else
+    PDD_CONDA_ENV := pdd
+  endif
 endif
 
 PDD_PYTHON_VERSION := 3.12
