@@ -136,7 +136,8 @@ class TestOpenAIRequiredArraySchema:
 
         with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
             with patch('pdd.llm_invoke.litellm.completion', side_effect=capture_completion):
-                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 10, "output_tokens": 5}):
+                mock_callback_data = type('obj', (object,), {'cost': 0.001, 'input_tokens': 10, 'output_tokens': 5, 'finish_reason': 'stop'})()
+                with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
                     try:
                         llm_invoke(
                             prompt="Return a test object",

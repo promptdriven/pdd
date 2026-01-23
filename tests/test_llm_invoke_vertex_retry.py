@@ -285,7 +285,7 @@ class TestVertexRetryIntegration:
                     mock_completion.return_value = mock_response
 
                     with patch('pdd.llm_invoke._has_invalid_python_code', side_effect=force_retry_once):
-                        with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 10, "output_tokens": 10}):
+                        with patch('pdd.llm_invoke._CALLBACK_DATA', {"cost": 0.001, "input_tokens": 10, "output_tokens": 10}):
                             m = mock_open(read_data='{}')
                             with patch('builtins.open', m):
                                 with patch('pdd.llm_invoke.json.load', return_value={}):

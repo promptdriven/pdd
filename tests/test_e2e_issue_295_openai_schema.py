@@ -192,7 +192,10 @@ print("Hello, World!")
         with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
             with patch('pdd.llm_invoke.litellm.completion', side_effect=mock_completion_with_counter):
                 with patch('pdd.llm_invoke.litellm.responses', side_effect=mock_responses_api):
-                    with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 100, "output_tokens": 50}):
+                    mock_callback_data = type('obj', (object,), {'cost': 0.001, 'input_tokens': 100, 'output_tokens': 50, 'finish_reason': 'stop'})()
+                    with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
+                        from pdd import cli
+
                         runner = CliRunner()
                         result = runner.invoke(cli.cli, [
                             "--local",  # Force local execution
@@ -299,7 +302,8 @@ print("Hello, World!")
         # Run llm_invoke directly
         with patch('pdd.llm_invoke._load_model_data', return_value=mock_df):
             with patch('pdd.llm_invoke.litellm.completion', side_effect=capture_completion):
-                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 10, "output_tokens": 5}):
+                mock_callback_data = type('obj', (object,), {'cost': 0.001, 'input_tokens': 10, 'output_tokens': 5, 'finish_reason': 'stop'})()
+                with patch('pdd.llm_invoke._CALLBACK_DATA', mock_callback_data):
                     response = llm_invoke(
                         prompt="Return a test object",
                         input_json={"query": "test"},

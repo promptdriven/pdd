@@ -66,7 +66,7 @@ class TestConcurrentLLMCallbacks:
             elif thread_id == 'thread_2':
                 time.sleep(0.02)
 
-            # Step 1: Callback writes to global _LAST_CALLBACK_DATA
+            # Step 1: Callback writes to global _CALLBACK_DATA
             # This simulates LiteLLM calling our success callback
             _litellm_success_callback(
                 kwargs=mock_kwargs,
