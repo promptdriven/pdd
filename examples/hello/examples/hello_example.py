@@ -1,39 +1,41 @@
 import sys
 import os
 
-# Add the current directory to sys.path to ensure we can import the module
-# regardless of where this script is run from.
-sys.path.append(os.getcwd())
+# Add the directory containing the module to the Python path
+# This allows us to import the module regardless of where this script is run from
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# Assuming the module is in the same directory or a known relative path
+# Adjust '..' or '.' as necessary based on actual file structure
+sys.path.append(current_dir)
 
-# Import the 'hello' function from the module.
-# Note: Since the module name wasn't explicitly provided in the prompt metadata,
-# we assume the file is named 'hello_module.py' or similar based on the context.
-# In a real scenario, you would use: from your_module_name import hello
+# Import the specific function from the module
+# Note: Since the module name was not provided in the prompt metadata, 
+# we assume the file is named 'hello_module.py' for this example.
+# In a real scenario, replace 'hello_module' with the actual filename without extension.
 try:
-    # Attempting to import assuming the module is in the same directory
-    # and named based on the function it contains for this example.
-    # Replace 'your_module_name' with the actual filename (without .py).
-    from your_module_name import hello
+    from hello_module import hello
 except ImportError:
-    # Fallback for demonstration if the file isn't actually present
-    # This defines the function inline so the example is runnable standalone
-    print("Module not found, defining function inline for demonstration:")
-    
+    # Fallback for demonstration if the file isn't actually named hello_module
+    # This block handles the case where the code is pasted directly or the file is named differently
+    print("Could not import 'hello_module'. Defining mock for demonstration.")
     def hello() -> None:
-        """Print a friendly greeting to stdout."""
+        """Prints 'hello' to standard output."""
         print("hello")
 
 def main() -> None:
     """
     Demonstrates the usage of the hello() function.
     """
-    print("--- Calling the hello() function ---")
+    print("Calling the hello function:")
+    print("-" * 20)
     
-    # The hello function takes no arguments and returns None.
-    # Its primary side effect is printing to stdout.
+    # Call the function
+    # Input: None
+    # Output: Prints "hello" to stdout
     hello()
     
-    print("--- Execution complete ---")
+    print("-" * 20)
+    print("Function execution complete.")
 
 if __name__ == "__main__":
     main()

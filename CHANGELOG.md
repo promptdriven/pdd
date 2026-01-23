@@ -1,3 +1,33 @@
+## v0.0.127 (2026-01-22)
+
+### Feat
+
+- UI improvements - Dev Units view, model sliders, and Sync All button
+- Add web UI sync visualization for remote mode
+- **example**: add support for --format option in example generation
+- **which**: expose effective config and search paths for prompts and outputs (Fixes #21)
+
+### Fix
+
+- Remove invalid escape sequence in agentic_langtest_example.py
+- Verify agentic fix with combined test run before claiming success (#360)
+- Run all test files together in fix loop to detect isolation failures (#360)
+- Embed sync_state in stdout as markers for cloud compatibility
+- Include sync_state in final cloud update and send immediately
+- Direct fix output to actual failing test file, not primary (#360)
+- Set PDD_WEB_MODE in correct subprocess path (jobs.py)
+- Preserve conda/venv environment in spawned terminals (#347)
+- Exit sync loop when tests pass despite non-zero exit code (#349)
+- Move worktree creation before Step 5.5 for prompt fix isolation (#352)
+- **context_generator**: skip Python syntax validation for markdown format in example generation
+
+### Refactor
+
+- extract shared formatCost utility and simplify command filtering
+- Replace stdout markers with temp file IPC for sync state
+- **example generation**: change default output format from 'py' to 'code' and update related documentation
+- **which**: simplify effective config handling and improve tuple unpacking logic
+
 ## v0.0.126 (2026-01-21)
 
 ### Feat
