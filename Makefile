@@ -1,5 +1,15 @@
-# Conda environment (override with PDD_CONDA_ENV env var)
-PDD_CONDA_ENV ?= pdd-dev
+# Detect if we're under a worktrees directory
+_PARENT_DIR := $(notdir $(patsubst %/,%,$(dir $(CURDIR))))
+_CURRENT_DIR := $(notdir $(CURDIR))
+
+# Conda environment: if under worktrees, use current dir name; else default to pdd
+ifeq ($(_PARENT_DIR),worktrees)
+PDD_CONDA_ENV ?= $(_CURRENT_DIR)
+else
+PDD_CONDA_ENV ?= pdd
+endif
+
+PDD_PYTHON_VERSION := 3.12
 
 # Directories
 PROD_DIR := pdd
@@ -61,7 +71,26 @@ help:
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
- 
+	@echo ""
+	@echo "Environment Setup:"
+	@echo "  make dev-setup               - Run full developer setup (interactive)"
+	@echo "  make create-conda-env        - Create conda env (requires worktrees dir)"
+
+# Create conda environment (only valid if under worktrees directory)
+.PHONY: create-conda-env
+create-conda-env:
+ifeq ($(_PARENT_DIR),worktrees)
+	@echo "Creating conda environment '$(_CURRENT_DIR)' with Python $(PDD_PYTHON_VERSION)"
+	@conda create -n $(_CURRENT_DIR) python=$(PDD_PYTHON_VERSION) -y
+else
+	$(error Cannot create conda environment. Current directory must be immediately under a 'worktrees' directory. Current parent directory: $(_PARENT_DIR))
+endif
+
+# Run the full developer setup script
+.PHONY: dev-setup
+dev-setup:
+	@bash scripts/dev-setup.sh
+
 # Public repo paths (override via env if needed)
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
 PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
