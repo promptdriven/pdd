@@ -676,6 +676,127 @@ def test_sync_order_defaults_when_no_prompts_modified(mock_dependencies, temp_cw
     assert last_context.get("sync_order_script") == ""
     assert last_context.get("sync_order_list") == "No modules to sync"
 
+
+def test_sync_order_script_written_to_cwd(mock_dependencies, temp_cwd):
+    """
+    After generating sync order, a sync_order.sh should be written to the
+    user's original CWD (not just the worktree temp directory).
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    issue_number = 555
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+
+    # Step 9 reports modified prompt files
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/foo_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    mock_template = MagicMock()
+    mock_template.format.return_value = "Formatted"
+    mock_template_loader.return_value = mock_template
+
+    # Patch _setup_worktree to return our worktree path and create prompt files
+    # after the mock setup (avoiding the rmtree in real _setup_worktree)
+    def mock_setup_worktree(cwd, issue_num, quiet):
+        prompts_dir = worktree_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        (prompts_dir / "foo_python.prompt").write_text(
+            "<include>prompts/bar_python.prompt</include>", encoding="utf-8"
+        )
+        (prompts_dir / "bar_python.prompt").write_text("% bar module", encoding="utf-8")
+        return worktree_path, None
+
+    with patch("pdd.agentic_change_orchestrator._setup_worktree", side_effect=mock_setup_worktree):
+        run_agentic_change_orchestrator(
+            issue_url="http://test",
+            issue_content="Test",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=issue_number,
+            issue_author="a",
+            issue_title="T",
+            cwd=temp_cwd,
+        )
+
+    # sync_order.sh should exist in the user's CWD
+    user_script = temp_cwd / "sync_order.sh"
+    assert user_script.exists(), "sync_order.sh not written to user's CWD"
+    content = user_script.read_text()
+    assert "pdd sync" in content
+    # Should NOT contain absolute temp directory paths
+    assert "/var/folders" not in content
+    assert ".pdd/worktrees" not in content
+
+
+def test_sync_order_list_context_is_clean_commands(mock_dependencies, temp_cwd):
+    """
+    context['sync_order_list'] should contain clean 'pdd sync X' commands,
+    not the full bash script with shebang/comments/set -e.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/foo_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    last_context = {}
+    def capture_format(**kwargs):
+        last_context.clear()
+        last_context.update(kwargs)
+        return "Formatted"
+
+    mock_template = MagicMock()
+    mock_template.format.side_effect = capture_format
+    mock_template_loader.return_value = mock_template
+
+    issue_number = 556
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+    prompts_dir = worktree_path / "prompts"
+    prompts_dir.mkdir(parents=True)
+    (prompts_dir / "foo_python.prompt").write_text("% foo", encoding="utf-8")
+
+    run_agentic_change_orchestrator(
+        issue_url="http://test",
+        issue_content="Test",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=issue_number,
+        issue_author="a",
+        issue_title="T",
+        cwd=temp_cwd,
+    )
+
+    sync_list = last_context.get("sync_order_list", "")
+    if sync_list and sync_list != "No modules to sync":
+        # Should be clean commands, not a full bash script
+        assert not sync_list.startswith("#!/bin/bash"), "sync_order_list should not contain shebang"
+        assert "set -e" not in sync_list, "sync_order_list should not contain set -e"
+        assert "pdd sync" in sync_list
+
+
 def test_worktree_path_in_context_when_resuming(mock_dependencies, temp_cwd):
     """
     Test that worktree_path is added to context when resuming after Step 9.

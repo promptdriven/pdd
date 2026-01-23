@@ -660,10 +660,23 @@ def run_agentic_change_orchestrator(
                 cyclic_modules = set(cycles[0]) if cycles else set()
                 affected = get_affected_modules(sorted_modules, modified_modules, graph, cyclic_modules)
                 if affected:
-                    script_path = worktree_path / "sync_order.sh"
-                    sync_order_list = generate_sync_order_script(affected, script_path, worktree_path)
-                    sync_order_script = str(script_path)
-                    if not quiet: console.print(f"[dim]Generated sync order script: {script_path}[/dim]")
+                    # Generate clean command list for PR body (not full bash script)
+                    sync_order_list = "\n".join([f"pdd sync {m}" for m in affected])
+
+                    # Write script to user's CWD (accessible after workflow completes)
+                    user_script_path = cwd / "sync_order.sh"
+                    generate_sync_order_script(affected, user_script_path, worktree_path=None)
+                    sync_order_script = str(user_script_path)
+
+                    # Also generate in worktree for Step 13 to commit
+                    worktree_script_path = worktree_path / "sync_order.sh"
+                    generate_sync_order_script(affected, worktree_script_path, worktree_path=None)
+
+                    if not quiet:
+                        console.print(f"\n[bold]Sync commands (run after merge):[/bold]")
+                        for module in affected:
+                            console.print(f"  pdd sync {module}")
+                        console.print(f"[green]Sync script saved to: {user_script_path}[/green]")
             except Exception as e:
                 if not quiet: console.print(f"[yellow]Warning: Could not generate sync order: {e}[/yellow]")
 
