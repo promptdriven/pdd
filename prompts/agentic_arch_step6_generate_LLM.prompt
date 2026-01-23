@@ -1,0 +1,128 @@
+<pdd-reason>Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "generate_architecture", "signature": "(issue_content: str, step1-5_outputs: str)", "returns": "str (valid JSON array matching architecture schema)"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step5_research_deps_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to generate the complete architecture.json based on all previous analysis and research.
+
+% Context
+
+You are working on step 6 of 8 in an agentic architecture workflow. All analysis and research is complete. Now generate the final architecture.json.
+
+% Architecture Schema Reference
+
+<architecture_schema>
+<include>pdd/templates/architecture/architecture_json.prompt</include>
+</architecture_schema>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content (PRD)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Your Task
+
+Generate a complete, valid architecture.json following these rules:
+
+1. **Output format:** A raw JSON array (NOT wrapped in an object)
+
+2. **Required fields per entry:**
+   - `reason`: Why this module needs to exist
+   - `description`: Architectural responsibilities, interfaces, error handling
+   - `dependencies`: Array of prompt filenames this module depends on
+   - `priority`: Integer starting at 1, sequential without gaps
+   - `filename`: PDD convention `<base>_<LangOrFramework>.prompt`
+   - `filepath`: Framework-appropriate output path
+
+3. **Optional fields:**
+   - `tags`: Lower-case categorization tags
+   - `context_urls`: Array of `{url, purpose}` objects from step 5 research
+   - `interface`: Object with `type` and type-specific sub-object
+
+4. **Priority ordering:**
+   - Must form a valid topological sort of the dependency graph
+   - If A depends on B, then B.priority < A.priority
+   - Sequential integers: 1, 2, 3, ... (no gaps)
+
+5. **Filename conventions:**
+   - `<descriptive_base>_<LangOrFramework>.prompt`
+   - LangOrFramework matches the tech stack (Python, TypeScriptReact, Go, etc.)
+
+6. **Interface types:**
+   - api: endpoints array with method, path, auth
+   - module: functions array with name, signature, returns
+   - page: route, params, dataSources
+   - component: props, emits, context
+   - config: keys with name, type, source
+   - cli, job, message, graphql as appropriate
+
+% Output
+
+Write the generated architecture.json content. Output ONLY the valid JSON array, with no additional commentary or markdown fencing.
+
+After generating, use `gh issue comment` to post a summary to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 6: Architecture Generated
+
+**Status:** Generation Complete
+
+### Summary
+- Total modules: [N]
+- Priority range: 1-[max]
+- Technologies: [list]
+
+### Module Overview
+| Priority | Filename | Filepath | Dependencies |
+|----------|----------|----------|--------------|
+| 1 | [filename] | [filepath] | [] |
+
+---
+*Proceeding to Step 7: Validate*
+```
+
+% Important
+
+- The JSON must be valid (no comments, no trailing commas)
+- Sort the array by ascending priority
+- Ensure all dependency references exist in the array
+- Include context_urls from step 5 where available
+- Always post your findings as a GitHub comment before completing
