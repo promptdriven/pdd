@@ -425,3 +425,54 @@ Before submitting your regression test:
 4. **Review logs**: Confirm that logging is clear and helpful for debugging
 
 Remember: Regression tests are crucial for maintaining system stability. They should catch breaking changes and ensure that the PDD workflow continues to function correctly as the codebase evolves.
+
+## Method 4: Generating Architecture from a PRD (GitHub Issue)
+
+Instead of manually writing `architecture.json`, you can point `pdd generate` at a GitHub issue containing your PRD. An 8-step agentic workflow will analyze the PRD, research the tech stack, and produce a validated `architecture.json`.
+
+### Prerequisites
+
+1. `gh` CLI installed and authenticated (`gh auth login`)
+2. A GitHub issue containing your PRD (title, goals, features, tech stack)
+
+### Steps
+
+1. **Create a GitHub issue** with your PRD content:
+   - Title: Project name or feature area
+   - Body: Goals, key features, non-functional requirements, tech stack preferences
+
+2. **Run the agentic generate command**:
+   ```bash
+   pdd generate https://github.com/myorg/myrepo/issues/42
+   ```
+
+3. **Monitor progress**: The workflow posts step-by-step progress as issue comments:
+   - Analyzes your PRD for features and tech stack
+   - Researches documentation and best practices
+   - Designs the module breakdown with dependency ordering
+   - Generates and validates `architecture.json`
+
+4. **Review the output**: The workflow produces:
+   - `architecture.json` - Module definitions with priorities and dependencies
+   - `architecture_diagram.html` - Interactive Mermaid visualization
+
+5. **Generate prompts from architecture**:
+   ```bash
+   pdd generate --template generic/generate_prompt \
+     -e MODULE=orders_api -e LANG_OR_FRAMEWORK=Python \
+     -e ARCHITECTURE_FILE=architecture.json \
+     --output prompts/orders_api_Python.prompt
+   ```
+
+### Resuming a Failed Run
+
+If the workflow stops (e.g., PRD needs clarification):
+1. Add clarifications as comments on the GitHub issue
+2. Re-run `pdd generate <issue-url>` — it resumes from the last completed step
+
+### Tips
+
+- Write detailed PRDs: The more specific your requirements, the better the architecture
+- Include tech stack preferences explicitly (e.g., "FastAPI + PostgreSQL" vs. leaving it ambiguous)
+- Review the generated `architecture.json` before generating individual module prompts
+- The `context_urls` field in each module entry provides documentation links for code generation
