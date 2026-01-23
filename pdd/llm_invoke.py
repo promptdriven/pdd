@@ -6,6 +6,7 @@ import pandas as pd
 import litellm
 import logging # ADDED FOR DETAILED LOGGING
 import importlib.resources
+import threading  # For thread-safe callback data storage (issue #375)
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
@@ -684,13 +685,8 @@ if not cache_configured:
 
 # --- LiteLLM Callback for Success Logging ---
 
-# Module-level storage for last callback data (Use with caution in concurrent environments)
-_LAST_CALLBACK_DATA = {
-    "input_tokens": 0,
-    "output_tokens": 0,
-    "finish_reason": None,
-    "cost": 0.0,
-}
+# Thread-local storage for callback data (thread-safe for concurrent server mode - issue #375)
+_CALLBACK_DATA = threading.local()
 
 def _litellm_success_callback(
     kwargs: Dict[str, Any],              # kwargs passed to completion
@@ -699,9 +695,14 @@ def _litellm_success_callback(
 ):
     """
     LiteLLM success callback to capture usage and finish reason.
-    Stores data in a module-level variable for potential retrieval.
+    Stores data in thread-local storage for thread-safe concurrent access.
     """
-    global _LAST_CALLBACK_DATA
+    # Initialize thread-local attributes if not present
+    if not hasattr(_CALLBACK_DATA, 'cost'):
+        _CALLBACK_DATA.cost = 0.0
+        _CALLBACK_DATA.input_tokens = 0
+        _CALLBACK_DATA.output_tokens = 0
+        _CALLBACK_DATA.finish_reason = None
     usage = getattr(completion_response, 'usage', None)
     input_tokens = getattr(usage, 'prompt_tokens', 0)
     output_tokens = getattr(usage, 'completion_tokens', 0)
@@ -759,10 +760,11 @@ def _litellm_success_callback(
             calculated_cost = 0.0 # Default to 0 on any error
             logger.debug(f"Cost calculation failed with fallback method: {e2}")
 
-    _LAST_CALLBACK_DATA["input_tokens"] = input_tokens
-    _LAST_CALLBACK_DATA["output_tokens"] = output_tokens
-    _LAST_CALLBACK_DATA["finish_reason"] = finish_reason
-    _LAST_CALLBACK_DATA["cost"] = calculated_cost # Store the calculated cost
+    # Store to thread-local storage (thread-safe for concurrent server jobs)
+    _CALLBACK_DATA.input_tokens = input_tokens
+    _CALLBACK_DATA.output_tokens = output_tokens
+    _CALLBACK_DATA.finish_reason = finish_reason
+    _CALLBACK_DATA.cost = calculated_cost
 
     # Callback doesn't need to return a value now
     # return calculated_cost
@@ -2744,7 +2746,7 @@ def llm_invoke(
                 # --- Retrieve Cost from Callback Data --- (Reinstated)
                 # For batch, this will reflect the cost associated with the *last* item processed by the callback.
                 # A fully accurate batch total would require a more complex callback class to aggregate.
-                total_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                total_cost = getattr(_CALLBACK_DATA, 'cost', 0.0)
                 # ----------------------------------------
 
                 final_result = results if use_batch_mode else results[0]
@@ -2752,9 +2754,9 @@ def llm_invoke(
 
                 # --- Verbose Output for Success ---
                 if verbose:
-                    # Get token usage from the *last* callback data (might not be accurate for batch)
-                    input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
-                    output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                    # Get token usage from thread-local callback data (might not be accurate for batch)
+                    input_tokens = getattr(_CALLBACK_DATA, 'input_tokens', 0)
+                    output_tokens = getattr(_CALLBACK_DATA, 'output_tokens', 0)
 
                     cost_input_pm = model_info.get('input', 0.0) if pd.notna(model_info.get('input')) else 0.0
                     cost_output_pm = model_info.get('output', 0.0) if pd.notna(model_info.get('output')) else 0.0
