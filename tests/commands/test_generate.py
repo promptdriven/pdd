@@ -61,6 +61,11 @@ for _mod_name, _mock in _import_mocks.items():
 
 # Preserve any existing module to restore later
 _saved_generate_module = sys.modules.pop("pdd.commands.generate", None)
+_saved_commands_modules = {
+    name: module
+    for name, module in sys.modules.items()
+    if name.startswith("pdd.commands")
+}
 _saved_commands_pkg = sys.modules.get("pdd.commands")
 _saved_commands_attrs = None
 if _saved_commands_pkg is not None:
@@ -82,22 +87,24 @@ finally:
         else:
             sys.modules.pop(_mod_name, None)
 
-    # Restore pdd.commands attributes if they existed before import.
-    # Importing a submodule can overwrite package attributes with the module object.
-    _commands_pkg = sys.modules.get("pdd.commands")
-    if _commands_pkg is not None:
-        if _saved_commands_pkg is not None and _saved_commands_attrs is not None:
+    # Restore pdd.commands module tree to its prior state to avoid polluting
+    # later imports with mocked decorators.
+    for _name in [n for n in sys.modules if n.startswith("pdd.commands")]:
+        if _name not in _saved_commands_modules:
+            sys.modules.pop(_name, None)
+    for _name, _module in _saved_commands_modules.items():
+        sys.modules[_name] = _module
+
+    # Restore original package attributes if the package existed pre-import.
+    if _saved_commands_pkg is not None and _saved_commands_attrs is not None:
+        _commands_pkg = sys.modules.get("pdd.commands")
+        if _commands_pkg is not None:
             for _attr, _value in _saved_commands_attrs.items():
                 if _value is None:
                     if hasattr(_commands_pkg, _attr):
                         delattr(_commands_pkg, _attr)
                 else:
                     setattr(_commands_pkg, _attr, _value)
-        else:
-            # Ensure package attributes point at the click commands, not the module.
-            setattr(_commands_pkg, "generate", generate_module.generate)
-            setattr(_commands_pkg, "test", generate_module.test)
-            setattr(_commands_pkg, "example", generate_module.example)
 
     # Restore or remove pdd.commands.generate to avoid leaking mocked decorators
     if _saved_generate_module is not None:
@@ -105,7 +112,7 @@ finally:
     else:
         sys.modules.pop("pdd.commands.generate", None)
 
-del _import_mocks, _saved_modules, _saved_generate_module, _saved_commands_pkg, _saved_commands_attrs, _mod_name
+del _import_mocks, _saved_modules, _saved_generate_module, _saved_commands_modules, _saved_commands_pkg, _saved_commands_attrs, _mod_name
 
 # --------------------------------------------------------------------------------
 # Z3 FORMAL VERIFICATION
@@ -167,11 +174,9 @@ def mock_code_gen():
         yield m
 
 @pytest.fixture
-def mock_resolve_template():
-    mock_templates = MagicMock()
-    mock_templates.resolve_template_path = MagicMock()
-    with patch.dict(sys.modules, {"pdd.templates": mock_templates}):
-        yield mock_templates.resolve_template_path
+def mock_load_template():
+    with patch("pdd.template_registry.load_template") as m:
+        yield m
 
 @pytest.fixture
 def mock_context_gen():
@@ -221,25 +226,25 @@ def test_generate_success_prompt_file(runner, mock_code_gen):
         assert call_kwargs["prompt_file"] == "my_prompt.txt"
         assert call_kwargs["force_incremental_flag"] is False
 
-def test_generate_success_template(runner, mock_code_gen, mock_resolve_template):
+def test_generate_success_template(runner, mock_code_gen, mock_load_template):
     """Test successful generation using a template."""
-    mock_resolve_template.return_value = "/path/to/resolved/template.txt"
-    
+    mock_load_template.return_value = {"path": "/path/to/resolved/template.txt"}
+
     result = runner.invoke(generate_module.generate, ["--template", "basic-flask"])
-    
+
     assert result.exit_code == 0
-    mock_resolve_template.assert_called_with("basic-flask")
+    mock_load_template.assert_called_with("basic-flask")
     mock_code_gen.assert_called_once()
     assert mock_code_gen.call_args[1]["prompt_file"] == "/path/to/resolved/template.txt"
 
-def test_generate_template_not_found(runner, mock_resolve_template):
+def test_generate_template_not_found(runner, mock_load_template):
     """Test error when template cannot be resolved."""
-    mock_resolve_template.return_value = None
-    
+    mock_load_template.side_effect = FileNotFoundError("missing")
+
     result = runner.invoke(generate_module.generate, ["--template", "missing"])
-    
+
     assert result.exit_code != 0
-    assert "Template 'missing' not found" in result.output
+    assert "Failed to load template 'missing'" in result.output
 
 def test_generate_env_vars(runner, mock_code_gen):
     """Test environment variable parsing and setting."""

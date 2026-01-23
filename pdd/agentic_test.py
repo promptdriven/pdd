@@ -299,5 +299,10 @@ def main():
         sys.exit(1)
 
 
+def agentic_test_main():
+    """Backward-compatible alias for CLI entry point."""
+    return main()
+
+
 if __name__ == "__main__":
     main()
