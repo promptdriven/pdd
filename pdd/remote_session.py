@@ -613,18 +613,11 @@ class RemoteSessionManager:
 
                     if should_update and (stdout or stderr or sync_state):
                         try:
-                            # Embed sync_state as a marker line within stdout
-                            # (cloud preserves stdout but may not preserve custom fields)
-                            cloud_stdout = stdout
-                            if sync_state:
-                                import json as _json
-                                marker_line = f"\n@@PDD_SYNC_STATE@@{_json.dumps(sync_state, separators=(',', ':'))}\n"
-                                cloud_stdout = (stdout or "") + marker_line
-
                             await self._update_command_output(
                                 cmd.command_id,
-                                stdout=cloud_stdout,
+                                stdout=stdout,
                                 stderr=stderr,
+                                sync_state=sync_state
                             )
                             last_update_time = current_time
                             if sync_state:
@@ -667,14 +660,16 @@ class RemoteSessionManager:
         command_id: str,
         stdout: str = "",
         stderr: str = "",
+        sync_state: dict = None
     ) -> None:
         """
         Update cloud with intermediate command output for log streaming.
 
         Args:
             command_id: The command ID to update.
-            stdout: Current stdout output (may include sync_state markers).
+            stdout: Current stdout output.
             stderr: Current stderr output.
+            sync_state: Optional sync visualization state dict.
         """
         if not self.session_id:
             return
@@ -686,6 +681,8 @@ class RemoteSessionManager:
             "stderr": stderr,
             "streaming": True,  # Indicate this is a streaming update
         }
+        if sync_state:
+            response_payload["sync_state"] = sync_state
 
         payload = {
             "sessionId": self.session_id,
@@ -767,22 +764,18 @@ class RemoteSessionManager:
                 if not error_msg and isinstance(result, dict):
                     error_msg = result.get("stderr", "") or result.get("stdout", "")
 
-            # Build stdout with sync_state embedded as marker line
-            final_stdout = result.get("stdout", "") if isinstance(result, dict) else ""
-            if isinstance(result, dict) and result.get("sync_state"):
-                import json as _json
-                marker_line = f"\n@@PDD_SYNC_STATE@@{_json.dumps(result['sync_state'], separators=(',', ':'))}\n"
-                final_stdout = final_stdout + marker_line
-
             formatted_response = {
                 "success": job_status == "completed",
                 "message": error_msg,
                 "exit_code": result.get("exit_code", 0) if isinstance(result, dict) else 0,
-                "stdout": final_stdout,
+                "stdout": result.get("stdout", "") if isinstance(result, dict) else "",
                 "stderr": result.get("stderr", "") if isinstance(result, dict) else "",
                 "files_created": result.get("files_created", []) if isinstance(result, dict) else [],
                 "cost": response_data.get("cost", 0.0),
             }
+            # Include sync_state from the job result (read from temp file by job status endpoint)
+            if isinstance(result, dict) and result.get("sync_state"):
+                formatted_response["sync_state"] = result["sync_state"]
 
             final_status = "completed" if job_status == "completed" else "failed"
             await self.update_command(
