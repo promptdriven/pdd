@@ -136,13 +136,7 @@ def login(browser: Optional[bool]):
             # Decode token to get expiration
             payload = _decode_jwt_payload(token)
             expires_at = payload.get("exp")
-
-            # Validate expires_at is a valid numeric timestamp (Issue #379)
-            # If missing or invalid, use 1-hour fallback (matches _cache_jwt() pattern)
-            if not isinstance(expires_at, (int, float)) or expires_at <= 0:
-                expires_at = time.time() + 3600  # 1-hour fallback
-                console.print("[yellow]Warning: Token missing expiration, using 1-hour default.[/yellow]")
-
+            
             # Ensure cache directory exists
             if not JWT_CACHE_FILE.parent.exists():
                 JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)

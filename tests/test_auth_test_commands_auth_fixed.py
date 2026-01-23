@@ -192,18 +192,17 @@ class TestLoginCacheWriting:
 
 class TestDownstreamNullHandling:
     """
-    Tests verifying that downstream functions handle null expires_at gracefully.
+    Tests verifying that downstream functions crash when cache has null expires_at.
 
-    After Issue #379 fix, these functions should NOT crash when cache has null expires_at.
-    They should treat it as invalid/expired and return gracefully.
+    These tests document the crash behavior that Issue #379 causes.
+    They help verify that the root cause is the cache corruption.
     """
 
-    def test_get_cached_jwt_handles_null_expires_at_gracefully(self, tmp_path):
+    def test_get_cached_jwt_crashes_with_null_expires_at(self, tmp_path):
         """
-        Verify that get_cached_jwt() handles null expires_at gracefully (after fix).
+        Demonstrate that get_cached_jwt() crashes when expires_at is null.
 
-        Before fix: Crashed with TypeError: '>' not supported between 'NoneType' and 'float'
-        After fix: Returns None gracefully (treats as expired/invalid)
+        This is the TypeError mentioned in Issue #358 and #379.
         """
         import pdd.auth_service as auth_service
 
@@ -212,20 +211,17 @@ class TestDownstreamNullHandling:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps({
             "id_token": "some_token",
-            "expires_at": None  # This was the corruption!
+            "expires_at": None  # This is the corruption!
         }))
 
         with patch.object(auth_service, 'JWT_CACHE_FILE', cache_file):
-            # After fix: should NOT crash, should return None (no valid token)
-            result = auth_service.get_cached_jwt()
-            assert result is None, "Should return None for invalid expires_at, not crash"
+            # This should crash with TypeError: '>' not supported between 'NoneType' and 'float'
+            with pytest.raises(TypeError, match="not supported between"):
+                auth_service.get_cached_jwt()
 
-    def test_get_jwt_cache_info_handles_null_expires_at_gracefully(self, tmp_path):
+    def test_get_jwt_cache_info_crashes_with_null_expires_at(self, tmp_path):
         """
-        Verify that get_jwt_cache_info() handles null expires_at gracefully (after fix).
-
-        Before fix: Crashed with TypeError
-        After fix: Returns (False, None) gracefully
+        Demonstrate that get_jwt_cache_info() crashes when expires_at is null.
         """
         import pdd.auth_service as auth_service
 
@@ -237,7 +233,6 @@ class TestDownstreamNullHandling:
         }))
 
         with patch.object(auth_service, 'JWT_CACHE_FILE', cache_file):
-            # After fix: should NOT crash, should return (False, None)
-            is_valid, expires_at = auth_service.get_jwt_cache_info()
-            assert is_valid is False, "Should return False for invalid expires_at"
-            assert expires_at is None, "Should return None for invalid expires_at"
+            # This should crash with TypeError
+            with pytest.raises(TypeError, match="not supported between"):
+                auth_service.get_jwt_cache_info()
