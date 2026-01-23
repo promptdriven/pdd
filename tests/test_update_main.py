@@ -583,3 +583,129 @@ contexts:
         f"Wrong path exists: {wrong_prompt_path.exists()}"
     assert not wrong_prompt_path.exists(), \
         f"Prompt was created at wrong path {wrong_prompt_path} instead of {expected_prompt_path}"
+
+
+# --- Tests for agentic update source-file mutation bug ---
+
+def test_agentic_update_does_not_modify_source_when_output_specified(tmp_path):
+    """
+    When --output is specified, the agentic update path must NOT modify the
+    source prompt file. Only the output path should contain the updated content.
+    Regression test for: agentic update overwrites source in-place ignoring --output.
+    """
+    source_prompt = tmp_path / "source.prompt"
+    output_prompt = tmp_path / "output.prompt"
+    code_file = tmp_path / "modified_code.py"
+    original_code = tmp_path / "original_code.py"
+
+    original_content = "original prompt content\n"
+    source_prompt.write_text(original_content)
+    code_file.write_text("def foo(): return 42\n")
+    original_code.write_text("def foo(): pass\n")
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "time": 0.25,
+        "force": False,
+        "quiet": False,
+    }
+
+    with patch("pdd.update_main.get_available_agents", return_value=["anthropic"]), \
+         patch("pdd.update_main.get_tests_dir_from_config", return_value=None), \
+         patch("pdd.update_main.run_agentic_update") as mock_agentic:
+
+        def agentic_side_effect(prompt_file, **kwargs):
+            """Simulate agentic update modifying the prompt_file in-place."""
+            Path(prompt_file).write_text("agentic modified content\n")
+            return (True, "ok", 0.01, "claude", [str(prompt_file)])
+
+        mock_agentic.side_effect = agentic_side_effect
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=str(source_prompt),
+            modified_code_file=str(code_file),
+            input_code_file=str(original_code),
+            output=str(output_prompt),
+            use_git=False,
+            simple=False,
+        )
+
+    # Source must remain unchanged
+    assert source_prompt.read_text() == original_content, \
+        "Source prompt file was modified by agentic update despite --output being specified"
+    # Output should have the updated content
+    assert output_prompt.exists(), "Output file was not created"
+    assert output_prompt.read_text() == "agentic modified content\n"
+    # Function should return success
+    assert result is not None
+    assert result[0] == "agentic modified content\n"
+
+
+def test_agentic_update_failure_does_not_corrupt_source(tmp_path):
+    """
+    When agentic update fails after partially modifying a file, the source
+    prompt must remain unchanged if --output is specified.
+    """
+    source_prompt = tmp_path / "source.prompt"
+    output_prompt = tmp_path / "output.prompt"
+    code_file = tmp_path / "modified_code.py"
+    original_code = tmp_path / "original_code.py"
+
+    original_content = "original prompt content\n"
+    source_prompt.write_text(original_content)
+    code_file.write_text("def foo(): return 42\n")
+    original_code.write_text("def foo(): pass\n")
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "time": 0.25,
+        "force": False,
+        "quiet": True,
+    }
+
+    with patch("pdd.update_main.get_available_agents", return_value=["anthropic"]), \
+         patch("pdd.update_main.get_tests_dir_from_config", return_value=None), \
+         patch("pdd.update_main.run_agentic_update") as mock_agentic, \
+         patch("pdd.update_main.construct_paths") as mock_cp, \
+         patch("pdd.update_main.update_prompt") as mock_up:
+
+        def agentic_side_effect(prompt_file, **kwargs):
+            """Simulate agentic update that modifies file then fails."""
+            Path(prompt_file).write_text("partially corrupted\n")
+            return (False, "agentic failed", 0.0, "claude", [])
+
+        mock_agentic.side_effect = agentic_side_effect
+
+        # Set up legacy fallback mocks
+        mock_cp.return_value = (
+            {},
+            {
+                "input_prompt_file": original_content,
+                "modified_code_file": "def foo(): return 42\n",
+                "input_code_file": "def foo(): pass\n",
+            },
+            {"output": str(output_prompt)},
+            None
+        )
+        mock_up.return_value = ("legacy updated content\n", 0.02, "gpt-4")
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=str(source_prompt),
+            modified_code_file=str(code_file),
+            input_code_file=str(original_code),
+            output=str(output_prompt),
+            use_git=False,
+            simple=False,
+        )
+
+    # Source must remain unchanged even after agentic failure
+    assert source_prompt.read_text() == original_content, \
+        "Source prompt was corrupted by failed agentic update"
