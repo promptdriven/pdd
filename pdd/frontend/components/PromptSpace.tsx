@@ -16,8 +16,9 @@ import type { GlobalDefaults } from '../types';
 import PromptMetricsBar from './PromptMetricsBar';
 import GuidanceSidebar from './GuidanceSidebar';
 import SyncStatusBadge from './SyncStatusBadge';
-import ModelSelector from './ModelSelector';
+import ModelSliders from './ModelSliders';
 import { ModelInfo } from '../api';
+import { resolveModelForStrength, ALL_MODELS } from '../lib/modelResolver';
 import { pddAutocompleteExtension } from '../lib/pddAutocomplete';
 import { findIncludeAtCursor, IncludeTagInfo, parseIncludeManyPaths } from '../lib/includeAnalyzer';
 import PromptCodeDiffModal from './PromptCodeDiffModal';
@@ -160,7 +161,8 @@ const CommandOptionsModal: React.FC<{
   onRun: (options: Record<string, any>) => void;
   onAddToQueue?: (options: Record<string, any>) => void;
   onCancel: () => void;
-}> = ({ command, prompt, onRun, onAddToQueue, onCancel }) => {
+  currentGlobalValues?: { strength: number; time: number; temperature: number };
+}> = ({ command, prompt, onRun, onAddToQueue, onCancel, currentGlobalValues }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [optionValues, setOptionValues] = useState<Record<string, any>>(() => {
@@ -192,9 +194,17 @@ const CommandOptionsModal: React.FC<{
       defaults['verification-program'] = prompt.example;
     }
 
-    // Set global option defaults
+    // Set global option defaults, using current slider values if available
     GLOBAL_OPTIONS.forEach(opt => {
-      defaults[`_global_${opt.name}`] = opt.defaultValue;
+      if (currentGlobalValues && opt.name === 'strength') {
+        defaults[`_global_${opt.name}`] = currentGlobalValues.strength;
+      } else if (currentGlobalValues && opt.name === 'time') {
+        defaults[`_global_${opt.name}`] = currentGlobalValues.time;
+      } else if (currentGlobalValues && opt.name === 'temperature') {
+        defaults[`_global_${opt.name}`] = currentGlobalValues.temperature;
+      } else {
+        defaults[`_global_${opt.name}`] = opt.defaultValue;
+      }
     });
 
     return defaults;
@@ -256,7 +266,12 @@ const CommandOptionsModal: React.FC<{
   // Check if any global options differ from defaults
   const hasCustomGlobalOptions = GLOBAL_OPTIONS.some(opt => {
     const value = optionValues[`_global_${opt.name}`];
-    return value !== opt.defaultValue;
+    // Compare against slider values (if provided) rather than static defaults
+    let baseline = opt.defaultValue;
+    if (currentGlobalValues && opt.name === 'strength') baseline = currentGlobalValues.strength;
+    else if (currentGlobalValues && opt.name === 'time') baseline = currentGlobalValues.time;
+    else if (currentGlobalValues && opt.name === 'temperature') baseline = currentGlobalValues.temperature;
+    return value !== baseline;
   });
 
   return (
@@ -468,8 +483,11 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
-  // Model selection state
-  const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
+  // Model selection state - uses full catalog from data/llm_model.csv
+  const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(() => resolveModelForStrength(ALL_MODELS, GLOBAL_DEFAULTS.strength));
+  const [strength, setStrength] = useState(GLOBAL_DEFAULTS.strength);
+  const [timeValue, setTimeValue] = useState(GLOBAL_DEFAULTS.time);
+  const [temperature, setTemperature] = useState(GLOBAL_DEFAULTS.temperature);
 
   // Include token analysis state
   const [includeAnalysis, setIncludeAnalysis] = useState<{
@@ -488,8 +506,27 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [codeContent, setCodeContent] = useState<string | null>(null);
   const [codeLoading, setCodeLoading] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [codeCollapsed, setCodeCollapsed] = useState(false);
   const codeEditorContainerRef = useRef<HTMLDivElement>(null);
   const codeEditorViewRef = useRef<EditorView | null>(null);
+
+  // Test panel state for side-by-side view
+  const [showTestPanel, setShowTestPanel] = useState(false);
+  const [testContent, setTestContent] = useState<string | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [testCollapsed, setTestCollapsed] = useState(false);
+  const testEditorContainerRef = useRef<HTMLDivElement>(null);
+  const testEditorViewRef = useRef<EditorView | null>(null);
+
+  // Example panel state for side-by-side view
+  const [showExamplePanel, setShowExamplePanel] = useState(false);
+  const [exampleContent, setExampleContent] = useState<string | null>(null);
+  const [exampleLoading, setExampleLoading] = useState(false);
+  const [exampleError, setExampleError] = useState<string | null>(null);
+  const [exampleCollapsed, setExampleCollapsed] = useState(false);
+  const exampleEditorContainerRef = useRef<HTMLDivElement>(null);
+  const exampleEditorViewRef = useRef<EditorView | null>(null);
 
   // Diff analysis modal state
   const [showDiffModal, setShowDiffModal] = useState(false);
@@ -498,6 +535,12 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const [isSyncingFromArch, setIsSyncingFromArch] = useState(false);
   const [syncFromArchError, setSyncFromArchError] = useState<string | null>(null);
   const [syncFromArchSuccess, setSyncFromArchSuccess] = useState(false);
+
+  // Resolve model whenever strength changes
+  useEffect(() => {
+    const resolved = resolveModelForStrength(ALL_MODELS, strength);
+    if (resolved) setSelectedModel(resolved);
+  }, [strength]);
 
   // Update preview content when toggling preview on or when view mode changes
   useEffect(() => {
@@ -707,11 +750,10 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     loadCodeContent();
   }, [loadCodeContent]);
 
-  // Initialize code editor when content is loaded and panel is visible
+  // Initialize code editor when content is loaded and panel is visible and not collapsed
   useEffect(() => {
-    if (!showCodePanel || codeContent === null || !codeEditorContainerRef.current) return;
+    if (!showCodePanel || codeCollapsed || codeContent === null || !codeEditorContainerRef.current) return;
 
-    // Clean up existing editor
     if (codeEditorViewRef.current) {
       codeEditorViewRef.current.destroy();
       codeEditorViewRef.current = null;
@@ -722,45 +764,152 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
       extensions: [
         lineNumbers(),
         highlightActiveLine(),
-        EditorView.editable.of(false), // Read-only
+        EditorView.editable.of(false),
         getLanguageExtension(prompt.code || ''),
         oneDark,
         EditorView.theme({
-          '&': {
-            height: '100%',
-            fontSize: '13px',
-            backgroundColor: 'rgb(17 24 39)',
-          },
-          '.cm-scroller': {
-            overflow: 'auto',
-            fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-          },
-          '.cm-gutters': {
-            backgroundColor: 'rgb(31 41 55)',
-            borderRight: '1px solid rgb(55 65 81)',
-          },
-          '.cm-activeLineGutter': {
-            backgroundColor: 'rgb(55 65 81)',
-          },
-          '.cm-activeLine': {
-            backgroundColor: 'rgba(55, 65, 81, 0.5)',
-          },
+          '&': { height: '100%', fontSize: '13px', backgroundColor: 'rgb(17 24 39)' },
+          '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace' },
+          '.cm-gutters': { backgroundColor: 'rgb(31 41 55)', borderRight: '1px solid rgb(55 65 81)' },
+          '.cm-activeLineGutter': { backgroundColor: 'rgb(55 65 81)' },
+          '.cm-activeLine': { backgroundColor: 'rgba(55, 65, 81, 0.5)' },
         }),
       ],
     });
 
-    codeEditorViewRef.current = new EditorView({
-      state,
-      parent: codeEditorContainerRef.current,
-    });
+    codeEditorViewRef.current = new EditorView({ state, parent: codeEditorContainerRef.current });
 
     return () => {
-      if (codeEditorViewRef.current) {
-        codeEditorViewRef.current.destroy();
-        codeEditorViewRef.current = null;
-      }
+      if (codeEditorViewRef.current) { codeEditorViewRef.current.destroy(); codeEditorViewRef.current = null; }
     };
-  }, [showCodePanel, codeContent, prompt.code]);
+  }, [showCodePanel, codeCollapsed, codeContent, prompt.code]);
+
+  // Load test content when test panel is opened
+  const loadTestContent = useCallback(async () => {
+    if (!prompt.test) {
+      setTestError('No test file associated with this prompt');
+      return;
+    }
+
+    setTestLoading(true);
+    setTestError(null);
+
+    try {
+      const file = await api.getFileContent(prompt.test);
+      setTestContent(file.content);
+    } catch (e: any) {
+      setTestError(e.message || 'Failed to load test file');
+    } finally {
+      setTestLoading(false);
+    }
+  }, [prompt.test]);
+
+  // Toggle test panel
+  const handleToggleTestPanel = useCallback(() => {
+    if (!showTestPanel && !testContent && prompt.test) {
+      loadTestContent();
+    }
+    setShowTestPanel(!showTestPanel);
+  }, [showTestPanel, testContent, prompt.test, loadTestContent]);
+
+  // Initialize test editor when content is loaded and panel is visible
+  useEffect(() => {
+    if (!showTestPanel || testCollapsed || testContent === null || !testEditorContainerRef.current) return;
+
+    if (testEditorViewRef.current) {
+      testEditorViewRef.current.destroy();
+      testEditorViewRef.current = null;
+    }
+
+    const state = EditorState.create({
+      doc: testContent,
+      extensions: [
+        lineNumbers(),
+        highlightActiveLine(),
+        EditorView.editable.of(false),
+        getLanguageExtension(prompt.test || ''),
+        oneDark,
+        EditorView.theme({
+          '&': { height: '100%', fontSize: '13px', backgroundColor: 'rgb(17 24 39)' },
+          '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace' },
+          '.cm-gutters': { backgroundColor: 'rgb(31 41 55)', borderRight: '1px solid rgb(55 65 81)' },
+          '.cm-activeLineGutter': { backgroundColor: 'rgb(55 65 81)' },
+          '.cm-activeLine': { backgroundColor: 'rgba(55, 65, 81, 0.5)' },
+        }),
+      ],
+    });
+
+    testEditorViewRef.current = new EditorView({ state, parent: testEditorContainerRef.current });
+
+    return () => {
+      if (testEditorViewRef.current) { testEditorViewRef.current.destroy(); testEditorViewRef.current = null; }
+    };
+  }, [showTestPanel, testCollapsed, testContent, prompt.test]);
+
+  // Load example content when example panel is opened
+  const loadExampleContent = useCallback(async () => {
+    if (!prompt.example) {
+      setExampleError('No example file associated with this prompt');
+      return;
+    }
+
+    setExampleLoading(true);
+    setExampleError(null);
+
+    try {
+      const file = await api.getFileContent(prompt.example);
+      setExampleContent(file.content);
+    } catch (e: any) {
+      setExampleError(e.message || 'Failed to load example file');
+    } finally {
+      setExampleLoading(false);
+    }
+  }, [prompt.example]);
+
+  // Toggle example panel
+  const handleToggleExamplePanel = useCallback(() => {
+    if (!showExamplePanel && !exampleContent && prompt.example) {
+      loadExampleContent();
+    }
+    setShowExamplePanel(!showExamplePanel);
+  }, [showExamplePanel, exampleContent, prompt.example, loadExampleContent]);
+
+  // Initialize example editor when content is loaded and panel is visible
+  useEffect(() => {
+    if (!showExamplePanel || exampleCollapsed || exampleContent === null || !exampleEditorContainerRef.current) return;
+
+    if (exampleEditorViewRef.current) {
+      exampleEditorViewRef.current.destroy();
+      exampleEditorViewRef.current = null;
+    }
+
+    const state = EditorState.create({
+      doc: exampleContent,
+      extensions: [
+        lineNumbers(),
+        highlightActiveLine(),
+        EditorView.editable.of(false),
+        getLanguageExtension(prompt.example || ''),
+        oneDark,
+        EditorView.theme({
+          '&': { height: '100%', fontSize: '13px', backgroundColor: 'rgb(17 24 39)' },
+          '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace' },
+          '.cm-gutters': { backgroundColor: 'rgb(31 41 55)', borderRight: '1px solid rgb(55 65 81)' },
+          '.cm-activeLineGutter': { backgroundColor: 'rgb(55 65 81)' },
+          '.cm-activeLine': { backgroundColor: 'rgba(55, 65, 81, 0.5)' },
+        }),
+      ],
+    });
+
+    exampleEditorViewRef.current = new EditorView({ state, parent: exampleEditorContainerRef.current });
+
+    return () => {
+      if (exampleEditorViewRef.current) { exampleEditorViewRef.current.destroy(); exampleEditorViewRef.current = null; }
+    };
+  }, [showExamplePanel, exampleCollapsed, exampleContent, prompt.example]);
+
+  // Whether any right panel is visible
+  const anyRightPanelOpen = showCodePanel || showTestPanel || showExamplePanel;
 
   // Keyboard shortcut for include analysis (Cmd+. / Ctrl+.)
   useEffect(() => {
@@ -1205,7 +1354,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
         {/* Sidebar with commands - responsive slide-out on mobile, hidden when comparing code */}
         <aside className={`
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-          ${showCodePanel ? 'lg:hidden' : ''}
+          ${anyRightPanelOpen ? 'lg:hidden' : ''}
           fixed lg:relative z-50 lg:z-auto
           w-56 sm:w-52 lg:w-48 h-full
           glass lg:bg-surface-800/30 border-r border-surface-700/50
@@ -1225,9 +1374,63 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
             <h2 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">Commands</h2>
           </div>
           <div className="flex-1 overflow-y-auto">
-            {/* Regular Commands */}
-            <div className="p-2 space-y-1">
-              {regularCommands.map(cmd => {
+            {/* Sync + Update Group (highlighted) */}
+            <div className="p-2">
+              <div className="p-1.5 rounded-xl bg-accent-500/10 border border-accent-500/20 space-y-0.5">
+                {regularCommands.filter(cmd => cmd.group === 'sync-update').map(cmd => {
+                  const missingFiles = getMissingFiles(cmd);
+                  const hasMissingFiles = missingFiles.length > 0;
+                  return (
+                    <button
+                      key={cmd.name}
+                      onClick={() => { if (!isExecuting) { handleCommandClick(cmd.name); setSidebarOpen(false); } }}
+                      disabled={isExecuting}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left transition-all duration-200 ${
+                        isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-accent-300 hover:bg-accent-500/20 hover:text-white'
+                      }`}
+                      title={hasMissingFiles ? `${cmd.description} (${missingFiles.join(', ')} file${missingFiles.length > 1 ? 's' : ''} not auto-detected)` : cmd.description}
+                    >
+                      <span className="text-base">{cmd.icon}</span>
+                      <span className="flex-1">{cmd.shortDescription}</span>
+                      {hasMissingFiles && (
+                        <span className="w-5 h-5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs flex items-center justify-center">!</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Generate Group */}
+            <div className="px-2 pb-2">
+              <div className="p-1.5 rounded-xl bg-surface-700/30 border border-surface-700/50 space-y-0.5">
+                {regularCommands.filter(cmd => cmd.group === 'generate').map(cmd => {
+                  const missingFiles = getMissingFiles(cmd);
+                  const hasMissingFiles = missingFiles.length > 0;
+                  return (
+                    <button
+                      key={cmd.name}
+                      onClick={() => { if (!isExecuting) { handleCommandClick(cmd.name); setSidebarOpen(false); } }}
+                      disabled={isExecuting}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm text-left transition-all duration-200 ${
+                        isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-surface-300 hover:bg-surface-700/50 hover:text-white'
+                      }`}
+                      title={hasMissingFiles ? `${cmd.description} (${missingFiles.join(', ')} file${missingFiles.length > 1 ? 's' : ''} not auto-detected)` : cmd.description}
+                    >
+                      <span className="text-base">{cmd.icon}</span>
+                      <span className="flex-1">{cmd.shortDescription}</span>
+                      {hasMissingFiles && (
+                        <span className="w-5 h-5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs flex items-center justify-center">!</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Remainder */}
+            <div className="px-2 pb-2 space-y-0.5">
+              {regularCommands.filter(cmd => !cmd.group || (cmd.group !== 'sync-update' && cmd.group !== 'generate')).map(cmd => {
                 const missingFiles = getMissingFiles(cmd);
                 const hasMissingFiles = missingFiles.length > 0;
                 return (
@@ -1343,11 +1546,34 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                 onViewModeChange={handleViewModeChange}
                 isLoading={isAnalyzing}
                 preprocessingError={analysisResult?.preprocessing_error}
-                timeValue={GLOBAL_DEFAULTS.time}
+                timeValue={timeValue}
                 promptLineCount={content ? content.split('\n').length : undefined}
                 codeLineCount={codeContent ? codeContent.split('\n').length : undefined}
                 selectedModel={selectedModel}
-                onModelChange={setSelectedModel}
+                showCodePanel={showCodePanel}
+                onToggleCodePanel={handleToggleCodePanel}
+                hasCodeFile={!!prompt.code}
+                showTestPanel={showTestPanel}
+                onToggleTestPanel={handleToggleTestPanel}
+                hasTestFile={!!prompt.test}
+                showExamplePanel={showExamplePanel}
+                onToggleExamplePanel={handleToggleExamplePanel}
+                hasExampleFile={!!prompt.example}
+                showPreview={showPreview}
+                onTogglePreview={() => setShowPreview(!showPreview)}
+                onShowDiff={() => setShowDiffModal(true)}
+              />
+
+              {/* Model Selection sliders (collapsible) */}
+              <ModelSliders
+                models={ALL_MODELS}
+                strength={strength}
+                onStrengthChange={setStrength}
+                time={timeValue}
+                onTimeChange={setTimeValue}
+                temperature={temperature}
+                onTemperatureChange={setTemperature}
+                resolvedModel={selectedModel}
               />
 
               {/* Editor path bar - responsive */}
@@ -1372,24 +1598,6 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                   </svg>
                   <span className="hidden sm:inline">Tokens</span>
                 </button>
-                {/* Code panel toggle button */}
-                <button
-                  onClick={handleToggleCodePanel}
-                  disabled={!prompt.code}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
-                    !prompt.code
-                      ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
-                      : showCodePanel
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
-                  }`}
-                  title={!prompt.code ? 'No code file available' : showCodePanel ? 'Hide code panel' : 'Show code side-by-side'}
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                  </svg>
-                  <span className="hidden sm:inline">Code</span>
-                </button>
                 {/* Guide toggle button */}
                 <button
                   onClick={() => setGuidanceSidebarOpen(!guidanceSidebarOpen)}
@@ -1405,55 +1613,12 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                   </svg>
                   <span className="hidden sm:inline">Guide</span>
                 </button>
-                {/* Diff Analysis button */}
-                <button
-                  onClick={() => setShowDiffModal(true)}
-                  disabled={!prompt.code}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
-                    !prompt.code
-                      ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
-                      : 'bg-gradient-to-r from-purple-600/50 to-blue-600/50 text-purple-200 hover:from-purple-500 hover:to-blue-500 hover:text-white'
-                  }`}
-                  title={!prompt.code ? 'No code file available' : 'View detailed diff analysis'}
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-                  </svg>
-                  <span className="hidden sm:inline">Diff</span>
-                </button>
-                {/* Preview toggle button */}
-                <button
-                  onClick={() => setShowPreview(!showPreview)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
-                    showPreview
-                      ? 'bg-accent-600 text-white'
-                      : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
-                  }`}
-                  title={showPreview ? 'Show source code' : 'Show rendered preview'}
-                >
-                  {showPreview ? (
-                    <>
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                      </svg>
-                      <span className="hidden sm:inline">Source</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                      </svg>
-                      <span className="hidden sm:inline">Preview</span>
-                    </>
-                  )}
-                </button>
               </div>
 
-              {/* Editor or Preview with optional Code Panel */}
+              {/* Editor or Preview with optional right panels */}
               <div className="flex-1 flex overflow-hidden">
                 {/* Main Editor / Preview Panel */}
-                <div className={`flex-1 flex flex-col overflow-hidden ${showCodePanel ? 'flex-1' : 'w-full'}`}>
+                <div className={`flex-1 flex flex-col overflow-hidden ${anyRightPanelOpen ? 'flex-1' : 'w-full'}`}>
                   {showPreview ? (
                     <div className="flex-1 overflow-auto bg-surface-900/50 p-4 sm:p-6 lg:p-8">
                       <div
@@ -1466,108 +1631,253 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                   )}
                 </div>
 
-                {/* Vertical Command Bar - between prompt and code when comparing */}
-                {showCodePanel && (
+                {/* Vertical Command Bar - prompt <-> code (Sync/Update) + other commands */}
+                {anyRightPanelOpen && (
                   <div className="flex flex-col items-center justify-center py-4 px-1 bg-surface-800/50 border-x border-surface-700/50">
-                    <div className="flex flex-col gap-1.5">
-                      {regularCommands.map(cmd => {
-                        const missingFiles = getMissingFiles(cmd);
-                        const hasMissingFiles = missingFiles.length > 0;
-                        return (
+                    <div className="flex flex-col gap-1">
+                      {/* Sync: prompt → code */}
+                      {showCodePanel && (
+                        <div className="flex flex-col gap-1 p-1.5 rounded-xl bg-accent-500/10 border border-accent-500/20">
                           <button
-                            key={cmd.name}
-                            onClick={() => { if (!isExecuting) handleCommandClick(cmd.name); }}
+                            onClick={() => { if (!isExecuting) handleCommandClick(CommandType.SYNC); }}
                             disabled={isExecuting}
                             className={`flex flex-col items-center gap-1 p-2 rounded-lg text-xs font-medium transition-all duration-200 min-w-[52px] ${
-                              isExecuting
-                                ? 'text-surface-500 cursor-not-allowed'
-                                : 'text-surface-400 hover:bg-surface-700/70 hover:text-white'
+                              isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-accent-300 hover:bg-accent-500/20 hover:text-white'
                             }`}
-                            title={hasMissingFiles ? `${cmd.description} (${missingFiles.join(', ')} file${missingFiles.length > 1 ? 's' : ''} not auto-detected)` : cmd.description}
+                            title="Sync: prompt → code"
                           >
-                            <span className="text-lg relative">
-                              {cmd.icon}
-                              {hasMissingFiles && (
-                                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-yellow-500/80"></span>
-                              )}
-                            </span>
-                            <span className="text-[10px] leading-tight text-center">{cmd.shortDescription}</span>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                            </svg>
+                            <span className="text-[10px] leading-tight text-center">Sync</span>
                           </button>
-                        );
-                      })}
+                          <button
+                            onClick={() => { if (!isExecuting) handleCommandClick(CommandType.UPDATE); }}
+                            disabled={isExecuting}
+                            className={`flex flex-col items-center gap-1 p-2 rounded-lg text-xs font-medium transition-all duration-200 min-w-[52px] ${
+                              isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-accent-300 hover:bg-accent-500/20 hover:text-white'
+                            }`}
+                            title="Update: code → prompt"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                            </svg>
+                            <span className="text-[10px] leading-tight text-center">Update</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Other commands (Fix, Verify, etc.) */}
+                      {regularCommands.filter(cmd => cmd.group !== 'sync-update' && cmd.name !== CommandType.TEST && cmd.name !== CommandType.EXAMPLE && cmd.name !== CommandType.GENERATE).length > 0 && (
+                        <>
+                          <div className="h-2" />
+                          <div className="flex flex-col gap-1 p-1.5 rounded-xl bg-surface-700/30 border border-surface-700/50">
+                            {regularCommands.filter(cmd => cmd.group !== 'sync-update' && cmd.name !== CommandType.TEST && cmd.name !== CommandType.EXAMPLE && cmd.name !== CommandType.GENERATE).map(cmd => {
+                              const missingFiles = getMissingFiles(cmd);
+                              const hasMissingFiles = missingFiles.length > 0;
+                              return (
+                                <button
+                                  key={cmd.name}
+                                  onClick={() => { if (!isExecuting) handleCommandClick(cmd.name); }}
+                                  disabled={isExecuting}
+                                  className={`flex flex-col items-center gap-1 p-2 rounded-lg text-xs font-medium transition-all duration-200 min-w-[52px] ${
+                                    isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-surface-400 hover:bg-surface-700/70 hover:text-white'
+                                  }`}
+                                  title={hasMissingFiles ? `${cmd.description} (${missingFiles.join(', ')} not auto-detected)` : cmd.description}
+                                >
+                                  <span className="text-lg relative">
+                                    {cmd.icon}
+                                    {hasMissingFiles && (
+                                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-yellow-500/80"></span>
+                                    )}
+                                  </span>
+                                  <span className="text-[10px] leading-tight text-center">{cmd.shortDescription}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
 
-                {/* Code Panel - Side by Side */}
-                {showCodePanel && (
-                  <div className="flex-1 flex flex-col bg-surface-900/50">
-                    {/* Code panel header */}
-                    <div className="px-3 py-2 bg-surface-800/50 border-b border-surface-700/50 flex items-center justify-between">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <svg className="w-4 h-4 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                        </svg>
-                        <span className="text-xs text-surface-400 font-mono truncate" title={prompt.code || ''}>
-                          {prompt.code?.split('/').pop() || 'Code'}
-                        </span>
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 flex-shrink-0">
-                          Read Only
-                        </span>
+                {/* Right Panels - stacked vertically with inter-panel action arrows */}
+                {anyRightPanelOpen && (
+                  <div className="flex-1 flex flex-col bg-surface-900/50 overflow-hidden">
+                    {/* Code Panel */}
+                    {showCodePanel && (
+                      <div className={`flex flex-col ${codeCollapsed ? '' : 'flex-1 min-h-0'}`}>
+                        <div className="px-3 py-2 bg-surface-800/50 border-b border-surface-700/50 flex items-center justify-between flex-shrink-0 cursor-pointer" onClick={() => setCodeCollapsed(!codeCollapsed)}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <svg className={`w-3 h-3 text-surface-400 transition-transform ${codeCollapsed ? '-rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                            <svg className="w-4 h-4 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                            </svg>
+                            <span className="text-xs text-surface-400 font-mono truncate" title={prompt.code || ''}>
+                              {prompt.code?.split('/').pop() || 'Code'}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 flex-shrink-0">Read Only</span>
+                          </div>
+                          <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                            <button onClick={handleReloadCode} disabled={codeLoading} className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors" title="Reload">
+                              <svg className={`w-3.5 h-3.5 ${codeLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            </button>
+                            <button onClick={() => setShowCodePanel(false)} className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors" title="Close">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                        {!codeCollapsed && (
+                          codeLoading ? (
+                            <div className="flex-1 flex items-center justify-center py-8">
+                              <svg className="animate-spin h-5 w-5 text-blue-400" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                            </div>
+                          ) : codeError ? (
+                            <div className="flex-1 flex items-center justify-center py-4">
+                              <span className="text-xs text-red-300">{codeError}</span>
+                            </div>
+                          ) : (
+                            <div ref={codeEditorContainerRef} className="flex-1 overflow-hidden" />
+                          )
+                        )}
                       </div>
-                      <div className="flex items-center gap-1">
-                        {/* Refresh button */}
-                        <button
-                          onClick={handleReloadCode}
-                          disabled={codeLoading}
-                          className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors"
-                          title="Reload code file"
-                        >
-                          <svg className={`w-3.5 h-3.5 ${codeLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
-                        </button>
-                        {/* Close button */}
-                        <button
-                          onClick={() => setShowCodePanel(false)}
-                          className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors"
-                          title="Close code panel"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
+                    )}
 
-                    {/* Code content */}
-                    {codeLoading ? (
-                      <div className="flex-1 flex items-center justify-center">
-                        <div className="flex flex-col items-center gap-3">
-                          <svg className="animate-spin h-6 w-6 text-blue-400" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    {/* Arrow: prompt + code → test */}
+                    {showCodePanel && showTestPanel && (
+                      <div className="flex items-center justify-center py-1 px-2 bg-surface-800/30 border-y border-surface-700/30 flex-shrink-0">
+                        <button
+                          onClick={() => { if (!isExecuting) handleCommandClick(CommandType.TEST); }}
+                          disabled={isExecuting}
+                          className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-medium transition-all duration-200 ${
+                            isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-yellow-300 hover:bg-yellow-500/20 hover:text-white'
+                          }`}
+                          title="Generate test from prompt + code"
+                        >
+                          <span className="text-[10px] text-surface-500">prompt + code</span>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
                           </svg>
-                          <span className="text-sm text-surface-400">Loading code...</span>
-                        </div>
+                          <span>Gen Test</span>
+                        </button>
                       </div>
-                    ) : codeError ? (
-                      <div className="flex-1 flex items-center justify-center">
-                        <div className="flex flex-col items-center gap-3 p-4 text-center">
-                          <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    )}
+
+                    {/* Test Panel */}
+                    {showTestPanel && (
+                      <div className={`flex flex-col ${testCollapsed ? '' : 'flex-1 min-h-0'}`}>
+                        <div className="px-3 py-2 bg-surface-800/50 border-b border-surface-700/50 flex items-center justify-between flex-shrink-0 cursor-pointer" onClick={() => setTestCollapsed(!testCollapsed)}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <svg className={`w-3 h-3 text-surface-400 transition-transform ${testCollapsed ? '-rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                            <svg className="w-4 h-4 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                            </svg>
+                            <span className="text-xs text-surface-400 font-mono truncate" title={prompt.test || ''}>
+                              {prompt.test?.split('/').pop() || 'Test'}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/20 text-yellow-300 flex-shrink-0">Read Only</span>
+                          </div>
+                          <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                            <button onClick={() => loadTestContent()} disabled={testLoading} className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors" title="Reload">
+                              <svg className={`w-3.5 h-3.5 ${testLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            </button>
+                            <button onClick={() => setShowTestPanel(false)} className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors" title="Close">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                        {!testCollapsed && (
+                          testLoading ? (
+                            <div className="flex-1 flex items-center justify-center py-8">
+                              <svg className="animate-spin h-5 w-5 text-yellow-400" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                            </div>
+                          ) : testError ? (
+                            <div className="flex-1 flex items-center justify-center py-4">
+                              <span className="text-xs text-red-300">{testError}</span>
+                            </div>
+                          ) : (
+                            <div ref={testEditorContainerRef} className="flex-1 overflow-hidden" />
+                          )
+                        )}
+                      </div>
+                    )}
+
+                    {/* Arrow: prompt + code → example */}
+                    {showCodePanel && showExamplePanel && (
+                      <div className="flex items-center justify-center py-1 px-2 bg-surface-800/30 border-y border-surface-700/30 flex-shrink-0">
+                        <button
+                          onClick={() => { if (!isExecuting) handleCommandClick(CommandType.EXAMPLE); }}
+                          disabled={isExecuting}
+                          className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-medium transition-all duration-200 ${
+                            isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-green-300 hover:bg-green-500/20 hover:text-white'
+                          }`}
+                          title="Generate example from prompt + code"
+                        >
+                          <span className="text-[10px] text-surface-500">prompt + code</span>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
                           </svg>
-                          <span className="text-sm text-red-300">{codeError}</span>
-                          <button
-                            onClick={handleReloadCode}
-                            className="px-3 py-1.5 text-xs bg-surface-700 hover:bg-surface-600 rounded-lg transition-colors"
-                          >
-                            Retry
-                          </button>
-                        </div>
+                          <span>Gen Example</span>
+                        </button>
                       </div>
-                    ) : (
-                      <div ref={codeEditorContainerRef} className="flex-1 overflow-hidden" />
+                    )}
+
+                    {/* Example Panel */}
+                    {showExamplePanel && (
+                      <div className={`flex flex-col ${exampleCollapsed ? '' : 'flex-1 min-h-0'}`}>
+                        <div className="px-3 py-2 bg-surface-800/50 border-b border-surface-700/50 flex items-center justify-between flex-shrink-0 cursor-pointer" onClick={() => setExampleCollapsed(!exampleCollapsed)}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <svg className={`w-3 h-3 text-surface-400 transition-transform ${exampleCollapsed ? '-rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                            <svg className="w-4 h-4 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                            </svg>
+                            <span className="text-xs text-surface-400 font-mono truncate" title={prompt.example || ''}>
+                              {prompt.example?.split('/').pop() || 'Example'}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-green-500/20 text-green-300 flex-shrink-0">Read Only</span>
+                          </div>
+                          <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                            <button onClick={() => loadExampleContent()} disabled={exampleLoading} className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors" title="Reload">
+                              <svg className={`w-3.5 h-3.5 ${exampleLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            </button>
+                            <button onClick={() => setShowExamplePanel(false)} className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors" title="Close">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                        {!exampleCollapsed && (
+                          exampleLoading ? (
+                            <div className="flex-1 flex items-center justify-center py-8">
+                              <svg className="animate-spin h-5 w-5 text-green-400" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                            </div>
+                          ) : exampleError ? (
+                            <div className="flex-1 flex items-center justify-center py-4">
+                              <span className="text-xs text-red-300">{exampleError}</span>
+                            </div>
+                          ) : (
+                            <div ref={exampleEditorContainerRef} className="flex-1 overflow-hidden" />
+                          )
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -1597,6 +1907,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
           onRun={handleRunWithOptions}
           onAddToQueue={onAddToQueue ? handleAddToQueueWithOptions : undefined}
           onCancel={() => setModalCommand(null)}
+          currentGlobalValues={{ strength, time: timeValue, temperature }}
         />
       )}
 

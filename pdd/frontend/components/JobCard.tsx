@@ -50,6 +50,26 @@ function formatTimeAgo(date: Date): string {
 }
 
 /**
+ * Extract dev unit name from a display command string.
+ * Looks for prompt filenames like "prompts/orders_Python.prompt" or module names.
+ */
+function extractDevUnitName(displayCommand: string): string | null {
+  // Match prompts/MODULE_LANG.prompt pattern
+  const promptMatch = displayCommand.match(/prompts\/([^_\s]+)/);
+  if (promptMatch) return promptMatch[1];
+
+  // Match MODULE_LANG.prompt pattern directly
+  const fileMatch = displayCommand.match(/([a-zA-Z_]+)_[A-Za-z]+\.prompt/);
+  if (fileMatch) return fileMatch[1];
+
+  // Match -m MODULE or --module MODULE
+  const moduleMatch = displayCommand.match(/(?:-m|--module)\s+(\S+)/);
+  if (moduleMatch) return moduleMatch[1];
+
+  return null;
+}
+
+/**
  * Get status badge styling.
  */
 function getStatusStyle(status: JobStatus): { bg: string; text: string; icon: string } {
@@ -82,6 +102,7 @@ const JobCard: React.FC<JobCardProps> = ({
   const isActive = job.status === 'queued' || job.status === 'running';
   const isSpawnedJob = job.id.startsWith('spawned-');
   const isRemoteJob = job.metadata?.remote === true;
+  const devUnitName = extractDevUnitName(job.displayCommand);
   const progressPercent = job.progress
     ? Math.round((job.progress.current / job.progress.total) * 100)
     : null;
@@ -100,9 +121,16 @@ const JobCard: React.FC<JobCardProps> = ({
       {/* Header: Command name and status */}
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex-1 min-w-0">
-          <h3 className="text-sm font-medium text-white truncate" title={job.displayCommand}>
-            {job.displayCommand}
-          </h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-medium text-white truncate" title={job.displayCommand}>
+              {job.displayCommand}
+            </h3>
+            {devUnitName && (
+              <span className="flex-shrink-0 px-2 py-0.5 rounded-md text-[10px] font-medium bg-purple-500/15 text-purple-300 border border-purple-500/25">
+                {devUnitName}
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2 mt-1">
             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${statusStyle.bg} ${statusStyle.text}`}>
               {statusStyle.icon === 'spinner' && (

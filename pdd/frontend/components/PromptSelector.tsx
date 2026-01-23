@@ -3,7 +3,6 @@ import { api, PromptInfo } from '../api';
 import CreatePromptModal from './CreatePromptModal';
 
 interface PromptSelectorProps {
-  onSelectPrompt: (prompt: PromptInfo) => void;
   onEditPrompt: (prompt: PromptInfo) => void;
   onCreatePrompt?: (prompt: PromptInfo) => void;
   selectedPrompt: PromptInfo | null;
@@ -22,19 +21,13 @@ const LANGUAGE_COLORS: Record<string, string> = {
 const PromptCard: React.FC<{
   prompt: PromptInfo;
   isSelected: boolean;
-  onSelect: () => void;
   onEditPrompt: () => void;
-}> = ({ prompt, isSelected, onSelect, onEditPrompt }) => {
+}> = ({ prompt, isSelected, onEditPrompt }) => {
   const languageColor = prompt.language
     ? LANGUAGE_COLORS[prompt.language] || 'bg-surface-700/50 text-surface-300 border-surface-600'
     : 'bg-surface-700/50 text-surface-300 border-surface-600';
 
   const handleCardClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onSelect();
-  };
-
-  const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onEditPrompt();
   };
@@ -49,7 +42,7 @@ const PromptCard: React.FC<{
             : 'border-surface-700/50 hover:border-surface-600'}
         `}
       >
-        {/* Card header - clickable to select */}
+        {/* Card - click to open prompt space */}
         <div className="p-3 sm:p-4 cursor-pointer" onClick={handleCardClick}>
           <div className="flex items-start justify-between gap-2 mb-2 sm:mb-3">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -57,24 +50,6 @@ const PromptCard: React.FC<{
               {prompt.language && (
                 <span className={`px-2 py-0.5 rounded-full text-[10px] sm:text-xs border font-medium ${languageColor}`}>
                   {prompt.language}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {/* Edit button to open full-screen PromptSpace */}
-              <button
-                onClick={handleEditClick}
-                className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-1.5 transition-all duration-200 bg-surface-700/50 text-surface-300 hover:bg-accent-600 hover:text-white border border-surface-600/50 hover:border-accent-500/50"
-                title="Open in Prompt Space"
-              >
-                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-                <span className="hidden sm:inline">Open</span>
-              </button>
-              {isSelected && (
-                <span className="px-2 py-1 rounded-full bg-accent-500/20 text-accent-300 text-[10px] sm:text-xs font-medium border border-accent-500/30">
-                  Selected
                 </span>
               )}
             </div>
@@ -120,7 +95,6 @@ const FileTag: React.FC<{
 };
 
 const PromptSelector: React.FC<PromptSelectorProps> = ({
-  onSelectPrompt,
   onEditPrompt,
   onCreatePrompt,
   selectedPrompt,
@@ -324,7 +298,6 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
               key={prompt.prompt}
               prompt={prompt}
               isSelected={selectedPrompt?.prompt === prompt.prompt}
-              onSelect={() => onSelectPrompt(prompt)}
               onEditPrompt={() => onEditPrompt(prompt)}
             />
           ))}
