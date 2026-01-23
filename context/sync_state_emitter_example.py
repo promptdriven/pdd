@@ -6,17 +6,12 @@ This script demonstrates:
 2. Emitting a sync_start event with file paths.
 3. Emitting state_update events as operations progress.
 4. Emitting a sync_complete event when done.
-5. Cleaning up the state file.
 
-The emitter writes JSON state to a temp file which the server reads
-on each poll and includes in the job status response. The frontend
-then renders the SyncVisualization component from this state.
-
-Cross-process flow:
-  sync subprocess → writes temp file → server reads on poll → includes in response → frontend renders
+The output can be parsed by the frontend's SyncVisualization component
+by detecting lines starting with @@PDD_SYNC_STATE@@ and parsing the
+JSON payload that follows.
 """
 
-import os
 import time
 
 from pdd.sync_state_emitter import SyncStateEmitter
@@ -26,8 +21,6 @@ def main():
     """Simulate a sync workflow with state emissions."""
 
     # --- 1. Create emitter with module name and budget ---
-    # In production, the job manager sets PDD_SYNC_STATE_FILE env var.
-    # For this example, we'll let it use the default PID-based path.
     emitter = SyncStateEmitter(basename="calculator", budget=5.0)
 
     # --- 2. Define file paths ---
@@ -39,7 +32,7 @@ def main():
     }
 
     # --- 3. Emit sync_start at the beginning ---
-    # Writes: {"operation":"initializing","cost":0,"budget":5.0,"basename":"calculator",...,"status":"running"}
+    # Output: @@PDD_SYNC_STATE@@{"type":"sync_start","basename":"calculator","budget":5.0,"paths":{...},"elapsedSeconds":0}
     emitter.emit_sync_start(paths=paths)
 
     # --- 4. Simulate operations with state updates ---
@@ -96,12 +89,8 @@ def main():
     )
 
     # --- 5. Emit sync_complete when done ---
-    # Writes: {"operation":"test","cost":1.15,"budget":5.0,...,"status":"completed"}
+    # Output: @@PDD_SYNC_STATE@@{"type":"sync_complete","cost":1.15,"budget":5.0,"basename":"calculator","elapsedSeconds":1.1,"status":"completed","operation":"test"}
     emitter.emit_sync_complete(cost=1.15, success=True)
-
-    # --- 6. Cleanup the state file ---
-    # In production, the server or job manager handles cleanup.
-    emitter.cleanup()
 
 
 if __name__ == "__main__":
