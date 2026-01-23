@@ -176,8 +176,9 @@ def test_worktree_creation_failure(mock_dependencies, tmp_path):
 
     assert success is False
     assert "Failed to create worktree" in msg
-    # Should stop before calling Step 7 (steps 1,2,3,4,5,5.5,6 = 7 steps)
-    assert mock_run.call_count == 7
+    # Should stop before Step 5.5 runs (steps 1,2,3,4,5 = 5 steps)
+    # Issue #352 moved worktree creation from before Step 7 to before Step 5.5
+    assert mock_run.call_count == 5
 
 def test_prompt_formatting_error(mock_dependencies, tmp_path):
     """Tests handling of malformed prompt templates."""

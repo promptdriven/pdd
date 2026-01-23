@@ -52,6 +52,7 @@ def fix_main(
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
     protect_tests: bool = False,
+    test_files: list[str] | None = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -320,7 +321,8 @@ def fix_main(
                 verbose=verbose,
                 agentic_fallback=agentic_fallback,
                 use_cloud=use_cloud_for_loop,
-                protect_tests=protect_tests
+                protect_tests=protect_tests,
+                test_files=test_files,
             )
         elif not cloud_execution_succeeded:
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)
