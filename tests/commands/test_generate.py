@@ -180,7 +180,7 @@ def mock_load_template():
 
 @pytest.fixture
 def mock_context_gen():
-    with patch("pdd.context_generator_main.context_generator_main") as m:
+    with patch.object(generate_module, "context_generator_main") as m:
         m.return_value = ("example", 0.0, "model")
         yield m
 
