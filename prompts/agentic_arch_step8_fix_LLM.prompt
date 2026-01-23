@@ -1,0 +1,95 @@
+<pdd-reason>Fixes validation errors in architecture.json: resolves circular deps, priority violations, missing fields.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "fix_architecture", "signature": "(current_architecture: str, step7_output: str)", "returns": "str (corrected JSON array)"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step7_validate_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to fix validation errors in the generated architecture.json.
+
+% Context
+
+You are working on step 8 of 8 in an agentic architecture workflow. Step 7 found validation errors. Fix them and output the corrected architecture.json.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Current Architecture
+<architecture_json>
+{current_architecture}
+</architecture_json>
+
+% Validation Errors
+<validation_errors>
+{step7_output}
+</validation_errors>
+
+% Your Task
+
+Fix each validation error identified in step 7:
+
+1. **Circular dependencies:** Restructure the dependency graph to eliminate cycles. Consider:
+   - Extracting shared interfaces into a new foundational module
+   - Removing unnecessary dependencies
+   - Inverting dependency direction where appropriate
+
+2. **Priority ordering violations:** Reorder priorities to satisfy all dependency constraints:
+   - Recompute topological sort of the dependency graph
+   - Assign sequential priorities starting at 1
+   - Ensure every module's priority > all its dependencies' priorities
+
+3. **Missing dependencies:** Add missing entries or remove references to non-existent modules
+
+4. **Priority gaps or duplicates:** Reassign sequential integers (1, 2, 3, ...)
+
+5. **Missing required fields:** Fill in any missing reason, description, dependencies, priority, filename, or filepath
+
+6. **Filename convention violations:** Correct to `<base>_<LangOrFramework>.prompt` format
+
+7. **Invalid interface types:** Correct to valid enum values
+
+8. **Invalid context_urls format:** Ensure each has url and purpose strings
+
+% Output
+
+Output the COMPLETE corrected architecture.json as a valid JSON array. Include ALL entries (not just the fixed ones). Output ONLY the JSON, with no additional commentary or markdown fencing.
+
+After fixing, use `gh issue comment` to post a summary to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 8: Fixes Applied
+
+**Status:** Fixes Complete
+
+### Changes Made
+1. [Description of fix 1]
+2. [Description of fix 2]
+
+### Summary
+- Errors fixed: [N]
+- Modules reordered: [Yes/No]
+- New modules added: [N or 0]
+
+---
+*Returning to Step 7 for re-validation*
+```
+
+% Important
+
+- Output the ENTIRE corrected JSON array, not just the changed entries
+- Ensure the fixed JSON is valid (no comments, no trailing commas)
+- Maintain all existing correct entries unchanged
+- Sort by ascending priority after fixes
+- Always post your findings as a GitHub comment before completing

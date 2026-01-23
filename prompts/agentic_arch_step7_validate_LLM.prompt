@@ -1,0 +1,91 @@
+<pdd-reason>Validates architecture.json: checks circular deps, priority ordering, missing deps, field completeness.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "validate_architecture", "signature": "(step6_output: str)", "returns": "str ('VALID' or list of validation errors)"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step6_generate_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to validate the generated architecture.json for correctness and consistency.
+
+% Context
+
+You are working on step 7 of 8 in an agentic architecture workflow. Step 6 generated the architecture.json. Now validate it for errors.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Architecture to Validate
+<architecture_json>
+{step6_output}
+</architecture_json>
+
+% Validation Checks
+
+Perform ALL of the following checks:
+
+1. **Valid JSON:** Parse the content as JSON; must be a top-level array
+2. **Required fields:** Each entry must have: reason, description, dependencies, priority, filename, filepath
+3. **No circular dependencies:** Follow dependency chains; no entry should depend on itself (directly or transitively)
+4. **Priority ordering matches dependency graph:** If A depends on B, then B.priority < A.priority
+5. **No missing dependencies:** Every filename referenced in a dependencies array must exist as a filename in another entry
+6. **No priority gaps:** Priorities must be sequential integers starting at 1 (1, 2, 3, ..., N)
+7. **No duplicate priorities:** Each priority value must be unique
+8. **No duplicate filenames:** Each filename must be unique
+9. **Filename conventions:** Must follow `<base>_<LangOrFramework>.prompt` pattern
+10. **Interface validity:** If present, interface.type must be one of: component, page, module, api, graphql, cli, job, message, config
+11. **context_urls format:** If present, each entry must have `url` (string) and `purpose` (string)
+
+% Output
+
+If ALL checks pass, output exactly: "VALID"
+
+If any checks fail, output the validation errors in this format:
+
+```markdown
+## Validation Errors
+
+1. **[Check Name]:** [Description of the error]
+   - Entry: [filename or priority]
+   - Issue: [specific problem]
+   - Fix: [suggested fix]
+
+2. **[Check Name]:** [Description of the error]
+   ...
+```
+
+After validation, use `gh issue comment` to post results to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+```markdown
+## Step 7: Validation
+
+**Status:** [VALID | Errors Found]
+
+### Results
+- Checks passed: [N]/11
+- Errors found: [N]
+
+### Errors (if any)
+[list of errors with suggested fixes]
+
+---
+*[Proceeding to Step 8: Fix | Architecture validated successfully]*
+```
+
+% Important
+
+- Be thorough: check every entry against every rule
+- Report ALL errors found, not just the first one
+- If the architecture is valid, output "VALID" clearly
+- Always post your findings as a GitHub comment before completing
