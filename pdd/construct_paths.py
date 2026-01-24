@@ -544,9 +544,22 @@ def _is_known_language(language_name: str) -> bool:
         return False
 
     builtin_languages = {
-        'python', 'javascript', 'typescript', 'java', 'cpp', 'c', 'go', 'ruby', 'rust',
+        'python', 'javascript', 'typescript', 'typescriptreact', 'javascriptreact',
+        'java', 'cpp', 'c', 'go', 'ruby', 'rust',
         'kotlin', 'swift', 'csharp', 'php', 'scala', 'r', 'lua', 'perl', 'bash', 'shell',
         'powershell', 'sql', 'prompt', 'html', 'css', 'makefile',
+        # Additional languages from language_format.csv
+        'haskell', 'dart', 'elixir', 'clojure', 'julia', 'erlang', 'fortran',
+        'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
+        'prisma', 'lean', 'agda',
+        # Frontend / templating
+        'svelte', 'vue', 'scss', 'sass', 'less',
+        'jinja', 'handlebars', 'pug', 'ejs', 'twig',
+        # Modern / systems languages
+        'zig', 'mojo', 'solidity',
+        # Config / query / infra
+        'graphql', 'protobuf', 'terraform', 'hcl', 'nix',
+        'glsl', 'wgsl', 'starlark', 'dockerfile',
         # Common data and config formats for architecture prompts and configs
         'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini'
     }
@@ -917,16 +930,13 @@ def construct_paths(
             if not example_path_str:
                 example_path_str = "context"
 
-            # Extract ROOT directory (first component) for scan scope
-            # This ensures auto-deps scans all example files, not just a subdirectory
-            # e.g., "context/commands/" -> "context", "examples/foo.py" -> "examples"
-            # Fix for Issue #332: Using full subdirectory path caused CSV truncation
+            # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+            # If it ends with / or has no file extension, treat as directory; otherwise use parent
             example_path = Path(example_path_str)
-            parts = example_path.parts
-            if parts and parts[0] not in ('/', '.', '..'):
-                resolved_config["examples_dir"] = parts[0]
+            if example_path_str.endswith('/') or '.' not in example_path.name:
+                resolved_config["examples_dir"] = example_path_str.rstrip('/')
             else:
-                resolved_config["examples_dir"] = "context"  # Fallback for edge cases
+                resolved_config["examples_dir"] = str(example_path.parent)
 
         except Exception as e:
             console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
@@ -1253,16 +1263,13 @@ def construct_paths(
     if not example_path_str:
         example_path_str = "context"
 
-    # Extract ROOT directory (first component) for scan scope
-    # This ensures auto-deps scans all example files, not just a subdirectory
-    # e.g., "context/commands/" -> "context", "examples/foo.py" -> "examples"
-    # Fix for Issue #332: Using full subdirectory path caused CSV truncation
+    # example_path_str can be a directory (e.g., "context/") or a file path (e.g., "examples/foo.py")
+    # If it ends with / or has no file extension, treat as directory; otherwise use parent
     example_path = Path(example_path_str)
-    parts = example_path.parts
-    if parts and parts[0] not in ('/', '.', '..'):
-        resolved_config["examples_dir"] = parts[0]
+    if example_path_str.endswith('/') or '.' not in example_path.name:
+        resolved_config["examples_dir"] = example_path_str.rstrip('/')
     else:
-        resolved_config["examples_dir"] = "context"  # Fallback for edge cases
+        resolved_config["examples_dir"] = str(example_path.parent)
 
 
     return resolved_config, input_strings, output_file_paths_str_return, language

@@ -281,13 +281,35 @@ async def write_file(
 
 
 # Known language suffixes for prompt files (e.g., "calculator_python.prompt")
-KNOWN_LANGUAGES = ["python", "typescript", "javascript", "java", "go", "rust", "cpp", "c", "csharp", "ruby", "swift", "kotlin"]
+# IMPORTANT: Sorted by length (longest first) so more specific suffixes match before shorter ones
+# (e.g., "typescriptreact" must match before "typescript", "javascript" before "java")
+# This list covers languages from data/language_format.csv.
+# Users can add custom languages to the CSV; they'll be detected via the _is_known_language fallback.
+KNOWN_LANGUAGES = sorted([
+    # Core languages
+    "python", "typescriptreact", "javascriptreact", "typescript", "javascript",
+    "java", "go", "rust", "cpp", "c", "csharp", "ruby", "swift", "kotlin",
+    # Scripting & systems
+    "php", "scala", "perl", "bash", "shell", "powershell", "lua",
+    "haskell", "dart", "elixir", "clojure", "julia", "erlang",
+    "fortran", "nim", "ocaml", "groovy", "coffeescript", "r",
+    "zig", "mojo", "solidity",
+    # Frontend / templating
+    "svelte", "vue", "scss", "sass", "less",
+    "jinja", "handlebars", "pug", "ejs", "twig",
+    # Data / config / query
+    "sql", "graphql", "protobuf", "terraform", "hcl",
+    "html", "css", "makefile", "prisma", "lean", "nix",
+    "glsl", "wgsl", "starlark", "dockerfile",
+], key=len, reverse=True)
 
 # Map language to file extensions
 LANGUAGE_EXTENSIONS = {
     "python": [".py"],
     "typescript": [".ts", ".tsx"],
+    "typescriptreact": [".tsx"],
     "javascript": [".js", ".jsx"],
+    "javascriptreact": [".jsx"],
     "java": [".java"],
     "go": [".go"],
     "rust": [".rs"],
@@ -297,6 +319,43 @@ LANGUAGE_EXTENSIONS = {
     "ruby": [".rb"],
     "swift": [".swift"],
     "kotlin": [".kt"],
+    "php": [".php"],
+    "scala": [".scala"],
+    "perl": [".pl"],
+    "lua": [".lua"],
+    "haskell": [".hs"],
+    "dart": [".dart"],
+    "elixir": [".ex", ".exs"],
+    "clojure": [".clj"],
+    "julia": [".jl"],
+    "erlang": [".erl"],
+    "nim": [".nim"],
+    "ocaml": [".ml"],
+    "groovy": [".groovy"],
+    "prisma": [".prisma"],
+    "lean": [".lean"],
+    "zig": [".zig"],
+    "mojo": [".mojo"],
+    "solidity": [".sol"],
+    "svelte": [".svelte"],
+    "vue": [".vue"],
+    "scss": [".scss"],
+    "sass": [".sass"],
+    "less": [".less"],
+    "jinja": [".jinja2", ".jinja", ".j2"],
+    "handlebars": [".hbs", ".handlebars"],
+    "pug": [".pug"],
+    "ejs": [".ejs"],
+    "twig": [".twig"],
+    "graphql": [".graphql", ".gql"],
+    "protobuf": [".proto"],
+    "terraform": [".tf"],
+    "hcl": [".hcl"],
+    "nix": [".nix"],
+    "glsl": [".glsl"],
+    "wgsl": [".wgsl"],
+    "starlark": [".bzl"],
+    "dockerfile": [".dockerfile"],
 }
 
 
@@ -356,14 +415,34 @@ def parse_prompt_stem(stem: str) -> tuple:
     - "calculator_python" -> ("calculator", "python")
     - "calculator_Python" -> ("calculator", "python")
     - "simple_math_TypeScript" -> ("simple_math", "typescript")
+    - "ui_components_TypeScriptReact" -> ("ui_components", "typescriptreact")
     - "unknown" -> ("unknown", None)
+
+    Uses KNOWN_LANGUAGES (sorted longest-first) for matching, with a fallback
+    to _is_known_language() which checks the language_format.csv for custom languages.
     """
     stem_lower = stem.lower()
+    # Primary: check against hardcoded list (sorted longest-first for correct matching)
     for lang in KNOWN_LANGUAGES:
         suffix = f"_{lang}"
         if stem_lower.endswith(suffix):
             # Return the basename portion and normalized lowercase language
             return stem[:-len(suffix)], lang
+
+    # Fallback: try CSV-based language detection for languages not in hardcoded list
+    if "_" in stem:
+        parts = stem_lower.split("_")
+        # Try progressively longer suffixes (from right) to find a known language
+        # e.g., for "my_app_newlang": try "newlang", then "app_newlang"
+        for i in range(len(parts) - 1, 0, -1):
+            candidate = "_".join(parts[i:])
+            try:
+                from ...construct_paths import _is_known_language
+                if _is_known_language(candidate):
+                    return stem[:-(len(candidate) + 1)], candidate
+            except (ImportError, Exception):
+                break
+
     return stem, None
 
 
