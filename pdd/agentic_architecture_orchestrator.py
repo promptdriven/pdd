@@ -66,8 +66,8 @@ def _get_state_dir(cwd: Path) -> Path:
 
 
 def _save_architecture_files(
-    cwd: Path, 
-    architecture_json_content: str, 
+    cwd: Path,
+    architecture_json_content: str,
     issue_title: str
 ) -> List[str]:
     """
@@ -75,7 +75,7 @@ def _save_architecture_files(
     Returns a list of generated file paths.
     """
     output_files = []
-    
+
     # 1. Save architecture.json
     json_path = cwd / "architecture.json"
     try:
@@ -88,19 +88,19 @@ def _save_architecture_files(
             clean_content = clean_content[3:]
         if clean_content.endswith("```"):
             clean_content = clean_content[:-3]
-        
+
         # Validate JSON
         arch_data = json.loads(clean_content)
-        
+
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(arch_data, f, indent=2)
         output_files.append(str(json_path))
-        
+
         # 2. Generate Mermaid Diagram
         if HAS_MERMAID:
             mermaid_code = generate_mermaid_code(arch_data, issue_title)
             html_content = generate_html(mermaid_code, arch_data, issue_title)
-            
+
             html_path = cwd / "architecture_diagram.html"
             with open(html_path, "w", encoding="utf-8") as f:
                 f.write(html_content)
@@ -370,6 +370,7 @@ def run_agentic_architecture_orchestrator(
 
     if not validation_success:
         console.print("[yellow]Warning: Maximum validation iterations reached. Using last generated architecture.[/yellow]")
+        final_architecture = current_architecture
 
     # --- Post-Processing ---
     output_files = _save_architecture_files(cwd, final_architecture, issue_title)

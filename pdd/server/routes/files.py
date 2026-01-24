@@ -651,6 +651,93 @@ async def list_prompt_files(
     return results
 
 
+@router.get("/prompts/changed")
+async def list_changed_prompt_files(
+    base_branch: Annotated[str, Query(description="Base branch to compare against")] = "main",
+    validator: PathValidator = Depends(get_path_validator),
+):
+    """
+    List prompt files that have been changed on the current branch compared to base.
+
+    Uses git diff to find .prompt files that are new or modified.
+
+    Returns:
+        List of changed prompt file paths (relative to project root)
+    """
+    import subprocess
+
+    project_root = validator.project_root
+
+    try:
+        # Get the merge-base between current branch and base branch
+        merge_base_result = subprocess.run(
+            ["git", "merge-base", "HEAD", base_branch],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+        )
+
+        if merge_base_result.returncode != 0:
+            # If merge-base fails (e.g., no common ancestor), compare directly
+            merge_base = base_branch
+        else:
+            merge_base = merge_base_result.stdout.strip()
+
+        # Get list of changed files (including added, modified)
+        diff_result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=ACMR", merge_base, "HEAD"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+        )
+
+        if diff_result.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to get git diff: {diff_result.stderr}"
+            )
+
+        # Also get staged and unstaged changes (for uncommitted work)
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+        )
+
+        changed_files = set()
+
+        # Parse committed changes
+        for line in diff_result.stdout.strip().split("\n"):
+            if line and line.endswith(".prompt"):
+                changed_files.add(line)
+
+        # Parse uncommitted changes (staged and unstaged)
+        if status_result.returncode == 0:
+            for line in status_result.stdout.strip().split("\n"):
+                if line and len(line) > 3:
+                    # Format: XY filename (X=staged, Y=unstaged)
+                    file_path = line[3:].strip()
+                    # Handle renamed files (format: "old -> new")
+                    if " -> " in file_path:
+                        file_path = file_path.split(" -> ")[1]
+                    if file_path.endswith(".prompt"):
+                        changed_files.add(file_path)
+
+        return {"changed_prompts": sorted(changed_files), "base_branch": base_branch}
+
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="Git is not installed or not in PATH"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting changed prompts: {str(e)}"
+        )
+
+
 @router.get("/metadata", response_model=List[FileMetadata])
 async def get_file_metadata(
     paths: Annotated[List[str], Query(description="List of paths to check")],
