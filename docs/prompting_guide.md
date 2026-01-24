@@ -222,6 +222,25 @@ The PDD preprocessor supports additional XML‑style tags to keep prompts clean,
 
 Use these tags sparingly. When you must use them, prefer stable commands with bounded output (e.g., `head -n 20` in `<shell>`).
 
+**`context_urls` in Architecture Entries:**
+
+When an architecture.json entry includes a `context_urls` array, the `generate_prompt` template automatically converts each entry into a `<web>` tag in the generated prompt's Dependencies section. This enables the LLM to fetch relevant API documentation during code generation:
+
+```json
+"context_urls": [
+  {"url": "https://fastapi.tiangolo.com/tutorial/first-steps/", "purpose": "FastAPI routing patterns"}
+]
+```
+
+Becomes in the generated prompt:
+```xml
+<fastapi_routing_patterns>
+  <web>https://fastapi.tiangolo.com/tutorial/first-steps/</web>
+</fastapi_routing_patterns>
+```
+
+The tag name is derived from the `purpose` field (lowercased, spaces replaced with underscores). This mechanism bridges architecture-level research with prompt-level context.
+
 ---
 
 ## Architecture Metadata Tags
