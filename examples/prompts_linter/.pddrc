@@ -1,0 +1,47 @@
+version: "1.0"
+
+contexts:
+  utils:
+    paths: ["*models*", "*helpers*", "*rules*", "*llm*", "*fix*", "*report*", "*pipeline*"]
+    defaults:
+      generate_output_path: "src/utils/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 90.0
+      auto_deps_csv_path: "project_dependencies.csv"
+
+  cli:
+    paths: ["*cli*"]
+    defaults:
+      generate_output_path: "src/cli/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      auto_deps_csv_path: "project_dependencies.csv"
+
+  backend:
+    paths: ["*backend*", "*api*"]
+    defaults:
+      generate_output_path: "src/backend/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      auto_deps_csv_path: "project_dependencies.csv"
+
+  frontend:
+    paths: ["*frontend*", "*streamlit*"]
+    defaults:
+      generate_output_path: "src/frontend/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      auto_deps_csv_path: "project_dependencies.csv"
+
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      auto_deps_csv_path: "project_dependencies.csv"

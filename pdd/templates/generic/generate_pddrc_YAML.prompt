@@ -1,0 +1,213 @@
+---
+name: generic/generate_pddrc
+description: Generate a .pddrc configuration file from architecture.json to define project contexts and settings
+version: 1.0.0
+tags: [config, template, pddrc, generic]
+language: yaml
+output: .pddrc
+variables:
+  ARCHITECTURE_FILE:
+    required: true
+    type: path
+    description: Architecture JSON file that defines the project structure and modules.
+    example_paths: [architecture.json, apps/backend/architecture.json]
+usage:
+  generate:
+    - name: Generate .pddrc from architecture
+      command: pdd generate --template generic/generate_pddrc -e ARCHITECTURE_FILE=app/architecture.json --output app/.pddrc
+
+discover:
+  enabled: false
+---
+
+Purpose: Generate a `.pddrc` configuration file that defines project contexts based on the architecture structure, enabling PDD to automatically apply appropriate settings for different parts of the codebase.
+
+<ARCHITECTURE_FILE><include>${ARCHITECTURE_FILE}</include></ARCHITECTURE_FILE>
+
+CONTEXT: You are generating a .pddrc configuration file for a project. The .pddrc file enables PDD to automatically detect which context applies when working with different modules and apply appropriate settings.
+
+WHAT IS A .pddrc FILE?
+
+A .pddrc file is a YAML configuration that defines "contexts" - different logical areas of your codebase with their own settings. When you run PDD commands (like `pdd sync models`), it automatically detects which context matches the module name and applies the right configuration.
+
+Key concepts:
+- **Contexts**: Named configurations for different parts of your codebase (utils, cli, backend, frontend, etc.)
+- **Path patterns**: Wildcard patterns that match MODULE NAMES, not filesystem paths (e.g., "*models*", "*cli*", "*backend*")
+- **Module names**: Extracted from the `filename` field in architecture.json (e.g., "models_Python.prompt" → "models")
+- **Defaults**: Settings applied when working in that context (output paths, language, coverage targets, LLM parameters)
+- **Context detection**: PDD searches contexts in order and uses the first match
+
+CONFIGURATION STRUCTURE:
+
+```yaml
+version: "1.0"
+
+contexts:
+  # Context name (descriptive identifier)
+  utils:
+    # Wildcard patterns to match MODULE NAMES (not filesystem paths)
+    # When you run "pdd sync models", it matches against "models"
+    paths: ["*models*", "*helpers*", "*utils*"]
+    
+    # Settings applied when working in this context
+    defaults:
+      generate_output_path: "src/utils/"        # Where generated code goes
+      test_output_path: "tests/"                # Where test files go
+      example_output_path: "examples/"          # Where example files go
+      default_language: "python"                # Primary language
+      target_coverage: 90.0                     # Test coverage target (%)
+      strength: 0.75                            # LLM generation strength (0-1)
+      temperature: 0.0                          # LLM temperature (0-1)
+      budget: 10.0                              # Cost budget per operation ($)
+      max_attempts: 3                           # Max retry attempts
+      auto_deps_csv_path: "project_dependencies.csv" # Path to dependency cache CSV
+  
+  backend:
+    # Matches modules with "backend" or "api" in their names
+    paths: ["*backend*", "*api*"]
+    defaults:
+      generate_output_path: "src/backend/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 90.0
+```
+
+INSTRUCTIONS:
+
+1. **Analyze the architecture.json** to understand the project structure:
+   - Extract MODULE NAMES from the `filename` field (e.g., "models_Python.prompt" → "models")
+   - Look at the `tags` field to identify layers (core, utils, cli, backend, frontend, api, etc.)
+   - Look at the `filepath` field to determine output directory structure
+   - Group modules by their architectural layer or functional area based on tags
+   - Identify the primary language from `filename` patterns (e.g., _Python.prompt, _TypeScriptReact.prompt)
+
+2. **Create contexts** for each distinct layer/area:
+   - Use descriptive names: utils, cli, backend, frontend, api, shared, etc.
+   - Order from most specific to most general (PDD stops at first match)
+   - Each context should have clear, non-overlapping path patterns
+
+3. **Generate path patterns** using MODULE NAME wildcards:
+   - Extract module names from `filename` fields (remove language suffix and .prompt extension)
+   - Create wildcard patterns like "*models*", "*cli*", "*backend*", "*api*"
+   - Group related modules: ["*models*", "*helpers*", "*utils*"] for utils context
+   - Use single wildcards that match substrings: "*backend*" matches "backend_api", "backend_service", etc.
+   - Be specific enough to avoid conflicts between contexts
+
+4. **Set appropriate defaults** for each context:
+   - **generate_output_path**: Infer from common `filepath` patterns in that group (e.g., "src/utils/" if modules go to src/utils/)
+   - **test_output_path**: Usually "tests/" (relative to project root)
+   - **example_output_path**: Usually "examples/" (relative to project root)
+   - **default_language**: Infer from prompt filenames (Python, TypeScript, TypeScriptReact, Java, etc.)
+   - **target_coverage**: 
+     * Backend/API/Core: 90% (critical business logic)
+     * Frontend/UI: 80-85% (UI components)
+     * Utils/Shared: 85-90% (reusable code)
+     * CLI: 85% (user-facing interfaces)
+   - **auto_deps_csv_path**: "project_dependencies.csv" (ALWAYS include this)
+   - **strength**: 0.75 (standard - can be omitted, PDD will use default)
+   - **temperature**: 0.0 (deterministic - can be omitted, PDD will use default)
+   - **budget**: 10.0 (standard - can be omitted, PDD will use default)
+   - **max_attempts**: 3 (standard - can be omitted, PDD will use default)
+
+5. **Always include a "default" context** as the final fallback:
+   - This catches any modules not matched by other contexts
+   - Use conservative settings
+   - No `paths` field needed (it's the fallback)
+
+6. **Keep it simple**:
+   - Only include settings that differ from PDD defaults
+   - Always include: generate_output_path, test_output_path, example_output_path, default_language, target_coverage, auto_deps_csv_path
+   - Omit optional LLM parameters (strength, temperature, budget, max_attempts) unless project has specific requirements
+
+7. **Add helpful comments**:
+   - Add a brief comment for each context explaining its purpose
+   - Keep comments concise and descriptive
+   - Reference to the architecture.json file is optional but helpful
+
+OUTPUT REQUIREMENTS:
+
+1. Output ONLY the YAML content for the .pddrc file
+2. Do NOT include markdown code fences (```), explanations, or commentary
+3. Use proper YAML formatting with 2-space indentation
+4. Start with `version: "1.0"` (no header comments needed)
+5. Order contexts from most specific to most general
+6. Use wildcard patterns that match MODULE NAMES: "*models*", "*cli*", "*backend*"
+7. Extract module names from `filename` field (remove language suffix and .prompt)
+8. Make sure the "default" context comes last (no `paths` field)
+9. ALWAYS include these essential settings in every context: generate_output_path, test_output_path, example_output_path, default_language, target_coverage, auto_deps_csv_path
+10. Group related modules together in the same context based on tags and output paths
+
+EXAMPLE OUTPUT STRUCTURE (adapt to your actual architecture):
+
+```yaml
+version: "1.0"
+
+contexts:
+  # Core utilities and shared modules (with all optional parameters shown)
+  utils:
+    paths: ["*models*", "*helpers*", "*rules*", "*utils*"]
+    defaults:
+      generate_output_path: "src/utils/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 90.0
+      strength: 0.75                            # Optional: LLM generation strength
+      temperature: 0.0                          # Optional: LLM temperature
+      budget: 10.0                              # Optional: Cost budget per operation
+      max_attempts: 3                           # Optional: Max retry attempts
+      auto_deps_csv_path: "project_dependencies.csv"  # Optional: Dependency cache
+
+  # Command-line interface (minimal configuration)
+  cli:
+    paths: ["*cli*"]
+    defaults:
+      generate_output_path: "src/cli/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 85.0
+      auto_deps_csv_path: "project_dependencies.csv"
+
+  # Backend API and services
+  backend:
+    paths: ["*backend*", "*api*", "*service*"]
+    defaults:
+      generate_output_path: "src/backend/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 90.0
+      auto_deps_csv_path: "project_dependencies.csv"
+
+  # Frontend UI components
+  frontend:
+    paths: ["*frontend*", "*ui*", "*component*"]
+    defaults:
+      generate_output_path: "src/frontend/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "typescript"
+      target_coverage: 80.0
+      auto_deps_csv_path: "project_dependencies.csv"
+
+  # Default fallback for unmatched modules
+  default:
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
+      default_language: "python"
+      target_coverage: 80.0
+      auto_deps_csv_path: "project_dependencies.csv"
+```
+
+CRITICAL REMINDERS:
+- Do NOT include the example above in your output - it's just a template
+- Analyze the ACTUAL architecture.json file provided
+- Extract real module names from the `filename` field
+- Group modules based on their actual `tags` and `filepath` patterns
+- Use wildcard patterns that match module names: "*models*", "*cli*", "*backend*"
+- Keep it simple - only include essential settings
+- Output only the YAML content, no markdown fences or explanations
