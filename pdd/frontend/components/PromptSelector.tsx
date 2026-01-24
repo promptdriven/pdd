@@ -105,21 +105,50 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [showChangedOnly, setShowChangedOnly] = useState(false);
+  const [changedPrompts, setChangedPrompts] = useState<string[]>([]);
+  const [loadingChanged, setLoadingChanged] = useState(false);
 
-  // Filter prompts based on search query
+  // Filter prompts based on search query and changed-only filter
   const filteredPrompts = useMemo(() => {
-    if (!searchQuery.trim()) return prompts;
-    const query = searchQuery.toLowerCase();
-    return prompts.filter(p =>
-      p.sync_basename.toLowerCase().includes(query) ||
-      p.prompt.toLowerCase().includes(query) ||
-      (p.language && p.language.toLowerCase().includes(query))
-    );
-  }, [prompts, searchQuery]);
+    let filtered = prompts;
+
+    // Apply changed-only filter
+    if (showChangedOnly && changedPrompts.length > 0) {
+      filtered = filtered.filter(p => changedPrompts.includes(p.prompt));
+    }
+
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.sync_basename.toLowerCase().includes(query) ||
+        p.prompt.toLowerCase().includes(query) ||
+        (p.language && p.language.toLowerCase().includes(query))
+      );
+    }
+
+    return filtered;
+  }, [prompts, searchQuery, showChangedOnly, changedPrompts]);
 
   useEffect(() => {
     loadPrompts();
+    loadChangedPrompts();
   }, []);
+
+  const loadChangedPrompts = async () => {
+    setLoadingChanged(true);
+    try {
+      const data = await api.getChangedPrompts();
+      setChangedPrompts(data.changed_prompts);
+    } catch (e: any) {
+      // Silently fail - this is an optional feature
+      console.warn('Failed to load changed prompts:', e.message);
+      setChangedPrompts([]);
+    } finally {
+      setLoadingChanged(false);
+    }
+  };
 
   const loadPrompts = async () => {
     setLoading(true);
@@ -227,10 +256,38 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
           <span className="hidden sm:inline">Your Prompts</span>
           <span className="sm:hidden">Prompts</span>
           <span className="px-2 py-0.5 rounded-full bg-accent-500/20 text-accent-300 text-xs font-medium">
-            {filteredPrompts.length}{searchQuery ? `/${prompts.length}` : ''}
+            {filteredPrompts.length}{(searchQuery || showChangedOnly) ? `/${prompts.length}` : ''}
           </span>
         </h2>
         <div className="flex items-center gap-2">
+          {/* Changed Only Filter Toggle */}
+          <button
+            onClick={() => setShowChangedOnly(!showChangedOnly)}
+            disabled={loadingChanged}
+            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm rounded-lg transition-colors border ${
+              showChangedOnly
+                ? 'bg-green-600/20 text-green-300 border-green-500/50 hover:bg-green-600/30'
+                : 'text-surface-400 hover:text-white bg-surface-800/50 hover:bg-surface-700 border-surface-700/50'
+            }`}
+            title={showChangedOnly ? 'Show all prompts' : 'Show only changed prompts (compared to main)'}
+          >
+            {loadingChanged ? (
+              <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+            )}
+            <span className="hidden sm:inline">Changed</span>
+            {showChangedOnly && changedPrompts.length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-green-500/30 text-green-200 text-[10px] font-medium">
+                {changedPrompts.length}
+              </span>
+            )}
+          </button>
           <button
             onClick={() => setShowCreateModal(true)}
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm bg-accent-600 hover:bg-accent-500 text-white rounded-lg transition-colors"
@@ -242,7 +299,7 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
             <span className="hidden sm:inline">New</span>
           </button>
           <button
-            onClick={loadPrompts}
+            onClick={() => { loadPrompts(); loadChangedPrompts(); }}
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm text-surface-400 hover:text-white bg-surface-800/50 hover:bg-surface-700 rounded-lg transition-colors border border-surface-700/50"
             title="Refresh"
           >
@@ -284,12 +341,30 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
         <div className="flex flex-col items-center justify-center py-12 sm:py-16">
           <div className="w-10 h-10 rounded-xl bg-surface-700/50 flex items-center justify-center mb-3">
             <svg className="w-5 h-5 text-surface-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              {showChangedOnly ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              )}
             </svg>
           </div>
           <div className="text-surface-400 text-sm text-center">
-            No prompts matching "<span className="text-white">{searchQuery}</span>"
+            {showChangedOnly && !searchQuery ? (
+              <>No prompts changed on this branch</>
+            ) : showChangedOnly && searchQuery ? (
+              <>No changed prompts matching "<span className="text-white">{searchQuery}</span>"</>
+            ) : (
+              <>No prompts matching "<span className="text-white">{searchQuery}</span>"</>
+            )}
           </div>
+          {showChangedOnly && (
+            <button
+              onClick={() => setShowChangedOnly(false)}
+              className="mt-3 px-3 py-1.5 text-xs text-accent-400 hover:text-accent-300 transition-colors"
+            >
+              Show all prompts
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid gap-3 sm:gap-4">
