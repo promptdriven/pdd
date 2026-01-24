@@ -192,6 +192,7 @@ def example_example_command():
     
     Options:
         --output PATH: Where to save the generated example code
+        --format FORMAT: Output format (default: code). Valid values: code (uses language extension), md (markdown)
     
     Returns:
         Tuple[str, float, str]: (example_code, total_cost_in_dollars, model_name)
@@ -220,6 +221,8 @@ def example_example_command():
     print(f"Output file: {output_file}")
     print("\nCommand equivalent:")
     print(f"  pdd example --output {output_file} {prompt_file} {code_file}")
+    print("\nWith format option:")
+    print(f"  pdd example --format md --output {output_dir}/calculator_example.md {prompt_file} {code_file}")
     
     # The example command is useful for:
     # 1. Creating reusable interface references for other prompts

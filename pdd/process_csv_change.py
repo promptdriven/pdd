@@ -81,7 +81,7 @@ def process_csv_change(
         csv_file: Path to the input CSV file. Must contain 'prompt_name' and
                   'change_instructions' columns.
         strength: Strength parameter for the LLM model (0.0 to 1.0).
-        temperature: Temperature parameter for the LLM model (0.0 to 1.0).
+        temperature: Temperature parameter for the LLM model (0.0 to 2.0).
         code_directory: Path to the directory containing the code files.
         language: Default programming language if the prompt filename doesn't
                   specify one (e.g., '_python').
@@ -117,8 +117,8 @@ def process_csv_change(
     if not 0.0 <= strength <= 1.0:
          console.print(f"[bold red]Error:[/bold red] 'strength' must be between 0.0 and 1.0. Given: {strength}")
          return False, [], 0.0, None # Return None for model_name on early exit
-    if not 0.0 <= temperature <= 1.0: # Added temperature validation (assuming 0-1 range)
-         console.print(f"[bold red]Error:[/bold red] 'temperature' must be between 0.0 and 1.0. Given: {temperature}")
+    if not 0.0 <= temperature <= 2.0:
+         console.print(f"[bold red]Error:[/bold red] 'temperature' must be between 0.0 and 2.0. Given: {temperature}")
          return False, [], 0.0, None # Return None for model_name on early exit
     if budget < 0.0:
          console.print(f"[bold red]Error:[/bold red] 'budget' must be non-negative. Given: {budget}")

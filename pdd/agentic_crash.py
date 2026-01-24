@@ -489,16 +489,24 @@ def run_agentic_crash(
     all_changed_files_set.update(changed_files_from_fs)
     all_changed_files = sorted(all_changed_files_set)
 
-    # 5) Run the program file after the agent's fix attempt to verify the fix
-    program_success, program_message = _run_program_file(
-        program_path=program_path,
-        project_root=project_root,
-        verbose=verbose,
-        quiet=quiet,
-    )
+    # 5) Verify the fix
+    is_python = program_path.suffix.lower() == ".py"
 
-    # Combine agent's view of success with verification result
-    overall_success = bool(agent_success) and bool(program_success)
+    if is_python:
+        # Python: run the program file to verify no crash
+        program_success, program_message = _run_program_file(
+            program_path=program_path,
+            project_root=project_root,
+            verbose=verbose,
+            quiet=quiet,
+        )
+        overall_success = bool(agent_success) and bool(program_success)
+    else:
+        # Non-Python: trust the agent's own verification.
+        # The agent already ran the program using language-appropriate tools.
+        program_success = agent_success
+        program_message = agent_message or ""
+        overall_success = bool(agent_success)
 
     if program_success:
         # Verification succeeded

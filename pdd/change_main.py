@@ -411,7 +411,7 @@ def change_main(
                         modified_content = item.get('modified_prompt')
 
                         # Skip if modification failed for this file or data is missing
-                        if not original_prompt_filename or modified_content is None:
+                        if not original_prompt_filename or not modified_content:
                             logger.warning(
                                 "Skipping save for item due to missing data or error: %s",
                                 item

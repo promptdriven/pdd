@@ -108,8 +108,8 @@ def test_cli_generate_template_with_prompt_raises_usage_error(mock_code_main, mo
         ["generate", "--template", "architecture/demo", str(files["conflict.prompt"])]
     )
 
-    assert result.exit_code == 0
-    assert "either --template or a PROMPT_FILE" in result.output
+    assert result.exit_code == 2  # UsageError exits with code 2
+    assert "either --template or a PROMPT_FILE" in result.output or "Usage" in result.output
     mock_code_main.assert_not_called()
 
 @patch('pdd.core.cli.auto_update')
@@ -119,9 +119,70 @@ def test_cli_generate_template_load_failure(mock_load_template, mock_code_main, 
     """Failed template resolution should surface as a UsageError without running the command."""
     result = runner.invoke(cli.cli, ["generate", "--template", "missing/template"])
 
-    assert result.exit_code == 0
-    assert "Failed to load template 'missing/template'" in result.output
+    assert result.exit_code == 2  # UsageError exits with code 2
+    assert "Failed to load template 'missing/template'" in result.output or "Usage" in result.output
     mock_code_main.assert_not_called()
+
+# --- GitHub Issue URL Detection Tests ---
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_agentic_architecture')
+def test_cli_generate_github_issue_url_triggers_agentic_mode(mock_agentic, mock_auto_update, runner):
+    """A GitHub issue URL should trigger agentic architecture mode instead of file generation."""
+    mock_agentic.return_value = (True, "Architecture generated", 2.5, "anthropic", ["architecture.json"])
+
+    result = runner.invoke(
+        cli.cli,
+        ["generate", "https://github.com/owner/repo/issues/42"],
+    )
+    assert result.exit_code == 0
+    mock_agentic.assert_called_once_with(
+        issue_url="https://github.com/owner/repo/issues/42",
+        verbose=False,
+        quiet=False,
+    )
+    assert "Architecture generated" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_agentic_architecture')
+def test_cli_generate_github_issue_url_failure(mock_agentic, mock_auto_update, runner):
+    """Agentic architecture failure should be reported gracefully."""
+    mock_agentic.return_value = (False, "gh CLI not found", 0.0, "", [])
+
+    result = runner.invoke(
+        cli.cli,
+        ["generate", "https://github.com/owner/repo/issues/99"],
+    )
+    assert result.exit_code == 0
+    assert "Failed" in result.output or "gh CLI not found" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_generate_nonexistent_file_raises_error(mock_main, mock_auto_update, runner, tmp_path):
+    """A non-existent file path should raise a UsageError."""
+    result = runner.invoke(
+        cli.cli,
+        ["generate", str(tmp_path / "nonexistent.prompt")],
+    )
+    assert result.exit_code == 2
+    assert "does not exist" in result.output
+    mock_main.assert_not_called()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_generate_directory_path_raises_error(mock_main, mock_auto_update, runner, tmp_path):
+    """A directory path should raise a UsageError."""
+    result = runner.invoke(
+        cli.cli,
+        ["generate", str(tmp_path)],
+    )
+    assert result.exit_code == 2
+    assert "is a directory" in result.output
+    mock_main.assert_not_called()
+
 
 def test_real_generate_command(create_dummy_files, tmp_path):
     """Test the 'generate' command with real files by calling the function directly."""

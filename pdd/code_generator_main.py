@@ -20,16 +20,13 @@ from .construct_paths import construct_paths
 from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
-from .core.cloud import CloudConfig
+from .core.cloud import CloudConfig, get_cloud_timeout
 from .python_env_detector import detect_host_python_executable
 from .architecture_sync import (
     get_architecture_entry_for_prompt,
     has_pdd_tags,
     generate_tags_from_architecture,
 )
-
-# Cloud request timeout
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
@@ -777,7 +774,13 @@ def code_generator_main(
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
                 processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
-                
+
+                # Extract and display pinned example ID if present in prompt
+                pin_match = re.search(r'<pin>([^<]+)</pin>', processed_prompt_for_cloud)
+                if pin_match and verbose:
+                    pinned_example_id = pin_match.group(1).strip()
+                    console.print(f"[cyan]Using pinned example:[/cyan] {pinned_example_id}")
+
                 # Get JWT token via CloudConfig (handles both injected tokens and device flow)
                 jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
 
@@ -793,13 +796,22 @@ def code_generator_main(
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
-                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=CLOUD_REQUEST_TIMEOUT)
+                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_timeout())
                         response.raise_for_status()
                         
                         response_data = response.json()
                         generated_code_content = response_data.get("generatedCode")
                         total_cost = float(response_data.get("totalCost", 0.0))
                         model_name = response_data.get("modelName", "cloud_model")
+
+                        # Extract example information from examplesUsed array (cloud returns this)
+                        examples_used = response_data.get("examplesUsed", [])
+                        if examples_used:
+                            selected_example_id = examples_used[0].get("id")
+                            selected_example_title = examples_used[0].get("title")
+                        else:
+                            selected_example_id = None
+                            selected_example_title = None
 
                         # Strip markdown code fences if present (cloud API returns fenced JSON)
                         if generated_code_content and isinstance(language, str) and language.strip().lower() == "json":
@@ -819,12 +831,19 @@ def code_generator_main(
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
-                             console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
+                             # Display example info if available
+                             if selected_example_id:
+                                 example_info = f" | Example: {selected_example_id}"
+                                 if selected_example_title:
+                                     example_info += f" ({selected_example_title})"
+                                 console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}{example_info}", title="[green]Cloud Success[/green]", expand=False))
+                             else:
+                                 console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
                     except requests.exceptions.Timeout:
                         if cloud_only:
-                            console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                            console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
                             raise click.UsageError("Cloud execution timed out")
-                        console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
+                        console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
                         status_code = e.response.status_code if e.response else 0

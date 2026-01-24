@@ -1,6 +1,7 @@
 """Project-level pytest configuration hooks."""
 
 import os
+import sys
 from typing import Any
 
 import pytest
@@ -12,6 +13,10 @@ load_dotenv()
 
 # Store the original PDD_PATH at module load time for restoration
 _ORIGINAL_PDD_PATH = os.environ.get('PDD_PATH')
+
+# Store original streams at module load time for restoration
+_ORIGINAL_STDOUT = sys.stdout
+_ORIGINAL_STDERR = sys.stderr
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +33,31 @@ def preserve_pdd_path():
     elif 'PDD_PATH' in os.environ:
         # Original was None but test set it - remove it
         del os.environ['PDD_PATH']
+
+
+@pytest.fixture(autouse=True)
+def restore_standard_streams():
+    """Ensure sys.stdout/stderr are restored after each test to prevent pollution.
+
+    CLI code may wrap streams with OutputCapture for core dump functionality.
+    If early exits (ctx.exit(0)) bypass normal cleanup, streams remain wrapped.
+    This fixture provides defense-in-depth by restoring original streams.
+    """
+    yield
+    # Restore if streams were replaced (indicates incomplete cleanup)
+    # Import here to avoid circular imports at module load time
+    try:
+        from pdd.core.cli import OutputCapture
+        if isinstance(sys.stdout, OutputCapture):
+            sys.stdout = _ORIGINAL_STDOUT
+        if isinstance(sys.stderr, OutputCapture):
+            sys.stderr = _ORIGINAL_STDERR
+    except ImportError:
+        # If OutputCapture can't be imported, fall back to simple check
+        if sys.stdout is not _ORIGINAL_STDOUT:
+            sys.stdout = _ORIGINAL_STDOUT
+        if sys.stderr is not _ORIGINAL_STDERR:
+            sys.stderr = _ORIGINAL_STDERR
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

@@ -1041,7 +1041,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
     # Test working directory context
     log "9c. Testing working directory context integration"
     # Run sync locally with an explicit timeout so hung cloud calls don't stall CI
-    WORKDIR_CONTEXT_TIMEOUT="${WORKDIR_CONTEXT_TIMEOUT:-600}s"
+    WORKDIR_CONTEXT_TIMEOUT="${WORKDIR_CONTEXT_TIMEOUT:-900}s"
     WORKDIR_CONTEXT_CMD=(
         "$PDD_SCRIPT"
         --force

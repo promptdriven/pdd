@@ -132,9 +132,10 @@ class RemoteSessionManager:
     No external tunnel is required; the cloud generates the access URL.
     """
 
-    def __init__(self, jwt_token: str, project_path: Path):
+    def __init__(self, jwt_token: str, project_path: Path, server_port: int = 9876):
         self.jwt_token = jwt_token
         self.project_path = project_path
+        self.server_port = server_port
         self.session_id: Optional[str] = None
         self.cloud_url: Optional[str] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
@@ -469,7 +470,7 @@ class RemoteSessionManager:
             Exception: If execution fails.
             asyncio.CancelledError: If the command was cancelled.
         """
-        local_url = "http://127.0.0.1:9876"
+        local_url = f"http://127.0.0.1:{self.server_port}"
         execute_endpoint = "/api/v1/commands/execute"
 
         # Build request payload in CommandRequest format
@@ -694,7 +695,7 @@ class RemoteSessionManager:
         Returns:
             bool: True if cancellation was successful.
         """
-        local_url = "http://127.0.0.1:9876"
+        local_url = f"http://127.0.0.1:{self.server_port}"
         cancel_endpoint = f"/api/v1/commands/jobs/{job_id}/cancel"
 
         try:

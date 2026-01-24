@@ -20,10 +20,9 @@ from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
 from .agentic_langtest import default_verify_cmd_for
-from .core.cloud import CloudConfig
-
-# Cloud request timeout for LLM calls
-CLOUD_FIX_TIMEOUT = 400  # seconds
+from .core.cloud import CloudConfig, get_cloud_timeout
+# Moved import to top level to allow mocking in tests
+from .pytest_output import run_pytest_and_capture_output
 
 console = Console()
 
@@ -42,7 +41,8 @@ def cloud_fix_errors(
     temperature: float,
     verbose: bool = False,
     time: float = DEFAULT_TIME,
-    code_file_ext: str = ".py"
+    code_file_ext: str = ".py",
+    protect_tests: bool = False
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Call the cloud fixCode endpoint to fix errors in code and unit tests.
@@ -61,6 +61,7 @@ def cloud_fix_errors(
         verbose: Enable verbose logging
         time: Time budget for thinking effort
         code_file_ext: File extension to determine language (e.g., ".py", ".java")
+        protect_tests: If True, prevents LLM from modifying unit tests
 
     Returns:
         Tuple of:
@@ -91,6 +92,7 @@ def cloud_fix_errors(
         "temperature": temperature,
         "time": time if time is not None else 0.25,
         "verbose": verbose,
+        "protectTests": protect_tests
     }
 
     headers = {
@@ -107,7 +109,7 @@ def cloud_fix_errors(
             cloud_url,
             json=payload,
             headers=headers,
-            timeout=CLOUD_FIX_TIMEOUT
+            timeout=get_cloud_timeout()
         )
         response.raise_for_status()
 
@@ -126,7 +128,7 @@ def cloud_fix_errors(
         return update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name
 
     except requests.exceptions.Timeout:
-        raise RuntimeError(f"Cloud fix timed out after {CLOUD_FIX_TIMEOUT}s")
+        raise RuntimeError(f"Cloud fix timed out after {get_cloud_timeout()}s")
 
     except requests.exceptions.HTTPError as e:
         status_code = e.response.status_code if e.response else 0
@@ -195,14 +197,17 @@ def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_f
 # ---------------------------------------------------------------------
 
 
-def run_pytest_on_file(test_file: str) -> tuple[int, int, int, str]:
+def run_pytest_on_file(test_file: str, extra_files: list[str] | None = None) -> tuple[int, int, int, str]:
     """
     Run pytest on the specified test file using the subprocess-based runner.
     Returns a tuple: (failures, errors, warnings, logs)
+
+    Args:
+        test_file: Primary test file path.
+        extra_files: Optional additional test files to run together (Bug #360).
     """
-    from .pytest_output import run_pytest_and_capture_output
     # Use the subprocess-based runner to avoid module caching issues
-    output_data = run_pytest_and_capture_output(test_file)
+    output_data = run_pytest_and_capture_output(test_file, extra_files=extra_files)
     
     # Extract results
     results = output_data.get("test_results", [{}])[0]
@@ -271,7 +276,9 @@ def fix_error_loop(unit_test_file: str,
                    verbose: bool = False,
                    time: float = DEFAULT_TIME,
                    agentic_fallback: bool = True,
-                   use_cloud: bool = False):
+                   protect_tests: bool = False,
+                   use_cloud: bool = False,
+                   test_files: list[str] | None = None):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations,
     counting only the number of times we actually call the LLM fix function.
@@ -298,7 +305,11 @@ def fix_error_loop(unit_test_file: str,
         verbose: Enable verbose logging (default: False).
         time: Time parameter for the fix_errors_from_unit_tests call.
         agentic_fallback: Whether to trigger cli agentic fallback when fix fails.
+        protect_tests: When True, prevents the LLM from modifying test files.
         use_cloud: If True, use cloud LLM for fix calls while keeping test execution local.
+        test_files: Optional list of ALL test files to run together (Bug #360).
+            When provided, pytest runs all files together to detect test isolation
+            failures that only manifest when multiple test files interact.
     Outputs:
         success: Boolean indicating if the overall process succeeded.
         final_unit_test: String contents of the final unit test file.
@@ -317,12 +328,26 @@ def fix_error_loop(unit_test_file: str,
     if verbose:
         rprint("[cyan]Starting fix error loop process.[/cyan]")
 
+    # Bug #360: Compute extra test files to run alongside the primary file.
+    # This ensures test isolation failures (tests that only fail when run together)
+    # are detected by the fix loop, not just in the post-fix combined run.
+    extra_files = None
+    if test_files:
+        resolved_unit = str(Path(unit_test_file).resolve())
+        extra_files = [f for f in test_files if str(Path(f).resolve()) != resolved_unit]
+        if not extra_files:
+            extra_files = None
+
     # Remove existing error log file if it exists.
     if os.path.exists(error_log_file):
         try:
             os.remove(error_log_file)
             if verbose:
                 rprint(f"[green]Removed old error log file:[/green] {error_log_file}")
+        except OSError as e:
+            # Ignore errors if file cannot be removed (e.g. race condition, or mocked exists=True but file missing)
+            if verbose:
+                rprint(f"[yellow]Warning:[/yellow] Could not remove old error log file '{error_log_file}': {e}")
         except Exception as e:
             rprint(f"[red]Error:[/red] Could not remove error log file: {e}")
             return False, "", "", 0, 0.0, ""
@@ -358,7 +383,7 @@ def fix_error_loop(unit_test_file: str,
     # Run an initial test to determine starting state
     try:
         if is_python:
-            initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file)
+            initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file, extra_files=extra_files)
         else:
             # For non-Python files, run the verification program to get an initial error state
             rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
@@ -621,7 +646,7 @@ def fix_error_loop(unit_test_file: str,
 
         # Update best iteration if needed:
         if (errors < best_iteration_info["errors"] or
-            (errors == best_iteration_info["errors"] and fails < best_iteration_info["fails"]) or
+            (errors == best_iteration_info["errors" ] and fails < best_iteration_info["fails"]) or
             (errors == best_iteration_info["errors"] and fails == best_iteration_info["fails"] and warnings < best_iteration_info["warnings"])):
             best_iteration_info = {
                 "attempt": iteration,
@@ -661,7 +686,8 @@ def fix_error_loop(unit_test_file: str,
                         temperature=temperature,
                         verbose=verbose,
                         time=time,
-                        code_file_ext=os.path.splitext(code_file)[1]
+                        code_file_ext=os.path.splitext(code_file)[1],
+                        protect_tests=protect_tests
                     )
                 except RuntimeError as cloud_err:
                     # Cloud failed - fall back to local if it's a recoverable error
@@ -680,7 +706,8 @@ def fix_error_loop(unit_test_file: str,
                         strength,
                         temperature,
                         verbose=verbose,
-                        time=time
+                        time=time,
+                        protect_tests=protect_tests
                     )
             else:
                 # Use local LLM for fix
@@ -693,7 +720,8 @@ def fix_error_loop(unit_test_file: str,
                     strength,
                     temperature,
                     verbose=verbose,
-                    time=time  # Pass time parameter
+                    time=time,  # Pass time parameter
+                    protect_tests=protect_tests
                 )
 
             # Update the fix attempt in the structured log
@@ -712,7 +740,7 @@ def fix_error_loop(unit_test_file: str,
             break
 
         # Update unit test file if needed.
-        if updated_unit_test:
+        if updated_unit_test and not protect_tests:
             try:
                 # Ensure we have valid content even if the returned fixed_unit_test is empty
                 content_to_write = fixed_unit_test if fixed_unit_test else unit_test_contents
@@ -723,6 +751,9 @@ def fix_error_loop(unit_test_file: str,
             except Exception as e:
                 rprint(f"[red]Error writing updated unit test:[/red] {e}")
                 break
+        elif updated_unit_test and protect_tests:
+            if verbose:
+                rprint("[yellow]Unit test update skipped (protect_tests=True).[/yellow]")
 
         # Update code file and run verification if needed.
         if updated_code:
@@ -766,7 +797,7 @@ def fix_error_loop(unit_test_file: str,
 
         # Run pytest for the next iteration
         try:
-            fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file)
+            fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file, extra_files=extra_files)
             
             # Update post-test output in structured log
             log_structure["iterations"][-1]["post_test_output"] = pytest_output
@@ -829,7 +860,7 @@ def fix_error_loop(unit_test_file: str,
                 
                 # Check if the best iteration had passing tests
                 success = (best_iteration_info["fails"] == 0 and 
-                          best_iteration_info["errors"] == 0 and 
+                          best_iteration_info["errors" ] == 0 and 
                           best_iteration_info["warnings"] == 0)
             except Exception as e:
                 rprint(f"[red]Error restoring best iteration backups:[/red] {e}")
@@ -915,6 +946,15 @@ def fix_error_loop(unit_test_file: str,
             except Exception as e:
                 rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
             success = True
+            # Bug #360: Verify with combined test files if extra_files present.
+            # The agentic fix only runs the primary file in isolation. If the
+            # failure requires all files to manifest (test isolation issue),
+            # the agent's success claim may be false. Re-verify with combined run.
+            if success and extra_files and is_python:
+                verify_fails, verify_errors, _, _ = run_pytest_on_file(unit_test_file, extra_files=extra_files)
+                if verify_fails > 0 or verify_errors > 0:
+                    rprint(f"[yellow]Agentic fix passed single-file test but combined test still fails ({verify_fails} failures, {verify_errors} errors)[/yellow]")
+                    success = False
 
     return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
 
@@ -924,6 +964,7 @@ if __name__ == "__main__":
     unit_test_file = "tests/test_example.py"
     code_file = "src/code_example.py"
     prompt = "Write a function that adds two numbers"
+    prompt_file = "prompts/example_prompt.txt"  # Added prompt_file for testing
     verification_program = "verify_code.py"  # Program that verifies the code
     strength = 0.5
     temperature = 0.0
@@ -935,6 +976,7 @@ if __name__ == "__main__":
     success, final_unit_test, final_code, attempts, total_cost, model_name = fix_error_loop(
         unit_test_file,
         code_file,
+        prompt_file,
         prompt,
         verification_program,
         strength,

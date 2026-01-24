@@ -234,9 +234,12 @@ def test_run_agentic_task_anthropic_success(mock_cwd, mock_env, mock_load_model_
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
     assert cmd[0] == "/bin/claude", f"Command should use discovered path, got: {cmd[0]}"
+    assert "-p" in cmd
     assert "--dangerously-skip-permissions" in cmd
     assert "--output-format" in cmd
     assert "json" in cmd
+    # Prompt content piped via stdin, not as positional arg
+    assert kwargs.get("input") is not None
 
     # Verify temp file creation and cleanup
     temp_files = list(mock_cwd.glob(".agentic_prompt_*.txt"))
@@ -270,6 +273,44 @@ def test_run_agentic_task_anthropic_result_key(mock_cwd, mock_env, mock_load_mod
     assert msg == "Task completed via result key."  # Should extract 'result', not raw JSON
     assert cost == 0.10
     assert provider == "anthropic"
+
+def test_anthropic_provider_pipes_prompt_via_stdin(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Verify Claude CLI uses -p - flag and pipes prompt content via stdin.
+
+    This prevents Claude from interpreting file-discovered instructions as
+    'automated bot workflow' and refusing to execute them.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    instruction = "Search for duplicate issues and post a comment"
+    success, msg, cost, provider = run_agentic_task(instruction, mock_cwd)
+
+    assert success
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+
+    # Command must use -p - for stdin piping
+    assert "-p" in cmd
+    assert "-" in cmd[cmd.index("-p") + 1:cmd.index("-p") + 2]
+
+    # File path must NOT be a positional argument in the command
+    prompt_files = list(mock_cwd.glob(".agentic_prompt_*.txt"))
+    for pf in prompt_files:
+        assert str(pf) not in cmd
+
+    # Prompt content must be passed via subprocess input= parameter
+    assert kwargs.get("input") is not None
+    assert instruction in kwargs["input"]
 
 def test_run_agentic_task_gemini_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test successful execution with Google (Gemini) and cost calculation."""
@@ -565,11 +606,14 @@ def test_run_with_provider_accepts_timeout_parameter(mock_cwd, mock_env, mock_lo
     mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
     mock_subprocess.return_value.stderr = ""
 
+    # Create a real prompt file for _run_with_provider to read
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("Read the file .agentic_prompt.txt for instructions.")
+
     # This call should accept a timeout parameter
-    # Currently this will raise TypeError: _run_with_provider() got an unexpected keyword argument 'timeout'
     success, msg, cost = _run_with_provider(
         "anthropic",
-        "Read the file .agentic_prompt.txt for instructions.",
+        prompt_file,
         mock_cwd,
         verbose=False,
         quiet=False,
@@ -896,8 +940,8 @@ def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_su
     cmd = args[0]
     assert cmd[0] == "/bin/claude", f"Command should use discovered path, got: {cmd[0]}"
     assert "--dangerously-skip-permissions" in cmd
-    # Should NOT have -p flag for interactive mode
-    assert "-p" not in cmd
+    # Should have -p - flag to pipe prompt as direct user message
+    assert "-p" in cmd
 
     # Verify env sanitization
     env = kwargs['env']
@@ -982,12 +1026,12 @@ def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_r
     
     assert success
     
-    # Check that the command included a reference to a .agentic_prompt file
-    cmd = mock_subprocess_run.call_args[0][0]
-    # The instruction is the last argument for Anthropic interactive mode
-    instruction_arg = cmd[-1]
-    assert ".agentic_prompt_" in instruction_arg
-    
+    # Prompt content is piped via stdin, not passed as positional arg
+    _, kwargs = mock_subprocess_run.call_args
+    stdin_content = kwargs.get("input", "")
+    assert "Instruction" in stdin_content
+    assert ".agentic_prompt_" in stdin_content  # Self-referential instruction is in content
+
     # Verify no temp files remain in tmp_path
     temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))
     assert len(temp_files) == 0

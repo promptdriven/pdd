@@ -58,9 +58,7 @@ You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `
    - For each dev unit from Step 5 (DEV_UNITS_IDENTIFIED):
    - Execute pdd fix in manual mode:
      ```bash
-     # Create a temp error file for pdd fix
-     touch /tmp/pdd_fix_errors_{dev_unit}.log
-     pdd fix --manual prompts/{dev_unit}_python.prompt pdd/{dev_unit}.py tests/test_{dev_unit}.py /tmp/pdd_fix_errors_{dev_unit}.log --loop
+     pdd fix --manual --loop {protect_tests_flag} prompts/{{dev_unit}}_python.prompt pdd/{{dev_unit}}.py tests/test_{{dev_unit}}.py
      ```
    - Wait for completion before starting next
    - Capture output from each run
@@ -72,7 +70,7 @@ You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `
 
 3. **Run unit tests to verify fixes**
    - After all pdd fix runs complete
-   - Run: `pytest tests/test_{dev_unit}.py -v` for each
+   - Run: `pytest tests/test_{{dev_unit}}.py -v` for each
    - Report pass/fail status
 
 % Output
@@ -88,24 +86,24 @@ Your comment should follow this format:
 ```markdown
 ## Step 8: Run pdd fix (Cycle {cycle_number})
 
-**Status:** {N}/{M} Dev Units Fixed
+**Status:** {{N}}/{{M}} Dev Units Fixed
 
 ### pdd fix Results
 | Dev Unit | pdd fix Status | Tests After |
 |----------|----------------|-------------|
-| `{name}` | Success | {N}/{M} pass |
-| `{name}` | Failed | {error} |
+| `{{name}}` | Success | {{N}}/{{M}} pass |
+| `{{name}}` | Failed | {{error}} |
 
 ### Files Changed
-{list_of_modified_files}
+{{list_of_modified_files}}
 
 ### Summary
-- Dev units fixed: {list}
-- Dev units still failing: {list}
-- Total pdd fix runs: {N}
-- Total cost: ${cost:.4f}
+- Dev units fixed: {{list}}
+- Dev units still failing: {{list}}
+- Total pdd fix runs: {{N}}
+- Total cost: ${{cost:.4f}}
 
-FILES_MODIFIED: {comma_separated_list_of_code_files}
+FILES_MODIFIED: {{comma_separated_list_of_code_files}}
 
 ---
 *Proceeding to Step 9: Final Verification*

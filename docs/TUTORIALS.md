@@ -75,6 +75,40 @@ This tutorial walks through implementing a GitHub issue using PDD.
    - The PR is updated with the fix
    - Review and merge when ready
 
+### Method 4: Generating Tests (UI, CLI, or API)
+
+1. **Create a GitHub Issue**
+   - Describe what needs to be tested:
+     - **Web UI**: Webpage URL, screenshots, expected behaviors
+     - **CLI**: Commands to test, expected outputs
+     - **API**: Endpoints to test, HTTP methods, expected responses
+   - Include examples of expected behavior
+   - Specify what elements/interactions/responses should be verified
+
+2. **Generate Tests**
+   ```bash
+   pdd test https://github.com/myorg/myrepo/issues/789
+   ```
+   This analyzes the target and creates comprehensive tests (Playwright for web, pytest for CLI, pytest+requests for API).
+
+3. **Handle Clarifying Questions**
+   - If PDD needs more information (e.g., credentials, test environment setup, API authentication), it posts questions to the issue
+   - Answer them in the GitHub issue comments
+   - Run `pdd test` again to resume
+
+4. **Review the Generated Tests**
+   - The PR contains tests for the specified target:
+     - **Web UI**: Playwright tests
+     - **CLI**: pytest with subprocess
+     - **API**: pytest with requests/httpx
+   - Review and adjust tests as needed
+
+5. **Fix Any Issues Found**
+   ```bash
+   pdd fix https://github.com/myorg/myrepo/issues/789
+   ```
+   Use this if tests reveal bugs that need fixing.
+
 ### Tips
 
 - **Resume from anywhere**: Workflow state is saved to GitHub, so you can continue on any machine
@@ -425,3 +459,54 @@ Before submitting your regression test:
 4. **Review logs**: Confirm that logging is clear and helpful for debugging
 
 Remember: Regression tests are crucial for maintaining system stability. They should catch breaking changes and ensure that the PDD workflow continues to function correctly as the codebase evolves.
+
+## Method 4: Generating Architecture from a PRD (GitHub Issue)
+
+Instead of manually writing `architecture.json`, you can point `pdd generate` at a GitHub issue containing your PRD. An 8-step agentic workflow will analyze the PRD, research the tech stack, and produce a validated `architecture.json`.
+
+### Prerequisites
+
+1. `gh` CLI installed and authenticated (`gh auth login`)
+2. A GitHub issue containing your PRD (title, goals, features, tech stack)
+
+### Steps
+
+1. **Create a GitHub issue** with your PRD content:
+   - Title: Project name or feature area
+   - Body: Goals, key features, non-functional requirements, tech stack preferences
+
+2. **Run the agentic generate command**:
+   ```bash
+   pdd generate https://github.com/myorg/myrepo/issues/42
+   ```
+
+3. **Monitor progress**: The workflow posts step-by-step progress as issue comments:
+   - Analyzes your PRD for features and tech stack
+   - Researches documentation and best practices
+   - Designs the module breakdown with dependency ordering
+   - Generates and validates `architecture.json`
+
+4. **Review the output**: The workflow produces:
+   - `architecture.json` - Module definitions with priorities and dependencies
+   - `architecture_diagram.html` - Interactive Mermaid visualization
+
+5. **Generate prompts from architecture**:
+   ```bash
+   pdd generate --template generic/generate_prompt \
+     -e MODULE=orders_api -e LANG_OR_FRAMEWORK=Python \
+     -e ARCHITECTURE_FILE=architecture.json \
+     --output prompts/orders_api_Python.prompt
+   ```
+
+### Resuming a Failed Run
+
+If the workflow stops (e.g., PRD needs clarification):
+1. Add clarifications as comments on the GitHub issue
+2. Re-run `pdd generate <issue-url>` — it resumes from the last completed step
+
+### Tips
+
+- Write detailed PRDs: The more specific your requirements, the better the architecture
+- Include tech stack preferences explicitly (e.g., "FastAPI + PostgreSQL" vs. leaving it ambiguous)
+- Review the generated `architecture.json` before generating individual module prompts
+- The `context_urls` field in each module entry provides documentation links for code generation

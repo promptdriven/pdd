@@ -30,6 +30,7 @@ from .conflicts_main import conflicts_main
 from .bug_main import bug_main
 from .crash_main import crash_main
 from .trace_main import trace_main
+from .agentic_test import agentic_test_main
 from .preprocess_main import preprocess_main
 from .construct_paths import construct_paths
 from .fix_verification_main import fix_verification_main
@@ -37,7 +38,6 @@ from .core.errors import console
 from .install_completion import install_completion
 from .core.utils import _should_show_onboarding_reminder
 from .core.cli import process_commands
-import subprocess
 
 if __name__ == "__main__":
     cli()

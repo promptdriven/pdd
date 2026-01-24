@@ -17,6 +17,7 @@ try:
     from ..auth_service import (
         get_auth_status,
         logout as service_logout,
+        verify_auth,
         JWT_CACHE_FILE,
     )
     from ..get_jwt_token import (
@@ -135,7 +136,13 @@ def login(browser: Optional[bool]):
             # Decode token to get expiration
             payload = _decode_jwt_payload(token)
             expires_at = payload.get("exp")
-            
+
+            # Validate expires_at is a valid numeric timestamp (Issue #379)
+            # If missing or invalid, use 1-hour fallback (matches _cache_jwt() pattern)
+            if not isinstance(expires_at, (int, float)) or expires_at <= 0:
+                expires_at = time.time() + 3600  # 1-hour fallback
+                console.print("[yellow]Warning: Token missing expiration, using 1-hour default.[/yellow]")
+
             # Ensure cache directory exists
             if not JWT_CACHE_FILE.parent.exists():
                 JWT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -174,16 +181,28 @@ def login(browser: Optional[bool]):
 
 
 @auth_group.command("status")
-def status():
-    """Check current authentication status."""
+@click.option(
+    "--verify",
+    is_flag=True,
+    default=False,
+    help="Verify authentication by attempting to refresh the token"
+)
+def status(verify: bool):
+    """Check current authentication status.
+
+    By default, shows the current auth state based on cached credentials.
+    Use --verify to actually test if authentication will work.
+    """
     auth_status = get_auth_status()
-    
+
     if not auth_status.get("authenticated"):
-        console.print("Not authenticated.")
-        return
-        
+        console.print("[yellow]Not authenticated.[/yellow]")
+        console.print("Run: [bold]pdd auth login[/bold]")
+        sys.exit(1)
+
     username = "Unknown"
-    
+    expires_in_minutes = None
+
     # If we have a cached token, try to extract user info
     if auth_status.get("cached") and JWT_CACHE_FILE.exists():
         try:
@@ -191,20 +210,59 @@ def status():
             token = data.get("id_token")
             if token:
                 payload = _decode_jwt_payload(token)
-                # Try to find a meaningful identifier
-                username = payload.get("email") or payload.get("sub")
-                
-                # Check for GitHub specific claims if available in Firebase token
-                firebase_claims = payload.get("firebase", {})
-                identities = firebase_claims.get("identities", {})
-                if "github.com" in identities:
-                    # identities['github.com'] is a list of IDs, not usernames usually
-                    pass
+                username = payload.get("email") or payload.get("sub") or "Unknown"
+
+            # Calculate time remaining
+            expires_at = auth_status.get("expires_at")
+            if expires_at:
+                expires_in_minutes = int((expires_at - time.time()) / 60)
         except Exception:
             pass
-            
-    console.print(f"Authenticated as: [bold green]{username}[/bold green]")
-    sys.exit(0)
+
+        # Token is cached and valid
+        console.print(f"Authenticated as: [bold green]{username}[/bold green]")
+        if expires_in_minutes is not None:
+            console.print(f"Token expires in: {expires_in_minutes} minutes")
+        sys.exit(0)
+
+    else:
+        # Only refresh token exists, JWT expired or missing
+        # Try to get username from expired token if it exists
+        if JWT_CACHE_FILE.exists():
+            try:
+                data = json.loads(JWT_CACHE_FILE.read_text())
+                token = data.get("id_token")
+                if token:
+                    payload = _decode_jwt_payload(token)
+                    username = payload.get("email") or payload.get("sub") or "Unknown"
+            except Exception:
+                pass
+
+        if not verify:
+            # Show warning that token may fail
+            console.print(f"Session for: [bold yellow]{username}[/bold yellow] (token expired, will refresh on next use)")
+            console.print("[yellow]⚠ If cloud operations fail, run:[/yellow] [bold]pdd auth login[/bold]")
+            sys.exit(0)
+        else:
+            # Actually verify by attempting refresh
+            console.print("Verifying authentication...")
+
+            async def do_verify():
+                return await verify_auth()
+
+            result = asyncio.run(do_verify())
+
+            if result.get("valid"):
+                verified_username = result.get("username") or username
+                console.print(f"[green]✓[/green] Authenticated as: [bold green]{verified_username}[/bold green]")
+                console.print("[green]Token refreshed successfully.[/green]")
+                sys.exit(0)
+            else:
+                error = result.get("error", "Unknown error")
+                console.print(f"[red]✗ Authentication verification failed:[/red] {error}")
+                if result.get("needs_reauth"):
+                    console.print("Run: [bold]pdd auth logout && pdd auth login[/bold]")
+                sys.exit(1)
 
 
 @auth_group.command("logout")

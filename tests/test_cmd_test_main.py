@@ -8,8 +8,8 @@ import pytest
 import click
 import requests
 from click import Context
-from pdd.cmd_test_main import cmd_test_main, CLOUD_REQUEST_TIMEOUT
-from pdd.core.cloud import CloudConfig
+from pdd.cmd_test_main import cmd_test_main
+from pdd.core.cloud import CloudConfig, get_cloud_timeout
 
 
 def _has_cloud_credentials() -> bool:

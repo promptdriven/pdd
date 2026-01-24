@@ -1,0 +1,111 @@
+% You are an expert software engineer handling a test generation request. Your task is to assess if there's sufficient information to create comprehensive tests.
+
+% Context
+
+You are working on step 3 of 9 in an agentic test generation workflow. Previous steps checked for duplicates and researched the codebase.
+
+**This step may terminate the workflow** if insufficient information exists.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Author: @{issue_author}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+% Your Task
+
+1. **Evaluate what we know**
+   **For UI/CLI tests:**
+   - Do we understand what UI elements/pages need to be tested?
+   - Do we know how to access the UI (URLs, commands, launch methods)?
+
+   **For API tests:**
+   - Do we know which endpoints need to be tested?
+   - Do we understand the expected HTTP methods, request formats, and response codes?
+
+   **For all tests:**
+   - Do we have enough detail about expected behaviors to verify?
+   - Can we identify the test scenarios from the issue description?
+
+2. **Identify gaps**
+   - What specific information is missing that would prevent test creation?
+   - Are there ambiguities about expected behaviors?
+   - Do we need credentials, test data, or environment setup details?
+
+3. **Decide**
+   - **Proceed**: We have enough to create meaningful tests
+   - **Needs More Info**: Critical gaps prevent test creation
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If Proceed:**
+```markdown
+## Step 3: Analyze & Clarify
+
+**Status:** Proceed
+
+### Summary
+[What we understand about the test requirements and why we can proceed]
+
+### Test Scenarios Identified
+1. [Scenario 1]
+2. [Scenario 2]
+...
+
+---
+*Proceeding to Step 4: Detect Frontend*
+```
+
+**If Needs More Info (STOP workflow):**
+```markdown
+## Step 3: Analyze & Clarify
+
+**Status:** Needs More Info
+
+### What We Know
+[Summary of information gathered from steps 1-2]
+
+### What We Need
+To create comprehensive tests, we need clarification on:
+
+1. [Specific question 1]
+2. [Specific question 2]
+...
+
+@{issue_author} - Could you provide this information?
+
+---
+*Test generation paused - awaiting additional information from issue author.*
+```
+
+% Important
+
+- **STOP the workflow** if status is "Needs More Info"
+- Tag the issue author (@username) when requesting info
+- Be specific about what information is missing
+- Only request info that's truly necessary for test creation
+- In general, everything visible should be tested to make sure it works
+- Always post your findings as a GitHub comment before completing

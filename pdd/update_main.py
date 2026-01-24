@@ -501,8 +501,17 @@ def update_main(
 
             if use_agentic:
                 tests_dir = get_tests_dir_from_config()
+
+                # If output differs from input, work on a copy to avoid modifying source
+                if final_output_path != actual_input_prompt_file:
+                    import shutil
+                    shutil.copy2(actual_input_prompt_file, final_output_path)
+                    agentic_prompt_file = final_output_path
+                else:
+                    agentic_prompt_file = actual_input_prompt_file
+
                 success, message, agentic_cost, provider, changed_files = run_agentic_update(
-                    prompt_file=actual_input_prompt_file,
+                    prompt_file=agentic_prompt_file,
                     code_file=modified_code_file,
                     test_files=None,
                     tests_dir=tests_dir,
@@ -511,13 +520,8 @@ def update_main(
                 )
 
                 if success:
-                    with open(actual_input_prompt_file, 'r') as f:
+                    with open(agentic_prompt_file, 'r') as f:
                         updated_prompt = f.read()
-
-                    # Handle output path if different from input
-                    if final_output_path != actual_input_prompt_file:
-                        with open(final_output_path, 'w') as f:
-                            f.write(updated_prompt)
 
                     if not quiet:
                         rprint("[bold green]Prompt updated successfully (agentic).[/bold green]")

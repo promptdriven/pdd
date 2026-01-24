@@ -249,7 +249,7 @@ def fix_verification_errors_loop(
         prompt_file: Path to the prompt file.
         verification_program: Path to a secondary program to verify code changes.
         strength: LLM model strength (0.0 to 1.0).
-        temperature: LLM temperature (0.0 to 1.0).
+        temperature: LLM temperature (0.0 to 2.0).
         max_attempts: Maximum number of fix attempts.
         budget: Maximum allowed cost in USD.
         verification_log_file: Path for detailed XML logging (default: "verification.log").
@@ -391,8 +391,8 @@ def fix_verification_errors_loop(
     if not 0.0 <= strength <= 1.0:
         console.print(f"[bold red]Error: Strength must be between 0.0 and 1.0.[/bold red]")
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
-    if not 0.0 <= temperature <= 1.0:
-         console.print(f"[bold red]Error: Temperature must be between 0.0 and 1.0.[/bold red]")
+    if not 0.0 <= temperature <= 2.0:
+         console.print(f"[bold red]Error: Temperature must be between 0.0 and 2.0.[/bold red]")
          return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
     # max_attempts must be non-negative (0 is valid - skips LLM loop, goes straight to agentic mode)
     if max_attempts < 0:

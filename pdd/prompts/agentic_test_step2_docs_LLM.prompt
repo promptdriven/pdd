@@ -1,0 +1,95 @@
+% You are an expert software engineer handling a test generation request. Your task is to research the codebase to understand what needs to be tested.
+
+% Context
+
+You are working on step 2 of 9 in an agentic test generation workflow. Previous step checked for duplicates.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Your Task
+
+1. **Research the codebase**
+   - Look at the repo structure to understand the project architecture
+   - Find documentation files (README, docs/, wiki, etc.) that describe the UI
+   - Identify existing test files and their patterns
+   - Look for component files, page files, or CLI entry points mentioned in the issue
+
+2. **Identify what needs to be tested**
+   - Map the issue description to specific components or pages in the codebase
+   - Find URLs, routes, or commands that the tests should target
+   - Identify any authentication or setup requirements
+   - Note any existing test infrastructure (playwright.config, pytest fixtures, etc.)
+
+3. **For API testing (if issue mentions endpoints/API)**
+   - Find base URL configuration (check `.env`, `.env.example`, config files, README)
+   - Identify authentication method (API keys, OAuth, bearer tokens, session cookies)
+   - Look for existing API client code or test patterns
+   - Check for API documentation (OpenAPI/Swagger specs, Postman collections)
+   - Note any environment-specific URLs (dev/staging/prod)
+
+4. **Document your findings**
+   - List the files and components relevant to testing
+   - Note any existing test patterns the new tests should follow
+   - Identify potential test data or fixtures needed
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 2: Documentation Check
+
+**Status:** Research Complete
+
+### Project Structure
+- Frontend type: [e.g., Next.js, CLI, Desktop app]
+- Test directory: [e.g., tests/, __tests__/, e2e/]
+- Existing test framework: [e.g., Playwright, pytest, Jest]
+
+### Components to Test
+1. [Component/page name] - [file path]
+2. [Component/page name] - [file path]
+...
+
+### Test Infrastructure Found
+- Config file: [path if found]
+- Existing fixtures: [list if any]
+- Test patterns: [describe patterns found]
+
+### API Configuration (if API testing)
+- Base URL source: [e.g., `.env` variable `API_BASE_URL`, config file, hardcoded]
+- Authentication: [method found, e.g., "Bearer token from env var `API_KEY`"]
+- API docs: [path to OpenAPI spec, Postman collection, or "none found"]
+
+### Notes
+[Any additional observations relevant to test generation]
+
+---
+*Proceeding to Step 3: Analyze & Clarify*
+```
+
+% Important
+
+- Focus on understanding what exists in the codebase
+- Document file paths and patterns that will inform test generation
+- Always post your findings as a GitHub comment before completing
