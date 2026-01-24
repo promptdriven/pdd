@@ -2912,3 +2912,77 @@ def test_resolve_config_hierarchy_cli_prompts_dir_wins(monkeypatch):
     assert "prompts_dir" in resolved
     assert resolved["prompts_dir"] == "cli_prompts"
 
+
+def test_construct_paths_regular_mode_respects_env_prompts_dir(tmp_path, monkeypatch):
+    """
+    Integration test: PDD_PROMPTS_DIR should be respected in regular mode (e.g., pdd generate).
+    
+    This verifies the environment variable works through the full construct_paths flow,
+    not just in _resolve_config_hierarchy isolation.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "/custom/prompts")
+    
+    # Create minimal test files
+    prompts_dir = tmp_path / "custom_prompts_location"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "test_python.prompt"
+    prompt_file.write_text("% Test prompt", encoding="utf-8")
+    
+    input_file_paths = {"prompt_file": str(prompt_file)}
+    command_options = {"output": "test.py"}
+    
+    resolved_config, _, output_paths, _ = construct_paths(
+        input_file_paths=input_file_paths,
+        force=True,
+        quiet=True,
+        command="generate",
+        command_options=command_options,
+    )
+    
+    # The environment variable should be in resolved_config
+    assert "prompts_dir" in resolved_config
+    assert resolved_config["prompts_dir"] == "/custom/prompts", \
+        f"Expected prompts_dir='/custom/prompts' from PDD_PROMPTS_DIR, got '{resolved_config['prompts_dir']}'"
+
+
+def test_construct_paths_sync_mode_respects_env_prompts_dir(tmp_path, monkeypatch):
+    """
+    Integration test: PDD_PROMPTS_DIR should be respected in sync discovery mode.
+    
+    Verifies the fix for the bug where sync mode would unconditionally overwrite
+    prompts_dir (lines 794, 807, 812) even when PDD_PROMPTS_DIR was set.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "/custom/sync/prompts")
+    
+    # Create minimal structure for sync mode
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "context").mkdir()
+    
+    command_options = {"basename": "calculator"}
+    
+    # Mock generate_output_paths to return predictable paths
+    mock_output_paths = {
+        "generate_output_path": str(tmp_path / "src" / "calculator.py"),
+        "test_output_path": str(tmp_path / "tests" / "test_calculator.py"),
+        "example_output_path": str(tmp_path / "context" / "calculator_example.py"),
+    }
+    
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._get_context_config', return_value={}):
+        
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths={},
+            force=True,
+            quiet=True,
+            command="sync",
+            command_options=command_options,
+        )
+    
+    # The environment variable should take precedence over sync discovery inference
+    assert "prompts_dir" in resolved_config
+    assert resolved_config["prompts_dir"] == "/custom/sync/prompts", \
+        f"Expected prompts_dir='/custom/sync/prompts' from PDD_PROMPTS_DIR in sync mode, got '{resolved_config['prompts_dir']}'"
+
