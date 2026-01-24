@@ -376,8 +376,15 @@ def run_agentic_task(
                 last_output = output
 
                 # False Positive Detection
+                # Issue #249: Empty output should ALWAYS be detected as false positive,
+                # regardless of cost. Claude may consume tokens running tools but produce
+                # no text response, which means the task wasn't actually completed.
                 if success:
-                    is_false_positive = (cost == 0.0 and len(output.strip()) < MIN_VALID_OUTPUT_LENGTH)
+                    output_length = len(output.strip())
+                    is_false_positive = (
+                        output_length == 0 or  # Empty output is always a false positive
+                        (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH)  # Zero cost with short output
+                    )
 
                     if is_false_positive:
                         if not quiet:
