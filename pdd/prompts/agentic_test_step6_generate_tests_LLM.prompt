@@ -1,0 +1,210 @@
+% You are an expert software engineer handling a test generation request. Your task is to generate comprehensive tests based on the test plan.
+
+% Context
+
+You are working on step 6 of 9 in an agentic test generation workflow. Previous steps have created a detailed test plan.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Worktree Setup
+
+You are now working in an isolated git worktree at: {worktree_path}
+
+**Before writing any tests, set up the worktree environment:**
+
+1. Check what environment/config files exist in the main repo but are missing in the worktree:
+   - Look for `.env`, `.env.local`, `.env.test`, or similar files
+   - Check for test configuration files (playwright.config.ts, pytest.ini, etc.)
+   - Look at existing tests for setup patterns
+
+2. Symlink or copy necessary files:
+   - **Symlink `.env` files** from the main repo if they exist
+   - Example: `ln -s ../../.env .env` (adjust path based on worktree depth)
+   - Do NOT copy/symlink `venv`, `node_modules`, or other large directories
+
+3. Install test dependencies if needed:
+   - For Playwright: check if `npx playwright install` is needed
+   - For pytest: ensure the package is available
+
+% Your Task
+
+1. **Review the test plan from Step 5**
+   - Extract all test scenarios and test cases
+   - Note the test framework to use (Playwright, pytest, etc.)
+   - Understand the file naming and directory conventions
+
+2. **Generate test code**
+   Following the test plan exactly:
+   - Create test files in the appropriate directory
+   - Implement all test cases from the plan
+   - Use proper assertions and error messages
+   - Include setup/teardown as specified
+   - Follow the project's existing test patterns
+
+3. **For Web UI (Playwright):**
+   ```typescript
+   import {{ test, expect }} from '@playwright/test';
+
+   test.describe('Feature Name', () => {{
+     test('should do something', async ({{ page }}) => {{
+       await page.goto('/path');
+       await expect(page.locator('selector')).toBeVisible();
+     }});
+   }});
+   ```
+
+4. **For CLI (pytest):**
+   ```python
+   import subprocess
+   import pytest
+
+   def test_command_output():
+       result = subprocess.run(['command', 'args'], capture_output=True, text=True)
+       assert result.returncode == 0
+       assert 'expected output' in result.stdout
+   ```
+
+5. **For API (pytest + requests):**
+   ```python
+   import pytest
+   import requests
+
+   # Use BASE_URL from test plan (Step 5) or environment
+   BASE_URL = "..."  # e.g., from env var or test config
+
+   class TestEndpointName:
+       """Test the endpoint specified in the test plan."""
+
+       def test_success_case(self):
+           # Use method, path, and payload from test plan
+           response = requests.post(  # or get, put, delete per plan
+               f"{{BASE_URL}}/path/from/plan",
+               json={{...}}  # payload structure from test plan
+           )
+           assert response.status_code == ...  # expected status from plan
+           # Validate response structure per test plan
+
+       def test_error_case(self):
+           # Test error scenarios from test plan
+           response = requests.post(
+               f"{{BASE_URL}}/path/from/plan",
+               json={{...}}  # invalid payload per test plan
+           )
+           assert response.status_code == 400  # or other error code
+   ```
+
+6. **For API (pytest + httpx for async):**
+   ```python
+   import pytest
+   import httpx
+
+   # Use BASE_URL from test plan (Step 5) or environment
+   BASE_URL = "..."  # e.g., from env var or test config
+
+   @pytest.mark.asyncio
+   async def test_endpoint_from_plan():
+       async with httpx.AsyncClient() as client:
+           # Use method and path from test plan
+           response = await client.get(f"{{BASE_URL}}/path/from/plan")
+           assert response.status_code == ...  # expected status from plan
+           # Validate response per test plan
+   ```
+
+% Output
+
+After generating the tests, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 6: Generated Tests
+
+### Test Files Created
+- `{{test_file_path_1}}`
+- `{{test_file_path_2}}`
+...
+
+### Test Summary
+- **Total Tests:** [N]
+- **Test Suites:** [N]
+- **Framework:** [framework name]
+
+### Test Code Overview
+
+#### `{{test_file_path_1}}`
+```{{language}}
+// Key test implementations...
+```
+
+### Running the Tests
+```bash
+{{test_run_command}}
+```
+
+---
+*Proceeding to Step 7: Run Tests*
+```
+
+% CRITICAL: Machine-Readable Output (REQUIRED)
+
+**You MUST output exactly one of these lines at the very end of your response.**
+This is required for the automation to continue. Without this line, the workflow will fail.
+
+If you created new test file(s):
+```
+FILES_CREATED: path/to/test_file1, path/to/test_file2
+```
+
+If you modified existing test file(s):
+```
+FILES_MODIFIED: path/to/test_file
+```
+
+Examples:
+- Playwright: `FILES_CREATED: tests/e2e/dashboard.spec.ts`
+- pytest (CLI): `FILES_CREATED: tests/test_cli.py`
+- pytest (API): `FILES_CREATED: tests/test_api_users.py`
+- Multiple files: `FILES_CREATED: tests/e2e/login.spec.ts, tests/e2e/dashboard.spec.ts`
+
+% Important
+
+- Write test files to disk before posting the comment
+- Follow the test plan from Step 5 exactly
+- Use descriptive test names and error messages
+- Include proper setup and cleanup
+- Tests should be self-contained and runnable
+- Always post your findings as a GitHub comment before completing

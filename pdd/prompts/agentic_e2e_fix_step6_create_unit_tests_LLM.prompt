@@ -1,0 +1,106 @@
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to create or append unit tests for the involved dev units.
+
+% Context
+
+You are working on step 6 of 9 in an agentic e2e fix workflow. You need to create unit tests that will detect the bugs in the identified dev units.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Cycle: {cycle_number}/{max_cycles}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+% Dev Units to Fix
+{dev_units_identified}
+
+% Your Task
+
+1. **For each identified dev unit:**
+   - Read the module's source code: `pdd/{{dev_unit}}.py`
+   - Read the module's prompt: `prompts/{{dev_unit}}_python.prompt`
+   - Understand the expected behavior from the prompt
+
+2. **Design unit tests that detect the bug**
+   - Create tests that specifically exercise the buggy code path
+   - Tests should FAIL on current buggy code
+   - Tests should PASS once the bug is fixed
+
+3. **Write or append to test files**
+   - Check if `tests/test_{{dev_unit}}.py` exists
+   - If exists: append new test functions
+   - If not: create new test file
+
+4. **Follow testing conventions**
+   - Use pytest framework
+   - Include clear docstrings explaining what each test verifies
+   - Use appropriate assertions and mocking
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 6: Create Unit Tests (Cycle {cycle_number})
+
+**Status:** {{N}} Tests Created/Updated
+
+### Tests Created
+
+#### `tests/test_{{dev_unit}}.py`
+```python
+{{test_code}}
+```
+
+**What this tests:** {{explanation}}
+
+### Summary
+| Dev Unit | Test File | Tests Added |
+|----------|-----------|-------------|
+| `{{name}}` | `tests/test_{{name}}.py` | {{N}} |
+
+FILES_CREATED: {{comma_separated_new_files}}
+FILES_MODIFIED: {{comma_separated_modified_files}}
+
+---
+*Proceeding to Step 7: Verify Tests Detect Bugs*
+```
+
+% Important
+
+- Tests MUST fail on current buggy code (this is verified in Step 7)
+- Focus on testing the specific bug behavior, not general functionality
+- Always output FILES_CREATED and/or FILES_MODIFIED lines
+- Always post your findings as a GitHub comment before completing

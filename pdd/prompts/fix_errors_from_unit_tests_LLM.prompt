@@ -10,6 +10,14 @@
 
 % If the verfication program fails to run, the code_under_test and unit_test are unchanged from the previous iteration.
 
+% TEST PROTECTION MODE: {protect_tests}
+% If protect_tests is "true":
+%   - The unit_test file is PROTECTED and MUST NOT be modified
+%   - You can READ the test to understand expected behavior, but you MUST only fix the code_under_test
+%   - The test file represents the correct specification; the bug is in the code
+%   - Do NOT suggest changes to the test file; only output fixed code_under_test
+%   - Set update_unit_test=false in your output
+
 % IMPORTANT: The original prompt is the authoritative specification for what the code should do.
 % When analyzing errors:
 %   - If the code doesn't match the prompt specification, fix the CODE

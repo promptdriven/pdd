@@ -1,45 +1,41 @@
-#!/usr/bin/env python3
-"""
-Example usage of the hello module.
+import sys
+import os
 
-This script demonstrates how to use the hello() function which prints
-a greeting message to the console.
-"""
+# Add the directory containing the module to the Python path
+# This allows us to import the module regardless of where this script is run from
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# Assuming the module is in the same directory or a known relative path
+# Adjust '..' or '.' as necessary based on actual file structure
+sys.path.append(current_dir)
 
+# Import the specific function from the module
+# Note: Since the module name was not provided in the prompt metadata, 
+# we assume the file is named 'hello_module.py' for this example.
+# In a real scenario, replace 'hello_module' with the actual filename without extension.
 try:
-    # Attempt to import the hello function from the module
-    from hello import hello
+    from hello_module import hello
 except ImportError:
-    # Fallback implementation if the module is not found in the path
+    # Fallback for demonstration if the file isn't actually named hello_module
+    # This block handles the case where the code is pasted directly or the file is named differently
+    print("Could not import 'hello_module'. Defining mock for demonstration.")
     def hello() -> None:
-        """
-        Prints the greeting message "hello".
-        """
+        """Prints 'hello' to standard output."""
         print("hello")
-
 
 def main() -> None:
     """
-    Main function demonstrating the usage of hello().
-    
-    The hello() function takes no arguments and returns nothing.
-    It simply prints the word "hello" to the console.
+    Demonstrates the usage of the hello() function.
     """
+    print("Calling the hello function:")
+    print("-" * 20)
     
-    # Basic usage - call hello() to print "hello"
-    print("Calling hello():")
+    # Call the function
+    # Input: None
+    # Output: Prints "hello" to stdout
     hello()
     
-    # The function can be called multiple times
-    print("\nCalling hello() three times:")
-    for i in range(3):
-        hello()
-    
-    # Demonstrating that hello() returns None
-    print("\nDemonstrating return value:")
-    result = hello()
-    print(f"Return value: {result}")  # Will print: Return value: None
-
+    print("-" * 20)
+    print("Function execution complete.")
 
 if __name__ == "__main__":
     main()

@@ -1,11 +1,8 @@
+from __future__ import annotations
+
 def hello() -> None:
-    """
-    Prints the greeting message "hello".
-
-    This function outputs the string "hello" to the console and returns nothing.
-
-    Example:
-        >>> hello()
-        hello
-    """
+    """Prints 'hello' to standard output."""
     print("hello")
+
+if __name__ == "__main__":
+    hello()

@@ -20,9 +20,14 @@ from .construct_paths import construct_paths
 from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
-from .core.cloud import CloudConfig
+from .core.cloud import CloudConfig, get_cloud_timeout
 from .python_env_detector import detect_host_python_executable
 from .validate_prompt_includes import validate_prompt_includes
+from .architecture_sync import (
+    get_architecture_entry_for_prompt,
+    has_pdd_tags,
+    generate_tags_from_architecture,
+)
 
 # Cloud request timeout
 CLOUD_REQUEST_TIMEOUT = 400  # seconds
@@ -773,7 +778,13 @@ def code_generator_main(
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
                 processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
-                
+
+                # Extract and display pinned example ID if present in prompt
+                pin_match = re.search(r'<pin>([^<]+)</pin>', processed_prompt_for_cloud)
+                if pin_match and verbose:
+                    pinned_example_id = pin_match.group(1).strip()
+                    console.print(f"[cyan]Using pinned example:[/cyan] {pinned_example_id}")
+
                 # Get JWT token via CloudConfig (handles both injected tokens and device flow)
                 jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
 
@@ -789,13 +800,33 @@ def code_generator_main(
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
-                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=CLOUD_REQUEST_TIMEOUT)
+                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_timeout())
                         response.raise_for_status()
                         
                         response_data = response.json()
                         generated_code_content = response_data.get("generatedCode")
                         total_cost = float(response_data.get("totalCost", 0.0))
                         model_name = response_data.get("modelName", "cloud_model")
+
+                        # Extract example information from examplesUsed array (cloud returns this)
+                        examples_used = response_data.get("examplesUsed", [])
+                        if examples_used:
+                            selected_example_id = examples_used[0].get("id")
+                            selected_example_title = examples_used[0].get("title")
+                        else:
+                            selected_example_id = None
+                            selected_example_title = None
+
+                        # Strip markdown code fences if present (cloud API returns fenced JSON)
+                        if generated_code_content and isinstance(language, str) and language.strip().lower() == "json":
+                            cleaned = generated_code_content.strip()
+                            if cleaned.startswith("```json"):
+                                cleaned = cleaned[7:]
+                            elif cleaned.startswith("```"):
+                                cleaned = cleaned[3:]
+                            if cleaned.endswith("```"):
+                                cleaned = cleaned[:-3]
+                            generated_code_content = cleaned.strip()
 
                         if not generated_code_content:
                             if cloud_only:
@@ -804,12 +835,19 @@ def code_generator_main(
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
                         elif verbose:
-                             console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
+                             # Display example info if available
+                             if selected_example_id:
+                                 example_info = f" | Example: {selected_example_id}"
+                                 if selected_example_title:
+                                     example_info += f" ({selected_example_title})"
+                                 console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}{example_info}", title="[green]Cloud Success[/green]", expand=False))
+                             else:
+                                 console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
                     except requests.exceptions.Timeout:
                         if cloud_only:
-                            console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                            console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
                             raise click.UsageError("Cloud execution timed out")
-                        console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
+                        console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
                         status_code = e.response.status_code if e.response else 0
@@ -1037,6 +1075,23 @@ def code_generator_main(
                                 raise click.UsageError(f"LLM generation failed: {generated_code_content}")
                                 
                             parsed = json.loads(generated_code_content)
+
+                            # Fix common LLM mistake: unwrap arrays wrapped in objects
+                            # LLMs often return {"items": [...]} or {"type": "array", "items": [...]}
+                            # when the schema expects a plain array [...]
+                            output_schema = fm_meta.get("output_schema", {})
+                            if output_schema.get("type") == "array" and isinstance(parsed, dict):
+                                # Check for common wrapper patterns
+                                if "items" in parsed and isinstance(parsed["items"], list):
+                                    parsed = parsed["items"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+                                elif "data" in parsed and isinstance(parsed["data"], list):
+                                    parsed = parsed["data"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+                                elif "results" in parsed and isinstance(parsed["results"], list):
+                                    parsed = parsed["results"]
+                                    generated_code_content = json.dumps(parsed, indent=2)
+
                             if _is_architecture_template(fm_meta):
                                 parsed, repaired = _repair_architecture_interface_types(parsed)
                                 if repaired:
@@ -1056,25 +1111,52 @@ def code_generator_main(
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
 
-                # Validate <include> tags in generated prompt files (Issue #225)
-                # If generating a .prompt file, validate that all <include> tags reference existing files
-                if str(p_output).endswith('.prompt') or language == 'prompt':
-                    validated_content, invalid_includes = validate_prompt_includes(
-                        generated_code_content,
-                        base_dir=str(p_output.parent),
-                        remove_invalid=False  # Replace with comments instead of removing
-                    )
-                    if invalid_includes:
-                        if verbose or not quiet:
-                            console.print(
-                                f"[yellow]Warning: Found {len(invalid_includes)} invalid <include> tag(s) "
-                                f"referencing non-existent files. Replaced with comments.[/yellow]"
-                            )
-                            for inv_path in invalid_includes:
-                                console.print(f"  [dim]- {inv_path}[/dim]")
-                        generated_code_content = validated_content
+                # Process .prompt files: inject architecture tags and validate includes
+                final_content = generated_code_content
+                if p_output.suffix == '.prompt':
+                    # Step 1: Inject architecture metadata tags (reverse sync)
+                    try:
+                        # Check if this prompt has an architecture entry
+                        arch_entry = get_architecture_entry_for_prompt(p_output.name)
 
-                p_output.write_text(generated_code_content, encoding="utf-8")
+                        # Only inject tags if:
+                        # 1. Architecture entry exists
+                        # 2. Content doesn't already have PDD tags (preserve manual edits)
+                        if arch_entry and not has_pdd_tags(final_content):
+                            tags = generate_tags_from_architecture(arch_entry)
+                            if tags:
+                                # Prepend tags to the generated content
+                                final_content = tags + '\n\n' + final_content
+                                if verbose:
+                                    console.print("[info]Injected architecture metadata tags from architecture.json[/info]")
+                    except Exception as e:
+                        # Don't fail generation if tag injection fails
+                        if verbose:
+                            console.print(f"[yellow]Warning: Could not inject architecture tags: {e}[/yellow]")
+
+                    # Step 2: Validate <include> tags (Issue #225)
+                    # Ensure all <include> tags reference existing files
+                    try:
+                        validated_content, invalid_includes = validate_prompt_includes(
+                            final_content,
+                            base_dir=str(p_output.parent),
+                            remove_invalid=False  # Replace with comments instead of removing
+                        )
+                        if invalid_includes:
+                            if verbose or not quiet:
+                                console.print(
+                                    f"[yellow]Warning: Found {len(invalid_includes)} invalid <include> tag(s) "
+                                    f"referencing non-existent files. Replaced with comments.[/yellow]"
+                                )
+                                for inv_path in invalid_includes:
+                                    console.print(f"  [dim]- {inv_path}[/dim]")
+                            final_content = validated_content
+                    except Exception as e:
+                        # Don't fail generation if validation fails
+                        if verbose:
+                            console.print(f"[yellow]Warning: Could not validate include tags: {e}[/yellow]")
+
+                p_output.write_text(final_content, encoding="utf-8")
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
                 # Safety net: ensure architecture HTML is generated post-write if applicable

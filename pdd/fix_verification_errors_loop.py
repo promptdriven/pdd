@@ -249,7 +249,7 @@ def fix_verification_errors_loop(
         prompt_file: Path to the prompt file.
         verification_program: Path to a secondary program to verify code changes.
         strength: LLM model strength (0.0 to 1.0).
-        temperature: LLM temperature (0.0 to 1.0).
+        temperature: LLM temperature (0.0 to 2.0).
         max_attempts: Maximum number of fix attempts.
         budget: Maximum allowed cost in USD.
         verification_log_file: Path for detailed XML logging (default: "verification.log").
@@ -391,8 +391,8 @@ def fix_verification_errors_loop(
     if not 0.0 <= strength <= 1.0:
         console.print(f"[bold red]Error: Strength must be between 0.0 and 1.0.[/bold red]")
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
-    if not 0.0 <= temperature <= 1.0:
-         console.print(f"[bold red]Error: Temperature must be between 0.0 and 1.0.[/bold red]")
+    if not 0.0 <= temperature <= 2.0:
+         console.print(f"[bold red]Error: Temperature must be between 0.0 and 2.0.[/bold red]")
          return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": {}}
     # max_attempts must be non-negative (0 is valid - skips LLM loop, goes straight to agentic mode)
     if max_attempts < 0:
@@ -457,6 +457,21 @@ def fix_verification_errors_loop(
         console.print(f"[bold red]Error reading initial program/code files: {e}[/bold red]")
         stats['status_message'] = f'Error reading initial files: {e}' # Add status message
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": stats}
+
+    # 3a-pre: Validate code file is not empty (prevents infinite loops with empty content)
+    if not initial_code_content or len(initial_code_content.strip()) == 0:
+        error_msg = f"Code file is empty or contains only whitespace: {code_path}"
+        console.print(f"[bold red]Error: {error_msg}[/bold red]")
+        stats['status_message'] = f'Error: Code file is empty - cannot verify'
+        return {
+            "success": False,
+            "final_program": initial_program_content,
+            "final_code": "",
+            "total_attempts": 0,
+            "total_cost": 0.0,
+            "model_name": None,
+            "statistics": stats
+        }
 
     # 3a: Run initial program with args
     initial_return_code, initial_output = _run_program(program_path, args=program_args)

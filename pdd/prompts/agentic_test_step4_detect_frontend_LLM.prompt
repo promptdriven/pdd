@@ -1,0 +1,126 @@
+% You are an expert software engineer handling a test generation request. Your task is to identify the test type and determine the appropriate testing framework.
+
+% Context
+
+You are working on step 4 of 9 in an agentic test generation workflow. Previous steps checked for duplicates, researched the codebase, and confirmed sufficient information exists.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+% Your Task
+
+1. **Identify test type**
+   - **Web UI**: Next.js, React, Vue, Angular, static HTML, etc.
+   - **CLI**: Command-line interface (Python Click, argparse, Go cobra, etc.)
+   - **Desktop App**: Electron, Tauri, native app, etc.
+   - **Mobile**: React Native, Flutter (note: may need special handling)
+   - **API**: REST endpoints, GraphQL, backend services (no UI involved)
+
+2. **Determine testing framework**
+   Based on frontend type and existing codebase:
+
+   **Web UI:**
+   - Playwright (recommended for comprehensive browser testing)
+   - Cypress (if already in use)
+   - Selenium (if legacy tests exist)
+
+   **CLI:**
+   - pytest with subprocess (Python CLIs)
+   - Jest with child_process (Node CLIs)
+   - Native test framework (Go, Rust)
+
+   **Desktop/Electron:**
+   - Playwright (supports Electron)
+   - Spectron (Electron-specific)
+
+   **API:**
+   - pytest + requests (Python backends)
+   - pytest + httpx (async Python backends)
+   - Jest + fetch/axios (Node backends)
+   - Use existing test patterns if found in codebase
+
+3. **Identify test environment requirements**
+   - Base URL or command to launch
+   - Any required environment variables
+   - Authentication method (if needed)
+   - Test data or fixtures required
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 4: Detect Test Type
+
+**Status:** Test Type Detected
+
+### Test Type Analysis
+- **Type:** [Web UI | CLI | Desktop App | Mobile | API]
+- **Framework/Stack:** [e.g., Next.js 14, Python Click, Electron]
+- **Test Framework:** [e.g., Playwright, pytest, Jest]
+
+### Environment Requirements
+- **Base URL/Command:** [e.g., http://localhost:3000 or `pdd --help`]
+- **Environment Variables:** [list if any]
+- **Authentication:** [describe method or "Not required"]
+
+### Test File Convention
+- **Directory:** [e.g., tests/e2e/, tests/ui/]
+- **Naming:** [e.g., test_*.py, *.spec.ts]
+
+### Rationale
+[Brief explanation of why this framework was chosen]
+
+---
+*Proceeding to Step 5: Create Test Plan*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output these lines at the very end of your response.**
+These are required for the orchestrator to parse.
+
+```
+TEST_TYPE: [web | cli | desktop | api]
+TEST_FRAMEWORK: [playwright | pytest | pytest-requests | pytest-httpx | jest | cypress | other]
+```
+
+Examples:
+- `TEST_TYPE: web` / `TEST_FRAMEWORK: playwright`
+- `TEST_TYPE: cli` / `TEST_FRAMEWORK: pytest`
+- `TEST_TYPE: api` / `TEST_FRAMEWORK: pytest-requests`
+
+% Important
+
+- Consider what's already in the codebase (don't introduce new frameworks unnecessarily)
+- Prefer Playwright for web UI testing (supports multiple browsers, good DX)
+- Prefer pytest for CLI testing (robust, well-supported)
+- Prefer pytest + requests for API testing (simple, widely used)
+- Always post your findings as a GitHub comment before completing

@@ -1,0 +1,180 @@
+% You are an expert software engineer handling a test generation request. Your task is to create a comprehensive test plan and verify it's achievable.
+
+% Context
+
+You are working on step 5 of 9 in an agentic test generation workflow. Previous steps have identified the test type and testing framework.
+
+**This step may terminate the workflow** if the test plan is blocked by missing information.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Author: @{issue_author}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Your Task
+
+1. **Create comprehensive test plan**
+   Based on the issue requirements and codebase research:
+
+   **For UI tests (web/desktop/mobile):**
+   - List all test scenarios to cover
+   - Define test cases for each scenario
+   - Specify selectors/locators for UI elements
+   - Include both happy path and edge case tests
+
+   **For CLI tests:**
+   - List commands and subcommands to test
+   - Define test cases for each command
+   - Specify expected stdout/stderr and exit codes
+
+   **For API tests:**
+   - List all endpoints to test
+   - Define test cases for each endpoint (HTTP methods, status codes, payloads)
+   - Specify request/response validation (headers, body schema, error responses)
+   - Include authentication requirements
+   - Include both success (2xx) and error scenarios (4xx, 5xx)
+
+2. **Verify plan is achievable**
+   Check for blockers:
+   - Are all required URLs/endpoints accessible?
+   - Do we know how to authenticate (if needed)?
+   - Are test data/fixtures available or can they be created?
+   - Are there any external dependencies that might block tests?
+
+3. **Identify any remaining blockers**
+   If blocked, be specific about what's needed:
+   - Credentials or authentication setup
+   - Environment configuration
+   - Test data requirements
+   - External service access
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+**If plan is achievable:**
+```markdown
+## Step 5: Create Test Plan
+
+**Status:** Plan Ready
+
+### Test Plan Overview
+- **Total Test Cases:** [N]
+- **Framework:** [from Step 4]
+- **Estimated Coverage:** [what will be covered]
+
+### Test Scenarios
+
+#### Scenario 1: [Name]
+- **Description:** [What this tests]
+- **Test Cases:**
+  1. [Test case 1]
+  2. [Test case 2]
+  ...
+
+#### Scenario 2: [Name]
+- **Description:** [What this tests]
+- **Test Cases:**
+  1. [Test case 1]
+  ...
+
+### API Test Scenarios (if API type)
+
+*For each endpoint mentioned in the issue, create a section like this:*
+
+#### Endpoint: `[METHOD] [path from issue]`
+- **Description:** [What this endpoint does]
+- **Test Cases:**
+  1. Returns [success status] with valid request
+  2. Returns 400 with invalid/missing required fields
+  3. Returns 401/403 if authentication required but missing
+  4. [Other error cases specific to this endpoint]
+- **Request Example:** [Based on issue requirements]
+- **Expected Response:** [Based on issue requirements]
+- **Authentication:** [Required/Not required - specify method if needed]
+
+### Test Configuration
+- **Setup required:** [describe any setup]
+- **Fixtures needed:** [list fixtures]
+- **Cleanup:** [describe cleanup if needed]
+
+---
+*Proceeding to Step 6: Generate Tests*
+```
+
+**If plan is BLOCKED (STOP workflow):**
+```markdown
+## Step 5: Create Test Plan
+
+**Status:** PLAN_BLOCKED
+
+### Blockers Identified
+The test plan cannot proceed due to:
+
+1. [Blocker 1 - e.g., "Need credentials for admin dashboard"]
+2. [Blocker 2 - e.g., "External API key required"]
+...
+
+### What We Need
+@{issue_author} - To proceed with test generation, please provide:
+
+1. [Specific requirement 1]
+2. [Specific requirement 2]
+...
+
+### Partial Plan (for reference)
+[Include what tests could be created once blockers are resolved]
+
+---
+*Test generation paused - plan blocked by missing requirements.*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output this line at the very end of your response.**
+
+If plan is ready:
+```
+TEST_PLAN_STATUS: READY
+```
+
+If plan is blocked:
+```
+TEST_PLAN_STATUS: PLAN_BLOCKED
+```
+
+% Important
+
+- **STOP the workflow** if status is "PLAN_BLOCKED"
+- Tag the issue author (@username) when requesting info
+- Be comprehensive - test everything visible/interactive
+- Include both positive tests and error handling tests
+- Always post your findings as a GitHub comment before completing

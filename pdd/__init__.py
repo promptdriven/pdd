@@ -2,7 +2,7 @@
 
 import os
 
-__version__ = "0.0.107"
+__version__ = "0.0.128"
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction
@@ -14,9 +14,6 @@ DEFAULT_STRENGTH = 1.0
 DEFAULT_TEMPERATURE = 0.0
 
 DEFAULT_TIME = 0.25
-
-# Define constants used across the package
-DEFAULT_LLM_MODEL = "gpt-5.1-codex-mini"
 
 # Public OAuth credentials for cloud mode
 # These are safe to embed as they are public client identifiers:

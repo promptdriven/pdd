@@ -1,0 +1,157 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_bug_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 10-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+
+% Requirements
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run 10 steps sequentially, each as a separate `run_agentic_task()` call
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps
+6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
+7. For Step 9: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
+8. Pass extracted files to Step 9 (E2E) and Step 10 (PR) via `files_to_stage` context variable for explicit git staging
+
+% Step Execution
+For each step (1-10):
+1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
+2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=STEP_TIMEOUTS.get(step_num))`
+   - Import `STEP_TIMEOUTS` from `agentic_common` (Issue #261)
+   - Pass step-specific timeout to ensure complex steps get adequate time
+4. Store the output for use by subsequent steps
+5. Accumulate cost: `total_cost += step_cost`
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_bug_step1_duplicate_LLM | Search for duplicate issues |
+| 2 | agentic_bug_step2_docs_LLM | Check documentation for user error |
+| 3 | agentic_bug_step3_triage_LLM | Assess if enough info to proceed |
+| 4 | agentic_bug_step4_reproduce_LLM | Attempt to reproduce the bug |
+| 5 | agentic_bug_step5_root_cause_LLM | Analyze root cause |
+| 6 | agentic_bug_step6_test_plan_LLM | Design test strategy |
+| 7 | agentic_bug_step7_generate_LLM | Generate failing unit test |
+| 8 | agentic_bug_step8_verify_LLM | Verify test catches the bug |
+| 9 | agentic_bug_step9_e2e_test_LLM | Generate and run E2E tests |
+| 10 | agentic_bug_step10_pr_LLM | Create draft PR and link to issue |
+
+% Context Accumulation
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output through step3_output
+- ... and so on
+- Step 8 receives: issue_content, step1_output through step7_output
+- Step 9 receives: issue_content, step1_output through step8_output, worktree_path, files_to_stage
+- Step 10 receives: issue_content, step1_output through step9_output, worktree_path, files_to_stage
+
+% Files to Stage
+After Step 7 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Steps 9 and 10:
+- `context["files_to_stage"] = ", ".join(changed_files)`
+- After Step 9 parses E2E_FILES_CREATED, extend changed_files and update files_to_stage
+- This ensures Step 9 (E2E) and Step 10 (PR) know exactly which files to include
+- Step 10 prompt uses `{files_to_stage}` to display the explicit list of files to stage
+
+% Early Exit Conditions (Hard Stops)
+
+The orchestrator must parse step output to detect stop conditions:
+
+| Step | Stop Condition | Detection |
+|------|----------------|-----------|
+| 1 | Issue is a duplicate | Output contains "Duplicate of #" |
+| 2 | "Feature Request" or "User Error" | Output contains "Feature Request (Not a Bug)" or "User Error (Not a Bug)" |
+| 3 | Needs more info from author | Output contains "Needs More Info" |
+| 7 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
+| 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
+| 9 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
+
+**Hard stop behavior:**
+- Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
+- The step has already posted its findings to GitHub before returning
+- Do NOT continue to subsequent steps
+
+**Soft failures (continue):**
+- If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
+- This applies to all steps - only the specific hard stop patterns above terminate the workflow
+- Steps should post their findings to GitHub even on partial failure
+
+% Git Worktree Isolation
+
+Before Step 7, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
+
+1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+   - Create worktree at `.pdd/worktrees/fix-issue-{issue_number}/` relative to git root
+   - Branch name: `fix/issue-{issue_number}`
+   - If worktree already exists at path, remove with `git worktree remove --force`
+   - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
+   - If branch already exists locally, delete with `git branch -D`
+   - Create worktree: `git worktree add -b {branch} {path} HEAD`
+   - Return (worktree_path, None) on success, (None, error_msg) on failure
+
+2. In orchestrator loop, before Step 7:
+   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
+   - Switch working directory to worktree path for Steps 7-10
+   - Add `worktree_path` to context dict (for Step 10 prompt formatting)
+   - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
+
+3. Additional helper functions:
+   - `_get_git_root(cwd: Path) -> Optional[Path]` - Get repo root via `git rev-parse --show-toplevel`
+   - `_worktree_exists(cwd: Path, worktree_path: Path) -> bool` - Check if path is in `git worktree list --porcelain` output
+   - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
+   - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
+   - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
+
+% Console Output
+
+The orchestrator must provide real-time feedback to the user via rich console output:
+
+1. **Header** (at start):
+   ```
+   🔍 Investigating issue #{issue_number}: "{issue_title}"
+   ```
+
+2. **Step progress** (before each step):
+   ```
+   [Step N/10] {step_description}...
+   ```
+
+3. **Agentic output** (during each step):
+   - Stream or display the output from `run_agentic_task()` so the user can see what the agent is doing
+   - Use `verbose` flag to control detail level
+
+4. **Step result** (after each step):
+   ```
+     → {brief_result}
+   ```
+   Examples: "No duplicates found", "Confirmed bug", "Needs More Info (stopping)"
+
+5. **Hard stop message** (if workflow terminates early):
+   ```
+   ⏹️  Investigation stopped at Step N: {reason}
+   ```
+
+6. **Final summary** (at end):
+   ```
+   ✅ Investigation complete  (or ❌ Investigation failed)
+      Total cost: ${total_cost:.4f}
+      Files changed: {comma_separated_list}
+      Worktree: {worktree_path}  (if worktree was created)
+      PR created: #{pr_number}  (if applicable)
+   ```
+
+Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>
+
+% Deliverables
+- Code: `pdd/agentic_bug_orchestrator.py`

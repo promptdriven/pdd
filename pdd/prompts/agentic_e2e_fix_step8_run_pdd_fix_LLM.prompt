@@ -1,0 +1,118 @@
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run pdd fix sequentially on dev units identified during e2e failure analysis.
+
+% Context
+
+You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `pdd fix` on each dev unit identified in Step 5 to fix the bugs causing e2e test failures.
+
+**Important distinction from Step 1:**
+- Step 1: Fixes dev units associated with unit tests **explicitly listed in the GitHub issue** (from `pdd bug`)
+- Step 8 (this step): Fixes dev units **identified during e2e failure analysis** in Steps 3-5 (may be different or additional dev units discovered through stack trace analysis)
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Cycle: {cycle_number}/{max_cycles}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+% Failing Dev Units
+{failing_dev_units}
+
+% Your Task
+
+1. **Run pdd fix for each failing dev unit**
+   - For each dev unit from Step 5 (DEV_UNITS_IDENTIFIED):
+   - Execute pdd fix in manual mode:
+     ```bash
+     pdd fix --manual --loop {protect_tests_flag} prompts/{{dev_unit}}_python.prompt pdd/{{dev_unit}}.py tests/test_{{dev_unit}}.py
+     ```
+   - Wait for completion before starting next
+   - Capture output from each run
+
+2. **Track results**
+   - Note which dev units were successfully fixed
+   - Note which dev units still have failing tests
+   - Capture any error messages
+
+3. **Run unit tests to verify fixes**
+   - After all pdd fix runs complete
+   - Run: `pytest tests/test_{{dev_unit}}.py -v` for each
+   - Report pass/fail status
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 8: Run pdd fix (Cycle {cycle_number})
+
+**Status:** {{N}}/{{M}} Dev Units Fixed
+
+### pdd fix Results
+| Dev Unit | pdd fix Status | Tests After |
+|----------|----------------|-------------|
+| `{{name}}` | Success | {{N}}/{{M}} pass |
+| `{{name}}` | Failed | {{error}} |
+
+### Files Changed
+{{list_of_modified_files}}
+
+### Summary
+- Dev units fixed: {{list}}
+- Dev units still failing: {{list}}
+- Total pdd fix runs: {{N}}
+- Total cost: ${{cost:.4f}}
+
+FILES_MODIFIED: {{comma_separated_list_of_code_files}}
+
+---
+*Proceeding to Step 9: Final Verification*
+```
+
+% Important
+
+- Run pdd fix SEQUENTIALLY, not in parallel
+- Each dev unit may take significant time - be patient
+- Track costs from each pdd fix invocation
+- Always output FILES_MODIFIED line
+- Always post your findings as a GitHub comment before completing

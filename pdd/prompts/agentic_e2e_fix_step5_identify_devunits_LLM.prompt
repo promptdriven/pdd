@@ -1,0 +1,91 @@
+% You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to identify which dev units are involved in the failures.
+
+% Context
+
+You are working on step 5 of 9 in an agentic e2e fix workflow. You need to identify which dev units (modules) are responsible for the remaining test failures.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Cycle: {cycle_number}/{max_cycles}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Your Task
+
+1. **Analyze the stack traces**
+   - Review error stack traces from Step 2
+   - Identify which source files are involved in the failures
+   - Map source files to their corresponding dev units (modules)
+
+2. **Map files to dev units**
+   - List all prompts in the `prompts/` directory: `ls prompts/*_python.prompt`
+   - For each involved source file, find its corresponding prompt
+   - A dev unit name is derived from the prompt file: `{{name}}_python.prompt` -> `{{name}}`
+
+3. **List dev units to fix**
+   - Create a prioritized list of dev units that need fixing
+   - Consider dependencies between dev units
+   - Note which dev units were already fixed in previous cycles
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 5: Identify Dev Units (Cycle {cycle_number})
+
+**Status:** {{N}} Dev Units Identified
+
+### Stack Trace Analysis
+| Source File | Dev Unit | Error Type |
+|-------------|----------|------------|
+| `pdd/{{file}}.py` | `{{dev_unit}}` | {{error_type}} |
+
+### Dev Units to Fix
+1. `{{dev_unit_1}}` - {{reason}}
+2. `{{dev_unit_2}}` - {{reason}}
+
+### Previously Fixed (This Session)
+- `{{dev_unit}}` - Cycle {{N}}
+
+DEV_UNITS_IDENTIFIED: {{comma_separated_list}}
+
+---
+*Proceeding to Step 6: Create Unit Tests*
+```
+
+% Important
+
+- The DEV_UNITS_IDENTIFIED line is machine-readable and used by subsequent steps
+- Only include dev units that have corresponding prompts (PDD-managed modules)
+- Skip dev units that don't have prompts (external dependencies)
+- Always post your findings as a GitHub comment before completing

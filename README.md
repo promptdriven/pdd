@@ -1,16 +1,37 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.107-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.128-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
-PDD (Prompt-Driven Development) is a versatile tool for generating code, creating examples, running unit tests, and managing prompt files. It leverages AI models to streamline the development process, allowing developers to work more efficiently with prompt-driven code generation.
+PDD (Prompt-Driven Development) is a toolkit for AI-powered code generation and maintenance.
+
+**Getting started is simple:**
+
+```bash
+# Install and run
+uv tool install pdd-cli
+pdd setup
+pdd connect
+```
+
+This launches a web interface at `localhost:9876` where you can:
+- Implement GitHub issues automatically
+- Generate and test code from prompts
+- Manage your PDD projects visually
 
 <p align="center">
   <img src="docs/videos/handpaint_demo.gif" alt="PDD Handpaint Demo" />
 </p>
 
-The primary command is **`sync`**, which automatically executes the complete PDD workflow loop with intelligent decision-making, real-time visual feedback, and sophisticated state management. It analyzes your project files, determines what operations are needed, and executes them with live progress animation while maintaining detailed logs of all decisions and changes. For most use cases, `sync` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order. Make sure the `generate` command is run first to ensure the LLM API keys work.
+For CLI users, PDD also offers powerful **agentic commands** that implement GitHub issues automatically:
+- `pdd change <issue-url>` - Implement feature requests (12-step workflow)
+- `pdd bug <issue-url>` - Create failing tests for bugs
+- `pdd fix <issue-url>` - Fix the failing tests
+- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (8-step workflow)
+- `pdd test <issue-url>` - Generate UI tests from issue descriptions (9-step workflow)
+
+For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
 ## Whitepaper
 
@@ -111,9 +132,70 @@ pip install pdd-cli
 
 
 
+## Getting Started
+
+### Option 1: Web Interface (Recommended)
+
+The easiest way to use PDD is through the web interface:
+
+```bash
+# 1. Install PDD
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install pdd-cli
+
+# 2. Run setup (API keys, shell completion)
+pdd setup
+
+# 3. Launch the web interface
+pdd connect
+```
+
+This opens a browser-based interface where you can:
+- **Run Commands**: Execute `pdd change`, `pdd bug`, `pdd fix`, `pdd sync` etc. visually
+- **Browse Files**: View and edit prompts, code, and tests in your project
+- **Remote Access**: Access your session from any browser via PDD Cloud (use `--local-only` to disable)
+
+### Option 2: Issue-Driven CLI
+
+For CLI enthusiasts, implement GitHub issues directly:
+
+**Prerequisites:**
+1. **GitHub CLI** - Required for issue access:
+   ```bash
+   brew install gh && gh auth login
+   ```
+
+2. **One Agentic CLI** - Required to run the workflows (install at least one):
+   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
+   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
+   - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+
+**Usage:**
+```bash
+# Implement a feature request
+pdd change https://github.com/owner/repo/issues/123
+
+# Or fix a bug
+pdd bug https://github.com/owner/repo/issues/456
+pdd fix https://github.com/owner/repo/issues/456
+```
+
+### Option 3: Manual Prompt Workflow
+
+For learning PDD fundamentals or working with existing prompt files:
+
+```bash
+cd your-project
+pdd sync module_name  # Full automated workflow
+```
+
+See the [Hello Example](#-quickstart-hello-example) below for a step-by-step introduction.
+
+---
+
 ## 🚀 Quickstart (Hello Example)
 
-If you’re brand new to PDD, follow these steps to see it in action.
+If you want to understand PDD fundamentals, follow this manual example to see it in action.
 
 1. **Install prerequisites** (macOS/Linux):
    ```bash
@@ -285,7 +367,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.107
+Current version: 0.0.128
 
 To check your installed version, run:
 ```
@@ -445,22 +527,74 @@ pdd [GLOBAL OPTIONS] COMMAND [OPTIONS] [ARGS]...
 
 Here is a brief overview of the main commands provided by PDD. Click the command name to jump to its detailed section:
 
-- **[`sync`](#1-sync)**: **[PRIMARY COMMAND]** Automatically executes the complete PDD workflow loop for a given basename - from dependency injection through code generation, testing, and verification.
-- **[`generate`](#2-generate)**: Creates runnable code from a prompt file; supports parameterized prompts via `-e/--env`.
-- **[`example`](#3-example)**: Generates a compact example showing how to use functionality defined in a prompt.
-- **[`test`](#4-test)**: Generates or enhances unit tests for a code file and its prompt.
-- **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives.
-- **[`fix`](#6-fix)**: Fixes errors in code and unit tests based on error messages and the original prompt.
-- **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones.
-- **[`change`](#8-change)**: Modifies a prompt file based on instructions in a change prompt.
-- **[`update`](#9-update)**: Updates the original prompt file based on modified code.
-- **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description.
-- **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files.
-- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash. Includes an agentic fallback mode for complex errors.
-- **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line.
-- **[`bug`](#14-bug)**: Generates a unit test from a GitHub issue via an agentic workflow that analyzes, reproduces, and creates failing tests.
-- **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file.
-- **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging its output against the prompt's intent using an LLM.
+### Command Relationships
+
+The following diagram shows how PDD commands interact:
+
+```mermaid
+flowchart TB
+    subgraph entry["Entry Points"]
+        connect["pdd connect<br/>(Web UI - Recommended)"]
+        cli["Direct CLI"]
+    end
+
+    subgraph issue["Issue-Driven Commands"]
+        change["pdd change &lt;url&gt;"]
+        bug["pdd bug &lt;url&gt;"]
+        fix_url["pdd fix &lt;url&gt;"]
+        test_url["pdd test &lt;url&gt;"]
+    end
+
+    sync["pdd sync"]
+
+    subgraph sync_flow["sync workflow"]
+        direction LR
+        generate["generate"] --> test["test"] --> fix["fix"] --> update["update"]
+    end
+
+    connect --> issue
+    connect --> sync
+    cli --> issue
+    cli --> sync
+
+    sync --> sync_flow
+```
+
+**Key concepts:**
+- **Entry points**: Use `pdd connect` (web UI) or run commands directly via CLI
+- **Issue-driven**: `change`, `bug`, `fix <url>` automate GitHub issue workflows
+- **`pdd sync`**: Orchestrates generate → test → fix → update for prompt-based development
+
+### Getting Started
+- **[`connect`](#17-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction
+- **[`setup`](#post-installation-setup-required-first-step-after-installation)**: Configure API keys and shell completion
+
+### Agentic Commands (Issue-Driven)
+- **[`change`](#8-change)**: Implement feature requests from GitHub issues (12-step workflow)
+- **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
+- **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
+- **[`test`](#4-test)**: Generate UI tests from GitHub issues (9-step workflow in agentic mode)
+
+### Core Commands (Prompt-Based)
+- **[`sync`](#1-sync)**: **[PRIMARY FOR PROMPT WORKFLOWS]** Automated prompt-to-code cycle
+- **[`generate`](#2-generate)**: Creates runnable code from a prompt file; supports parameterized prompts via `-e/--env`
+- **[`example`](#3-example)**: Generates a compact example showing how to use functionality defined in a prompt
+- **[`test`](#4-test)**: Generates or enhances unit tests for a code file and its prompt
+- **[`update`](#9-update)**: Updates the original prompt file based on modified code
+- **[`verify`](#16-verify)**: Verifies functional correctness by running a program and judging output against intent
+- **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash
+
+### Prompt Management
+- **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives
+- **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
+- **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
+- **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
+- **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
+- **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
+
+### Utility Commands
+- **[`auth`](#18-auth)**: Manages authentication with PDD Cloud
+- **[`sessions`](#19-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
 
 ## Global Options
 
@@ -870,6 +1004,38 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.promp
 pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_calculator_python.prompt calculator_python.prompt
 ```
 
+**Agentic Architecture Mode:**
+
+When the positional argument is a GitHub issue URL instead of a prompt file, `generate` enters agentic architecture mode. The issue body serves as the PRD (Product Requirements Document), and an 8-step agentic workflow generates `architecture.json` automatically.
+
+```bash
+pdd generate https://github.com/owner/repo/issues/42
+```
+
+The 8-step workflow:
+1. **Analyze PRD**: Extract features, tech stack, and requirements from the issue content
+2. **Deep Analysis**: Feature decomposition, module boundaries, shared concerns
+3. **Research**: Web search for tech stack documentation and best practices
+4. **Design**: Module breakdown with dependency graph and priority ordering
+5. **Research Dependencies**: Find relevant API docs and code examples per module
+6. **Generate**: Produce complete `architecture.json` with proper priorities
+7. **Validate**: Check for circular deps, priority ordering, missing deps
+8. **Fix**: Auto-fix validation issues (loops back to step 7, max 5 iterations)
+
+Prerequisites:
+- `gh` CLI must be installed and authenticated
+- The issue must contain a PRD describing the project scope
+
+**Workflow Resumption**: Re-running `pdd generate <issue-url>` resumes from the last completed step. State is persisted to GitHub issue comments for cross-machine resume.
+
+**Hard Stops**: The workflow stops if the PRD content is insufficient, the tech stack is ambiguous, or clarification is needed. Address the issue and re-run.
+
+Example:
+```bash
+pdd generate https://github.com/myorg/myrepo/issues/42
+# Generates: architecture.json + architecture_diagram.html
+```
+
 #### Prompt Templates
 
 Templates are reusable prompt files that generate a specific artifact (code, JSON, tests, etc.). Templates carry human/CLI metadata in YAML front matter (parsed by the CLI and not sent to the LLM), while the body stays concise and model‑focused.
@@ -979,6 +1145,24 @@ pdd generate --template architecture/architecture_json \
   --output architecture.json
 # Results in: architecture_diagram.html (from existing architecture.json)
 ```
+
+**Context URLs (optional field):**
+
+Architecture entries support an optional `context_urls` array that associates web documentation references with each module. When prompts are generated from the architecture (via `generate_prompt`), these URLs are emitted as `<web>` tags in the Dependencies section, enabling the LLM to fetch relevant API documentation during code generation.
+
+```json
+{
+  "filename": "orders_api_Python.prompt",
+  "dependencies": ["models_Python.prompt"],
+  "context_urls": [
+    {"url": "https://fastapi.tiangolo.com/tutorial/first-steps/", "purpose": "FastAPI routing patterns"},
+    {"url": "https://docs.pydantic.dev/latest/concepts/models/", "purpose": "Pydantic model validation"}
+  ],
+  ...
+}
+```
+
+The `context_urls` field is populated automatically by the agentic architecture workflow (step 5: research dependencies) but can also be added manually to any architecture entry.
 
 Front Matter (YAML) metadata
 
@@ -1284,6 +1468,10 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
+  - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript)
+  - `md`: Generates markdown format with `.md` extension
+  When `--format` is specified with an explicit `--output` path, the format option constrains the output file extension accordingly.
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
@@ -1299,6 +1487,64 @@ pdd [GLOBAL OPTIONS] example --output examples/factorial_calculator_example.py f
 
 ### 4. test
 
+Generate or enhance unit tests for a given code file and its corresponding prompt file. Also supports **agentic mode** for generating UI tests from GitHub issues.
+
+#### Agentic Mode (UI Test Generation)
+
+Generate UI tests from a GitHub issue. The issue describes what needs to be tested (a webpage, CLI, or desktop app), and an agentic workflow analyzes the target, creates a test plan, and generates comprehensive UI tests.
+
+```
+pdd [GLOBAL OPTIONS] test <github-issue-url>
+```
+
+**How it works (9-step workflow with GitHub comments):**
+
+1. **Duplicate check** - Search for existing issues describing the same test requirements. If found, merge content and close the duplicate. Posts comment with findings.
+
+2. **Documentation check** - Review repo documentation and codebase to understand what needs to be tested. Posts comment with findings.
+
+3. **Analyze & clarify** - Determine if enough information exists in the issue to create tests. Posts comment requesting clarification if needed.
+
+4. **Detect frontend** - Identify the frontend type: web UI (Next.js, React, etc.), CLI, or desktop app. Determines the appropriate testing framework (e.g., Playwright for web). Posts comment with frontend analysis.
+
+5. **Create test plan** - Design a comprehensive test plan and verify it's achievable. Posts comment requesting information (e.g., credential access) if plan is blocked.
+
+6. **Generate tests** - Create UI tests in a new worktree following the test plan. Posts comment with generated test code.
+
+7. **Run tests** - Execute the generated tests against the target. Posts comment with test results.
+
+8. **Fix & iterate** - Fix any failing tests and re-run until they pass. Posts comment with fix attempts and final status.
+
+9. **Submit PR** - Create a draft pull request with the UI tests linked to the issue. Posts comment with PR link.
+
+**Agentic Options:**
+- `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+- `--manual`: Use legacy prompt-based mode instead of agentic mode
+
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
+
+**Example (Agentic Mode):**
+```bash
+# Generate UI tests from a GitHub issue
+pdd test https://github.com/myorg/myrepo/issues/789
+
+# Resume after answering clarifying questions
+pdd test https://github.com/myorg/myrepo/issues/789
+```
+
+**Next Step - Fixing Test Issues:**
+
+If the generated tests reveal issues that need code fixes, use `pdd fix` with the same issue URL:
+
+```bash
+pdd fix https://github.com/myorg/myrepo/issues/789
+```
+
+---
+
+#### Manual Mode (Prompt-Based)
+
 Generate or enhance unit tests for a given code file and its corresponding prompt file.
 
 Test organization:
@@ -1306,12 +1552,13 @@ Test organization:
 - New tests accumulate in that same file over time rather than being regenerated from scratch. When augmenting tests, PDD can merge additions into the existing file (see `--merge`).
 
 ```
-pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_FILE
+pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_OR_EXAMPLE_FILE
+pdd [GLOBAL OPTIONS] test --manual [OPTIONS] PROMPT_FILE CODE_OR_EXAMPLE_FILE
 ```
 
 Arguments:
 - `PROMPT_FILE`: The filename of the prompt file that generated the code.
-- `CODE_FILE`: The filename of the code file to be tested.
+- `CODE_OR_EXAMPLE_FILE`: The filename of the code implementation or example file. Files ending with `_example` are treated as example files for TDD-style test generation.
 
 Options:
 - `--output LOCATION`: Specify where to save the generated test file. The default file name is `test_<basename>.<language_file_extension>`. If an output file with the specified name already exists, a new file with a numbered suffix (e.g., `test_calculator_1.py`) will be created instead of overwriting.
@@ -1346,12 +1593,17 @@ could influence the output of the `pdd test` command when run in the same direct
 pdd [GLOBAL OPTIONS] test --output tests/test_factorial_calculator.py factorial_calculator_python.prompt src/factorial_calculator.py
 ```
 
-2. Generate additional tests to improve coverage (with multiple existing test files):
+2. Generate tests from an example file (TDD-style):
+```
+pdd [GLOBAL OPTIONS] test --output tests/test_calculator.py calculator_python.prompt examples/calculator_example.py
+```
+
+3. Generate additional tests to improve coverage (with multiple existing test files):
 ```
 pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --existing-tests tests/test_calculator_edge_cases.py --output tests/test_calculator_enhanced.py calculator_python.prompt src/calculator.py
 ```
 
-3. Improve coverage and merge with existing tests:
+4. Improve coverage and merge with existing tests:
 ```
 pdd [GLOBAL OPTIONS] test --coverage-report coverage.xml --existing-tests tests/test_calculator.py --merge --target-coverage 95.0 calculator_python.prompt src/calculator.py
 ```
@@ -1456,19 +1708,37 @@ pdd [GLOBAL OPTIONS] preprocess --output preprocessed/factorial_calculator_pytho
 
 ### 6. fix
 
-Fix errors in code and unit tests based on error messages and the original prompt file.
+Fix errors in code and unit tests. Supports two modes: **Agentic E2E Fix** (default when given a GitHub URL) for multi-dev-unit test fixing, and **Manual mode** for single dev-unit fixing with explicit file arguments.
 
+**Agentic E2E Fix Mode (GitHub URL):**
 ```
-pdd [GLOBAL OPTIONS] fix [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
+pdd [GLOBAL OPTIONS] fix [OPTIONS] <GITHUB_ISSUE_URL>
 ```
 
-Arguments:
+**Manual Mode (file arguments):**
+```
+pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE ERROR_FILE
+```
+
+#### Manual Mode Arguments
 - `PROMPT_FILE`: The filename of the prompt file that generated the code under test.
 - `CODE_FILE`: The filename of the code file to be fixed.
 - `UNIT_TEST_FILES`: The filename(s) of the unit test file(s). Multiple files can be provided, and each will be processed individually.
 - `ERROR_FILE`: The filename containing the unit test runtime error messages. Optional and does not need to exist when used with the `--loop` command.
 
-Options:
+#### Common Options
+- `--manual`: Use manual mode with explicit file arguments (required for legacy/single dev-unit fixing).
+- `--verbose`: Show detailed output during processing.
+- `--quiet`: Suppress all output except errors.
+- `--protect-tests/--no-protect-tests`: When enabled, prevents the LLM from modifying test files. The LLM will treat tests as read-only specifications and only fix the code. This is especially useful when tests created by `pdd bug` are known to be correct. Default: `--no-protect-tests`.
+
+#### Agentic E2E Fix Options
+- `--timeout-adder FLOAT`: Additional seconds to add to each step's timeout (default: 0.0).
+- `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
+- `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
+- `--force`: Override the branch mismatch safety check. By default, the command aborts if the current git branch doesn't match the expected branch from the issue (to prevent accidentally modifying the wrong codebase).
+
+#### Manual Mode Options
 - `--output-test LOCATION`: Specify where to save the fixed unit test file. The default file name is `test_<basename>_fixed.<language_file_extension>`. **Warning: If multiple `UNIT_TEST_FILES` are provided along with this option, only the fixed content of the last processed test file will be saved to this location, overwriting previous results. For individual fixed files, omit this option.**
 - `--output-code LOCATION`: Specify where to save the fixed code file. The default file name is `<basename>_fixed.<language_file_extension>`. If an environment variable `PDD_FIX_CODE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-results LOCATION`: Specify where to save the results of the error fixing process. The default file name is `<basename>_fix_results.log`. If an environment variable `PDD_FIX_RESULTS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
@@ -1512,19 +1782,19 @@ This feature only takes effect when `--loop` is set.
 
 When the `--loop` flag is set, agentic fallback is enabled by default:
 ```bash
-pdd [GLOBAL OPTIONS] fix --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+pdd [GLOBAL OPTIONS] fix --manual --loop [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 ```
 
 Or you may want to enable it explicitly
 
 ```bash
-pdd [GLOBAL OPTIONS] fix --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+pdd [GLOBAL OPTIONS] fix --manual --loop --agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 ```
 
 To disable this feature while using `--loop`, add `--no-agentic-fallback` to turn it off.
 
 ```bash
-pdd [GLOBAL OPTIONS] fix --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
+pdd [GLOBAL OPTIONS] fix --manual --loop --no-agentic-fallback [OTHER OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 ```
 
 **Prerequisites:**
@@ -1542,16 +1812,58 @@ For the agentic fallback to function, you need to have at least one of the suppo
 
 You can configure these keys using `pdd setup` or by setting them in your shell's environment.
 
-Example (save to different location):
-```
-pdd [GLOBAL OPTIONS] update --output updated_factorial_calculator_python.prompt factorial_calculator_python.prompt src/modified_factorial_calculator.py src/original_factorial_calculator.py
+#### Agentic E2E Fix Mode
+
+For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates a 9-step iterative workflow to fix both unit tests and e2e tests across your codebase.
+
+**How it Works:**
+
+The workflow analyzes the GitHub issue to extract test information, then iteratively fixes failing tests:
+
+1. **Run Unit Tests**: Execute unit tests from the issue and run `pdd fix` on each failing test sequentially
+2. **Run E2E Tests**: Execute end-to-end tests to identify failures; stop if all pass
+3. **Root Cause Analysis**: Analyze failures against documentation to determine if issues are in code, tests, or both
+4. **Fix E2E Tests**: If e2e tests themselves are incorrect, fix them and return to step 2
+5. **Identify Dev Units**: Determine which dev units are involved in the failures
+6. **Create Unit Tests**: For code bugs, create or append unit tests for the affected dev units
+7. **Verify Tests**: Run new unit tests to confirm they detect the bugs and will pass once fixed
+8. **Run PDD Fix**: Execute `pdd fix` sequentially on failing unit tests for each dev unit
+9. **Verify All**: Return to step 1 and repeat until all tests pass
+
+**Resumable Operations:**
+
+State is automatically persisted, allowing you to resume interrupted workflows. Use `--no-resume` to start fresh.
+
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd fix` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
+
+**Example:**
+```bash
+# Fix tests from a GitHub issue (agentic mode)
+pdd fix https://github.com/myorg/myrepo/issues/42
+
+# With custom timeout and max cycles
+pdd fix --timeout-adder 30 --max-cycles 10 https://github.com/myorg/myrepo/issues/42
+
+# Start fresh (ignore saved state)
+pdd fix --no-resume https://github.com/myorg/myrepo/issues/42
+
+# Disable GitHub state persistence (local-only)
+pdd fix --no-github-state https://github.com/myorg/myrepo/issues/42
+
+# Protect tests from modification (only fix code, not tests)
+pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 ```
 
-Example using the `--git` option:
-```
-pdd [GLOBAL OPTIONS] update --git factorial_calculator_python.prompt src/modified_factorial_calculator.py
-# This overwrites factorial_calculator_python.prompt in place using git history
-```
+**Prerequisites:**
+- The `gh` CLI must be installed and authenticated
+- At least one supported agent CLI (Claude, Gemini, or Codex) with API key configured
+
+**Relationship with `pdd bug`:**
+
+This feature works seamlessly with issues processed by `pdd bug`. The typical workflow is:
+1. Use `pdd bug <issue_url>` to analyze a bug and generate failing unit tests
+2. Use `pdd fix <issue_url>` to iteratively fix the failing tests across all affected dev units
+
 ### 7. split
 
 Split large complex prompt files into smaller, more manageable prompt files.
@@ -1576,30 +1888,72 @@ pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --out
 
 ### 8. change
 
-Modify an input prompt file based on a change prompt and the corresponding input code.
+Implement a change request from a GitHub issue using a 12-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), reviews architecture (asking for decisions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, runs a review loop to identify and fix issues, and creates a PR.
 
+**Agentic Mode (default):**
 ```
-pdd [GLOBAL OPTIONS] change [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE [INPUT_PROMPT_FILE]
+pdd [GLOBAL OPTIONS] change GITHUB_ISSUE_URL
+```
+
+Arguments:
+- `GITHUB_ISSUE_URL`: The URL of the GitHub issue describing the change request.
+
+The 12-step workflow:
+1. **Duplicate Check**: Search for duplicate issues
+2. **Documentation Check**: Verify feature isn't already implemented
+3. **Research**: Web search to clarify specifications and find best practices
+4. **Clarification**: Ensure requirements are clear; ask questions with options if not (stops workflow until answered)
+5. **Documentation Changes**: Analyze what documentation updates are needed
+6. **Identify Dev Units**: Find affected prompts, code, examples, and tests
+7. **Architecture Review**: Identify architectural decisions; ask questions with options if needed (stops workflow until answered)
+8. **Analyze Changes**: Design prompt modifications
+9. **Implement Changes**: Modify prompts in an isolated git worktree
+10. **Identify Issues**: Review changes for problems (part of review loop)
+11. **Fix Issues**: Fix identified issues (part of review loop, max 5 iterations)
+12. **Create PR**: Create a pull request linking to the issue
+
+**Workflow Resumption**: Steps 4 and 7 may pause the workflow to ask clarifying or architectural questions. When this happens, answer the questions in the GitHub issue and run `pdd change` again. The workflow will resume from where it left off, skipping already-completed steps to save tokens.
+
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
+
+**Review Loop**: Steps 10-11 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
+
+**Worktree Branching Behavior**: When running `pdd change` or `pdd bug`, a new git worktree is created based on your current HEAD:
+- **From main/master**: Branch is based on latest main - creates independent PR
+- **From feature branch**: Branch inherits commits from that branch - useful for stacked/dependent PRs
+
+If you want independent changes, run the command from the main branch. A warning will be displayed when running from a non-main branch.
+
+Example (agentic mode):
+```bash
+pdd change https://github.com/myorg/myrepo/issues/239
+```
+
+After the workflow completes, a PR is automatically created linking to the issue. The PR includes a `sync_order.sh` script that runs `pdd sync` commands in dependency order. Review the PR and run `./sync_order.sh` after merge to regenerate code.
+
+**Manual Mode (legacy):**
+```
+pdd [GLOBAL OPTIONS] change --manual [OPTIONS] CHANGE_PROMPT_FILE INPUT_CODE INPUT_PROMPT_FILE
 ```
 
 Arguments:
 - `CHANGE_PROMPT_FILE`: The filename containing the instructions on how to modify the input prompt file.
 - `INPUT_CODE`: The filename of the code that was generated from the input prompt file, or the directory containing the code files when used with the '--csv' option.
-- `INPUT_PROMPT_FILE`: (Optional) The filename of the prompt file that will be modified. Not required when using the '--csv' option.
+- `INPUT_PROMPT_FILE`: The filename of the prompt file that will be modified. Required in standard mode; not used when using the '--csv' option.
 
 Options:
 - `--budget FLOAT`: Set the maximum cost allowed for the change process (default is $5.0).
 - `--output LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_CHANGE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--csv`: Use a CSV file for the change prompts instead of a single change prompt file. The CSV file should have columns: `prompt_name` and `change_instructions`. When this option is used, `INPUT_PROMPT_FILE` is not needed, and `INPUT_CODE` should be the directory where the code files are located. The command expects prompt names in the CSV to follow the `<basename>_<language>.prompt` convention. For each `prompt_name` in the CSV, it will look for the corresponding code file (e.g., `<basename>.<language_extension>`) within the specified `INPUT_CODE` directory. Output files will overwrite existing files unless `--output LOCATION` is specified. If `LOCATION` is a directory, the modified prompt files will be saved inside this directory using the default naming convention otherwise, if a csv filename is specified the modified prompts will be saved in that CSV file with columns 'prompt_name' and 'modified_prompt'.
 
-Example (single prompt change):
+Example (manual single prompt change):
 ```
-pdd [GLOBAL OPTIONS] change --output modified_factorial_calculator_python.prompt changes_factorial.prompt src/factorial_calculator.py factorial_calculator_python.prompt
+pdd [GLOBAL OPTIONS] change --manual --output modified_factorial_calculator_python.prompt changes_factorial.prompt src/factorial_calculator.py factorial_calculator_python.prompt
 ```
 
-Example (batch change using CSV):
+Example (manual batch change using CSV):
 ```
-pdd [GLOBAL OPTIONS] change --csv --output modified_prompts/ changes_batch.csv src/
+pdd [GLOBAL OPTIONS] change --manual --csv --output modified_prompts/ changes_batch.csv src/
 ```
 
 ### 9. update
@@ -1815,17 +2169,23 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 2. **Documentation check** - Review repo documentation to determine if this is a bug or user error. Posts comment with findings.
 
-3. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
+3. **Triage** - Assess if enough information is provided to proceed. Posts comment requesting more info if needed.
 
-4. **Root cause analysis** - Run experiments to identify the root cause. Posts comment explaining the root cause.
+4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
 
-5. **Test plan** - Design a plan for creating tests to detect the problem. Posts comment with the test plan.
+5. **Root cause analysis** - Run experiments to identify the root cause. Posts comment explaining the root cause.
 
-6. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
+5.5. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
-7. **Verify detection** - Confirm the test successfully detects the bug. Posts comment confirming verification.
+6. **Test plan** - Design a plan for creating tests to detect the problem. Posts comment with the test plan.
 
-8. **Create draft PR** - Create a draft pull request with the failing test and link it to the issue. Posts comment with PR link.
+7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
+
+8. **Verify detection** - Confirm the unit test successfully detects the bug. Posts comment confirming verification.
+
+9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Posts comment with E2E test results.
+
+10. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
 
 Arguments:
 - `ISSUE_URL`: GitHub issue URL (e.g., https://github.com/owner/repo/issues/123)
@@ -1834,6 +2194,10 @@ Options:
 - `--manual`: Use legacy mode with explicit file arguments (PROMPT_FILE, CODE_FILE, PROGRAM_FILE, CURRENT_OUTPUT, DESIRED_OUTPUT)
 - `--output LOCATION`: Specify where to save the generated unit test. Default: `test_<module>_bug.py`
 - `--language LANG`: Specify the programming language for the unit test (default is "Python").
+- `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
 Example:
 ```bash
@@ -1843,6 +2207,22 @@ pdd bug https://github.com/myorg/myrepo/issues/42
 # Manual mode (legacy)
 pdd bug --manual prompt.prompt code.py main.py current.txt desired.txt
 ```
+
+**Next Step - Fixing the Bug:**
+
+After `pdd bug` creates failing tests and a draft PR, use `pdd fix` with the same issue URL to automatically fix the failing tests across all affected dev units:
+
+```bash
+pdd fix https://github.com/myorg/myrepo/issues/42
+```
+
+**Tip:** If `pdd bug` correctly identified the bug and created valid failing tests, use `--protect-tests` to prevent `pdd fix` from modifying the tests. This ensures the LLM only fixes the code to make the tests pass:
+
+```bash
+pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
+```
+
+See the [fix command](#6-fix) documentation for details on the agentic E2E fix workflow.
 
 ### 15. auto-deps
 
@@ -1915,6 +2295,161 @@ pdd verify --max-attempts 5 --budget 2.5 --output-code src/calc_verified.py --ou
 ```
 
 **When to use**: Use `verify` after `generate` and `example` for an initial round of functional validation and automated fixing based on *LLM judgment of program output against the prompt*. This helps ensure the code produces results aligned with the prompt's intent for a key scenario before proceeding to more granular unit testing (`test`) or fixing specific runtime errors (`crash`) or unit test failures (`fix`).
+
+### 17. connect
+
+**[RECOMMENDED ENTRY POINT]** Launches a web-based interface for PDD at `localhost:9876`.
+
+The web interface provides:
+- **Command Execution**: Run any PDD command (`pdd change`, `pdd bug`, `pdd fix`, `pdd sync`, etc.) with visual feedback
+- **File Browser**: View and edit prompts, code, and tests in your project
+- **Remote Access**: Access your session from any browser via PDD Cloud
+- **Session Management**: Run multiple sessions with custom names
+
+```bash
+pdd [GLOBAL OPTIONS] connect [OPTIONS]
+```
+
+Options:
+- `--port INT`: Port to listen on (default: 9876).
+- `--host TEXT`: Host to bind to (default: 127.0.0.1).
+- `--allow-remote`: Allow non-localhost connections. When enabled, the server binds to 0.0.0.0 to accept external connections.
+- `--token TEXT`: Bearer token for authentication. Recommended when using `--allow-remote`.
+- `--no-browser`: Don't open the browser automatically when starting the server.
+- `--frontend-url TEXT`: Custom frontend URL to open instead of the default.
+- `--local-only`: Skip cloud registration and run in local-only mode. The session will not be accessible remotely via PDD Cloud.
+- `--session-name TEXT`: Custom session name for identification. Useful when running multiple sessions.
+
+The command starts a FastAPI server and automatically opens the web interface in your default browser. The server also provides:
+- A REST API for programmatic access to PDD commands
+- API documentation at `http://localhost:9876/docs`
+
+**Remote Session Registration:**
+By default, `pdd connect` registers with PDD Cloud, allowing you to access your session remotely from any browser. The session is automatically deregistered on graceful shutdown (Ctrl+C).
+
+Security Notes:
+- By default, the server only accepts connections from localhost (127.0.0.1).
+- Using `--allow-remote` without `--token` will display a security warning and require confirmation.
+- For remote access, always use the `--token` option to require authentication.
+
+Example:
+```bash
+# Start the server with default settings (opens browser automatically)
+pdd connect
+
+# Start on a custom port without opening the browser
+pdd connect --port 8080 --no-browser
+
+# Allow remote connections with authentication
+pdd connect --allow-remote --token "your-secret-token"
+
+# Run in local-only mode (no cloud registration)
+pdd connect --local-only
+
+# Start with a custom session name for easy identification
+pdd connect --session-name "my-dev-server"
+```
+
+**When to use**: Use `connect` when you prefer a graphical interface for working with PDD, when demonstrating PDD to others, or when integrating PDD with other tools that can communicate via REST APIs.
+
+### 18. auth
+
+Manages authentication with PDD Cloud. The `auth` command provides subcommands for signing in, signing out, checking status, and retrieving authentication tokens.
+
+```bash
+pdd [GLOBAL OPTIONS] auth SUBCOMMAND [OPTIONS]
+```
+
+#### Subcommands
+
+##### auth login
+
+Signs in to PDD Cloud. Opens a web browser to complete the authentication process with an ephemeral code.
+
+```bash
+pdd auth login
+```
+
+##### auth status
+
+Displays the active account and current authentication state. Exit code is 0 if authenticated, 1 otherwise.
+
+```bash
+pdd auth status [OPTIONS]
+```
+
+**Options:**
+- `--verify`: Verify authentication by actually attempting to refresh the token. Without this flag, only cached credentials are checked.
+
+**Examples:**
+```bash
+# Quick check (uses cached credentials)
+pdd auth status
+
+# Deep verification (attempts token refresh)
+pdd auth status --verify
+```
+
+**Note:** If only a refresh token exists (no cached JWT), the status will show a warning that the token is expired and will refresh on next use. Use `--verify` to actually test if the refresh will succeed, or run `pdd auth login` to refresh the token immediately.
+
+##### auth logout
+
+Removes the stored authentication configuration for a PDD Cloud account locally.
+
+```bash
+pdd auth logout
+```
+
+##### auth token
+
+Outputs the authentication token for the current account. Useful for scripts or programmatic access to PDD Cloud.
+
+```bash
+pdd auth token [OPTIONS]
+```
+
+**Options:**
+- `--format [raw|json]`: Output format for the token. Use `raw` for just the token string (default), or `json` for structured output including token and expiration time.
+
+**When to use**: Use `auth` commands to manage your PDD Cloud authentication state. Use `auth login` to authenticate before using cloud features, `auth status` to verify your current session, and `auth token` when you need to pass credentials to scripts or other tools.
+
+### 19. `pdd sessions` - Manage Remote Sessions
+
+The `sessions` command group allows you to manage remote PDD sessions registered with PDD Cloud. Remote sessions enable you to control PDD instances running on other machines through the web frontend.
+
+#### List Sessions
+
+```bash
+pdd sessions list
+pdd sessions list --json
+```
+
+Lists all active remote sessions associated with your authenticated account. Use `--json` for machine-readable output.
+
+#### Session Info
+
+```bash
+pdd sessions info <session_id>
+```
+
+Displays detailed information about a specific session including project name, cloud URL, status, and last heartbeat time.
+
+#### Cleanup Sessions
+
+```bash
+pdd sessions cleanup --stale
+pdd sessions cleanup --all
+pdd sessions cleanup --all --force
+```
+
+**Options:**
+- `--stale`: Remove only stale sessions (no recent heartbeat)
+- `--all`: Remove all sessions for the current user
+- `--force`: Skip confirmation prompt
+
+**Note:** Sessions are automatically registered when running `pdd connect` (unless `--local-only` is specified) and deregistered on graceful shutdown. Use `pdd sessions cleanup` to manually remove orphaned sessions if a `pdd connect` instance was terminated ungracefully.
+
+**When to use**: Use `sessions list` to discover available remote sessions, `sessions info` to check session details, and `sessions cleanup` to remove stale or orphaned sessions.
 
 ## Example Review Process
 
@@ -2092,6 +2627,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_VERIFY_RESULTS_OUTPUT_PATH`**: Default path for the results log file generated by the `verify` command.
 - **`PDD_VERIFY_CODE_OUTPUT_PATH`**: Default path for the final code file generated by the `verify` command.
 - **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the final program file generated by the `verify` command.
+- **`PDD_CLOUD_TIMEOUT`**: Cloud request timeout in seconds. Default is 900 (15 minutes). Increase this value if you experience timeouts with long-running cloud operations.
 
 ### Configuration Priority
 
@@ -2205,6 +2741,7 @@ Here are some common issues and their solutions:
 7. **Command Timeout**:
    - Check internet connection
    - Try running with `--local` flag to compare
+   - Increase timeout with `export PDD_CLOUD_TIMEOUT=1800` (30 minutes) for long-running operations
    - If persistent, check PDD Cloud status page
 
 8. **Sync-Specific Issues**:
