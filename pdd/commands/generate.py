@@ -117,10 +117,12 @@ def generate(
                 quiet=quiet,
             )
             if not quiet:
-                status = "[green]Success[/green]" if success else "[red]Failed[/red]"
-                console.print(f"{status}: {message}")
+                if success:
+                    click.echo(click.style(f"Success: {message}", fg="green"))
+                else:
+                    click.echo(click.style(f"Failed: {message}", fg="red"))
                 if output_files:
-                    console.print(f"Output files: {', '.join(output_files)}")
+                    click.echo(f"Output files: {', '.join(output_files)}")
             return (message, cost, model) if success else None
 
         # Validate file path (not a URL, must exist and not be a directory)
