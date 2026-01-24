@@ -2678,6 +2678,55 @@ def test_examples_dir_uses_root_of_outputs_example_path_not_parent(tmpdir):
         "examples_dir should use root of outputs.example.path, not parent directory."
 
 
+def test_examples_dir_extracts_root_from_flat_example_output_path(tmpdir):
+    """
+    Regression test for Issue #332: When example_output_path is a subdirectory
+    like "context/commands/", examples_dir should extract the ROOT ("context"),
+    not use the full subdirectory path.
+
+    Bug: The existing test (test_examples_dir_uses_root_of_outputs_example_path_not_parent)
+    uses the NESTED format (outputs.example.path) which returns None and triggers
+    the fallback to "context", making the test pass by accident.
+
+    The actual .pddrc uses FLAT format (example_output_path: "context/commands/")
+    which DOES get found, but the code doesn't extract the root - it uses the
+    full subdirectory path, causing auto-deps to scan only context/commands/
+    and overwrite project_dependencies.csv with just 22 files instead of 600+.
+    """
+    input_file_paths = {}  # No inputs for sync discovery mode
+    force = False
+    quiet = True
+    command = 'sync'
+    command_options = {'basename': 'generate', 'language': 'python'}
+
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "pdd" / "commands" / "generate.py"),
+        "test_output_path": str(tmpdir / "tests" / "commands" / "test_generate.py"),
+    }
+
+    # CRITICAL: Use FLAT format like actual .pddrc, not nested format
+    mock_context_config = {
+        "example_output_path": "context/commands/",  # FLAT format - subdirectory!
+        "generate_output_path": "pdd/commands/",
+        "test_output_path": "tests/commands/",
+    }
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=Path(str(tmpdir / '.pddrc'))), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {'commands': {'defaults': mock_context_config}}}), \
+         patch('pdd.construct_paths._detect_context', return_value='commands'), \
+         patch('pdd.construct_paths._get_context_config', return_value=mock_context_config):
+
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths, force, quiet, command, command_options
+        )
+
+    # examples_dir should be "context" (root), NOT "context/commands" (full subdirectory)
+    assert resolved_config["examples_dir"] == "context", \
+        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (subdirectory). " \
+        "examples_dir should extract root from example_output_path to avoid CSV truncation."
+
+
 class TestPromptsDirContextDetection:
     """
     TDD Tests for detecting context from prompts_dir configuration.

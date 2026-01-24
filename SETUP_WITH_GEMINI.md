@@ -217,4 +217,37 @@ hello
 ```
 
 
+---
+
+## 10. Try the Web Interface with `pdd connect`
+
+PDD also provides a web-based interface for generating code and managing projects. Start the local server:
+
+```bash
+pdd connect
+```
+
+This launches a FastAPI server on `http://localhost:9876` and opens your browser automatically.
+
+From the web interface you can:
+- Generate code from prompts visually
+- Implement GitHub issues automatically
+- Manage PDD projects through a GUI
+
+Common options:
+
+```bash
+# Use a different port
+pdd connect --port 8000
+
+# Don't auto-open the browser
+pdd connect --no-browser
+
+# View API docs at http://localhost:9876/docs
+```
+
+Press `Ctrl+C` to stop the server when you're done.
+
+---
+
 ✅ That's it! You've installed PDD, configured Gemini, and used `pdd sync` to generate your first module.
