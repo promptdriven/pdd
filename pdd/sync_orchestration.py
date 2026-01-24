@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass, field
 import tempfile
 import sys
 
-from .sync_tui import maybe_steer_operation
+from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 
 import click
 import logging
