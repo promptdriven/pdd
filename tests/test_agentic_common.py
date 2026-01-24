@@ -9,6 +9,7 @@ from pdd.agentic_common import (
     run_agentic_task,
     _calculate_gemini_cost,
     _calculate_codex_cost,
+    _find_cli_binary,
     GEMINI_PRICING_BY_FAMILY,
     CODEX_PRICING
 )
@@ -129,7 +130,7 @@ def mock_load_model_data():
 
 @pytest.fixture
 def mock_shutil_which():
-    with patch('shutil.which') as mock:
+    with patch('pdd.agentic_common._find_cli_binary') as mock:
         yield mock
 
 @pytest.fixture
@@ -227,10 +228,10 @@ def test_run_agentic_task_anthropic_success(mock_cwd, mock_env, mock_load_model_
     assert cost == 0.05
     assert provider == "anthropic"
     
-    # Verify command structure
+    # Verify command structure - now uses full path from _find_cli_binary
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
-    assert cmd[0] == "claude"
+    assert cmd[0] == "/bin/claude"  # Uses discovered path, not hardcoded name
     assert "-p" in cmd
     assert "--dangerously-skip-permissions" in cmd
     assert "--output-format" in cmd
@@ -346,10 +347,10 @@ def test_run_agentic_task_gemini_success(mock_cwd, mock_env, mock_load_model_dat
     # Cost = 0.35 + 1.05 = 1.40
     assert abs(cost - 1.40) < 0.0001
 
-    # Verify command
+    # Verify command - now uses full path from _find_cli_binary
     args, _ = mock_subprocess.call_args
     cmd = args[0]
-    assert cmd[0] == "gemini"
+    assert cmd[0] == "/bin/gemini"  # Uses discovered path, not hardcoded name
     assert "--yolo" in cmd
 
 def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
@@ -387,10 +388,10 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert "Codex output." in msg
     assert abs(cost - 7.50) < 0.0001
 
-    # Verify command
+    # Verify command - now uses full path from _find_cli_binary
     args, _ = mock_subprocess.call_args
     cmd = args[0]
-    assert cmd[0] == "codex"
+    assert cmd[0] == "/bin/codex"  # Uses discovered path, not hardcoded name
     assert "--full-auto" in cmd
     assert "--json" in cmd
 
@@ -760,9 +761,15 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     google_real_success.stderr = ""
 
     def run_side_effect(cmd, **kwargs):
-        if "claude" in cmd:
-            return anthropic_false_positive
-        if "gemini" in cmd:
+        # Check if CLI path contains the provider name (e.g., /bin/exe contains "exe")
+        # Since _find_cli_binary is mocked to return "/bin/exe", we need a different approach
+        # Check the command path or any element for provider identification
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        if "anthropic" in str(kwargs.get('env', {}).get('_provider', '')) or cmd == ["/bin/exe", "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]:
+            # Anthropic command pattern
+            if "--dangerously-skip-permissions" in cmd:
+                return anthropic_false_positive
+        if "--yolo" in cmd:  # Gemini command pattern
             return google_real_success
         return MagicMock(returncode=1)
 
@@ -927,10 +934,10 @@ def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_su
     assert cost == 0.15
     assert provider == "anthropic"
     
-    # Verify command arguments
+    # Verify command arguments - now uses full path from _find_cli_binary
     args, kwargs = mock_subprocess_run.call_args
     cmd = args[0]
-    assert cmd[0] == "claude"
+    assert cmd[0] == "/bin/claude"  # Uses discovered path, not hardcoded name
     assert "--dangerously-skip-permissions" in cmd
     # Should have -p - flag to pipe prompt as direct user message
     assert "-p" in cmd
@@ -964,9 +971,9 @@ def test_run_agentic_task_gemini_success_2(mock_shutil_which, mock_subprocess_ru
     assert cost > 0.0
     assert provider == "google"
     
-    # Verify command
+    # Verify command - now uses full path from _find_cli_binary
     cmd = mock_subprocess_run.call_args[0][0]
-    assert cmd[0] == "gemini"
+    assert cmd[0] == "/bin/gemini"  # Uses discovered path, not hardcoded name
     assert "--yolo" in cmd
 
 def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
