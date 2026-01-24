@@ -740,8 +740,8 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     system falls back to a provider that performs real work.
     """
     # Return different paths for different CLIs so we can distinguish them in subprocess mock
-    def which_side_effect(cli):
-        return f"/bin/{cli}" if cli in ("claude", "gemini", "codex") else None
+    def which_side_effect(cli_name):
+        return f"/bin/{cli_name}" if cli_name in ("claude", "gemini", "codex") else None
     mock_shutil_which.side_effect = which_side_effect
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["GEMINI_API_KEY"] = "key"
@@ -1206,6 +1206,24 @@ def test_run_agentic_task_no_retries_by_default(mock_shutil_which, mock_subproce
 # ---------------------------------------------------------------------------
 
 
+def _prepend_cli_path(monkeypatch, cli_name: str, path_to_prepend) -> None:
+    """
+    Helper to prepend a test path to the common CLI paths.
+
+    This pattern is used across multiple tests to simulate CLI binaries
+    installed in non-standard locations. Using monkeypatch.setitem ensures
+    automatic cleanup after each test.
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture
+        cli_name: Name of the CLI (e.g., "claude", "gemini", "codex")
+        path_to_prepend: Path to prepend to the common paths list
+    """
+    from pdd.agentic_common import _COMMON_CLI_PATHS
+    original_paths = _COMMON_CLI_PATHS.get(cli_name, [])
+    monkeypatch.setitem(_COMMON_CLI_PATHS, cli_name, [path_to_prepend] + original_paths)
+
+
 class TestCliDiscoveryBug:
     """
     Tests for CLI binary discovery bug.
@@ -1233,7 +1251,7 @@ class TestCliDiscoveryBug:
         2. ~/.local/bin is added to PATH in .bashrc/.zshrc
         3. But pdd process doesn't inherit that PATH modification
         """
-        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+        from pdd.agentic_common import _find_cli_binary
 
         # Mock shutil.which to return None (simulates CLI not in PATH)
         monkeypatch.setattr("shutil.which", lambda cmd: None)
@@ -1248,9 +1266,8 @@ class TestCliDiscoveryBug:
         # Mock Path.home() to return our tmp_path
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
-        # Add our test path to common paths (monkeypatch.setitem adds cleanup automatically)
-        original_paths = _COMMON_CLI_PATHS.get("claude", [])
-        monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [fake_claude] + original_paths)
+        # Add our test path to common paths
+        _prepend_cli_path(monkeypatch, "claude", fake_claude)
 
         # This should return the path because claude exists in ~/.local/bin
         result = _find_cli_binary("claude")
@@ -1269,7 +1286,7 @@ class TestCliDiscoveryBug:
         This path is typically added to PATH by nvm's shell integration,
         but may not be available in non-interactive shells.
         """
-        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+        from pdd.agentic_common import _find_cli_binary
 
         # Mock shutil.which to return None
         monkeypatch.setattr("shutil.which", lambda cmd: None)
@@ -1286,8 +1303,7 @@ class TestCliDiscoveryBug:
 
         # Add nvm node parent to common paths for glob expansion
         nvm_node_dir = tmp_path / ".nvm" / "versions" / "node"
-        original_paths = _COMMON_CLI_PATHS.get("claude", [])
-        monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [nvm_node_dir] + original_paths)
+        _prepend_cli_path(monkeypatch, "claude", nvm_node_dir)
 
         result = _find_cli_binary("claude")
 
@@ -1301,8 +1317,6 @@ class TestCliDiscoveryBug:
         """
         Bug reproduction: get_available_agents misses Claude in common paths.
         """
-        from pdd.agentic_common import _COMMON_CLI_PATHS
-
         # Mock shutil.which to return None for all CLIs
         monkeypatch.setattr("shutil.which", lambda cmd: None)
 
@@ -1323,9 +1337,8 @@ class TestCliDiscoveryBug:
 
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
-        # Add test path to common paths (monkeypatch.setitem adds cleanup automatically)
-        original_paths = _COMMON_CLI_PATHS.get("claude", [])
-        monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [fake_claude] + original_paths)
+        # Add test path to common paths
+        _prepend_cli_path(monkeypatch, "claude", fake_claude)
 
         agents = get_available_agents()
 
@@ -1359,7 +1372,7 @@ class TestCliDiscovery:
 
     def test_find_cli_binary_fallback_to_common_paths(self, monkeypatch, tmp_path):
         """When shutil.which returns None, should search common paths."""
-        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+        from pdd.agentic_common import _find_cli_binary
 
         monkeypatch.setattr("shutil.which", lambda cmd: None)
 
@@ -1370,9 +1383,8 @@ class TestCliDiscovery:
         fake_claude.write_text("#!/bin/bash\necho claude")
         fake_claude.chmod(0o755)
 
-        # Add test path to common paths (monkeypatch.setitem adds cleanup automatically)
-        original_paths = _COMMON_CLI_PATHS.get("claude", [])
-        monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [fake_claude] + original_paths)
+        # Add test path to common paths
+        _prepend_cli_path(monkeypatch, "claude", fake_claude)
 
         result = _find_cli_binary("claude")
         assert result == str(fake_claude)
@@ -1425,7 +1437,7 @@ contexts:
         nvm allows multiple node versions to coexist. The glob pattern should
         find the CLI in any version's bin directory.
         """
-        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+        from pdd.agentic_common import _find_cli_binary
 
         monkeypatch.setattr("shutil.which", lambda cmd: None)
 
@@ -1441,10 +1453,9 @@ contexts:
 
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
-        # Add nvm node parent to common paths (monkeypatch.setitem adds cleanup automatically)
+        # Add nvm node parent to common paths
         nvm_node_dir = tmp_path / ".nvm" / "versions" / "node"
-        original_paths = _COMMON_CLI_PATHS.get("claude", [])
-        monkeypatch.setitem(_COMMON_CLI_PATHS, "claude", [nvm_node_dir] + original_paths)
+        _prepend_cli_path(monkeypatch, "claude", nvm_node_dir)
 
         result = _find_cli_binary("claude")
 
