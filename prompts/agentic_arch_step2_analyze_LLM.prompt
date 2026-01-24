@@ -1,13 +1,13 @@
 <pdd-reason>Deep analysis of PRD: feature decomposition, module boundaries, shared concerns, and tech stack determination.</pdd-reason>
 <pdd-interface>
-{
+{{
   "type": "module",
-  "module": {
+  "module": {{
     "functions": [
-      {"name": "deep_analyze", "signature": "(issue_content: str, step1_output: str)", "returns": "str (structured analysis with module candidates and tech stack)"}
+      {{"name": "deep_analyze", "signature": "(issue_content: str, step1_output: str)", "returns": "str (structured analysis with module candidates and tech stack)"}}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 <pdd-dependency>agentic_arch_step1_analyze_prd_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to perform deep analysis of the PRD to identify module boundaries, shared concerns, and the complete tech stack.

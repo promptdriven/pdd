@@ -1,13 +1,13 @@
 <pdd-reason>Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.</pdd-reason>
 <pdd-interface>
-{
+{{
   "type": "module",
-  "module": {
+  "module": {{
     "functions": [
-      {"name": "generate_architecture", "signature": "(issue_content: str, step1-5_outputs: str)", "returns": "str (valid JSON array matching architecture schema)"}
+      {{"name": "generate_architecture", "signature": "(issue_content: str, step1-5_outputs: str)", "returns": "str (valid JSON array matching architecture schema)"}}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 <pdd-dependency>agentic_arch_step5_research_deps_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to generate the complete architecture.json based on all previous analysis and research.
@@ -70,7 +70,7 @@ Generate a complete, valid architecture.json following these rules:
 
 3. **Optional fields:**
    - `tags`: Lower-case categorization tags
-   - `context_urls`: Array of `{url, purpose}` objects from step 5 research
+   - `context_urls`: Array of `{{url, purpose}}` objects from step 5 research
    - `interface`: Object with `type` and type-specific sub-object
 
 4. **Priority ordering:**

@@ -1,13 +1,13 @@
 <pdd-reason>Fixes validation errors in architecture.json: resolves circular deps, priority violations, missing fields.</pdd-reason>
 <pdd-interface>
-{
+{{
   "type": "module",
-  "module": {
+  "module": {{
     "functions": [
-      {"name": "fix_architecture", "signature": "(current_architecture: str, step7_output: str)", "returns": "str (corrected JSON array)"}
+      {{"name": "fix_architecture", "signature": "(current_architecture: str, step7_output: str)", "returns": "str (corrected JSON array)"}}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 <pdd-dependency>agentic_arch_step7_validate_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to fix validation errors in the generated architecture.json.

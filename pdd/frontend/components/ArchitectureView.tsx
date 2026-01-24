@@ -157,6 +157,11 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
 
+  // GitHub issue URL generation state
+  const [issueUrl, setIssueUrl] = useState('');
+  const [isGeneratingFromIssue, setIsGeneratingFromIssue] = useState(false);
+  const [issueGenerationError, setIssueGenerationError] = useState<string | null>(null);
+
   // Prompt generation state
   const [isGeneratingPrompts, setIsGeneratingPrompts] = useState(false);
   const [promptGenerationProgress, setPromptGenerationProgress] = useState<{
@@ -451,6 +456,87 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
       setIsGenerating(false);
     } catch (e) {
       console.error('Failed to cancel:', e);
+    }
+  };
+
+  // Generate architecture from GitHub issue URL
+  const handleGenerateFromIssue = async () => {
+    if (!issueUrl.trim()) {
+      setIssueGenerationError('Please enter a GitHub issue URL');
+      return;
+    }
+
+    // Validate URL format
+    const githubIssuePattern = /github\.com\/[^/]+\/[^/]+\/issues\/\d+/;
+    if (!githubIssuePattern.test(issueUrl)) {
+      setIssueGenerationError('Invalid GitHub issue URL format. Expected: https://github.com/owner/repo/issues/123');
+      return;
+    }
+
+    setIsGeneratingFromIssue(true);
+    setIssueGenerationError(null);
+
+    try {
+      // Check if we're in remote mode
+      if (executionMode === 'remote' && selectedRemoteSession) {
+        // Build options object for remote execution
+        const options: Record<string, any> = {};
+
+        // Add global options if provided
+        if (globalOptions) {
+          const { strength, temperature, time, verbose, quiet, force } = globalOptions;
+          if (strength !== undefined) options.strength = strength;
+          if (temperature !== undefined) options.temperature = temperature;
+          if (time !== undefined) options.time = time;
+          if (verbose) options.verbose = true;
+          if (quiet) options.quiet = true;
+          if (force) options.force = true;
+        }
+
+        // Submit to remote session - pass issue URL as prompt_file argument
+        try {
+          await api.submitRemoteCommand({
+            sessionId: selectedRemoteSession,
+            type: 'generate',
+            payload: { args: { prompt_file: issueUrl }, options },
+          });
+
+          // Clear the input and notify user
+          setIssueUrl('');
+          setIssueGenerationError(null);
+
+          // Notify via callback if available
+          if (onRemoteJobSubmitted) {
+            const displayCommand = `pdd generate ${issueUrl}`;
+            onRemoteJobSubmitted(displayCommand, 'generate', `issue-${Date.now()}`, selectedRemoteSession);
+          }
+
+          alert('Architecture generation from GitHub issue submitted to remote session. Check the remote machine for results.');
+        } catch (error) {
+          setIssueGenerationError(`Failed to submit remote command: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else {
+        // Local execution
+        const result = await api.generateArchitectureFromIssue(issueUrl, {
+          verbose: globalOptions.verbose,
+          quiet: globalOptions.quiet,
+        });
+
+        if (result.success) {
+          // Job started - show message to user
+          alert(`Architecture generation started. A terminal window will open to run the agentic workflow.\n\nJob ID: ${result.job_id}`);
+
+          // Clear the input
+          setIssueUrl('');
+        } else {
+          setIssueGenerationError(result.message || 'Failed to start architecture generation');
+        }
+      }
+    } catch (e: any) {
+      console.error('Failed to generate architecture from issue:', e);
+      setIssueGenerationError(e.message || 'Failed to start architecture generation');
+    } finally {
+      setIsGeneratingFromIssue(false);
     }
   };
 
@@ -1027,7 +1113,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           </div>
           <h2 className="text-xl font-semibold text-white mb-2">No architecture.json found</h2>
           <p className="text-surface-400 text-sm mb-6">
-            Generate a new architecture from a PRD, or load an existing architecture.json file.
+            Generate a new architecture from a PRD or GitHub issue, or load an existing architecture.json file.
           </p>
 
           {/* Primary actions */}
@@ -1046,6 +1132,41 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
             >
               Load PRD
             </button>
+          </div>
+
+          {/* GitHub Issue URL option */}
+          <div className="pt-4 border-t border-surface-700/50 mb-4">
+            <p className="text-surface-500 text-xs mb-3">Or generate from a GitHub issue</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={issueUrl}
+                onChange={(e) => {
+                  setIssueUrl(e.target.value);
+                  setIssueGenerationError(null);
+                }}
+                placeholder="https://github.com/org/repo/issues/123"
+                className="flex-1 px-3 py-2 bg-surface-900/50 border border-surface-600 rounded-lg text-sm text-white placeholder-surface-500 focus:outline-none focus:border-accent-500"
+                disabled={!serverConnected || isGeneratingFromIssue}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleGenerateFromIssue();
+                }}
+              />
+              <button
+                onClick={handleGenerateFromIssue}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  isGeneratingFromIssue
+                    ? 'bg-surface-600 text-surface-400 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-500 text-white'
+                }`}
+                disabled={!serverConnected || isGeneratingFromIssue || !issueUrl.trim()}
+              >
+                {isGeneratingFromIssue ? 'Starting...' : 'Generate'}
+              </button>
+            </div>
+            {issueGenerationError && (
+              <p className="text-red-400 text-xs mt-2">{issueGenerationError}</p>
+            )}
           </div>
 
           {/* Secondary action - load existing architecture */}

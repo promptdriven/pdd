@@ -1,13 +1,13 @@
 <pdd-reason>Validates architecture.json: checks circular deps, priority ordering, missing deps, field completeness.</pdd-reason>
 <pdd-interface>
-{
+{{
   "type": "module",
-  "module": {
+  "module": {{
     "functions": [
-      {"name": "validate_architecture", "signature": "(step6_output: str)", "returns": "str ('VALID' or list of validation errors)"}
+      {{"name": "validate_architecture", "signature": "(step6_output: str)", "returns": "str ('VALID' or list of validation errors)"}}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 <pdd-dependency>agentic_arch_step6_generate_LLM.prompt</pdd-dependency>
 % You are an expert software architect. Your task is to validate the generated architecture.json for correctness and consistency.
