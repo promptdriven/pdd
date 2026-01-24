@@ -526,6 +526,7 @@ def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_
         jsonl_output = [
             json.dumps({
                 "type": "result",
+                "output": "Task completed successfully with cached tokens used for cost calculation test.",
                 "usage": {
                     "input_tokens": 1000000,
                     "output_tokens": 0,
@@ -1197,3 +1198,99 @@ def test_run_agentic_task_no_retries_by_default(mock_shutil_which, mock_subproce
     assert success
     assert provider == "google"
     assert mock_subprocess_run.call_count == 2  # 1 Anthropic fail + 1 Google success (no retries)
+
+
+# ---------------------------------------------------------------------------
+# Issue #249: Empty Output with Non-Zero Cost Detection
+# ---------------------------------------------------------------------------
+
+
+def test_empty_output_with_nonzero_cost_detected_as_false_positive(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """
+    Issue #249: Empty output with non-zero cost should be detected as false positive.
+
+    Root cause: When Claude CLI returns success (exit 0) with:
+    - Non-zero cost (Claude consumed tokens processing the request)
+    - Empty result (Claude ran tools but never produced text output)
+
+    The current false positive check requires BOTH conditions:
+        is_false_positive = (cost == 0.0 and len(output.strip()) < MIN_VALID_OUTPUT_LENGTH)
+
+    This misses cases where Claude ran (cost > 0) but produced no output.
+
+    This test reproduces issue #249 where step 7 of pdd test workflow had empty
+    output because Claude ran Playwright tests (consuming tokens) but never
+    produced a text response, resulting in no GitHub comment being posted.
+    """
+    mock_shutil_which.return_value = "/bin/cmd"
+    mock_env["GEMINI_API_KEY"] = "key"
+
+    # First provider (Anthropic): Returns "success" with non-zero cost but EMPTY output
+    # This simulates the issue #249 scenario where Claude ran tools but produced no text
+    anthropic_empty_output = MagicMock()
+    anthropic_empty_output.returncode = 0  # CLI says success
+    anthropic_empty_output.stdout = json.dumps({
+        "result": "",  # Empty output - Claude never produced text response
+        "total_cost_usd": 0.25,  # Non-zero cost - Claude DID consume tokens
+    })
+    anthropic_empty_output.stderr = ""
+
+    # Second provider (Google): Returns real success with actual output
+    google_real_success = MagicMock()
+    google_real_success.returncode = 0
+    google_real_success.stdout = json.dumps({
+        "response": "Tests executed successfully. All 5 tests passed. Results posted to GitHub.",
+        "stats": {"models": {"flash": {"tokens": {"prompt": 1000, "candidates": 500, "cached": 0}}}}
+    })
+    google_real_success.stderr = ""
+
+    mock_subprocess_run.side_effect = [anthropic_empty_output, google_real_success]
+
+    success, msg, cost, provider = run_agentic_task("Run the tests and post results", tmp_path)
+
+    # Should detect Anthropic's empty output as false positive and fall back to Google
+    assert success, "Task should succeed via Google fallback"
+    assert provider == "google", (
+        f"Expected fallback to 'google' after detecting Anthropic empty output, "
+        f"but got provider='{provider}'. "
+        "Empty output with non-zero cost should be detected as false positive."
+    )
+    assert "Tests executed successfully" in msg, "Should have Google's actual response"
+
+
+def test_whitespace_only_output_detected_as_false_positive(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
+    """
+    Issue #249: Whitespace-only output should also be detected as false positive.
+
+    Even if the result contains newlines or spaces, if it's effectively empty
+    after stripping, it should be treated as a false positive.
+    """
+    mock_shutil_which.return_value = "/bin/cmd"
+    mock_env["GEMINI_API_KEY"] = "key"
+
+    # Anthropic returns whitespace-only output
+    anthropic_whitespace = MagicMock()
+    anthropic_whitespace.returncode = 0
+    anthropic_whitespace.stdout = json.dumps({
+        "result": "   \n\n\t  ",  # Only whitespace
+        "total_cost_usd": 0.10,
+    })
+    anthropic_whitespace.stderr = ""
+
+    # Google returns real output
+    google_success = MagicMock()
+    google_success.returncode = 0
+    google_success.stdout = json.dumps({
+        "response": "This is a real response with actual content that indicates work was done.",
+        "stats": {}
+    })
+    google_success.stderr = ""
+
+    mock_subprocess_run.side_effect = [anthropic_whitespace, google_success]
+
+    success, msg, cost, provider = run_agentic_task("Do work", tmp_path)
+
+    assert success
+    assert provider == "google", (
+        "Whitespace-only output should be detected as false positive"
+    )
