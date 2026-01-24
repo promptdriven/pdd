@@ -141,7 +141,7 @@ def _find_parent_element_span(
         (start, end) of the parent element, or None if no parent is found.
     """
     parent: Tuple[int, int] | None = None
-    parent_size = None
+    parent_size = float('inf')
 
     for name, start, end in elements:
         if start <= child_start and child_end <= end:
@@ -149,7 +149,7 @@ def _find_parent_element_span(
             if start == child_start and end == child_end:
                 continue
             size = end - start
-            if parent is None or size < parent_size:  # type: ignore[operator]
+            if size < parent_size:
                 parent = (start, end)
                 parent_size = size
 

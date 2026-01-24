@@ -68,6 +68,24 @@ __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'Sync
            '_check_example_success_history']
 
 
+def _ensure_trailing_slash(path: str) -> str:
+    """Ensure a directory path ends with a trailing slash.
+
+    Parameters
+    ----------
+    path : str
+        The directory path to process.
+
+    Returns
+    -------
+    str
+        The path with a trailing slash if it didn't already have one.
+    """
+    if path and not path.endswith('/'):
+        return path + '/'
+    return path
+
+
 def _safe_basename(basename: str) -> str:
     """Sanitize basename for use in metadata filenames.
 
@@ -542,10 +560,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         defaults = context_config.get('defaults', {})
                         example_dir = defaults.get('example_output_path', 'examples/')
                         test_dir = defaults.get('test_output_path', 'tests/')
-                        if example_dir and not example_dir.endswith('/'):
-                            example_dir = example_dir + '/'
-                        if test_dir and not test_dir.endswith('/'):
-                            test_dir = test_dir + '/'
+                        example_dir = _ensure_trailing_slash(example_dir)
+                        test_dir = _ensure_trailing_slash(test_dir)
                     except ValueError:
                         pass
 
@@ -638,12 +654,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger.info(f"Extracted dirs - test: {test_dir}, example: {example_dir}, code: {code_dir}")
 
                 # Ensure directories end with /
-                if test_dir and not test_dir.endswith('/'):
-                    test_dir = test_dir + '/'
-                if example_dir and not example_dir.endswith('/'):
-                    example_dir = example_dir + '/'
-                if code_dir and not code_dir.endswith('/'):
-                    code_dir = code_dir + '/'
+                test_dir = _ensure_trailing_slash(test_dir)
+                example_dir = _ensure_trailing_slash(example_dir)
+                code_dir = _ensure_trailing_slash(code_dir)
 
                 # Extract directory and name parts for subdirectory basename support
                 dir_prefix, name_part = _extract_name_part(basename)
@@ -776,9 +789,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 code_path = f"{generate_output_path}{name_part}.{extension}"
             else:
                 # Old behavior - use path + dir_prefix
-                code_dir = generate_output_path or './'
-                if not code_dir.endswith('/'):
-                    code_dir = code_dir + '/'
+                code_dir = _ensure_trailing_slash(generate_output_path or './')
                 code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
         
         # Get configured paths for example and test files using construct_paths
