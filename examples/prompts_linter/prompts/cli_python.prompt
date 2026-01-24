@@ -1,0 +1,114 @@
+You are an expert Python developer specializing in CLI tools using Typer and Rich. Your task is to implement the Command Line Interface (CLI) for the PDD Prompt Linter. This module, located at `src/cli/cli.py`, serves as the primary entry point for users interacting with the tool via the terminal. It is responsible for parsing arguments, configuring the runtime environment based on flags, invoking the central pipeline orchestrator, rendering the final report to the user, and handling fixed prompt output.
+
+Requirements
+1.  **Argument Parsing**: Use `Typer` to define the CLI application. The main command must accept a mandatory `PROMPT_FILE` argument (path to the file to lint).
+2.  **Configuration Flags**: Implement the following flags with appropriate defaults:
+    *   `--format`: Options `text` (default), `json`, `md`.
+    *   `--severity-threshold`: Options `info`, `warning`, `error`.
+    *   `--fail-on`: Options `warning`, `error`.
+    *   `--fix`: Boolean flag to enable fix suggestions.
+    *   `--in-place`: Boolean flag (requires `--fix`) to overwrite the original file with the fixed version.
+    *   `--fix-output`: Path to save the fixed prompt to a specific file (requires `--fix`, mutually exclusive with `--in-place`).
+    *   `--output`: Path to write the report to a file.
+    *   `--assume-cloud-grounding` / `--assume-local`: Mutually exclusive flags to set grounding context.
+3.  **LLM Configuration Flags**: Implement flags to control the LLM behavior:
+    *   `--llm` / `--no-llm`: Toggle LLM analysis (default: True).
+    *   `--llm-provider`: Options `auto`, `openai`, `anthropic`, `google`, `custom`.
+    *   `--llm-model`: String override for the model name.
+    *   `--llm-base-url`: String override for the API base URL.
+    *   `--llm-timeout-seconds`: Default 20.
+    *   `--llm-max-retries`: Default 2.
+    *   `--llm-budget-tokens`: Default 2000 (increased from 800 to prevent JSON truncation).
+4.  **Fix Behavior**: When `--fix` is enabled:
+    *   If `--in-place`: Overwrite the original file with `report.suggested_fix`.
+    *   If `--fix-output`: Write `report.suggested_fix` to the specified file (create parent directories if needed).
+    *   If neither: Display the fixed prompt to stdout in a Rich panel before showing the report.
+5.  **Orchestration**: The CLI must not contain business logic. It must instantiate the necessary configuration objects and call `utils.pipeline.lint_file` or `utils.pipeline.lint_text`.
+6.  **Output Rendering**: 
+    *   If `--output` is specified, write the formatted report to that file.
+    *   Otherwise, print to stdout.
+    *   Use `Rich` for pretty-printing when the format is `text` (console).
+    *   Ensure JSON output is raw and parseable (no extra text) when format is `json`.
+7.  **Exit Codes**:
+    *   Return `0` if linting passes (score > 0 and no issues above the `fail-on` threshold).
+    *   Return `1` if critical errors occur or the `fail-on` threshold is met.
+8.  **Error Handling**: Gracefully handle file not found errors and permission errors, printing user-friendly messages via `Rich` console.
+9.  **Validation**: Validate flag combinations:
+    *   `--in-place` requires `--fix`
+    *   `--fix-output` requires `--fix`
+    *   `--in-place` and `--fix-output` are mutually exclusive
+    *   `--assume-cloud-grounding` and `--assume-local` are mutually exclusive
+
+Dependencies
+<pipeline_module>
+  <include>src/utils/pipeline.py</include>
+</pipeline_module>
+<report_module>
+  <include>src/utils/report.py</include>
+</report_module>
+<models_module>
+  <include>src/utils/models.py</include>
+</models_module>
+<utils.models><include>examples/models_example.py</include></utils.models>
+<utils.report><include>examples/report_example.py</include></utils.report>
+<utils.fix><include>examples/fix_example.py</include></utils.fix>
+<utils.pipeline><include>examples/pipeline_example.py</include></utils.pipeline>
+<cli.cli><include>examples/cli_example.py</include></cli.cli>
+
+Prompt Dependencies:
+- pipeline_Python.prompt
+- report_Python.prompt
+- models_Python.prompt
+
+Instructions
+- Initialize a `typer.Typer` app with appropriate metadata.
+- Initialize a `Rich` console for pretty output.
+- Define the main entry point function decorated with `@app.command()`.
+- Use `typing.Annotated` for Typer arguments and options to ensure help text is generated correctly.
+- **Step 1: Validate Flag Combinations**
+    - Check if `--in-place` is used without `--fix` → error and exit
+    - Check if `--fix-output` is used without `--fix` → error and exit
+    - Check if both `--in-place` and `--fix-output` are used → error and exit
+    - Check if both `--assume-cloud-grounding` and `--assume-local` are used → error and exit
+- **Step 2: Read Input File**
+    - Use `Path(prompt_file).read_text(encoding="utf-8")`
+    - Handle `FileNotFoundError` and `PermissionError` gracefully
+- **Step 3: Configure Pipeline**
+    - Construct a `LintConfig` object from CLI flags
+    - Set `generate_fix` based on the `--fix` flag
+    - Pass LLM configuration (use_llm, provider, model, timeout, max_retries, budget)
+- **Step 4: Run Pipeline**
+    - Call `pipeline.lint_file(path, config)` or `pipeline.lint_text(text, config)`
+    - Receive a `Report` object
+- **Step 5: Handle Fixes**
+    - If `--fix` is enabled and `report.suggested_fix` exists:
+        - If `--in-place`: Write `report.suggested_fix` to the original file
+        - Else if `--fix-output`: Create parent directories with `fix_output.parent.mkdir(parents=True, exist_ok=True)` and write to the specified file
+        - Else: Display the fixed prompt in a Rich panel to stdout
+    - If `--fix` is enabled but no `report.suggested_fix`: Display a warning message
+- **Step 6: Filter Issues by Severity**
+    - Save original issues list
+    - Filter `report.issues` based on `--severity-threshold`
+    - Use a helper function `_get_severity_rank()` to map severities to integers
+- **Step 7: Render Report**
+    - Call `render_report(report, format, output_path)` from the report module
+    - Handle rendering exceptions gracefully
+    - Restore original issues list after rendering
+- **Step 8: Determine Exit Code**
+    - Check if `report.score == 0` and any issues have ERROR severity → exit code 1
+    - If `--fail-on` is set, check all original issues (not just filtered ones) against the threshold → exit code 1 if threshold met
+    - Otherwise → exit code 0
+- **Step 9: Exit**
+    - Call `raise typer.Exit(code=exit_code)`
+- Ensure `if __name__ == "__main__":` block calls `app()`.
+
+Deliverable
+- `src/cli/cli.py`: The complete, executable CLI script.
+
+Implementation assumptions (explicit)
+- The `pipeline` module exposes a `lint_file` function that accepts the file path and a `LintConfig` object.
+- The `report` module exposes a `render_report` function capable of formatting the `Report` object into string/rich output.
+- The `Report` object has a `suggested_fix` attribute (str | None) that contains the fixed prompt when `generate_fix=True`.
+- `Rich` is installed and available in the environment.
+- The CLI is a thin wrapper; complex validation of prompt content happens in `rules.py` or `pipeline.py`, not here.
+- Parent directories are automatically created when using `--fix-output` to improve user experience.

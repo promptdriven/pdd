@@ -58,6 +58,10 @@ export function useJobs(options: UseJobsOptions = {}) {
   const jobsRef = useRef<Map<string, JobInfo>>(jobs);
   jobsRef.current = jobs;
 
+  // Ref to always get latest onJobComplete callback (avoids stale closure issues in polling)
+  const onJobCompleteRef = useRef(onJobComplete);
+  onJobCompleteRef.current = onJobComplete;
+
   // Cleanup WebSocket connections on unmount
   useEffect(() => {
     return () => {
@@ -452,20 +456,30 @@ export function useJobs(options: UseJobsOptions = {}) {
    * The terminal script calls back to the server when done, and we poll to detect it.
    */
   useEffect(() => {
-    // Get spawned jobs that are still running
+    // Get spawned jobs that are still running (local, non-WebSocket jobs)
+    // These are jobs added via addSpawnedJob - they don't have WebSocket connections
+    // and aren't remote (remote jobs have their own polling below)
     const spawnedRunningJobs = (Array.from(jobs.values()) as JobInfo[]).filter(
-      (j) => j.id.startsWith('spawned-') && j.status === 'running'
+      (j) => j.status === 'running' && !j.metadata?.remote && !wsConnections.current.has(j.id)
     );
 
     if (spawnedRunningJobs.length === 0) return;
 
     const pollInterval = setInterval(async () => {
-      for (const job of spawnedRunningJobs) {
+      // Use jobsRef to get latest state (avoid stale closure)
+      const currentJobs = jobsRef.current;
+      const jobsToPoll = (Array.from(currentJobs.values()) as JobInfo[]).filter(
+        (j) => j.status === 'running' && !j.metadata?.remote && !wsConnections.current.has(j.id)
+      );
+
+      for (const job of jobsToPoll) {
         try {
           const status = await api.getSpawnedJobStatus(job.id);
           if (status.status === 'completed' || status.status === 'failed') {
             // Auto-update job status
             const success = status.status === 'completed';
+            let completedJobForCallback: { job: JobInfo; success: boolean } | null = null;
+
             setJobs((prev: Map<string, JobInfo>) => {
               const updated = new Map(prev);
               const currentJob = updated.get(job.id);
@@ -483,13 +497,15 @@ export function useJobs(options: UseJobsOptions = {}) {
                   ],
                 };
                 updated.set(job.id, completedJob);
-                // Trigger callback
-                if (onJobComplete) {
-                  onJobComplete(completedJob, success);
-                }
+                completedJobForCallback = { job: completedJob, success };
               }
               return updated;
             });
+
+            // Trigger callback outside setState using ref for latest callback
+            if (completedJobForCallback && onJobCompleteRef.current) {
+              onJobCompleteRef.current(completedJobForCallback.job, completedJobForCallback.success);
+            }
           }
         } catch (e) {
           // Ignore polling errors - server might be temporarily unavailable
@@ -498,7 +514,7 @@ export function useJobs(options: UseJobsOptions = {}) {
     }, 2000); // Poll every 2 seconds
 
     return () => clearInterval(pollInterval);
-  }, [jobs, onJobComplete]);
+  }, [jobs]);
 
   /**
    * Poll for remote job status updates.
@@ -617,9 +633,9 @@ export function useJobs(options: UseJobsOptions = {}) {
               return updated;
             });
 
-            // Trigger callback outside setState to avoid race conditions
-            if (completedJobForCallback && onJobComplete) {
-              onJobComplete(completedJobForCallback.job, completedJobForCallback.success);
+            // Trigger callback outside setState using ref for latest callback
+            if (completedJobForCallback && onJobCompleteRef.current) {
+              onJobCompleteRef.current(completedJobForCallback.job, completedJobForCallback.success);
             }
           }
         } catch (e) {
@@ -630,7 +646,7 @@ export function useJobs(options: UseJobsOptions = {}) {
     }, 2000); // Poll every 2 seconds
 
     return () => clearInterval(pollInterval);
-  }, [jobs, onJobComplete]);
+  }, [jobs]);
 
   // Derived state
   const activeJobs = Array.from(jobs.values()).filter(

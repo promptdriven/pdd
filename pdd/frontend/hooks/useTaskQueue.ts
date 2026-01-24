@@ -224,9 +224,9 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
         });
         callbacksRef.current.onTaskComplete?.({ ...nextTask, status: 'failed' }, false);
 
-        // Continue to next task if in auto mode
-        if (state.executionMode === 'auto' && state.isQueueRunning && !state.isPaused) {
-          setTimeout(() => runNextPendingTask(), 100);
+        // Auto-pause queue on failure so user can investigate
+        if (state.executionMode === 'auto' && state.isQueueRunning) {
+          setIsPaused(true);
         }
       }
     } catch (e) {
@@ -238,9 +238,9 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
       });
       callbacksRef.current.onTaskComplete?.({ ...nextTask, status: 'failed' }, false);
 
-      // Continue to next task if in auto mode
-      if (state.executionMode === 'auto' && state.isQueueRunning && !state.isPaused) {
-        setTimeout(() => runNextPendingTask(), 100);
+      // Auto-pause queue on failure so user can investigate
+      if (state.executionMode === 'auto' && state.isQueueRunning) {
+        setIsPaused(true);
       }
     }
   }, [updateTask]);
@@ -261,10 +261,15 @@ export function useTaskQueue(options: UseTaskQueueOptions = {}) {
 
     callbacksRef.current.onTaskComplete?.({ ...task, status: newStatus }, success);
 
-    // In auto mode, continue to next task
     const state = stateRef.current;
     if (state.executionMode === 'auto' && state.isQueueRunning && !state.isPaused) {
-      setTimeout(() => runNextPendingTask(), 100);
+      if (success) {
+        // Continue to next task on success
+        setTimeout(() => runNextPendingTask(), 100);
+      } else {
+        // Auto-pause queue on failure so user can investigate
+        setIsPaused(true);
+      }
     }
   }, [updateTask, runNextPendingTask]);
 

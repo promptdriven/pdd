@@ -1,0 +1,193 @@
+[
+  {
+    "reason": "Defines the core data structures used throughout the application to ensure type safety and consistent data exchange.",
+    "description": "Pydantic v2 models representing the domain entities. Includes `Issue` (severity, rule_id, description), `Report` (summary, issues, score), `LLMResponse` (structured output from LLM), and `FixSuggestion`. Defines enums for Severity and RuleCategories.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "models_Python.prompt",
+    "filepath": "src/utils/models.py",
+    "tags": [
+      "core",
+      "utils"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Provides low-level text processing utilities to support heuristic rules and parsing.",
+    "description": "Utility functions for text analysis. Includes tag detection (regex for XML-like tags), ratio heuristics (code vs text), file reading helpers, and string normalization utils.",
+    "dependencies": [],
+    "priority": 2,
+    "filename": "helpers_Python.prompt",
+    "filepath": "src/utils/helpers.py",
+    "tags": [
+      "core",
+      "utils"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Implements the deterministic logic for checking prompt compliance against the PDD Guide.",
+    "description": "Contains the library of heuristic rules derived from the Prompting Guide. Functions analyze text input and return a list of `Issue` objects. Covers modularity checks, context engineering validation, and forbidden tag detection.",
+    "dependencies": [
+      "models_Python.prompt",
+      "helpers_Python.prompt"
+    ],
+    "priority": 3,
+    "filename": "rules_Python.prompt",
+    "filepath": "src/utils/rules.py",
+    "tags": [
+      "core",
+      "logic"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Manages interactions with Large Language Models, including provider detection and fallback logic.",
+    "description": "Wrapper around LiteLLM. Handles API key detection (OpenAI, Anthropic, Google), enforces JSON output via schema, manages token budgets/timeouts, and implements the safe fallback mechanism (returns empty/null on failure so heuristics take over).",
+    "dependencies": [
+      "models_Python.prompt"
+    ],
+    "priority": 4,
+    "filename": "llm_Python.prompt",
+    "filepath": "src/utils/llm.py",
+    "tags": [
+      "core",
+      "ai"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Generates compliant prompt scaffolds to automatically fix issues found during linting.",
+    "description": "Logic to rewrite prompts. Takes a `Report` and original text, and produces a new text string that adheres to the PDD structure (Role, Scope, Requirements, Dependencies). Implements the `--fix` scaffolding logic.",
+    "dependencies": [
+      "models_Python.prompt"
+    ],
+    "priority": 5,
+    "filename": "fix_Python.prompt",
+    "filepath": "src/utils/fix.py",
+    "tags": [
+      "core",
+      "logic"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Handles the presentation of linting results in various formats.",
+    "description": "Rendering logic for the `Report` object. Supports outputting to Console (via Rich), JSON string, or Markdown file. Handles color coding based on severity.",
+    "dependencies": [
+      "models_Python.prompt"
+    ],
+    "priority": 6,
+    "filename": "report_Python.prompt",
+    "filepath": "src/utils/report.py",
+    "tags": [
+      "core",
+      "utils"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Acts as the central orchestrator, combining heuristics, LLM analysis, and reporting.",
+    "description": "The main entry point for logic. `lint_file` and `lint_text` functions. It runs heuristics, conditionally runs the LLM (merging results additively), calculates scores, and returns a final `Report` object.",
+    "dependencies": [
+      "models_Python.prompt",
+      "rules_Python.prompt",
+      "llm_Python.prompt",
+      "fix_Python.prompt",
+      "report_Python.prompt"
+    ],
+    "priority": 7,
+    "filename": "pipeline_Python.prompt",
+    "filepath": "src/utils/pipeline.py",
+    "tags": [
+      "core",
+      "orchestrator"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Provides the Command Line Interface for the tool.",
+    "description": "Typer application. Parses arguments (file path, flags for LLM, output format, fix mode). Calls `utils.pipeline` to perform work and uses `utils.report` (or Rich directly) to display results. Handles exit codes.",
+    "dependencies": [
+      "pipeline_Python.prompt"
+    ],
+    "priority": 8,
+    "filename": "cli_Python.prompt",
+    "filepath": "src/cli/main.py",
+    "tags": [
+      "cli"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {}
+    }
+  },
+  {
+    "reason": "Exposes the linting logic via a REST API for integration with other tools.",
+    "description": "FastAPI application. Defines endpoints like `POST /lint` that accept text/files and return the JSON report. Wraps `utils.pipeline`.",
+    "dependencies": [
+      "pipeline_Python.prompt"
+    ],
+    "priority": 9,
+    "filename": "backend_api_Python.prompt",
+    "filepath": "src/backend/api.py",
+    "tags": [
+      "backend",
+      "api"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {}
+    }
+  },
+  {
+    "reason": "Provides a visual, interactive interface for linting prompts.",
+    "description": "Streamlit application. Allows users to paste prompt text or upload files, configure LLM settings via UI, and view the structured report and fix suggestions visually. Calls `utils.pipeline` directly.",
+    "dependencies": [
+      "pipeline_Python.prompt"
+    ],
+    "priority": 10,
+    "filename": "frontend_streamlit_Python.prompt",
+    "filepath": "src/frontend/streamlit_app.py",
+    "tags": [
+      "frontend",
+      "ui"
+    ],
+    "interface": {
+      "type": "page",
+      "page": {
+        "route": "/ (Single Page App)",
+        "params": [],
+        "dataSources": [
+          {
+            "kind": "other",
+            "source": "utils.pipeline",
+            "method": "lint_text",
+            "description": "Direct python call to the pipeline orchestrator to lint input text."
+          }
+        ]
+      }
+    }
+  }
+]
