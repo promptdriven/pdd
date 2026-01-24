@@ -104,6 +104,49 @@ The following shows which modules depend on which other modules. When you identi
 
    **Anti-duplication check:** For each CREATE, you MUST justify why MODIFY is not possible. List specific existing modules that were considered and explain why they cannot be extended.
 
+   **Integration Point Discovery (CRITICAL for CREATE):**
+   When CREATEing new modules, you MUST also search for "integration points" - files that aggregate, register, or import other modules. These files often need to be MODIFIED when new modules are added to a directory.
+
+   **How to find integration points:**
+
+   1. **Search the target directory** for files that import/include multiple modules:
+      - Look for `main.py`, `index.ts`, `app.py`, `__init__.py`, `routes.py`, etc.
+      - Search for files with `_main` suffix (e.g., `sync_main.py`, `cli_main.py`)
+      - Check for registry/factory files that list or import other modules
+
+   2. **Grep for import patterns** in the directory where you're creating new modules:
+      ```bash
+      # Find files that import from this directory
+      grep -r "from <directory>" --include="*.py" | cut -d: -f1 | sort -u
+      grep -r "import.*<module_pattern>" --include="*.ts" | cut -d: -f1 | sort -u
+      ```
+
+   3. **Check for entry points** defined in:
+      - `pyproject.toml` or `setup.py` (Python)
+      - `package.json` main/exports fields (Node.js)
+      - Firebase `main.py` for Cloud Functions
+      - Framework-specific configs (e.g., Next.js `pages/`, FastAPI routers)
+
+   4. **Look for aggregator patterns:**
+      - Files that import ALL modules from a directory
+      - Files with decorator patterns (e.g., `@app.route`, `@https_fn.on_request`)
+      - Files that export/re-export multiple modules
+
+   **When you find an integration point:**
+   - Check its corresponding prompt file exists (e.g., `main.py` → `main_python.prompt`)
+   - Add it to "Dev Units to MODIFY" with reason explaining what needs to be registered
+   - If no prompt exists, note it in the output as a manual update needed
+
+   **Common integration point patterns by framework:**
+   | Framework | Integration Point | What to add |
+   |-----------|-------------------|-------------|
+   | Firebase Functions | `main.py` | Function export, lazy_import, decorator |
+   | FastAPI | `main.py` or `app.py` | Router include, endpoint registration |
+   | Express.js | `app.js` or `index.js` | Route registration, middleware |
+   | Django | `urls.py` | URL pattern |
+   | React Router | Router config file | Route component |
+   | CLI tools | Main CLI file | Command registration |
+
 % Important: Scope of `pdd change`
 
 **`pdd change` modifies ONLY prompt files (`.prompt`) and documentation.**
@@ -161,6 +204,16 @@ For each new dev unit proposed, explain:
 
 ### Dependencies (may need interface updates)
 - `prompts/zzz_{lang}.prompt` - [reason]
+
+### Integration Points Discovered
+*Search for files that aggregate/register modules in the affected directories*
+
+| Integration Point | Reason for Update | Prompt File |
+|-------------------|-------------------|-------------|
+| [file path] | [what needs to be registered] | [corresponding .prompt or "manual update needed"] |
+
+**Search performed:**
+- [List grep/search commands used to discover integration points]
 
 ### Files Explored
 - [List of files/directories checked]
