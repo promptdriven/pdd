@@ -17,15 +17,23 @@ from .get_language import get_language
 
 def _load_language_format() -> dict:
     """Load language_format.csv into a dict keyed by extension."""
-    csv_path = Path(__file__).parent.parent / "data" / "language_format.csv"
-    result = {}
-    with open(csv_path, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            ext = row.get('extension', '')
-            if ext:
-                result[ext] = row
-    return result
+    # Try multiple paths: package-relative first, then project-root-relative
+    candidates = [
+        Path(__file__).parent / "data" / "language_format.csv",
+        Path(__file__).parent.parent / "data" / "language_format.csv",
+    ]
+    for csv_path in candidates:
+        if csv_path.exists():
+            result = {}
+            with open(csv_path, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    ext = row.get('extension', '')
+                    if ext:
+                        result[ext] = row
+            return result
+    # CSV not found - return empty dict so smart detection (step 2) can handle it
+    return {}
 
 
 def get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[str]:

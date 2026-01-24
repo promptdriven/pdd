@@ -544,9 +544,22 @@ def _is_known_language(language_name: str) -> bool:
         return False
 
     builtin_languages = {
-        'python', 'javascript', 'typescript', 'java', 'cpp', 'c', 'go', 'ruby', 'rust',
+        'python', 'javascript', 'typescript', 'typescriptreact', 'javascriptreact',
+        'java', 'cpp', 'c', 'go', 'ruby', 'rust',
         'kotlin', 'swift', 'csharp', 'php', 'scala', 'r', 'lua', 'perl', 'bash', 'shell',
         'powershell', 'sql', 'prompt', 'html', 'css', 'makefile',
+        # Additional languages from language_format.csv
+        'haskell', 'dart', 'elixir', 'clojure', 'julia', 'erlang', 'fortran',
+        'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
+        'prisma', 'lean', 'agda',
+        # Frontend / templating
+        'svelte', 'vue', 'scss', 'sass', 'less',
+        'jinja', 'handlebars', 'pug', 'ejs', 'twig',
+        # Modern / systems languages
+        'zig', 'mojo', 'solidity',
+        # Config / query / infra
+        'graphql', 'protobuf', 'terraform', 'hcl', 'nix',
+        'glsl', 'wgsl', 'starlark', 'dockerfile',
         # Common data and config formats for architecture prompts and configs
         'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini'
     }
