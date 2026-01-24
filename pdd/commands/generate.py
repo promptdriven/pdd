@@ -1,138 +1,188 @@
+"""
+Generate, test, and example commands.
+"""
 from __future__ import annotations
-
 import os
-import sys
+import re
 import click
-from typing import Optional, Tuple, Dict, Any, List, Union
-from rich.console import Console
+from pathlib import Path
+from typing import Dict, Optional, Tuple, List
 
-# Relative imports for internal modules
+from ..code_generator_main import code_generator_main
 from ..context_generator_main import context_generator_main
+from ..cmd_test_main import cmd_test_main
 from ..track_cost import track_cost
+from ..core.errors import handle_error, console
 from ..operation_log import log_operation
-from ..core.errors import handle_error
 
-# Initialize console
-console = Console(file=sys.stdout)
-
-# Lazily imported in generate() to avoid heavy imports at module load time.
-# Exposed at module scope so tests can patch it safely.
-code_generator_main = None
-_DEFAULT_CODE_GENERATOR_MAIN = None
+_GITHUB_ISSUE_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)"
+)
 
 class GenerateCommand(click.Command):
-    """
-    Custom command class to handle the conditional requirement of PROMPT_FILE.
-    PROMPT_FILE is required unless --template is specified.
-    """
-    def format_usage(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        """
-        Custom usage formatter to indicate PROMPT_FILE is conditionally required.
-        """
-        # We rely on standard formatting but this class exists to satisfy
-        # specific help text requirements if needed in the future.
-        super().format_usage(ctx, formatter)
+    """Ensure help shows PROMPT_FILE as required even when validated at runtime."""
+
+    def collect_usage_pieces(self, ctx: click.Context) -> List[str]:
+        pieces = super().collect_usage_pieces(ctx)
+        return ["PROMPT_FILE" if piece == "[PROMPT_FILE]" else piece for piece in pieces]
 
 
-@click.command(cls=GenerateCommand, name="generate")
-@click.argument("prompt_file", required=False, type=click.Path(exists=True))
-@click.option("--template", help="Use a template instead of a prompt file.")
-@click.option("-e", "--env", multiple=True, help="Set environment variables (KEY=VALUE or KEY).")
-@click.option("--output", help="Specify where to save the generated code.")
-@click.option("--original-prompt", type=click.Path(exists=True), help="Original prompt file for incremental generation.")
-@click.option("--incremental", is_flag=True, help="Force incremental patching.")
-@click.option("--unit-test", type=click.Path(exists=True), help="Path to a unit test file for TDD.")
-@click.option("--exclude-tests", is_flag=True, help="Do not automatically include test files.")
+@click.command("generate", cls=GenerateCommand)
+@click.argument("prompt_file", required=False, type=click.UNPROCESSED)
+@click.option(
+    "--output",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the generated code (file or directory).",
+)
+@click.option(
+    "--original-prompt",
+    "original_prompt_file_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to the original prompt file for incremental generation.",
+)
+@click.option(
+    "--incremental",
+    "incremental_flag",
+    is_flag=True,
+    default=False,
+    help="Force incremental patching even if changes are significant (requires existing output).",
+)
+@click.option(
+    "-e",
+    "--env",
+    "env_kv",
+    multiple=True,
+    help="Set template variable (KEY=VALUE) or read KEY from env",
+)
+@click.option(
+    "--template",
+    "template_name",
+    type=str,
+    default=None,
+    help="Use a packaged/project template by name (e.g., architecture/architecture_json)",
+)
+@click.option(
+    "--unit-test",
+    "unit_test_file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to a unit test file to include in the prompt.",
+)
+@click.option(
+    "--exclude-tests",
+    "exclude_tests",
+    is_flag=True,
+    default=False,
+    help="Do not automatically include test files found in the default tests directory.",
+)
 @click.pass_context
-@log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
+@log_operation("generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
 def generate(
     ctx: click.Context,
     prompt_file: Optional[str],
-    template: Optional[str],
-    env: Tuple[str, ...],
     output: Optional[str],
-    original_prompt: Optional[str],
-    incremental: bool,
-    unit_test: Optional[str],
+    original_prompt_file_path: Optional[str],
+    incremental_flag: bool,
+    env_kv: Tuple[str, ...],
+    template_name: Optional[str],
+    unit_test_file: Optional[str],
     exclude_tests: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
-    Create runnable code from a prompt file.
+    Generate code from a prompt file.
+
+       \b
+    Related commands:
+      test      Generate unit tests for a prompt.
+      example   Generate example code for a prompt.
+
+    \b
+    Note:
+      Global options (for example ``--force``, ``--temperature``, ``--time``)
+      can be placed either before or after the subcommand. For example:
+
+        pdd generate my.prompt --force --temperature 0.5
     """
-    # Defer imports to avoid circular dependencies
-    global code_generator_main, _DEFAULT_CODE_GENERATOR_MAIN
-    from ..code_generator_main import code_generator_main as _code_generator_main
-    if _DEFAULT_CODE_GENERATOR_MAIN is None:
-        _DEFAULT_CODE_GENERATOR_MAIN = _code_generator_main
-    if code_generator_main is None or code_generator_main is _DEFAULT_CODE_GENERATOR_MAIN:
-        code_generator_main = _code_generator_main
-    
-    # Try to import template registry
     try:
-        from ..template_registry import load_template
-    except ImportError:
-        load_template = None
-
-    try:
-        # 1. Validate Mutex: Template vs Prompt File
-        if template and prompt_file:
-            raise click.UsageError("Cannot specify both PROMPT_FILE and --template.")
-        
-        if not template and not prompt_file:
-            raise click.UsageError("Missing argument 'PROMPT_FILE' or option '--template'.")
-
-        # 2. Resolve Template if used
-        target_prompt_file = prompt_file
-        if template:
-            if load_template is None:
-                raise click.UsageError("Template support is not available in this installation.")
-
+        # Resolve template to a prompt path when requested
+        if template_name and prompt_file:
+            raise click.UsageError("Provide either --template or a PROMPT_FILE path, not both.")
+        if template_name:
             try:
-                template_meta = load_template(template)
-                target_prompt_file = template_meta.get("path")
-                if not target_prompt_file:
-                    raise click.UsageError(f"Template '{template}' not found.")
-            except FileNotFoundError:
-                raise click.UsageError(f"Failed to load template '{template}'")
+                from .. import template_registry as _tpl
+                meta = _tpl.load_template(template_name)
+                prompt_file = meta.get("path")
+                if not prompt_file:
+                    raise click.UsageError(f"Template '{template_name}' did not return a valid path")
             except Exception as e:
-                raise click.UsageError(f"Error resolving template '{template}': {str(e)}")
+                raise click.UsageError(f"Failed to load template '{template_name}': {e}")
+        if not template_name and not prompt_file:
+            raise click.UsageError("Missing PROMPT_FILE. To use a template, pass --template NAME instead.")
 
-        # 3. Parse and Set Environment Variables
-        # Values passed with -e/--env override OS environment variables
-        env_vars = {}
-        for item in env:
+        # Detect GitHub issue URL -> agentic architecture mode
+        if prompt_file and _GITHUB_ISSUE_RE.search(prompt_file):
+            from ..agentic_architecture import run_agentic_architecture
+
+            verbose = ctx.obj.get("verbose", False)
+            quiet = ctx.obj.get("quiet", False)
+
+            success, message, cost, model, output_files = run_agentic_architecture(
+                issue_url=prompt_file,
+                verbose=verbose,
+                quiet=quiet,
+            )
+            if not quiet:
+                status = "[green]Success[/green]" if success else "[red]Failed[/red]"
+                console.print(f"{status}: {message}")
+                if output_files:
+                    console.print(f"Output files: {', '.join(output_files)}")
+            return (message, cost, model) if success else None
+
+        # Validate file path (not a URL, must exist and not be a directory)
+        if prompt_file and not template_name:
+            p = Path(prompt_file)
+            if not p.exists():
+                raise click.UsageError(f"Invalid value for 'PROMPT_FILE': Path '{prompt_file}' does not exist.")
+            if p.is_dir():
+                raise click.UsageError(f"Invalid value for 'PROMPT_FILE': Path '{prompt_file}' is a directory.")
+
+        # Parse -e/--env arguments into a dict
+        env_vars: Dict[str, str] = {}
+        for item in env_kv or ():
             if "=" in item:
                 key, value = item.split("=", 1)
-                env_vars[key] = value
+                key = key.strip()
+                if key:
+                    env_vars[key] = value
             else:
-                # Docker-style fallback: read from current env
-                if item in os.environ:
-                    env_vars[item] = os.environ[item]
-        
-        # Update os.environ for the duration of this command
-        # This allows the code generator and template expansion to see these values
-        os.environ.update(env_vars)
-
-        # 4. Call Code Generator
-        generated_code, is_incremental, cost, model = code_generator_main(
+                key = item.strip()
+                if key:
+                    val = os.environ.get(key)
+                    if val is not None:
+                        env_vars[key] = val
+                    else:
+                        if ctx.obj.get("verbose") and not ctx.obj.get("quiet"):
+                            console.print(f"[warning]-e {key} not found in environment; skipping[/warning]")
+        generated_code, incremental, total_cost, model_name = code_generator_main(
             ctx=ctx,
-            prompt_file=target_prompt_file,
+            prompt_file=prompt_file,  # resolved template path or user path
             output=output,
-            original_prompt_file_path=original_prompt,
-            force_incremental_flag=incremental,
-            env_vars=env_vars if env_vars else None,
-            unit_test_file=unit_test,
-            exclude_tests=exclude_tests
+            original_prompt_file_path=original_prompt_file_path,
+            force_incremental_flag=incremental_flag,
+            env_vars=env_vars or None,
+            unit_test_file=unit_test_file,
+            exclude_tests=exclude_tests,
         )
-
-        return generated_code, cost, model
-
-    except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+        return generated_code, total_cost, model_name
+    except click.Abort:
+        # Let user cancellation (e.g., pressing 'no' on overwrite prompt) propagate
+        # to PDDCLI.invoke() for graceful handling (fix for issue #186)
         raise
-    except Exception as e:
-        quiet = ctx.obj.get("quiet", False) if ctx.obj else False
-        handle_error(e, "generate", quiet)
+    except Exception as exception:
+        handle_error(exception, "generate", ctx.obj.get("quiet", False))
         return None
 
 
@@ -153,12 +203,12 @@ def generate(
     help="Output format: 'code' (default, uses language extension) or 'md' (markdown).",
 )
 @click.pass_context
-@log_operation(operation="example", updates_fingerprint=True)
+@log_operation("example", updates_fingerprint=True)
 @track_cost
 def example(
-    ctx: click.Context,
-    prompt_file: str,
-    code_file: str,
+    ctx: click.Context, 
+    prompt_file: str, 
+    code_file: str, 
     output: Optional[str],
     format: str,
 ) -> Optional[Tuple[str, float, str]]:
@@ -179,111 +229,77 @@ def example(
         return None
 
 
-@click.command(name="test")
-@click.argument("args", nargs=-1)
-@click.option("--manual", is_flag=True, help="Use manual mode with explicit file arguments.")
-@click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds to add to each step's timeout (Agentic mode).")
-@click.option("--no-github-state", is_flag=True, help="Disable GitHub issue comment-based state persistence (Agentic mode).")
-@click.option("--output", help="Specify where to save the generated test file.")
-@click.option("--language", help="Specify the programming language.")
-@click.option("--coverage-report", type=click.Path(exists=True), help="Path to the coverage report file.")
-@click.option("--existing-tests", type=click.Path(exists=True), multiple=True, help="Path(s) to existing unit test file(s).")
-@click.option("--target-coverage", type=float, default=90.0, help="Desired code coverage percentage.")
-@click.option("--merge", is_flag=True, help="Merge new tests with existing test file.")
+@click.command("test")
+@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("code_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--output",
+    type=click.Path(writable=True),
+    default=None,
+    help="Specify where to save the generated test file (file or directory).",
+)
+@click.option(
+    "--language", 
+    type=str, 
+    default=None, 
+    help="Specify the programming language."
+)
+@click.option(
+    "--coverage-report",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to the coverage report file for existing tests.",
+)
+@click.option(
+    "--existing-tests",
+    type=click.Path(exists=True, dir_okay=False),
+    multiple=True,
+    help="Path to existing unit test file(s). Can be specified multiple times.",
+)
+@click.option(
+    "--target-coverage",
+    type=click.FloatRange(0.0, 100.0),
+    default=None,  # Use None, default handled in cmd_test_main or env var
+    help="Desired code coverage percentage (default: 10.0 or PDD_TEST_COVERAGE_TARGET).",
+)
+@click.option(
+    "--merge",
+    is_flag=True,
+    default=False,
+    help="Merge new tests with existing test file instead of creating a separate file.",
+)
 @click.pass_context
-@log_operation(operation="test", updates_run_report=True)
+@log_operation("test", updates_run_report=True)
 @track_cost
 def test(
     ctx: click.Context,
-    args: Tuple[str, ...],
-    manual: bool,
-    timeout_adder: float,
-    no_github_state: bool,
+    prompt_file: str,
+    code_file: str,
     output: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
     existing_tests: Tuple[str, ...],
-    target_coverage: float,
+    target_coverage: Optional[float],
     merge: bool,
-) -> Optional[Tuple[Any, float, str]]:
-    """
-    Generate or enhance unit tests.
-
-    Supports two modes:
-    1. Agentic UI Test Generation: pdd test <GITHUB_ISSUE_URL>
-    2. Manual Unit Test Generation: pdd test --manual PROMPT_FILE CODE_OR_EXAMPLE_FILE
-    """
-    from ..cmd_test_main import cmd_test_main
-    from ..agentic_test import run_agentic_test
-
+) -> Optional[Tuple[str, float, str]]:
+    """Generate unit tests for a given prompt and implementation."""
     try:
-        if not args:
-            raise click.UsageError("Missing arguments. See 'pdd test --help'.")
-
-        # Determine mode
-        is_url = args[0].startswith("http") or "github.com" in args[0]
-        
-        if is_url and not manual:
-            # Agentic Mode
-            if len(args) != 1:
-                raise click.UsageError("Agentic mode requires exactly one argument (the GitHub issue URL).")
-            
-            issue_url = args[0]
-            verbose = ctx.obj.get("verbose", False) if ctx.obj else False
-            quiet = ctx.obj.get("quiet", False) if ctx.obj else False
-
-            success, message, cost, model, changed_files = run_agentic_test(
-                issue_url=issue_url,
-                verbose=verbose,
-                quiet=quiet,
-                timeout_adder=timeout_adder,
-                use_github_state=not no_github_state
-            )
-
-            if success:
-                console.print(f"[bold green]Agentic test generation completed:[/bold green] {message}")
-                if changed_files:
-                    console.print(f"Changed files: {', '.join(changed_files)}")
-            else:
-                console.print(f"[bold red]Agentic test generation failed:[/bold red] {message}")
-
-            result_dict = {
-                "success": success,
-                "message": message,
-                "changed_files": changed_files
-            }
-            return result_dict, cost, model
-
-        else:
-            # Manual Mode
-            if len(args) != 2:
-                raise click.UsageError("Manual mode requires exactly two arguments: PROMPT_FILE and CODE_OR_EXAMPLE_FILE.")
-            
-            prompt_file = args[0]
-            code_file = args[1]
-            
-            strength = ctx.obj.get("strength") if ctx.obj else None
-            temperature = ctx.obj.get("temperature") if ctx.obj else None
-
-            unit_test_code, cost, model = cmd_test_main(
-                ctx=ctx,
-                prompt_file=prompt_file,
-                code_file=code_file,
-                output=output,
-                language=language,
-                coverage_report=coverage_report,
-                existing_tests=existing_tests,
-                target_coverage=target_coverage,
-                merge=merge,
-                strength=strength,
-                temperature=temperature
-            )
-            
-            return unit_test_code, cost, model
-
-    except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+        # Convert empty tuple to None for cmd_test_main compatibility
+        existing_tests_list = list(existing_tests) if existing_tests else None
+        test_code, total_cost, model_name = cmd_test_main(
+            ctx=ctx,
+            prompt_file=prompt_file,
+            code_file=code_file,
+            output=output,
+            language=language,
+            coverage_report=coverage_report,
+            existing_tests=existing_tests_list,
+            target_coverage=target_coverage,
+            merge=merge,
+        )
+        return test_code, total_cost, model_name
+    except click.Abort:
         raise
-    except Exception as e:
-        quiet = ctx.obj.get("quiet", False) if ctx.obj else False
-        handle_error(e, "test", quiet)
+    except Exception as exception:
+        handle_error(exception, "test", ctx.obj.get("quiet", False))
         return None
