@@ -120,7 +120,7 @@ ALLOWED_COMMANDS = {
     "sync": "Synchronize prompts with code and tests",
     "update": "Update prompts based on code changes",
     "bug": "Generate unit test from bug (agentic mode)",
-    "generate": "Generate code from prompt",
+    "generate": "Generate code from prompt or architecture from GitHub issue URL",
     "test": "Generate unit tests",
     "example": "Generate example code",
     "fix": "Fix code based on test errors",
