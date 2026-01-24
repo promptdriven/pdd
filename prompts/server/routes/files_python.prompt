@@ -58,9 +58,11 @@
        - `parse_prompt_stem(stem)`: Extract sync_basename and language
 
   6. **Language detection**:
-     - KNOWN_LANGUAGES: python, typescript, javascript, java, go, rust, cpp, c, csharp, ruby, swift, kotlin
-     - LANGUAGE_EXTENSIONS: map language to file extensions
-     - Parse prompt stem: "calculator_python" -> ("calculator", "python")
+     - KNOWN_LANGUAGES: comprehensive list covering core languages (python, typescriptreact, javascriptreact, typescript, javascript, java, go, rust, cpp, c, csharp, ruby, swift, kotlin), scripting (php, scala, perl, bash, shell, haskell, dart, elixir, etc.), frontend/templating (svelte, vue, scss, sass, jinja, handlebars, etc.), modern/systems (zig, mojo, solidity), and config/query (sql, graphql, protobuf, terraform, etc.)
+     - IMPORTANT: KNOWN_LANGUAGES must be sorted by length (longest first) so "typescriptreact" matches before "typescript", and "javascript" before "java"
+     - LANGUAGE_EXTENSIONS: map language to file extensions (comprehensive, including e.g. elixir: [".ex", ".exs"], jinja: [".jinja2", ".jinja", ".j2"])
+     - Parse prompt stem: "calculator_python" -> ("calculator", "python"), "ui_components_TypeScriptReact" -> ("ui_components", "typescriptreact")
+     - `parse_prompt_stem` also has a fallback that checks `_is_known_language()` from construct_paths for custom languages not in the hardcoded list
 
   7. **Dev-unit file discovery**:
      - Extract subdirectory structure from prompt path (e.g., "prompts/server/foo.prompt" -> "server")
