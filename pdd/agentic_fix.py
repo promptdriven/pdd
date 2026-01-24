@@ -90,7 +90,6 @@ def _print_diff(old: str, new: str, path: Path) -> None:
     text = "".join(diff)
     _print_head("Unified diff (first lines)", text)
 
-
 def _run_testcmd(cmd: str, cwd: Path) -> bool:
     """
     Execute a test command locally via bash -lc "<cmd>".
@@ -177,7 +176,6 @@ def _detect_mtime_changes(before: Dict[Path, float], after: Dict[Path, float]) -
             changes.append(str(path))
 
     return changes
-
 
 def run_agentic_fix(
     prompt_file: str,
