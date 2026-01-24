@@ -1,3 +1,35 @@
+## v0.0.128 (2026-01-23)
+
+### Feat
+
+- frontend and backend improvements
+- add agentic architecture generation from GitHub issue PRD (#367)
+- add agentic architecture generation from GitHub issue PRD (#367)
+- auto-generate .pddrc before prompt generation from architecture.json
+- add generate_pddrc template for generating .pddrc from architecture.json
+- Enhance `generate` command with template registry, environment variable support, lazy code generator loading, and improved test isolation.
+- Add comprehensive tests for `pdd.cli`, integrate `agentic_test_main`, and update `project_dependencies.csv` by removing old context examples.
+- Implement agentic test generation and add comprehensive tests for `generate` command and `AgenticTest` class.
+- Implement agentic testing functionality and add comprehensive tests for the `generate` command's argument parsing and environment variable handling.
+- Implement `agentic_test_orchestrator` to manage multi-step agentic testing workflows with state persistence and new tests.
+- Generalize agentic test generation prompts to use templates for API test plans and code examples, and include API configuration documentation.
+- Generalize agentic test generation workflow to support API tests by updating prompts and adding API-specific instructions.
+- Add agentic test workflow for UI test generation (#332)
+
+### Fix
+
+- Update LLM test generation prompts to prevent pytest module cache pollution and refactor E2E test imports.
+- use click.echo for GitHub issue URL output in generate command
+- escape braces in agentic arch prompts and add GitHub issue URL support
+- _get_cached_jwt() crashes with TypeError when cache file has expires_at: null
+- pdd/commands/auth.py writes expires_at: null to cache, causing #358 crashes
+- Prevent `change_main` from writing empty files for empty prompts and ensure `update_main` agentic updates do not modify source files when an output path is specified. all unit tests pass
+
+### Refactor
+
+- Update template loading to use `template_registry` and enhance test module cleanup. Test polution issues
+- remove "UI" from agentic test generation workflow descriptions in prompts.
+
 ## v0.0.127 (2026-01-22)
 
 ### Feat
