@@ -65,6 +65,7 @@ DEFAULT_TIMEOUT_SECONDS: float = 240.0
 MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
+MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
 
 # GitHub State Markers
 GITHUB_STATE_MARKER_START = "<!-- PDD_WORKFLOW_STATE:"
@@ -220,7 +221,7 @@ def _get_cli_diagnostic_info(name: str) -> str:
         f"   agentic:",
         f"     {name}_path: /path/to/{name}",
         "",
-        f"4. Current PATH: {os.environ.get('PATH', 'not set')[:200]}...",
+        f"4. Current PATH: {os.environ.get('PATH', 'not set')[:MAX_PATH_DISPLAY_LENGTH]}...",
     ])
 
     return "\n".join(lines)
