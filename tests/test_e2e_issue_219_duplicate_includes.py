@@ -29,6 +29,9 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 
+from pdd import cli
+from pdd import auto_include as auto_include_module
+
 
 @pytest.fixture(autouse=True)
 def set_pdd_path(monkeypatch):
@@ -160,8 +163,6 @@ context/helper_example.py,Helper utility functions,2023-02-02
         with patch('pdd.auto_include.llm_invoke', side_effect=mock_llm_invoke_for_auto_include):
             with patch('pdd.insert_includes.llm_invoke', side_effect=mock_llm_invoke_for_auto_include):
                 with patch('pdd.auto_include.summarize_directory', side_effect=mock_summarize_directory):
-                    from pdd import cli
-
                     runner = CliRunner()
                     result = runner.invoke(cli.cli, [
                         "--local",
@@ -288,8 +289,6 @@ context/helper_example.py,Helper utility functions,2023-02-02
         with patch('pdd.auto_include.llm_invoke', side_effect=mock_llm_invoke_for_auto_include):
             with patch('pdd.insert_includes.llm_invoke', side_effect=mock_llm_invoke_for_auto_include):
                 with patch('pdd.auto_include.summarize_directory', side_effect=mock_summarize_directory):
-                    from pdd import cli
-
                     runner = CliRunner()
                     result = runner.invoke(cli.cli, [
                         "--local",
@@ -375,9 +374,7 @@ context/helper_example.py,Helper utilities,2023-02-02
 
         with patch('pdd.auto_include.llm_invoke', side_effect=mock_llm_invoke):
             with patch('pdd.auto_include.summarize_directory', side_effect=mock_summarize_directory):
-                from pdd.auto_include import auto_include
-
-                dependencies, csv_output, total_cost, model_name = auto_include(
+                dependencies, csv_output, total_cost, model_name = auto_include_module.auto_include(
                     input_prompt=input_prompt_with_include,
                     directory_path="context/*.py",
                     csv_file=None,
