@@ -2,7 +2,10 @@
 Generate, test, and example commands.
 """
 from __future__ import annotations
+import os
+import re
 import click
+from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
 from ..code_generator_main import code_generator_main
@@ -11,6 +14,10 @@ from ..cmd_test_main import cmd_test_main
 from ..track_cost import track_cost
 from ..core.errors import handle_error, console
 from ..operation_log import log_operation
+
+_GITHUB_ISSUE_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)"
+)
 
 class GenerateCommand(click.Command):
     """Ensure help shows PROMPT_FILE as required even when validated at runtime."""
@@ -21,7 +28,7 @@ class GenerateCommand(click.Command):
 
 
 @click.command("generate", cls=GenerateCommand)
-@click.argument("prompt_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.argument("prompt_file", required=False, type=click.UNPROCESSED)
 @click.option(
     "--output",
     type=click.Path(writable=True),
@@ -114,9 +121,36 @@ def generate(
                 raise click.UsageError(f"Failed to load template '{template_name}': {e}")
         if not template_name and not prompt_file:
             raise click.UsageError("Missing PROMPT_FILE. To use a template, pass --template NAME instead.")
+
+        # Detect GitHub issue URL -> agentic architecture mode
+        if prompt_file and _GITHUB_ISSUE_RE.search(prompt_file):
+            from ..agentic_architecture import run_agentic_architecture
+
+            verbose = ctx.obj.get("verbose", False)
+            quiet = ctx.obj.get("quiet", False)
+
+            success, message, cost, model, output_files = run_agentic_architecture(
+                issue_url=prompt_file,
+                verbose=verbose,
+                quiet=quiet,
+            )
+            if not quiet:
+                status = "[green]Success[/green]" if success else "[red]Failed[/red]"
+                console.print(f"{status}: {message}")
+                if output_files:
+                    console.print(f"Output files: {', '.join(output_files)}")
+            return (message, cost, model) if success else None
+
+        # Validate file path (not a URL, must exist and not be a directory)
+        if prompt_file and not template_name:
+            p = Path(prompt_file)
+            if not p.exists():
+                raise click.UsageError(f"Invalid value for 'PROMPT_FILE': Path '{prompt_file}' does not exist.")
+            if p.is_dir():
+                raise click.UsageError(f"Invalid value for 'PROMPT_FILE': Path '{prompt_file}' is a directory.")
+
         # Parse -e/--env arguments into a dict
         env_vars: Dict[str, str] = {}
-        import os as _os
         for item in env_kv or ():
             if "=" in item:
                 key, value = item.split("=", 1)
@@ -126,7 +160,7 @@ def generate(
             else:
                 key = item.strip()
                 if key:
-                    val = _os.environ.get(key)
+                    val = os.environ.get(key)
                     if val is not None:
                         env_vars[key] = val
                     else:
