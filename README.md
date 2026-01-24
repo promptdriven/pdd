@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.127-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.128-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -28,6 +28,8 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd change <issue-url>` - Implement feature requests (12-step workflow)
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
+- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (8-step workflow)
+- `pdd test <issue-url>` - Generate UI tests from issue descriptions (9-step workflow)
 
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
@@ -365,7 +367,7 @@ export PDD_TEST_OUTPUT_PATH=/path/to/tests/
 
 ## Version
 
-Current version: 0.0.127
+Current version: 0.0.128
 
 To check your installed version, run:
 ```
@@ -540,6 +542,7 @@ flowchart TB
         change["pdd change &lt;url&gt;"]
         bug["pdd bug &lt;url&gt;"]
         fix_url["pdd fix &lt;url&gt;"]
+        test_url["pdd test &lt;url&gt;"]
     end
 
     sync["pdd sync"]
@@ -570,6 +573,7 @@ flowchart TB
 - **[`change`](#8-change)**: Implement feature requests from GitHub issues (12-step workflow)
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
+- **[`test`](#4-test)**: Generate UI tests from GitHub issues (9-step workflow in agentic mode)
 
 ### Core Commands (Prompt-Based)
 - **[`sync`](#1-sync)**: **[PRIMARY FOR PROMPT WORKFLOWS]** Automated prompt-to-code cycle
@@ -1000,6 +1004,38 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.promp
 pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_calculator_python.prompt calculator_python.prompt
 ```
 
+**Agentic Architecture Mode:**
+
+When the positional argument is a GitHub issue URL instead of a prompt file, `generate` enters agentic architecture mode. The issue body serves as the PRD (Product Requirements Document), and an 8-step agentic workflow generates `architecture.json` automatically.
+
+```bash
+pdd generate https://github.com/owner/repo/issues/42
+```
+
+The 8-step workflow:
+1. **Analyze PRD**: Extract features, tech stack, and requirements from the issue content
+2. **Deep Analysis**: Feature decomposition, module boundaries, shared concerns
+3. **Research**: Web search for tech stack documentation and best practices
+4. **Design**: Module breakdown with dependency graph and priority ordering
+5. **Research Dependencies**: Find relevant API docs and code examples per module
+6. **Generate**: Produce complete `architecture.json` with proper priorities
+7. **Validate**: Check for circular deps, priority ordering, missing deps
+8. **Fix**: Auto-fix validation issues (loops back to step 7, max 5 iterations)
+
+Prerequisites:
+- `gh` CLI must be installed and authenticated
+- The issue must contain a PRD describing the project scope
+
+**Workflow Resumption**: Re-running `pdd generate <issue-url>` resumes from the last completed step. State is persisted to GitHub issue comments for cross-machine resume.
+
+**Hard Stops**: The workflow stops if the PRD content is insufficient, the tech stack is ambiguous, or clarification is needed. Address the issue and re-run.
+
+Example:
+```bash
+pdd generate https://github.com/myorg/myrepo/issues/42
+# Generates: architecture.json + architecture_diagram.html
+```
+
 #### Prompt Templates
 
 Templates are reusable prompt files that generate a specific artifact (code, JSON, tests, etc.). Templates carry human/CLI metadata in YAML front matter (parsed by the CLI and not sent to the LLM), while the body stays concise and model‑focused.
@@ -1109,6 +1145,24 @@ pdd generate --template architecture/architecture_json \
   --output architecture.json
 # Results in: architecture_diagram.html (from existing architecture.json)
 ```
+
+**Context URLs (optional field):**
+
+Architecture entries support an optional `context_urls` array that associates web documentation references with each module. When prompts are generated from the architecture (via `generate_prompt`), these URLs are emitted as `<web>` tags in the Dependencies section, enabling the LLM to fetch relevant API documentation during code generation.
+
+```json
+{
+  "filename": "orders_api_Python.prompt",
+  "dependencies": ["models_Python.prompt"],
+  "context_urls": [
+    {"url": "https://fastapi.tiangolo.com/tutorial/first-steps/", "purpose": "FastAPI routing patterns"},
+    {"url": "https://docs.pydantic.dev/latest/concepts/models/", "purpose": "Pydantic model validation"}
+  ],
+  ...
+}
+```
+
+The `context_urls` field is populated automatically by the agentic architecture workflow (step 5: research dependencies) but can also be added manually to any architecture entry.
 
 Front Matter (YAML) metadata
 
@@ -1433,6 +1487,64 @@ pdd [GLOBAL OPTIONS] example --output examples/factorial_calculator_example.py f
 
 ### 4. test
 
+Generate or enhance unit tests for a given code file and its corresponding prompt file. Also supports **agentic mode** for generating UI tests from GitHub issues.
+
+#### Agentic Mode (UI Test Generation)
+
+Generate UI tests from a GitHub issue. The issue describes what needs to be tested (a webpage, CLI, or desktop app), and an agentic workflow analyzes the target, creates a test plan, and generates comprehensive UI tests.
+
+```
+pdd [GLOBAL OPTIONS] test <github-issue-url>
+```
+
+**How it works (9-step workflow with GitHub comments):**
+
+1. **Duplicate check** - Search for existing issues describing the same test requirements. If found, merge content and close the duplicate. Posts comment with findings.
+
+2. **Documentation check** - Review repo documentation and codebase to understand what needs to be tested. Posts comment with findings.
+
+3. **Analyze & clarify** - Determine if enough information exists in the issue to create tests. Posts comment requesting clarification if needed.
+
+4. **Detect frontend** - Identify the frontend type: web UI (Next.js, React, etc.), CLI, or desktop app. Determines the appropriate testing framework (e.g., Playwright for web). Posts comment with frontend analysis.
+
+5. **Create test plan** - Design a comprehensive test plan and verify it's achievable. Posts comment requesting information (e.g., credential access) if plan is blocked.
+
+6. **Generate tests** - Create UI tests in a new worktree following the test plan. Posts comment with generated test code.
+
+7. **Run tests** - Execute the generated tests against the target. Posts comment with test results.
+
+8. **Fix & iterate** - Fix any failing tests and re-run until they pass. Posts comment with fix attempts and final status.
+
+9. **Submit PR** - Create a draft pull request with the UI tests linked to the issue. Posts comment with PR link.
+
+**Agentic Options:**
+- `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
+- `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
+- `--manual`: Use legacy prompt-based mode instead of agentic mode
+
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
+
+**Example (Agentic Mode):**
+```bash
+# Generate UI tests from a GitHub issue
+pdd test https://github.com/myorg/myrepo/issues/789
+
+# Resume after answering clarifying questions
+pdd test https://github.com/myorg/myrepo/issues/789
+```
+
+**Next Step - Fixing Test Issues:**
+
+If the generated tests reveal issues that need code fixes, use `pdd fix` with the same issue URL:
+
+```bash
+pdd fix https://github.com/myorg/myrepo/issues/789
+```
+
+---
+
+#### Manual Mode (Prompt-Based)
+
 Generate or enhance unit tests for a given code file and its corresponding prompt file.
 
 Test organization:
@@ -1441,6 +1553,7 @@ Test organization:
 
 ```
 pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_OR_EXAMPLE_FILE
+pdd [GLOBAL OPTIONS] test --manual [OPTIONS] PROMPT_FILE CODE_OR_EXAMPLE_FILE
 ```
 
 Arguments:

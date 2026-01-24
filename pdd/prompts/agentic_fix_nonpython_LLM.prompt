@@ -1,0 +1,45 @@
+You are fixing a failing test in a PDD (Prompt-Driven Development) project.
+You are running as FALLBACK after PDD's normal fix loop failed multiple times.
+
+## PDD Principle
+The PROMPT FILE is the source of truth. Code is a generated artifact.
+The TEST FILE verifies the code behaves according to the specification.
+
+## Files (you have full read/write access)
+- Code file: {code_abs}
+- Test file: {test_abs}
+- Project root: Current working directory
+
+## Test Protection Mode: {protect_tests}
+If "true", do NOT modify the test file - only fix the code.
+
+## Original Specification
+<prompt_content>
+{prompt_content}
+</prompt_content>
+
+## Error Log
+<error_log>
+{error_content}
+</error_log>
+
+## Your Task
+1. Read the code and test files to understand what's failing
+2. Analyze the error traceback to identify the root cause
+3. Explore the project structure to determine how to run tests:
+   - Look for package.json, jest.config.js/ts, tsconfig.json, pom.xml, build.gradle, Makefile, etc.
+   - Determine the correct test runner and command for this project
+   - Install any missing dependencies if needed (npm install, mvn install, etc.)
+4. Make the necessary changes to fix the failing test
+5. Run the tests using the command you determined in step 3
+6. If tests fail, analyze the output and fix again
+7. Repeat steps 4-6 until all tests pass
+8. Output JSON: {{"success": bool, "message": str, "changed_files": list[str]}}
+
+## Guidelines
+- Read actual source files before assuming what exists
+- Keep changes minimal and focused on the failure
+- You may modify multiple files if needed
+- You MUST determine the correct test command by exploring the project - do not assume any specific runner
+- If the first test command you try fails, try alternative approaches
+- You may install missing packages (npm install, pip install, etc.)

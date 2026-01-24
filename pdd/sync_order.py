@@ -208,13 +208,39 @@ def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[
                 queue.append(v)
 
     cycles: List[List[str]] = []
-    
+
     if processed_count != len(all_nodes):
-        # Cycle detected. Identify nodes involved in cycles.
-        remaining_nodes = [n for n, deg in in_degree.items() if deg > 0]
-        if remaining_nodes:
-            cycles.append(remaining_nodes)
-            logger.warning(f"Cyclic dependencies detected involving: {remaining_nodes}")
+        remaining = {n for n, deg in in_degree.items() if deg > 0}
+
+        # Find actual cycle participants: nodes that can reach themselves
+        # through remaining-only edges (DFS reachability check)
+        actual_cyclic: Set[str] = set()
+        for node in remaining:
+            visited: Set[str] = set()
+            stack = [dep for dep in adj_list.get(node, []) if dep in remaining]
+            found_cycle = False
+            while stack and not found_cycle:
+                current = stack.pop()
+                if current == node:
+                    found_cycle = True
+                    break
+                if current in visited:
+                    continue
+                visited.add(current)
+                stack.extend(dep for dep in adj_list.get(current, []) if dep in remaining)
+            if found_cycle:
+                actual_cyclic.add(node)
+
+        if actual_cyclic:
+            cycles.append(sorted(actual_cyclic))
+            logger.warning(f"Cyclic dependencies detected involving: {sorted(actual_cyclic)}")
+
+        # Append non-cyclic remaining nodes to sorted_list in best-effort order
+        # (these depend on cyclic nodes but aren't cyclic themselves)
+        non_cyclic_remaining = remaining - actual_cyclic
+        if non_cyclic_remaining:
+            ordered = sorted(non_cyclic_remaining, key=lambda n: (in_degree[n], n))
+            sorted_list.extend(ordered)
 
     return sorted_list, cycles
 
@@ -301,7 +327,7 @@ def generate_sync_order_script(modules: List[str], output_path: Path, worktree_p
     ]
 
     if worktree_path:
-        lines.append(f"cd {worktree_path}")
+        lines.append("# Run this script from your repository root directory")
         lines.append("")
 
     total = len(modules)

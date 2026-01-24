@@ -256,16 +256,21 @@ def _run_with_provider(
 
     cmd: List[str] = []
     
+    # Read prompt content for providers that pipe via stdin
+    prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
+
     # Construct Command
     if provider == "anthropic":
         # Remove API key to force subscription auth if configured that way
         env.pop("ANTHROPIC_API_KEY", None)
-        # Note: Tests expect NO -p flag for Anthropic, and prompt path as last arg
+        # Use -p - to pipe prompt as direct user message via stdin.
+        # This prevents Claude from interpreting file-discovered instructions
+        # as "automated bot workflow" and refusing to execute.
         cmd = [
-            "claude", 
-            "--dangerously-skip-permissions", 
+            "claude",
+            "-p", "-",
+            "--dangerously-skip-permissions",
             "--output-format", "json",
-            str(prompt_path)
         ]
     elif provider == "google":
         cmd = [
@@ -285,11 +290,15 @@ def _run_with_provider(
     else:
         return False, f"Unknown provider {provider}", 0.0
 
+    # For anthropic, pipe prompt content via stdin; others use file path in cmd
+    stdin_content = prompt_content if provider == "anthropic" else None
+
     try:
         result = subprocess.run(
             cmd,
             cwd=cwd,
             env=env,
+            input=stdin_content,
             capture_output=True,
             text=True,
             timeout=timeout

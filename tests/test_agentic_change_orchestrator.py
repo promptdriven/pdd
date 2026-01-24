@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -676,6 +676,127 @@ def test_sync_order_defaults_when_no_prompts_modified(mock_dependencies, temp_cw
     assert last_context.get("sync_order_script") == ""
     assert last_context.get("sync_order_list") == "No modules to sync"
 
+
+def test_sync_order_script_written_to_cwd(mock_dependencies, temp_cwd):
+    """
+    After generating sync order, a sync_order.sh should be written to the
+    user's original CWD (not just the worktree temp directory).
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    issue_number = 555
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+
+    # Step 9 reports modified prompt files
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/foo_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    mock_template = MagicMock()
+    mock_template.format.return_value = "Formatted"
+    mock_template_loader.return_value = mock_template
+
+    # Patch _setup_worktree to return our worktree path and create prompt files
+    # after the mock setup (avoiding the rmtree in real _setup_worktree)
+    def mock_setup_worktree(cwd, issue_num, quiet):
+        prompts_dir = worktree_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        (prompts_dir / "foo_python.prompt").write_text(
+            "<include>prompts/bar_python.prompt</include>", encoding="utf-8"
+        )
+        (prompts_dir / "bar_python.prompt").write_text("% bar module", encoding="utf-8")
+        return worktree_path, None
+
+    with patch("pdd.agentic_change_orchestrator._setup_worktree", side_effect=mock_setup_worktree):
+        run_agentic_change_orchestrator(
+            issue_url="http://test",
+            issue_content="Test",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=issue_number,
+            issue_author="a",
+            issue_title="T",
+            cwd=temp_cwd,
+        )
+
+    # sync_order.sh should exist in the user's CWD
+    user_script = temp_cwd / "sync_order.sh"
+    assert user_script.exists(), "sync_order.sh not written to user's CWD"
+    content = user_script.read_text()
+    assert "pdd sync" in content
+    # Should NOT contain absolute temp directory paths
+    assert "/var/folders" not in content
+    assert ".pdd/worktrees" not in content
+
+
+def test_sync_order_list_context_is_clean_commands(mock_dependencies, temp_cwd):
+    """
+    context['sync_order_list'] should contain clean 'pdd sync X' commands,
+    not the full bash script with shebang/comments/set -e.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/foo_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    last_context = {}
+    def capture_format(**kwargs):
+        last_context.clear()
+        last_context.update(kwargs)
+        return "Formatted"
+
+    mock_template = MagicMock()
+    mock_template.format.side_effect = capture_format
+    mock_template_loader.return_value = mock_template
+
+    issue_number = 556
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+    prompts_dir = worktree_path / "prompts"
+    prompts_dir.mkdir(parents=True)
+    (prompts_dir / "foo_python.prompt").write_text("% foo", encoding="utf-8")
+
+    run_agentic_change_orchestrator(
+        issue_url="http://test",
+        issue_content="Test",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=issue_number,
+        issue_author="a",
+        issue_title="T",
+        cwd=temp_cwd,
+    )
+
+    sync_list = last_context.get("sync_order_list", "")
+    if sync_list and sync_list != "No modules to sync":
+        # Should be clean commands, not a full bash script
+        assert not sync_list.startswith("#!/bin/bash"), "sync_order_list should not contain shebang"
+        assert "set -e" not in sync_list, "sync_order_list should not contain set -e"
+        assert "pdd sync" in sync_list
+
+
 def test_worktree_path_in_context_when_resuming(mock_dependencies, temp_cwd):
     """
     Test that worktree_path is added to context when resuming after Step 9.
@@ -923,6 +1044,36 @@ def test_sync_order_generation_dict(mock_dependencies_dict, tmp_path):
     mocks["build_graph"].assert_called()
     mocks["get_affected"].assert_called()
     mocks["gen_script"].assert_called()
+
+
+def test_sync_order_sh_included_in_changed_files(mock_dependencies_dict, tmp_path):
+    """sync_order.sh must appear in changed_files when sync order is generated."""
+    mocks = mock_dependencies_dict
+
+    worktree_dir = tmp_path / "wt"
+    prompts_dir = worktree_dir / "prompts"
+    prompts_dir.mkdir(parents=True)
+    (prompts_dir / "foo_python.prompt").write_text("% foo module")
+
+    existing_state = {
+        "last_completed_step": 12,
+        "step_outputs": {str(i): "out" for i in range(1, 13)},
+        "worktree_path": str(worktree_dir)
+    }
+    existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo_python.prompt"
+    mocks["load"].return_value = (existing_state, 123)
+
+    mocks["get_affected"].return_value = ["foo", "bar"]
+    mocks["gen_script"].return_value = "echo sync"
+    mocks["run"].return_value = (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://issue", issue_content="Fix", repo_owner="o",
+        repo_name="r", issue_number=1, issue_author="me",
+        issue_title="Fix", cwd=tmp_path, quiet=True
+    )
+
+    assert "sync_order.sh" in files
 
 
 # -----------------------------------------------------------------------------
@@ -1458,3 +1609,134 @@ def test_z3_stop_conditions():
     s.add(stop_reason != 0)
     assert s.check() == z3.unsat, "Step 9 without FAIL should continue"
     s.pop()
+
+
+# -----------------------------------------------------------------------------
+# Step 9 Worktree Fallback Tests
+# -----------------------------------------------------------------------------
+
+def test_step9_fallback_detects_worktree_changes(mock_dependencies, temp_cwd):
+    """
+    If LLM output lacks FILES_CREATED/FILES_MODIFIED markers but the
+    worktree has actual file changes, orchestrator should use those
+    and NOT fail at step 9.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            # LLM wrote files but forgot markers in final response
+            return (True, "I've implemented the changes and posted to the issue.", 5.0, "anthropic")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "anthropic")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/99", 0.2, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect_run
+
+    # Mock _detect_worktree_changes to return files (simulating real worktree changes)
+    with patch("pdd.agentic_change_orchestrator._detect_worktree_changes",
+               return_value=["prompts/backend/sales_dashboard_python.prompt"]):
+        success, msg, cost, model, files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Show sold examples on dashboard",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=237,
+            issue_author="me",
+            issue_title="Show sold examples",
+            cwd=temp_cwd
+        )
+
+    # Should NOT fail at step 9
+    assert "no file changes" not in (msg or "")
+    # The worktree-detected file should be in the changed files
+    assert "prompts/backend/sales_dashboard_python.prompt" in files
+
+
+def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
+    """
+    _detect_worktree_changes only picks up .prompt and .md files,
+    not .py, .txt, or .agentic_prompt_* temp files.
+    """
+    # Create a real git repo with tracked prompts/ directory (like pdd_cloud)
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
+
+    # Create initial tracked files (simulating existing repo structure)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "existing.prompt").write_text("existing")
+    (tmp_path / "main.py").write_text("existing code")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+    # Now simulate LLM changes: new files (untracked) and modified files
+    (tmp_path / "prompts" / "foo_python.prompt").write_text("new prompt")
+    (tmp_path / "prompts" / "existing.prompt").write_text("modified prompt")
+    (tmp_path / "README.md").write_text("docs")
+    (tmp_path / "random.py").write_text("code")
+    (tmp_path / ".agentic_prompt_abc12345.txt").write_text("temp")
+    (tmp_path / "notes.txt").write_text("notes")
+
+    files = _detect_worktree_changes(tmp_path)
+
+    assert "prompts/foo_python.prompt" in files
+    assert "prompts/existing.prompt" in files
+    assert "README.md" in files
+    assert "random.py" not in files
+    assert ".agentic_prompt_abc12345.txt" not in files
+    assert "notes.txt" not in files
+
+
+def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
+    """
+    When step 9 fails (no files from either regex or worktree fallback),
+    the step output is still saved to state for debugging.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_save_state = mocks["save_state"]
+
+    step9_output_text = "I analyzed the codebase but couldn't determine what prompts to change."
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, step9_output_text, 5.0, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch("pdd.agentic_change_orchestrator._detect_worktree_changes", return_value=[]):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=237,
+            issue_author="me",
+            issue_title="Show sold examples",
+            cwd=temp_cwd
+        )
+
+    assert success is False
+    assert "no file changes" in msg
+
+    # Verify save_workflow_state was called with the step 9 output in state
+    assert mock_save_state.called
+    # Find the call that contains step 9 output
+    found_step9_output = False
+    for call_args in mock_save_state.call_args_list:
+        args, kwargs_call = call_args
+        # state is the 4th positional arg
+        if len(args) >= 4:
+            state_arg = args[3]
+            if isinstance(state_arg, dict) and "step_outputs" in state_arg:
+                if state_arg["step_outputs"].get("9") == step9_output_text:
+                    found_step9_output = True
+                    break
+    assert found_step9_output, "Step 9 output should be saved to state on failure"

@@ -9,9 +9,6 @@ import pytest
 from pdd.agentic_fix import (
     run_agentic_fix,
     _verify_and_log,
-    _is_suspicious_path,
-    _extract_files_from_output,
-    _apply_file_map,
 )
 
 
@@ -162,7 +159,6 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
     # Keep local verification off (agents may run on remote infra)
     monkeypatch.setenv("PDD_AGENTIC_VERIFY", "0")
     monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
-    # Note: PDD_AGENTIC_TIMEOUT removed - timeout now configured via --timeout-adder CLI option
     monkeypatch.setenv("PDD_AGENTIC_VERIFY_TIMEOUT", "60")
 
     p_prompt, p_code, p_test, p_err = _mk_files(tmp_path)
@@ -271,21 +267,12 @@ class TestCwdHandling:
 
     Bug: run_agentic_fix uses Path.cwd() for path resolution, which fails
     when called from a different directory than where the module files live.
-
-    Example: Running `pdd sync hello` from repo root for examples/hello/ module
-    causes paths like "src/hello.py" to resolve to /repo/src/hello.py instead
-    of /repo/examples/hello/src/hello.py.
     """
 
     def test_run_agentic_fix_respects_cwd_parameter(self, tmp_path, monkeypatch):
         """
         Regression test: run_agentic_fix should use passed cwd for path resolution,
         not Path.cwd().
-
-        This test simulates the scenario where:
-        - Process cwd is repo root (wrong directory)
-        - Module files are in a subdirectory (correct directory)
-        - Relative paths should resolve against the module directory
         """
         # Setup two directories - wrong_dir simulates repo root, correct_dir is module
         wrong_dir = tmp_path / "repo_root"
@@ -348,7 +335,7 @@ class TestCwdHandling:
             code_file="src/hello.py",
             unit_test_file="tests/test_hello.py",
             error_log_file="error.log",
-            cwd=correct_dir,  # NEW: explicit cwd - should resolve paths against this
+            cwd=correct_dir,
         )
 
         # Instruction file should be in correct_dir, not wrong_dir
@@ -393,15 +380,6 @@ class TestCwdHandling:
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
 
-        # Capture the resolved paths used in the instruction template
-        captured_template_args = {}
-        original_format = str.format
-
-        def capture_format(fmt_string, **kwargs):
-            if "code_abs" in kwargs:
-                captured_template_args.update(kwargs)
-            return original_format(fmt_string, **kwargs)
-
         monkeypatch.setattr(
             "pdd.agentic_fix.load_prompt_template",
             lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}",
@@ -436,224 +414,68 @@ class TestCwdHandling:
                 "Code path should NOT reference the process cwd (other_dir)"
 
 
-class TestSuspiciousPathDetection:
-    """Tests for the _is_suspicious_path() function and its integration.
+class TestMtimeChangeDetection:
+    """Tests for mtime-based file change detection."""
 
-    This tests the defense against LLM artifacts like:
-    - Single-character filenames (C, E, T from agent misbehavior)
-    - Template variables ({path}, {code_abs}) captured by regex
-    """
+    def test_detects_new_files(self, tmp_path):
+        """Should detect newly created files."""
+        from pdd.agentic_fix import _snapshot_mtimes, _detect_mtime_changes
 
-    def test_single_char_paths_are_suspicious(self):
-        """Single character filenames should be rejected."""
-        assert _is_suspicious_path("C") is True
-        assert _is_suspicious_path("E") is True
-        assert _is_suspicious_path("T") is True
-        assert _is_suspicious_path("X") is True
-        assert _is_suspicious_path("/tmp/C") is True
-        assert _is_suspicious_path("./E") is True
+        before = _snapshot_mtimes(tmp_path)
 
-    def test_double_char_paths_are_suspicious(self):
-        """Double character filenames should also be rejected."""
-        assert _is_suspicious_path("ab") is True
-        assert _is_suspicious_path("/foo/xy") is True
+        # Create a new file
+        new_file = tmp_path / "new_file.py"
+        new_file.write_text("print('hello')\n")
 
-    def test_template_variables_are_suspicious(self):
-        """Template variable patterns like {path} should be rejected."""
-        assert _is_suspicious_path("{path}") is True
-        assert _is_suspicious_path("{code_abs}") is True
-        assert _is_suspicious_path("{test_abs}") is True
-        assert _is_suspicious_path("/some/dir/{path}") is True
-        assert _is_suspicious_path("file_{name}.py") is True
+        after = _snapshot_mtimes(tmp_path)
+        changes = _detect_mtime_changes(before, after)
 
-    def test_dot_only_paths_are_suspicious(self):
-        """Paths that are just dots should be rejected."""
-        assert _is_suspicious_path("..") is True
-        assert _is_suspicious_path("...") is True
+        assert any("new_file.py" in c for c in changes)
 
-    def test_empty_path_is_suspicious(self):
-        """Empty paths should be rejected."""
-        assert _is_suspicious_path("") is True
-        assert _is_suspicious_path(None) is True  # type: ignore
+    def test_detects_modified_files(self, tmp_path):
+        """Should detect modified files."""
+        from pdd.agentic_fix import _snapshot_mtimes, _detect_mtime_changes
+        import time
 
-    def test_legitimate_paths_are_not_suspicious(self):
-        """Normal file paths should NOT be rejected."""
-        assert _is_suspicious_path("hello.py") is False
-        assert _is_suspicious_path("src/main.py") is False
-        assert _is_suspicious_path("/Users/test/code.py") is False
-        assert _is_suspicious_path("test_module.py") is False
-        assert _is_suspicious_path("__init__.py") is False
-        assert _is_suspicious_path(".gitignore") is False
-        assert _is_suspicious_path("Makefile") is False
+        existing = tmp_path / "existing.py"
+        existing.write_text("original\n")
 
-    def test_three_char_paths_are_allowed(self):
-        """Three+ character filenames should be allowed."""
-        assert _is_suspicious_path("foo") is False
-        assert _is_suspicious_path("bar") is False
-        assert _is_suspicious_path("abc") is False
+        before = _snapshot_mtimes(tmp_path)
 
+        # Ensure mtime changes (some filesystems have 1s granularity)
+        time.sleep(0.05)
+        existing.write_text("modified\n")
 
-class TestExtractFilesFromOutputWithSuspiciousPathRejection:
-    """Tests that _extract_files_from_output rejects suspicious paths."""
+        after = _snapshot_mtimes(tmp_path)
+        changes = _detect_mtime_changes(before, after)
 
-    def test_rejects_single_char_paths(self):
-        """Should reject single-char paths from LLM output."""
-        blob = "<<<BEGIN_FILE:C>>>some content<<<END_FILE:C>>>"
-        result = _extract_files_from_output(blob)
-        assert "C" not in result
-        assert result == {}
+        assert any("existing.py" in c for c in changes)
 
-    def test_rejects_template_variable_paths(self):
-        """Should reject template variable paths like {path}."""
-        blob = "<<<BEGIN_FILE:{path}>>>some code<<<END_FILE:{path}>>>"
-        result = _extract_files_from_output(blob)
-        assert "{path}" not in result
-        assert result == {}
+    def test_detects_deleted_files(self, tmp_path):
+        """Should detect deleted files."""
+        from pdd.agentic_fix import _snapshot_mtimes, _detect_mtime_changes
 
-    def test_rejects_code_abs_template(self):
-        """Should reject {code_abs} template variable."""
-        blob = "<<<BEGIN_FILE:{code_abs}>>>def hello(): pass<<<END_FILE:{code_abs}>>>"
-        result = _extract_files_from_output(blob)
-        assert "{code_abs}" not in result
-        assert result == {}
+        to_delete = tmp_path / "to_delete.py"
+        to_delete.write_text("will be deleted\n")
 
-    def test_allows_legitimate_paths(self):
-        """Should allow legitimate file paths."""
-        blob = "<<<BEGIN_FILE:hello.py>>>def hello(): print('hello')<<<END_FILE:hello.py>>>"
-        result = _extract_files_from_output(blob)
-        assert "hello.py" in result
-        assert "def hello():" in result["hello.py"]
+        before = _snapshot_mtimes(tmp_path)
 
-    def test_mixed_paths_filters_suspicious(self):
-        """Should filter suspicious paths while keeping legitimate ones."""
-        blob = """
-        <<<BEGIN_FILE:C>>>bad<<<END_FILE:C>>>
-        <<<BEGIN_FILE:hello.py>>>good content<<<END_FILE:hello.py>>>
-        <<<BEGIN_FILE:{path}>>>template garbage<<<END_FILE:{path}>>>
-        <<<BEGIN_FILE:test_file.py>>>test content<<<END_FILE:test_file.py>>>
-        """
-        result = _extract_files_from_output(blob)
-        assert "C" not in result
-        assert "{path}" not in result
-        assert "hello.py" in result
-        assert "test_file.py" in result
-        assert len(result) == 2
+        to_delete.unlink()
 
+        after = _snapshot_mtimes(tmp_path)
+        changes = _detect_mtime_changes(before, after)
 
-class TestBugReplication:
-    """Integration tests that replicate the exact bug scenario.
+        assert any("to_delete.py" in c for c in changes)
 
-    Bug: When LLM produces malformed output with single-letter file markers like
-    <<<BEGIN_FILE:C>>><<<END_FILE:C>>>, the regex captures 'C' as a filename
-    and writes a 0-byte file to disk.
+    def test_no_changes_when_nothing_happens(self, tmp_path):
+        """Should return empty list when no files change."""
+        from pdd.agentic_fix import _snapshot_mtimes, _detect_mtime_changes
 
-    These tests verify the fix prevents this by checking actual file creation.
-    """
+        existing = tmp_path / "stable.py"
+        existing.write_text("stable\n")
 
-    def test_suspicious_paths_not_written_to_disk(self, tmp_path):
-        """
-        INTEGRATION TEST: Verify C, E, T files are NOT created on disk.
+        before = _snapshot_mtimes(tmp_path)
+        after = _snapshot_mtimes(tmp_path)
+        changes = _detect_mtime_changes(before, after)
 
-        This replicates the exact bug scenario where malformed LLM output
-        would result in empty files being created in the working directory.
-        """
-        # Create a legitimate code file that _apply_file_map expects
-        code_file = tmp_path / "hello.py"
-        code_file.write_text("# original\n")
-
-        # Simulate the file_map that would be created from malformed LLM output
-        # The content is empty string (0 bytes) when markers are on same line:
-        # <<<BEGIN_FILE:C>>><<<END_FILE:C>>>
-        file_map = {
-            "C": "",                              # Would create 0-byte file
-            "E": "",                              # Would create 0-byte file
-            "T": "",                              # Would create 0-byte file
-            "hello.py": "def hello():\n    print('hello')\n",  # Legitimate file
-        }
-
-        # Apply the file map (this is where the bug would manifest)
-        # Signature: _apply_file_map(file_map, project_root, primary_code_path, allow_new)
-        _apply_file_map(file_map, tmp_path, code_file, allow_new=True)
-
-        # CRITICAL ASSERTIONS: These files should NOT exist
-        assert not (tmp_path / "C").exists(), "Bug: C file was created on disk"
-        assert not (tmp_path / "E").exists(), "Bug: E file was created on disk"
-        assert not (tmp_path / "T").exists(), "Bug: T file was created on disk"
-
-        # Legitimate file SHOULD be updated
-        assert (tmp_path / "hello.py").exists()
-        assert "def hello():" in (tmp_path / "hello.py").read_text()
-
-    def test_template_variables_not_written_to_disk(self, tmp_path):
-        """
-        INTEGRATION TEST: Verify {path} template files are NOT created.
-
-        Bug scenario: LLM outputs code containing f-string templates like
-        <<<BEGIN_FILE:{path}>>> which gets captured as a filename.
-        """
-        code_file = tmp_path / "hello.py"
-        code_file.write_text("# original\n")
-
-        file_map = {
-            "{path}": "def _end_marker(path): return f'<<<END_FILE:{path}>>>'",
-            "{code_abs}": "some garbage",
-            "hello.py": "def hello(): print('hello')\n",
-        }
-
-        # Signature: _apply_file_map(file_map, project_root, primary_code_path, allow_new)
-        _apply_file_map(file_map, tmp_path, code_file, allow_new=True)
-
-        # These template variable files should NOT exist
-        assert not (tmp_path / "{path}").exists(), "Bug: {path} file was created"
-        assert not (tmp_path / "{code_abs}").exists(), "Bug: {code_abs} file was created"
-
-        # Legitimate file SHOULD exist
-        assert (tmp_path / "hello.py").exists()
-
-    def test_full_extraction_to_disk_pipeline(self, tmp_path):
-        """
-        END-TO-END TEST: Full pipeline from malformed LLM output to disk.
-
-        Simulates the complete bug scenario:
-        1. LLM produces malformed output with C, E, T markers
-        2. Regex extracts these as file paths
-        3. _apply_file_map attempts to write files
-        4. Validation prevents suspicious files from being created
-        """
-        code_file = tmp_path / "hello.py"
-        code_file.write_text("# original\n")
-
-        # Simulate exact malformed LLM output that caused the bug
-        malformed_llm_output = """
-Here's the fix for the code:
-
-<<<BEGIN_FILE:C>>><<<END_FILE:C>>>
-<<<BEGIN_FILE:E>>><<<END_FILE:E>>>
-<<<BEGIN_FILE:T>>><<<END_FILE:T>>>
-
-And here's the actual fix:
-<<<BEGIN_FILE:hello.py>>>
-def hello():
-    print("hello, world!")
-<<<END_FILE:hello.py>>>
-"""
-
-        # Step 1: Extract files from output (this includes suspicious path filtering)
-        file_map = _extract_files_from_output(malformed_llm_output)
-
-        # Verify extraction filtering worked
-        assert "C" not in file_map
-        assert "E" not in file_map
-        assert "T" not in file_map
-        assert "hello.py" in file_map
-
-        # Step 2: Apply to disk
-        # Signature: _apply_file_map(file_map, project_root, primary_code_path, allow_new)
-        _apply_file_map(file_map, tmp_path, code_file, allow_new=True)
-
-        # Step 3: Verify disk state
-        assert not (tmp_path / "C").exists(), "C file should not exist on disk"
-        assert not (tmp_path / "E").exists(), "E file should not exist on disk"
-        assert not (tmp_path / "T").exists(), "T file should not exist on disk"
-        assert (tmp_path / "hello.py").exists()
-        assert "hello, world!" in (tmp_path / "hello.py").read_text()
+        assert changes == []

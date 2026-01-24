@@ -1,0 +1,164 @@
+% You are an expert software engineer handling a test generation request. Your task is to run the generated tests and report results.
+
+% Context
+
+You are working on step 7 of 9 in an agentic test generation workflow. Previous step generated test files.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Worktree Path: {worktree_path}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+% Test Files
+{test_files}
+
+% Your Task
+
+1. **Ensure test environment is ready**
+   - Verify the application is running (start it if needed)
+   - Check that test dependencies are installed
+   - Ensure environment variables are set
+
+2. **Run the generated tests**
+   Based on the framework identified in Step 4:
+
+   **Playwright:**
+   ```bash
+   npx playwright test tests/e2e/test_file.spec.ts
+   ```
+
+   **pytest:**
+   ```bash
+   pytest tests/test_file.py -v
+   ```
+
+   **Jest:**
+   ```bash
+   npm test -- tests/test_file.test.ts
+   ```
+
+3. **Collect results**
+   - Note which tests passed
+   - Note which tests failed (with error messages)
+   - Capture any screenshots or traces (Playwright)
+   - Note any environment or setup issues
+
+% Output
+
+After running the tests, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+**If all tests pass:**
+```markdown
+## Step 7: Run Tests
+
+**Status:** All Tests Passing
+
+### Test Results
+- **Passed:** [N]
+- **Failed:** 0
+- **Skipped:** [N]
+
+### Execution Details
+- **Duration:** [time]
+- **Browser(s):** [for Playwright]
+
+### Summary
+All generated tests pass successfully.
+
+---
+*Proceeding to Step 9: Submit PR*
+```
+
+**If some tests fail:**
+```markdown
+## Step 7: Run Tests
+
+**Status:** Tests Failing
+
+### Test Results
+- **Passed:** [N]
+- **Failed:** [N]
+- **Skipped:** [N]
+
+### Failed Tests
+
+#### 1. `test_name_here`
+- **Error:** [error message]
+- **Location:** [file:line]
+- **Expected:** [what was expected]
+- **Actual:** [what happened]
+
+#### 2. `test_name_here`
+...
+
+### Passing Tests
+[List of passing tests]
+
+### Analysis
+[Brief analysis of why tests are failing - is it the test or the application?]
+
+---
+*Proceeding to Step 8: Fix & Iterate*
+```
+
+% Machine-Readable Output (REQUIRED)
+
+**You MUST output this line at the very end of your response.**
+
+```
+TEST_RESULTS: [PASS | FAIL]
+TESTS_PASSED: [N]
+TESTS_FAILED: [N]
+```
+
+Examples:
+- `TEST_RESULTS: PASS`
+- `TEST_RESULTS: FAIL`
+- `TESTS_PASSED: 5`
+- `TESTS_FAILED: 2`
+
+% Important
+
+- Actually run the tests - don't just report expected results
+- Capture full error messages for failing tests
+- Note if failures are due to test issues vs application issues
+- If tests pass, Step 8 will be skipped
+- Always post your findings as a GitHub comment before completing

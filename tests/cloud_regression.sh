@@ -101,7 +101,7 @@ if [ -x "$PDD_BASE_DIR/pdd-local.sh" ]; then
     log "Using local CLI script (pdd-local.sh) for cloud regression tests"
     PDD_SCRIPT="$PDD_BASE_DIR/pdd-local.sh"
 fi
-PROMPTS_PATH="$PDD_BASE_DIR/prompts"
+FIXTURES_PATH="$SCRIPT_DIR/fixtures"
 CONTEXT_PATH="$PDD_BASE_DIR/context"
 
 # Determine REGRESSION_DIR (using cloud_regression prefix)
@@ -346,7 +346,7 @@ cd "$REGRESSION_DIR" # Work inside the regression directory
 
 log "Current directory: $(pwd)"
 log "PDD Script: $(command -v $PDD_SCRIPT || echo 'Not in PATH')"
-log "Prompt Path: $PROMPTS_PATH"
+log "Fixtures Path: $FIXTURES_PATH"
 log "Context Path: $CONTEXT_PATH"
 log "Log File: $LOG_FILE"
 log "Cost File: $COST_FILE"
@@ -390,7 +390,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "1" ]; then
     log "========================================"
     log "1. Testing cloud 'generate' command"
     log "========================================"
-    run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+    run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
     check_exists "$MATH_SCRIPT" "'generate' output"
     cp "$MATH_SCRIPT" "$ORIGINAL_MATH_SCRIPT" # Backup for subsequent tests
 fi
@@ -405,9 +405,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "2" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
     fi
-    run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+    run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     check_exists "$MATH_VERIFICATION_PROGRAM" "'example' output"
 fi
 
@@ -421,9 +421,9 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
     fi
-    run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+    run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     check_exists "$MATH_TEST_SCRIPT" "'test' output"
 fi
 
@@ -437,11 +437,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
     fi
     if [ ! -f "$MATH_TEST_SCRIPT" ]; then
         log "Generating test script first..."
-        run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+        run_pdd_command test --output "$MATH_TEST_SCRIPT" --language Python "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     fi
 
     # Run tests to potentially generate errors for fix command
@@ -451,7 +451,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
     if grep -q -E "===+ (FAILURES|ERRORS) ===+" "$PYTEST_LOG"; then
         log "Errors found, running 'fix' command"
         run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
-                            "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
+                            "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
     else
         log "No errors found in pytest run, creating a simple error scenario for fix test"
         # Create a test file with an intentional error to test fix command
@@ -465,7 +465,7 @@ def test_add_intentional_fail():
 PYEOF
         python -m pytest "broken_${MATH_TEST_SCRIPT}" > "$PYTEST_LOG" 2>&1 || true
         run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
-                            "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "broken_${MATH_TEST_SCRIPT}" "$PYTEST_LOG"
+                            "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "broken_${MATH_TEST_SCRIPT}" "$PYTEST_LOG"
     fi
 fi
 
@@ -479,7 +479,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "5" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
     fi
 
     # Create a program that will crash (TypeError)
@@ -497,7 +497,7 @@ PYEOF
     if [ -s "$MATH_ERROR_LOG" ]; then
         log "Error log generated, running 'crash' command"
         run_pdd_command crash --output "$CRASH_FIXED_SCRIPT" --output-program "$CRASH_FIXED_PROGRAM" \
-                              "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
+                              "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" \
                               "$MATH_VERIFICATION_PROGRAM" "$MATH_ERROR_LOG"
     else
         log_error "Failed to generate error log for crash test"
@@ -514,12 +514,12 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
     fi
     if [ ! -f "$MATH_VERIFICATION_PROGRAM" ] || grep -q "'a'" "$MATH_VERIFICATION_PROGRAM"; then
         # Regenerate a valid example program
         log "Generating example program first..."
-        run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+        run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     fi
 
     # Introduce a semantic error to test verify
@@ -534,7 +534,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "6" ]; then
     run_pdd_command_noexit verify --output-results "$VERIFY_RESULTS_LOG" \
         --output-code "$VERIFY_CODE_OUTPUT" --output-program "$VERIFY_PROGRAM_OUTPUT" \
         --max-attempts 3 --budget 5.0 \
-        "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_VERIFICATION_PROGRAM"
+        "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_VERIFICATION_PROGRAM"
 fi
 
 # 7. Split
@@ -547,11 +547,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
         cp "$ORIGINAL_MATH_SCRIPT" "$MATH_SCRIPT"
     elif [ ! -f "$MATH_SCRIPT" ]; then
         log "Generating math script first..."
-        run_pdd_command generate --output "$MATH_SCRIPT" "$PROMPTS_PATH/$MATH_PROMPT"
+        run_pdd_command generate --output "$MATH_SCRIPT" "$FIXTURES_PATH/$MATH_PROMPT"
     fi
     if [ ! -f "$MATH_VERIFICATION_PROGRAM" ]; then
         log "Generating example program first..."
-        run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$PROMPTS_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
+        run_pdd_command example --output "$MATH_VERIFICATION_PROGRAM" "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT"
     fi
 
     # Create split instruction prompt
@@ -580,7 +580,7 @@ PYEOF
 
     run_pdd_command auto-deps --output "$AUTO_DEPS_PROMPT" \
                               --csv "$AUTO_DEPS_CSV" \
-                              "$PROMPTS_PATH/$MATH_PROMPT" "autodeps_context/*.py"
+                              "$FIXTURES_PATH/$MATH_PROMPT" "autodeps_context/*.py"
     check_exists "$AUTO_DEPS_PROMPT" "'auto-deps' modified prompt"
     check_exists "$AUTO_DEPS_CSV" "'auto-deps' dependency CSV"
 fi

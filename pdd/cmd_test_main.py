@@ -378,3 +378,9 @@ def cmd_test_main(
         return "", 0.0, f"Error: {e}"
 
     return generated_content, total_cost, model_name
+
+
+def main() -> None:
+    """CLI entrypoint for legacy/manual test generation."""
+    from .commands.generate import test as test_command
+    test_command.main(standalone_mode=True)

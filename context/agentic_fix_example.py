@@ -5,7 +5,7 @@ import subprocess
 import shutil
 
 # In a real project, the module would be imported from your package structure, e.g.:
-from pdd.agentic_fix import run_agentic_fix, AGENT_PROVIDER_PREFERENCE
+from pdd.agentic_fix import run_agentic_fix
 from pdd.agentic_common import get_available_agents
 # from agentic_fix import run_agentic_fix, AGENT_PROVIDER_PREFERENCE
 # from agentic_common import get_available_agents

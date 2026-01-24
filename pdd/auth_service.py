@@ -37,10 +37,13 @@ def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
         with open(JWT_CACHE_FILE, "r") as f:
             cache = json.load(f)
         expires_at = cache.get("expires_at", 0)
+        # Handle null/None expires_at defensively (Issue #379)
+        if not isinstance(expires_at, (int, float)):
+            return False, None
         # Check if token is still valid (with 5 minute buffer)
         if expires_at > time.time() + 300:
             return True, expires_at
-    except (json.JSONDecodeError, IOError, KeyError):
+    except (json.JSONDecodeError, IOError, KeyError, TypeError, AttributeError):
         pass
 
     return False, None
@@ -60,11 +63,14 @@ def get_cached_jwt() -> Optional[str]:
         with open(JWT_CACHE_FILE, "r") as f:
             cache = json.load(f)
         expires_at = cache.get("expires_at", 0)
+        # Handle null/None expires_at defensively (Issue #379)
+        if not isinstance(expires_at, (int, float)):
+            return None
         # Check if token is still valid (with 5 minute buffer)
         if expires_at > time.time() + 300:
             # Check both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility
             return cache.get("id_token") or cache.get("jwt")
-    except (json.JSONDecodeError, IOError, KeyError):
+    except (json.JSONDecodeError, IOError, KeyError, TypeError, AttributeError):
         pass
 
     return None
