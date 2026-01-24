@@ -5,6 +5,7 @@ __pycache__/
 *.vsix
 .tmp/
 .agentic_prompt*
+sync_order.sh
 
 staging_data_dump.json
 .pdd/core_dumps/*

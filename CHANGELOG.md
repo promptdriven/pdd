@@ -1,32 +1,67 @@
+## v0.0.128 (2026-01-23)
+
+### Feat
+
+- frontend and backend improvements
+- add agentic architecture generation from GitHub issue PRD (#367)
+- add agentic architecture generation from GitHub issue PRD (#367)
+- auto-generate .pddrc before prompt generation from architecture.json
+- add generate_pddrc template for generating .pddrc from architecture.json
+- Enhance `generate` command with template registry, environment variable support, lazy code generator loading, and improved test isolation.
+- Add comprehensive tests for `pdd.cli`, integrate `agentic_test_main`, and update `project_dependencies.csv` by removing old context examples.
+- Implement agentic test generation and add comprehensive tests for `generate` command and `AgenticTest` class.
+- Implement agentic testing functionality and add comprehensive tests for the `generate` command's argument parsing and environment variable handling.
+- Implement `agentic_test_orchestrator` to manage multi-step agentic testing workflows with state persistence and new tests.
+- Generalize agentic test generation prompts to use templates for API test plans and code examples, and include API configuration documentation.
+- Generalize agentic test generation workflow to support API tests by updating prompts and adding API-specific instructions.
+- Add agentic test workflow for UI test generation (#332)
+
+### Fix
+
+- Update LLM test generation prompts to prevent pytest module cache pollution and refactor E2E test imports.
+- use click.echo for GitHub issue URL output in generate command
+- escape braces in agentic arch prompts and add GitHub issue URL support
+- _get_cached_jwt() crashes with TypeError when cache file has expires_at: null
+- pdd/commands/auth.py writes expires_at: null to cache, causing #358 crashes
+- Prevent `change_main` from writing empty files for empty prompts and ensure `update_main` agentic updates do not modify source files when an output path is specified. all unit tests pass
+
+### Refactor
+
+- Update template loading to use `template_registry` and enhance test module cleanup. Test polution issues
+- remove "UI" from agentic test generation workflow descriptions in prompts.
+
 ## v0.0.127 (2026-01-22)
 
 ### Feat
 
-- UI improvements - Dev Units view, model sliders, and Sync All button
-- Add web UI sync visualization for remote mode
-- **example**: add support for --format option in example generation
-- **which**: expose effective config and search paths for prompts and outputs (Fixes #21)
+- **which**: new `pdd which` command exposes effective config and search paths for prompts and outputs (Fixes #21). Thanks Benjamin Knobloch!
+- **example**: add `--format` option to example generation. Thanks Benjamin Knobloch!
+- **frontend**: Dev Units view, model sliders with ELO-based model resolution, and Sync All button
 
 ### Fix
 
+- **fix workflow**: verify agentic fix with combined test run before claiming success (#360)
+- **fix workflow**: run all test files together in fix loop to detect isolation failures (#360)
+- **fix workflow**: direct fix output to actual failing test file, not primary (#360)
+- **terminal_spawner**: preserve conda/venv environment in spawned terminals (#347)
+- **sync**: exit sync loop when tests pass despite non-zero exit code (#349)
+- **bug workflow**: move worktree creation before Step 5.5 for prompt fix isolation (#352)
+- **llm_invoke**: remove warning for user-removed base model; remove hardcoded DEFAULT_LLM_MODEL (Issue #296). Thanks Serhan Asad!
+- **context_generator**: skip Python syntax validation for markdown format in example generation. Thanks Benjamin Knobloch!
+- **regression tests**: support paths with spaces (#334)
 - Remove invalid escape sequence in agentic_langtest_example.py
-- Verify agentic fix with combined test run before claiming success (#360)
-- Run all test files together in fix loop to detect isolation failures (#360)
-- Embed sync_state in stdout as markers for cloud compatibility
-- Include sync_state in final cloud update and send immediately
-- Direct fix output to actual failing test file, not primary (#360)
-- Set PDD_WEB_MODE in correct subprocess path (jobs.py)
-- Preserve conda/venv environment in spawned terminals (#347)
-- Exit sync loop when tests pass despite non-zero exit code (#349)
-- Move worktree creation before Step 5.5 for prompt fix isolation (#352)
-- **context_generator**: skip Python syntax validation for markdown format in example generation
 
 ### Refactor
 
-- extract shared formatCost utility and simplify command filtering
-- Replace stdout markers with temp file IPC for sync state
-- **example generation**: change default output format from 'py' to 'code' and update related documentation
-- **which**: simplify effective config handling and improve tuple unpacking logic
+- **construct_paths**: centralize language extension mapping (`BUILTIN_EXT_MAP`) shared across codebase. Thanks Benjamin Knobloch!
+- **frontend**: extract shared `formatCost` utility and simplify command filtering
+- **example generation**: change default output format from 'py' to 'code'. Thanks Benjamin Knobloch!
+- **which**: simplify effective config handling and improve tuple unpacking logic. Thanks Benjamin Knobloch!
+
+### Docs
+
+- Update prompts to reflect consolidated bug fixes (#347, #349, #352)
+- Update prompts for `test_files`/`extra_files` params
 
 ## v0.0.126 (2026-01-21)
 

@@ -26,6 +26,8 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 
+from pdd import cli
+
 
 @pytest.fixture(autouse=True)
 def set_pdd_path(monkeypatch):
@@ -191,8 +193,6 @@ print("Hello, World!")
             with patch('pdd.llm_invoke.litellm.completion', side_effect=mock_completion_with_counter):
                 with patch('pdd.llm_invoke.litellm.responses', side_effect=mock_responses_api):
                     with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.001, "input_tokens": 100, "output_tokens": 50}):
-                        from pdd import cli
-
                         runner = CliRunner()
                         result = runner.invoke(cli.cli, [
                             "--local",  # Force local execution

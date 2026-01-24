@@ -78,6 +78,7 @@ def _decode_jwt_payload(token: str) -> Dict:
     except Exception:
         return {}
 
+
 def _get_expected_jwt_audience() -> Optional[str]:
     """
     Determine the expected JWT audience based on PDD_ENV.
@@ -162,7 +163,7 @@ def _get_cached_jwt(verbose: bool = False) -> Optional[str]:
                     print(f"JWT cache invalidated: token expired {int(-time_remaining / 60)} minutes ago")
                 else:
                     print(f"JWT cache invalidated: token expires soon (in {int(time_remaining / 60)} minutes)")
-    except (json.JSONDecodeError, IOError, KeyError) as e:
+    except (json.JSONDecodeError, IOError, KeyError, TypeError) as e:
         if verbose:
             print(f"JWT cache invalidated: corrupted cache file ({e})")
         # Cache corrupted, delete it
@@ -524,6 +525,7 @@ class FirebaseAuthenticator:
         For production use, implement proper token verification.
         """
         return bool(id_token)
+
 
 async def get_jwt_token(
     firebase_api_key: str,
