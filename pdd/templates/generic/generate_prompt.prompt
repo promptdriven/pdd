@@ -70,9 +70,15 @@ variables:
   DEP_EXAMPLE_EXT:
     required: false
     type: string
-    description: File extension for dependency examples under context/ (for non-Python stacks).
+    description: File extension for dependency examples (for non-Python stacks).
     examples: [py, ts, tsx, go, java]
     default: py
+  PDDRC_FILE:
+    required: false
+    type: path
+    description: Project .pddrc configuration file that defines example_output_path and other path conventions.
+    example_paths: [.pddrc]
+    default: .pddrc
 usage:
   generate:
     - name: Minimal (architecture only)
@@ -105,6 +111,7 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 <architecture><include>${ARCHITECTURE_FILE}</include></architecture>
 <tech_stack><include>${TECH_STACK_FILE}</include></tech_stack>
 <generate_code_cli_example><include>${CODE_GENERATOR_PROMPT}</include></generate_code_cli_example>
+<pddrc><include>${PDDRC_FILE}</include></pddrc>
 
 % Existing prompt references (optional):
 <existing_backend_prompts><include-many>${EXISTING_PROMPTS}</include-many></existing_backend_prompts>
@@ -124,13 +131,20 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 5) A clear "Deliverable" section describing the expected code artifacts and entry points.
 
 % Dependencies format and conventions:
-- Represent each dependency using an XML tag with the dependency name, and put the file path inside an <include> tag, e.g.:
+- Read the `example_output_path` from the PDDRC_FILE (`.pddrc`) to determine where example files are located. This path is defined under each context's `defaults.example_output_path` setting.
+- Represent each dependency using an XML tag with the dependency name, and put the file path inside an <include> tag. Use the example_output_path from .pddrc, e.g. if .pddrc says `example_output_path: "examples/shared/"`:
   <orders_service>
-    <include>context/orders_service_example.${DEP_EXAMPLE_EXT}</include>
+    <include>examples/shared/orders_service_example.${DEP_EXAMPLE_EXT}</include>
   </orders_service>
-- Prefer real example files available in the provided context (use <include-many> when listing multiple). If examples are not provided, assume dependency examples live under context/ using the pattern context/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
+- Prefer real example files available in the provided context (use <include-many> when listing multiple). If examples are not provided, use the example_output_path from .pddrc with the pattern [example_output_path]/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
 - Include all necessary dependencies for the module/component (based on the provided context and references).
 - The ARCHITECTURE_FILE lists `dependencies` referencing other prompt filenames. Convert each dependency prompt filename into a sensible dependency name (strip language suffix and `_prompt`), and map to context files with the `${DEP_EXAMPLE_EXT}` extension if present; otherwise, list the prompt filename explicitly in a "Prompt Dependencies" subsection.
+- If the matched architecture entry has a `context_urls` array, emit a `<web>` tag for each URL in the Dependencies section. Derive the XML tag name from the `purpose` field (lowercased, non-alphanumeric characters replaced with underscores). Example:
+  ```
+  <fastapi_routing_patterns>
+    <web>https://fastapi.tiangolo.com/tutorial/first-steps/</web>
+  </fastapi_routing_patterns>
+  ```
 
 % Architecture awareness (ARCHITECTURE_FILE is required):
 - Align the "Requirements" and "Instructions" with the selected item’s `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config).

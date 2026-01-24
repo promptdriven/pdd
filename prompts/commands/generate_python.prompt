@@ -1,3 +1,17 @@
+<pdd-reason>CLI commands for the Generate Suite: generate, test, and example, with GitHub issue URL detection for agentic architecture mode.</pdd-reason>
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "generate", "description": "Generate code from a prompt file or trigger agentic architecture from a GitHub issue URL"},
+      {"name": "test", "description": "Generate tests from a prompt file"},
+      {"name": "example", "description": "Generate context examples from a prompt file"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_architecture_python.prompt</pdd-dependency>
 % You are an expert Python engineer. Your goal is to write `pdd/commands/generate.py`.
 
 % Role & Scope
@@ -13,6 +27,9 @@
 % Requirements
   1. **generate**:
      - Interface: Match the `generate` command specification in `README.md` (including parameterized `-e` options and templates).
+     - The `prompt_file` argument uses `type=click.UNPROCESSED` (not `click.Path`) to accept both file paths and GitHub issue URLs.
+     - When the positional argument matches a GitHub issue URL (`https://github.com/{owner}/{repo}/issues/{number}`), enter agentic architecture mode: import and call `run_agentic_architecture()` from `pdd.agentic_architecture`, passing through `verbose`, `quiet`, and other relevant options. Print result summary and return.
+     - Otherwise, validate that the argument is a valid file path (exists, not a directory) before proceeding with normal generation.
      - Logic: Resolve template if provided. Parse env vars. Call `code_generator_main`.
      - Track cost using `@track_cost`.
      - Log operation using `@log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)`.
@@ -35,6 +52,9 @@
   <code_generator_main_example>
   <include>context/code_generator_main_example.py</include>
   </code_generator_main_example>
+  <agentic_architecture_example>
+  <include>context/agentic_architecture_example.py</include>
+  </agentic_architecture_example>
   <context_generator_main_example>
   <include>context/context_generator_main_example.py</include>
   </context_generator_main_example>

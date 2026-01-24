@@ -80,6 +80,14 @@ output_schema:
       filename: { type: string }
       filepath: { type: string }
       tags: { type: array, items: { type: string } }
+      context_urls:
+        type: array
+        items:
+          type: object
+          required: [url, purpose]
+          properties:
+            url: { type: string }
+            purpose: { type: string }
       interface:
         type: object
         properties:
@@ -138,6 +146,7 @@ INSTRUCTIONS:
   - reason (briefly explain why this code module needs to exist), description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
   - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
   - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` and `source` (e.g., URL or identifier). The `kind` field MUST be exactly one of: `"api"`, `"query"`, `"stream"`, `"file"`, `"cache"`, `"message"`, `"job"`, or `"other"`. Do not invent new values like `"api/mutation"`; instead, use `"api"` (for any HTTP/REST/GraphQL endpoint) or `"other"` and describe details such as queries vs. mutations in `description` or `notes`. Provide `method`, `description`, and any other useful metadata when known.
+- context_urls (optional): An array of {url, purpose} objects associating web documentation references with this module. These are converted to `<web>` tags during prompt generation, enabling the LLM to fetch relevant API documentation. Populate with official docs, tutorials, or code examples relevant to the module's implementation.
 - Valid JSON only. No comments or trailing commas.
 
 OUTPUT FORMAT - CRITICAL: Return a raw JSON array, NOT an object with "items" or "data" wrapper:

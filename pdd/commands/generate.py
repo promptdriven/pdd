@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import click
+from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List, Union
 from rich.console import Console
 
@@ -20,6 +22,10 @@ console = Console(file=sys.stdout)
 code_generator_main = None
 _DEFAULT_CODE_GENERATOR_MAIN = None
 
+_GITHUB_ISSUE_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)"
+)
+
 class GenerateCommand(click.Command):
     """
     Custom command class to handle the conditional requirement of PROMPT_FILE.
@@ -35,7 +41,7 @@ class GenerateCommand(click.Command):
 
 
 @click.command(cls=GenerateCommand, name="generate")
-@click.argument("prompt_file", required=False, type=click.Path(exists=True))
+@click.argument("prompt_file", required=False, type=click.UNPROCESSED)  # UNPROCESSED to allow GitHub URLs
 @click.option("--template", help="Use a template instead of a prompt file.")
 @click.option("-e", "--env", multiple=True, help="Set environment variables (KEY=VALUE or KEY).")
 @click.option("--output", help="Specify where to save the generated code.")
@@ -98,9 +104,37 @@ def generate(
             except Exception as e:
                 raise click.UsageError(f"Error resolving template '{template}': {str(e)}")
 
+        # Detect GitHub issue URL -> agentic architecture mode
+        if prompt_file and _GITHUB_ISSUE_RE.search(prompt_file):
+            from ..agentic_architecture import run_agentic_architecture
+
+            verbose = ctx.obj.get("verbose", False)
+            quiet = ctx.obj.get("quiet", False)
+
+            success, message, cost, model, output_files = run_agentic_architecture(
+                issue_url=prompt_file,
+                verbose=verbose,
+                quiet=quiet,
+            )
+            if not quiet:
+                if success:
+                    click.echo(click.style(f"Success: {message}", fg="green"))
+                else:
+                    click.echo(click.style(f"Failed: {message}", fg="red"))
+                if output_files:
+                    click.echo(f"Output files: {', '.join(output_files)}")
+            return (message, cost, model) if success else None
+
+        # Validate file path (not a URL, must exist and not be a directory)
+        if prompt_file and not template:
+            p = Path(prompt_file)
+            if not p.exists():
+                raise click.UsageError(f"Invalid value for 'PROMPT_FILE': Path '{prompt_file}' does not exist.")
+            if p.is_dir():
+                raise click.UsageError(f"Invalid value for 'PROMPT_FILE': Path '{prompt_file}' is a directory.")
+
         # 3. Parse and Set Environment Variables
-        # Values passed with -e/--env override OS environment variables
-        env_vars = {}
+        env_vars: Dict[str, str] = {}
         for item in env:
             if "=" in item:
                 key, value = item.split("=", 1)
@@ -109,7 +143,7 @@ def generate(
                 # Docker-style fallback: read from current env
                 if item in os.environ:
                     env_vars[item] = os.environ[item]
-        
+
         # Update os.environ for the duration of this command
         # This allows the code generator and template expansion to see these values
         os.environ.update(env_vars)
