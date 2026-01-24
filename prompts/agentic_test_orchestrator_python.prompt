@@ -1,0 +1,222 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_test_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 9-step agentic test generation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost. Generates tests (Playwright for web, pytest for CLI, pytest+requests for API, etc.) from GitHub issue descriptions.
+
+% Requirements
+1. Function: `run_agentic_test_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run 9 steps sequentially, each as a separate `run_agentic_task()` call
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps
+6. For Step 6: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract test files
+7. Pass extracted files to Step 9 (PR) via `files_to_stage` context variable for explicit git staging
+
+% Per-Step Timeouts
+Define locally (workflow-specific configuration stays with the workflow):
+```python
+TEST_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 400.0,   # Docs Check
+    3: 400.0,   # Analyze & Clarify
+    4: 340.0,   # Detect Frontend
+    5: 600.0,   # Create Test Plan
+    6: 1000.0,  # Generate Tests (Most Complex)
+    7: 600.0,   # Run Tests
+    8: 800.0,   # Fix & Iterate
+    9: 240.0,   # Submit PR
+}
+```
+
+% Step Execution
+For each step (1-9):
+1. Load the step prompt template via `load_prompt_template(f"agentic_test_step{n}_{name}_LLM")`
+2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=TEST_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
+   - Use step-specific timeout plus optional timeout_adder to allow caller to extend timeouts
+   - Use DEFAULT_MAX_RETRIES for consistent retry behavior across all orchestrators
+4. Store the output for use by subsequent steps
+5. Accumulate cost: `total_cost += step_cost`
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_test_step1_duplicate_LLM | Search for duplicate test requests |
+| 2 | agentic_test_step2_docs_LLM | Review codebase to understand what to test |
+| 3 | agentic_test_step3_clarify_LLM | Determine if enough info, ask clarifying questions if needed |
+| 4 | agentic_test_step4_detect_frontend_LLM | Identify test type (web/CLI/desktop/api) and testing framework |
+| 5 | agentic_test_step5_test_plan_LLM | Create comprehensive test plan |
+| 6 | agentic_test_step6_generate_tests_LLM | Generate tests in worktree |
+| 7 | agentic_test_step7_run_tests_LLM | Execute generated tests |
+| 8 | agentic_test_step8_fix_iterate_LLM | Fix failing tests and re-run |
+| 9 | agentic_test_step9_submit_pr_LLM | Create draft PR and link to issue |
+
+% Context Accumulation
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output through step3_output
+- Step 5 receives: issue_content, step1_output through step4_output, frontend_type, test_framework
+- Step 6 receives: issue_content, step1_output through step5_output, worktree_path, test_plan
+- Step 7 receives: issue_content, step1_output through step6_output, worktree_path, test_files
+- Step 8 receives: issue_content, step1_output through step7_output, worktree_path, test_files, test_results
+- Step 9 receives: issue_content, step1_output through step8_output, worktree_path, files_to_stage
+
+% Files to Stage
+After Step 6 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Steps 7-9:
+- `context["files_to_stage"] = ", ".join(changed_files)`
+- After Step 8 fixes, update files_to_stage if new files were created
+- Step 9 prompt uses `{files_to_stage}` to display the explicit list of files to stage
+
+% Early Exit Conditions (Hard Stops)
+
+The orchestrator must parse step output to detect stop conditions:
+
+| Step | Stop Condition | Detection |
+|------|----------------|-----------|
+| 1 | Issue is a duplicate | Output contains "Duplicate of #" |
+| 3 | Needs more info from author | Output contains "Needs More Info" |
+| 5 | Test plan not achievable | Output contains "PLAN_BLOCKED" |
+| 6 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
+
+**Hard stop behavior:**
+- Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
+- The step has already posted its findings to GitHub before returning
+- Do NOT continue to subsequent steps
+
+**Soft failures (continue):**
+- If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
+- This applies to all steps - only the specific hard stop patterns above terminate the workflow
+- Steps should post their findings to GitHub even on partial failure
+
+% Git Worktree Isolation
+
+Before Step 6, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
+
+1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+   - Create worktree at `.pdd/worktrees/test-issue-{issue_number}/` relative to git root
+   - Branch name: `test/issue-{issue_number}`
+   - If worktree already exists at path, remove with `git worktree remove --force`
+   - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
+   - If branch already exists locally, delete with `git branch -D`
+   - Create worktree: `git worktree add -b {branch} {path} HEAD`
+   - Return (worktree_path, None) on success, (None, error_msg) on failure
+
+2. In orchestrator loop, before Step 6:
+   - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
+   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
+   - Switch working directory to worktree path for Steps 6-9
+   - Add `worktree_path` to context dict (for Step 9 prompt formatting)
+   - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
+
+3. Additional helper functions:
+   - `_get_git_root(cwd: Path) -> Optional[Path]` - Get repo root via `git rev-parse --show-toplevel`
+   - `_worktree_exists(cwd: Path, worktree_path: Path) -> bool` - Check if path is in `git worktree list --porcelain` output
+   - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
+   - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
+   - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
+
+% Console Output
+
+The orchestrator must provide real-time feedback to the user via rich console output:
+
+1. **Header** (at start):
+   ```
+   Generating tests for issue #{issue_number}: "{issue_title}"
+   ```
+
+2. **Step progress** (before each step):
+   ```
+   [Step N/9] {step_description}...
+   ```
+
+3. **Agentic output** (during each step):
+   - Stream or display the output from `run_agentic_task()` so the user can see what the agent is doing
+   - Use `verbose` flag to control detail level
+
+4. **Step result** (after each step):
+   ```
+     -> {brief_result}
+   ```
+   Examples: "No duplicates found", "Frontend detected: Next.js (Playwright)", "Needs More Info (stopping)"
+
+5. **Hard stop message** (if workflow terminates early):
+   ```
+   Investigation stopped at Step N: {reason}
+   ```
+
+6. **Final summary** (at end):
+   ```
+   Test generation complete  (or Test generation failed)
+      Total cost: ${total_cost:.4f}
+      Files created: {comma_separated_list}
+      Worktree: {worktree_path}  (if worktree was created)
+      PR created: #{pr_number}  (if applicable)
+   ```
+
+Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
+
+% State Persistence (GitHub + Local)
+
+To avoid re-running completed steps when the workflow is paused (e.g., needs more info from author), implement state persistence using shared functions from agentic_common. GitHub is primary storage (enables cross-machine resume), local file is cache.
+
+1. **State file location**: `.pdd/test-state/issue-{issue_number}.json` (local cache)
+
+2. **State file structure**:
+   ```json
+   {
+     "workflow": "test",
+     "issue_url": "https://github.com/owner/repo/issues/123",
+     "issue_number": 123,
+     "last_completed_step": 4,
+     "step_outputs": {
+       "1": "Step 1 output...",
+       "2": "Step 2 output...",
+       "3": "Step 3 output...",
+       "4": "Step 4 output..."
+     },
+     "total_cost": 0.0234,
+     "model_used": "anthropic",
+     "worktree_path": null,
+     "frontend_type": "web",
+     "test_framework": "playwright",
+     "github_comment_id": 12345678
+   }
+   ```
+
+3. **Use shared functions from agentic_common**:
+   - `load_workflow_state(cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state)` - Load from GitHub (primary) or local cache
+   - `save_workflow_state(cwd, issue_number, "test", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)` - Save to GitHub first, then local
+   - `clear_workflow_state(cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state)` - Clear on completion
+   - State directory: `_get_state_dir(cwd) -> Path` returns `.pdd/test-state/` relative to git root
+
+4. **Orchestrator logic**:
+   - On start: Call `load_workflow_state()`, determine `start_step = last_completed_step + 1`
+   - Track `github_comment_id` from load result for subsequent saves
+   - If state exists: Print `"Resuming from step {start_step} (steps 1-{last_completed_step} cached)"`
+   - For steps < start_step: Use cached output from `state["step_outputs"]`
+   - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
+     - On success: Store output in step_outputs, set `last_completed_step = step_num`
+     - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step = step_num - 1` (ensures resume re-runs the failed step)
+   - On successful completion (step 9 completes): Call `clear_workflow_state()`
+   - On hard stop (e.g., needs more info): State remains for next run
+
+5. **Console output for resumption**:
+   ```
+   Resuming test generation for issue #123
+      Steps 1-4 already complete (cached)
+      Starting from Step 5: Create Test Plan
+   ```
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+Note: `TEST_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+
+% Deliverables
+- Code: `pdd/agentic_test_orchestrator.py`

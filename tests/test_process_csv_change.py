@@ -134,8 +134,7 @@ def test_invalid_temperature(mock_change_fixture, capsys):
     assert total_cost == 0.0
     assert model_name is None # Expect None on early validation error
     captured = capsys.readouterr()
-    # Assuming range 0-1 based on implementation fix
-    assert f"Error: 'temperature' must be between 0.0 and 1.0. Given: {temperature}" in captured.out
+    assert f"Error: 'temperature' must be between 0.0 and 2.0. Given: {temperature}" in captured.out
 
 def test_invalid_code_directory(mock_change_fixture, capsys):
     """
