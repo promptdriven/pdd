@@ -86,8 +86,6 @@ from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
-# Import the default model constant
-from pdd import DEFAULT_LLM_MODEL
 from pdd.path_resolution import get_default_resolver
 
 # Opt-in to future pandas behavior regarding downcasting
@@ -383,7 +381,18 @@ def _llm_invoke_cloud(
             raise InsufficientCreditsError(error_msg)
 
         elif response.status_code in (401, 403):
-            error_msg = response.json().get("error", f"Authentication failed ({response.status_code})")
+            # Clear stale JWT cache to prevent repeated failures
+            try:
+                from pdd.auth_service import clear_jwt_cache
+                clear_jwt_cache()
+            except Exception:
+                pass  # Don't fail if cache clearing fails
+
+            server_error = response.json().get("error", "")
+            error_msg = (
+                f"Authentication expired ({server_error or response.status_code}). "
+                "Please re-authenticate with: pdd auth logout && pdd auth login"
+            )
             raise CloudFallbackError(error_msg)
 
         elif response.status_code >= 500:
@@ -589,8 +598,8 @@ else:
     logger.debug(f".env file not found at {ENV_PATH}. API keys might need to be provided manually.")
 
 # Default model if PDD_MODEL_DEFAULT is not set
-# Use the imported constant as the default
-DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_LLM_MODEL)
+# No hardcoded default - will use first available model from CSV if None
+DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", None)
 
 # --- LiteLLM Cache Configuration (S3 compatible for GCS, with SQLite fallback) ---
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
@@ -946,11 +955,11 @@ def _select_model_candidates(
         # Strategy (simplified and deterministic): pick the first available model
         # from the CSV as the surrogate base. This mirrors typical CSV ordering
         # expectations and keeps behavior predictable across environments.
+        # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
         try:
             base_model = available_df.iloc[0]
-            logger.warning(
-                f"Base model '{base_model_name}' not found in CSV. Falling back to surrogate base '{base_model['model']}' (Option A')."
-            )
+            # Silently use the first available model from user's CSV without warning
+            # Users who intentionally customize their CSV shouldn't see warnings about removed models
         except Exception:
             # If any unexpected error occurs during fallback, raise a clear error
             raise ValueError(

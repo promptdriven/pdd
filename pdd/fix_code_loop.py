@@ -215,7 +215,7 @@ def run_process_with_output(cmd_args, timeout=300):
     captured_stdout = []
     captured_stderr = []
 
-    def stream_pipe(pipe, sink, capture_list):
+    def stream_pipe(pipe, capture_list):
         while True:
             try:
                 chunk = pipe.read(1)
@@ -226,8 +226,8 @@ def run_process_with_output(cmd_args, timeout=300):
                 # OSError can occur when pipe is closed during read
                 break
 
-    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, sys.stdout, captured_stdout), daemon=True)
-    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, sys.stderr, captured_stderr), daemon=True)
+    t_out = threading.Thread(target=stream_pipe, args=(proc.stdout, captured_stdout), daemon=True)
+    t_err = threading.Thread(target=stream_pipe, args=(proc.stderr, captured_stderr), daemon=True)
 
     t_out.start()
     t_err.start()
@@ -300,6 +300,7 @@ def fix_code_loop(
     prompt_file: str = "",
     agentic_fallback: bool = True,
     use_cloud: bool = False,
+    prior_cost: float = 0.0,
 ) -> Tuple[bool, str, str, int, float, Optional[str]]:
     """
     Attempts to fix errors in a code module through multiple iterations.
@@ -439,7 +440,7 @@ def fix_code_loop(
 
     # Step 2: Initialize variables
     attempts = 0
-    total_cost = 0.0
+    total_cost = prior_cost  # Include prior costs from operations like auto-deps (Issue #364)
     success = False
     model_name = None
     history_log = "<history>\n"

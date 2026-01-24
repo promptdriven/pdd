@@ -19,13 +19,10 @@ from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop, run_pytest_on_file
 from .get_jwt_token import get_jwt_token
 from .get_language import get_language
-from .core.cloud import CloudConfig
+from .core.cloud import CloudConfig, get_cloud_timeout
 
 # Import DEFAULT_STRENGTH from the package
 from . import DEFAULT_STRENGTH
-
-# Cloud request timeout
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 console = Console()
 
@@ -54,6 +51,8 @@ def fix_main(
     agentic_fallback: bool = True,
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
+    protect_tests: bool = False,
+    test_files: list[str] | None = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -177,7 +176,7 @@ def fix_main(
                         cloud_url,
                         json=payload,
                         headers=headers,
-                        timeout=CLOUD_REQUEST_TIMEOUT
+                        timeout=get_cloud_timeout()
                     )
                     response.raise_for_status()
 
@@ -243,9 +242,9 @@ def fix_main(
 
                 except requests.exceptions.Timeout:
                     if cloud_only:
-                        console.print(f"[red]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s).[/red]")
+                        console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
                         raise click.UsageError("Cloud execution timed out")
-                    console.print(f"[yellow]Cloud execution timed out ({CLOUD_REQUEST_TIMEOUT}s). Falling back to local.[/yellow]")
+                    console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                     current_execution_is_local = True
 
                 except requests.exceptions.HTTPError as e:
@@ -321,7 +320,9 @@ def fix_main(
                 error_log_file=output_file_paths.get("output_results"),
                 verbose=verbose,
                 agentic_fallback=agentic_fallback,
-                use_cloud=use_cloud_for_loop
+                use_cloud=use_cloud_for_loop,
+                protect_tests=protect_tests,
+                test_files=test_files,
             )
         elif not cloud_execution_succeeded:
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)
@@ -336,7 +337,8 @@ def fix_main(
                 strength=strength,
                 temperature=temperature,
                 time=time, # Pass time to fix_errors_from_unit_tests
-                verbose=verbose
+                verbose=verbose,
+                protect_tests=protect_tests
             )
             attempts = 1
 
@@ -384,11 +386,14 @@ def fix_main(
                 success = False
 
         # Save fixed files
-        if fixed_unit_test:
+        if fixed_unit_test and not protect_tests:
             output_test_path = Path(output_file_paths["output_test"])
             output_test_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_test_path, 'w') as f:
                 f.write(fixed_unit_test)
+        elif fixed_unit_test and protect_tests:
+            if verbose:
+                rprint("[yellow]Unit test update skipped (protect_tests=True).[/yellow]")
 
         if fixed_code:
             output_code_path = Path(output_file_paths["output_code"])

@@ -5,8 +5,10 @@ import subprocess
 import shutil
 
 # In a real project, the module would be imported from your package structure, e.g.:
-from pdd.agentic_fix import run_agentic_fix, AGENT_PROVIDER_PREFERENCE
+from pdd.agentic_fix import run_agentic_fix
+from pdd.agentic_common import get_available_agents
 # from agentic_fix import run_agentic_fix, AGENT_PROVIDER_PREFERENCE
+# from agentic_common import get_available_agents
 
 # --- 1. Define the buggy code, its failing test, and a fix prompt ---
 
@@ -76,22 +78,25 @@ def setup_scenario(temp_dir: Path) -> dict[str, str]:
 
 
 def check_prerequisites() -> bool:
-    """Checks for required API keys before running the example."""
-    api_keys = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "google": "GOOGLE_API_KEY",
-        "openai": "OPENAI_API_KEY",
-    }
-    found_key = any(
-        os.getenv(key_name)
-        for provider in AGENT_PROVIDER_PREFERENCE
-        if (key_name := api_keys.get(provider))
-    ) or os.getenv("GEMINI_API_KEY")
+    """Checks for available agents before running the example.
 
-    if not found_key:
-        print("🛑 ERROR: No agent API key found in environment.")
-        print(f"   Please set one of: {list(api_keys.values())}")
+    Uses get_available_agents() which detects:
+    - Claude CLI (subscription auth, no API key needed)
+    - API keys (ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY)
+    - Vertex AI auth (GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_GENAI_USE_VERTEXAI)
+    """
+    available = get_available_agents()
+
+    if not available:
+        print("🛑 ERROR: No agent available.")
+        print("   Please ensure one of the following:")
+        print("   - Claude CLI is installed (for Anthropic subscription users)")
+        print("   - ANTHROPIC_API_KEY is set")
+        print("   - GEMINI_API_KEY or GOOGLE_API_KEY is set (with gemini CLI)")
+        print("   - OPENAI_API_KEY is set (with codex CLI)")
         return False
+
+    print(f"   Available agents: {', '.join(available)}")
     return True
 
 

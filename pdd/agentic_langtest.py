@@ -54,7 +54,7 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
         return f'{os.sys.executable} -m pytest "{test_rel}" -q'
 
 
-    if lang == "javascript" or lang == "typescript":
+    if lang in ("javascript", "typescript", "typescriptreact", "javascriptreact"):
         example_dir = str(_find_project_root(unit_test_file))
         rel_test_path = os.path.relpath(unit_test_file, example_dir)
         return (
@@ -112,7 +112,7 @@ def missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) ->
         return None
 
     need = []
-    if lang in ("typescript", "javascript"):
+    if lang in ("typescript", "javascript", "typescriptreact", "javascriptreact"):
         if not _which("npm"):
             need.append("npm (Node.js)")
     if lang == "java":

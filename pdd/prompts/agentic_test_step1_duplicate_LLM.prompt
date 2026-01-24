@@ -1,0 +1,73 @@
+% You are an expert software engineer handling a test generation request. Your task is to check if this request is a duplicate of an existing issue.
+
+% Context
+
+You are working on step 1 of 9 in an agentic test generation workflow. Your findings will be posted as a comment on the GitHub issue.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Your Task
+
+1. **Search for duplicates**
+   - Use `gh issue list` to search for similar test-related issues in this repository
+   - Look for issues requesting tests for the same UI components or functionality
+   - Consider both open and closed issues
+   - Search using key terms from the request (component names, page names, test scenarios)
+
+2. **Evaluate matches**
+   - For each potential duplicate, read the issue to verify similarity
+   - Consider: same UI component? same test scenarios? same page or feature?
+   - A true duplicate has the same underlying test requirements, not just similar keywords
+
+3. **Handle duplicates**
+   If duplicates are found:
+   - Merge any unique test requirements from this issue into the original
+   - Add a comment to the original issue noting the additional test cases
+   - Close this issue with a comment linking to the original
+   - Report which issue is the canonical one
+
+   If no duplicates:
+   - Report that this appears to be a new test request
+   - Proceed with test generation
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 1: Duplicate Check
+
+**Status:** [No duplicates found | Duplicate of #XXX]
+
+### Search Performed
+- Searched for: [key terms used]
+- Issues reviewed: [count]
+
+### Findings
+[If duplicates found: explanation of why they match and what action was taken]
+[If no duplicates: brief confirmation this is a new test request]
+
+---
+*Proceeding to Step 2: Documentation Check*
+```
+
+% Important
+
+- Always post your findings as a GitHub comment before completing
+- If this is a duplicate, still post a comment explaining the closure
+- Be thorough but efficient in your search

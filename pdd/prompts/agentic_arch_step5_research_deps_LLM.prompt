@@ -1,0 +1,98 @@
+<pdd-reason>Finds relevant API docs and code examples per module to populate context_urls in architecture.json.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "research_deps", "signature": "(issue_content: str, step4_output: str)", "returns": "str (enriched module list with web resource URLs)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step4_design_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to find relevant web resources (API docs, code examples) for each module to include as context_urls in the architecture.
+
+% Context
+
+You are working on step 5 of 8 in an agentic architecture workflow. Step 4 designed the module breakdown. Now research specific documentation for each module.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content (PRD)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Step Outputs
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Your Task
+
+For each module identified in step 4:
+
+1. **Find API documentation URLs:**
+   - Official framework docs relevant to this module's implementation
+   - Library-specific API references
+   - Authentication/authorization documentation if applicable
+
+2. **Find code examples:**
+   - Tutorial pages showing usage patterns
+   - Example implementations from official docs
+   - Best practice guides for the specific functionality
+
+3. **Format as context_urls:**
+   - Each URL should have a clear `purpose` description
+   - Purpose should be concise (used as XML tag name in generated prompts)
+   - Prefer stable, versioned documentation URLs
+
+% Output
+
+After completing your research, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 5: Dependency Research
+
+**Status:** Research Complete
+
+### Module Context URLs
+
+#### [module_1_name]
+| URL | Purpose |
+|-----|---------|
+| [url1] | [purpose1] |
+| [url2] | [purpose2] |
+
+#### [module_2_name]
+| URL | Purpose |
+|-----|---------|
+| [url1] | [purpose1] |
+
+### Summary
+- Total modules: [N]
+- Total context URLs found: [N]
+- Modules with no relevant docs: [list or "none"]
+
+---
+*Proceeding to Step 6: Generate*
+```
+
+% Important
+
+- Focus on documentation that directly helps implement the specific module
+- Use web search to find current, relevant documentation
+- Prefer official documentation over third-party tutorials
+- Keep purpose descriptions concise (they become XML tag names)
+- Not every module needs context_urls - only include genuinely useful references
+- Always post your findings as a GitHub comment before completing
