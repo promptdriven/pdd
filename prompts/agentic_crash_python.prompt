@@ -25,7 +25,9 @@ Uses `agentic_crash_explore_LLM` (loaded via load_prompt_template).
 % Requirements
 1. Single-pass: explore mode only
 2. Record file mtimes before agent runs, detect changes after
-3. Run program file after fix attempt to verify the fix
+3. Verification after fix:
+   - Python: run the program file locally to verify no crash
+   - Non-Python: trust the agent's own verification result (the agent already ran the program using language-appropriate tools)
 4. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
 5. Return 5-tuple: `(success, message, cost, model, changed_files)`
 

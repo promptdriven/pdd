@@ -19,7 +19,10 @@
      - Otherwise, infer the language from the file extension using `get_language()`.
 
   3) CSV location:
-     - Load from a path relative to the module: `Path(__file__).parent.parent / "data" / "language_format.csv"`
+     - Try multiple candidate paths in order (first that exists wins):
+       a) `Path(__file__).parent / "data" / "language_format.csv"` (package-relative)
+       b) `Path(__file__).parent.parent / "data" / "language_format.csv"` (project-root-relative)
+     - If no CSV is found, return an empty dict so smart detection (step 2) can still handle it.
 
 % Dependencies
   <get_language>
