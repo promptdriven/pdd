@@ -5397,5 +5397,281 @@
         "keys": []
       }
     }
+  },
+  {
+    "reason": "Orchestrates the 8-step agentic architecture workflow with validation loop, state persistence, and context accumulation.",
+    "description": "Multi-step orchestrator for architecture generation from a GitHub issue PRD. Runs 8 steps sequentially (analyze PRD, deep analysis, research, design, research deps, generate, validate, fix) with a validation loop (steps 7-8, max 5 iterations). Handles state persistence for resume, context accumulation between steps, and post-processing via render_mermaid.",
+    "dependencies": [],
+    "priority": 152,
+    "filename": "agentic_architecture_orchestrator_python.prompt",
+    "filepath": "pdd/agentic_architecture_orchestrator.py",
+    "tags": [
+      "module",
+      "python",
+      "agentic"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_architecture_orchestrator",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
+    "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Follows the same pattern as agentic_change.py and agentic_bug.py.",
+    "dependencies": [
+      "agentic_architecture_orchestrator_python.prompt"
+    ],
+    "priority": 153,
+    "filename": "agentic_architecture_python.prompt",
+    "filepath": "pdd/agentic_architecture.py",
+    "tags": [
+      "module",
+      "python",
+      "agentic"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_agentic_architecture",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "_is_github_issue_url",
+            "signature": "(url: str)",
+            "returns": "bool"
+          },
+          {
+            "name": "_parse_github_url",
+            "signature": "(url: str)",
+            "returns": "Optional[Tuple[str, str, int]]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Analyzes PRD from GitHub issue: extracts features, tech stack, requirements, and identifies gaps for architecture generation.",
+    "description": "Step 1 of the agentic architecture workflow. Receives GitHub issue content (PRD), extracts structured information including project title, goals, features, non-functional requirements, and tech stack hints. Identifies ambiguities and assesses PRD completeness.",
+    "dependencies": [],
+    "priority": 154,
+    "filename": "agentic_arch_step1_analyze_prd_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step1_analyze_prd_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "analyze_prd",
+            "signature": "(issue_content: str)",
+            "returns": "str (structured PRD summary or 'PRD Content Insufficient')"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Deep analysis of PRD: feature decomposition, module boundaries, shared concerns, and tech stack determination.",
+    "description": "Step 2 of the agentic architecture workflow. Performs deep analysis of the PRD to identify module boundaries, shared concerns (auth, error handling, validation), and determines the complete tech stack. Outputs module candidates with responsibilities.",
+    "dependencies": [
+      "agentic_arch_step1_analyze_prd_LLM.prompt"
+    ],
+    "priority": 155,
+    "filename": "agentic_arch_step2_analyze_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step2_analyze_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "deep_analyze",
+            "signature": "(issue_content: str, step1_output: str)",
+            "returns": "str (structured analysis with module candidates and tech stack)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Researches tech stack documentation, project structure conventions, and best practices via web search.",
+    "description": "Step 3 of the agentic architecture workflow. Researches each technology in the identified stack, finding official documentation URLs, project structure conventions, code patterns, and best practices. Collects URLs for use as context_urls in architecture.json.",
+    "dependencies": [
+      "agentic_arch_step2_analyze_LLM.prompt"
+    ],
+    "priority": 156,
+    "filename": "agentic_arch_step3_research_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step3_research_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "research_tech_stack",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str)",
+            "returns": "str (research findings with documentation URLs)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
+    "description": "Step 4 of the agentic architecture workflow. Designs the complete module decomposition following PDD principles (one prompt = one module). Determines dependency graph, calculates priority ordering via topological sort, defines interfaces, and determines file paths.",
+    "dependencies": [
+      "agentic_arch_step3_research_LLM.prompt"
+    ],
+    "priority": 157,
+    "filename": "agentic_arch_step4_design_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step4_design_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "design_modules",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)",
+            "returns": "str (module list with dependencies, priorities, interfaces)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
+    "description": "Step 5 of the agentic architecture workflow. For each module identified in step 4, searches for API documentation URLs, code examples, and framework-specific implementation guidance. Outputs enriched module list with web resource URLs formatted as context_urls.",
+    "dependencies": [
+      "agentic_arch_step4_design_LLM.prompt"
+    ],
+    "priority": 158,
+    "filename": "agentic_arch_step5_research_deps_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step5_research_deps_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "research_deps",
+            "signature": "(issue_content: str, step4_output: str)",
+            "returns": "str (enriched module list with web resource URLs)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
+    "description": "Step 6 of the agentic architecture workflow. Generates the final architecture.json based on all previous analysis and research. Produces a valid JSON array following the architecture schema with correct priority ordering (topological sort), proper filename/filepath conventions, and context_urls from step 5.",
+    "dependencies": [
+      "agentic_arch_step5_research_deps_LLM.prompt"
+    ],
+    "priority": 159,
+    "filename": "agentic_arch_step6_generate_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step6_generate_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_architecture",
+            "signature": "(issue_content: str, step1_through_step5_outputs: str)",
+            "returns": "str (valid JSON array matching architecture schema)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Validates architecture.json: checks circular deps, priority ordering, missing deps, field completeness.",
+    "description": "Step 7 of the agentic architecture workflow. Validates the generated architecture.json against 11 checks: valid JSON, required fields, no circular dependencies, priority ordering matches dependency graph, no missing dependencies, no priority gaps/duplicates, filename conventions, interface validity, and context_urls format.",
+    "dependencies": [
+      "agentic_arch_step6_generate_LLM.prompt"
+    ],
+    "priority": 160,
+    "filename": "agentic_arch_step7_validate_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step7_validate_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_architecture",
+            "signature": "(step6_output: str)",
+            "returns": "str ('VALID' or list of validation errors)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes validation errors in architecture.json: resolves circular deps, priority violations, missing fields.",
+    "description": "Step 8 of the agentic architecture workflow. Fixes validation errors identified in step 7. Handles circular dependency restructuring, priority reordering, missing dependency addition, field completion, filename convention fixes, and interface type corrections. Outputs complete corrected JSON array.",
+    "dependencies": [
+      "agentic_arch_step7_validate_LLM.prompt"
+    ],
+    "priority": 161,
+    "filename": "agentic_arch_step8_fix_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step8_fix_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_architecture",
+            "signature": "(current_architecture: str, step7_output: str)",
+            "returns": "str (corrected JSON array)"
+          }
+        ]
+      }
+    }
   }
 ]

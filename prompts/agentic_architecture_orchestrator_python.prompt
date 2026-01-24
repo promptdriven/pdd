@@ -1,0 +1,121 @@
+<pdd-reason>Orchestrates the 8-step agentic architecture workflow with validation loop, state persistence, and context accumulation.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_architecture_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_architecture_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 8-step agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a validation loop (steps 7-8) that iterates until no errors are found (max 5 iterations). Post-processes successful output via render_mermaid.py.
+
+% Requirements
+1. Function: `run_agentic_architecture_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, output_files)
+3. Run 8 steps, with steps 7-8 in a validation loop (max MAX_VALIDATION_ITERATIONS = 5)
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps
+
+% Per-Step Timeouts
+Define locally:
+```python
+ARCH_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 340.0,   # Analyze PRD
+    2: 340.0,   # Deep Analysis
+    3: 600.0,   # Research
+    4: 600.0,   # Design
+    5: 600.0,   # Research Dependencies
+    6: 1000.0,  # Generate
+    7: 340.0,   # Validate
+    8: 600.0,   # Fix
+}
+```
+
+% Step Execution
+For each step:
+1. Check if step already completed (from saved state) - if so, skip and use cached output
+2. Load step prompt template via `load_prompt_template(f"agentic_arch_step{n}_{name}_LLM")`
+3. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
+4. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=ARCH_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
+5. Store output for subsequent steps
+6. Save state after step completes (for resumption)
+7. Accumulate cost: `total_cost += step_cost`
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_arch_step1_analyze_prd_LLM | Extract features, tech stack, requirements from PRD |
+| 2 | agentic_arch_step2_analyze_LLM | Deep analysis: module boundaries, shared concerns |
+| 3 | agentic_arch_step3_research_LLM | Web research for tech stack docs and conventions |
+| 4 | agentic_arch_step4_design_LLM | Design module breakdown with dependency graph |
+| 5 | agentic_arch_step5_research_deps_LLM | Find API docs and code examples per module |
+| 6 | agentic_arch_step6_generate_LLM | Generate complete architecture.json |
+| 7 | agentic_arch_step7_validate_LLM | Validate generated architecture |
+| 8 | agentic_arch_step8_fix_LLM | Fix validation errors |
+
+% Validation Loop (Steps 7-8)
+```python
+validation_iteration = 0
+while validation_iteration < MAX_VALIDATION_ITERATIONS:
+    validation_iteration += 1
+    step7_output = run_step_7(current_architecture)
+    if "VALID" in step7_output:
+        break
+    step8_output = run_step_8(step7_output, current_architecture)
+    current_architecture = step8_output  # Updated JSON
+if validation_iteration >= MAX_VALIDATION_ITERATIONS:
+    print("Warning: Maximum validation iterations reached")
+```
+
+% Context Accumulation
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output, step2_output, step3_output
+- Step 5 receives: issue_content, step4_output
+- Step 6 receives: issue_content, step1_output through step5_output
+- Step 7 receives: step6_output (or current_architecture from step 8)
+- Step 8 receives: step7_output, current_architecture
+
+% Early Exit Conditions (Hard Stops)
+| Step | Stop Condition | Detection |
+|------|----------------|-----------|
+| 1 | PRD insufficient | Output contains "PRD Content Insufficient" |
+| 2 | Tech stack ambiguous | Output contains "Tech Stack Ambiguous" |
+| 4 | Clarification needed | Output contains "Clarification Needed" |
+
+% Post-Processing
+After successful generation (step 6 or fix loop completes):
+1. Write architecture.json to cwd
+2. Import and run `render_mermaid.py` to generate architecture_diagram.html
+3. Add both files to output_files list
+
+% State Persistence
+Use shared functions from agentic_common:
+- `load_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)`
+- `save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)`
+- `clear_workflow_state(cwd, issue_number, "architecture", state_dir, repo_owner, repo_name, use_github_state)`
+- State directory: `.pdd/arch-state/`
+
+% Console Output
+1. Header: `Generating architecture for issue #{issue_number}: "{issue_title}"`
+2. Step progress: `[Step N/8] {description}...`
+3. Validation iterations: `[Step 7/8] Validating (iteration 2/5)...`
+4. Final summary with total cost and output files
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.render_mermaid><include>context/render_mermaid_example.py</include></pdd.render_mermaid>
+
+% Deliverables
+- Code: `pdd/agentic_architecture_orchestrator.py`

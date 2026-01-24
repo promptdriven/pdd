@@ -28,6 +28,7 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd change <issue-url>` - Implement feature requests (12-step workflow)
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
+- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (8-step workflow)
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (9-step workflow)
 
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
@@ -1003,6 +1004,38 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py calculator_python.promp
 pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_calculator_python.prompt calculator_python.prompt
 ```
 
+**Agentic Architecture Mode:**
+
+When the positional argument is a GitHub issue URL instead of a prompt file, `generate` enters agentic architecture mode. The issue body serves as the PRD (Product Requirements Document), and an 8-step agentic workflow generates `architecture.json` automatically.
+
+```bash
+pdd generate https://github.com/owner/repo/issues/42
+```
+
+The 8-step workflow:
+1. **Analyze PRD**: Extract features, tech stack, and requirements from the issue content
+2. **Deep Analysis**: Feature decomposition, module boundaries, shared concerns
+3. **Research**: Web search for tech stack documentation and best practices
+4. **Design**: Module breakdown with dependency graph and priority ordering
+5. **Research Dependencies**: Find relevant API docs and code examples per module
+6. **Generate**: Produce complete `architecture.json` with proper priorities
+7. **Validate**: Check for circular deps, priority ordering, missing deps
+8. **Fix**: Auto-fix validation issues (loops back to step 7, max 5 iterations)
+
+Prerequisites:
+- `gh` CLI must be installed and authenticated
+- The issue must contain a PRD describing the project scope
+
+**Workflow Resumption**: Re-running `pdd generate <issue-url>` resumes from the last completed step. State is persisted to GitHub issue comments for cross-machine resume.
+
+**Hard Stops**: The workflow stops if the PRD content is insufficient, the tech stack is ambiguous, or clarification is needed. Address the issue and re-run.
+
+Example:
+```bash
+pdd generate https://github.com/myorg/myrepo/issues/42
+# Generates: architecture.json + architecture_diagram.html
+```
+
 #### Prompt Templates
 
 Templates are reusable prompt files that generate a specific artifact (code, JSON, tests, etc.). Templates carry human/CLI metadata in YAML front matter (parsed by the CLI and not sent to the LLM), while the body stays concise and model‑focused.
@@ -1112,6 +1145,24 @@ pdd generate --template architecture/architecture_json \
   --output architecture.json
 # Results in: architecture_diagram.html (from existing architecture.json)
 ```
+
+**Context URLs (optional field):**
+
+Architecture entries support an optional `context_urls` array that associates web documentation references with each module. When prompts are generated from the architecture (via `generate_prompt`), these URLs are emitted as `<web>` tags in the Dependencies section, enabling the LLM to fetch relevant API documentation during code generation.
+
+```json
+{
+  "filename": "orders_api_Python.prompt",
+  "dependencies": ["models_Python.prompt"],
+  "context_urls": [
+    {"url": "https://fastapi.tiangolo.com/tutorial/first-steps/", "purpose": "FastAPI routing patterns"},
+    {"url": "https://docs.pydantic.dev/latest/concepts/models/", "purpose": "Pydantic model validation"}
+  ],
+  ...
+}
+```
+
+The `context_urls` field is populated automatically by the agentic architecture workflow (step 5: research dependencies) but can also be added manually to any architecture entry.
 
 Front Matter (YAML) metadata
 

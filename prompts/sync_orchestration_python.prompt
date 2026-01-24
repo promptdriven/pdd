@@ -224,9 +224,17 @@ When `skip_verify` or `skip_tests` is set:
 ### Post-Operation Validation
 
 - After **generate**: Delete stale run_report to force re-validation
-- After **crash**: Re-run example to verify fix, update run report
-- After **fix**: Re-run tests to update run report
+- After **crash**:
+  - Python: Re-run example locally to verify fix, update run report
+  - Non-Python: Trust the agentic result (agent already verified with language-appropriate tools). Save a synthetic successful RunReport so sync_determine_operation advances.
+- After **fix**:
+  - Python: Re-run tests to update run report
+  - Non-Python: Trust the agentic result (agent already verified tests pass). Save a synthetic successful RunReport.
 - After **test** and **test_extend**: Execute tests to create/update run report
+
+### Non-Python Crash Detection
+
+For non-Python languages, skip Python-based program verification during crash detection. Instead, delegate crash detection to the agentic handler which uses the correct language-specific run command. Set `has_crash=True` with a descriptive crash_log_content to trigger the agentic crash handler.
 
 ### Multi-Language Test Support
 

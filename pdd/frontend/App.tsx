@@ -92,7 +92,7 @@ const App: React.FC = () => {
   }, [audioEnabled, setAudioEnabled, testSound]);
 
   // Remote session state
-  const [executionMode, setExecutionMode] = useState<'local' | 'remote'>('local');
+  const [executionMode, setExecutionMode] = useState<'local' | 'remote'>('remote');
   const [remoteSessions, setRemoteSessions] = useState<RemoteSessionInfo[]>([]);
   const [selectedRemoteSession, setSelectedRemoteSession] = useState<string | null>(null);
   const [remoteSessionError, setRemoteSessionError] = useState<string | null>(null);
@@ -281,6 +281,10 @@ const App: React.FC = () => {
         const sessions = await api.listRemoteSessions();
         setRemoteSessions(sessions);
         setRemoteSessionError(null); // Clear any previous errors
+        // Auto-select first available session if none is selected
+        if (sessions.length > 0) {
+          setSelectedRemoteSession(prev => prev || sessions[0].sessionId);
+        }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         console.error('Failed to fetch remote sessions:', errorMsg);
@@ -780,17 +784,37 @@ const App: React.FC = () => {
   // If editing a prompt, show full-screen PromptSpace
   if (editingPrompt) {
     return (
-      <PromptSpace
-        prompt={editingPrompt}
-        onBack={() => setEditingPrompt(null)}
-        onRunCommand={handlePromptSpaceCommand}
-        onAddToQueue={handlePromptSpaceAddToQueue}
-        isExecuting={isExecuting}
-        executionStatus={executionStatus}
-        lastCommand={lastCommand}
-        lastRunResult={lastRunResult}
-        onCancelCommand={handleCancelCommand}
-      />
+      <>
+        <PromptSpace
+          prompt={editingPrompt}
+          onBack={() => setEditingPrompt(null)}
+          onRunCommand={handlePromptSpaceCommand}
+          onAddToQueue={handlePromptSpaceAddToQueue}
+          isExecuting={isExecuting}
+          executionStatus={executionStatus}
+          lastCommand={lastCommand}
+          lastRunResult={lastRunResult}
+          onCancelCommand={handleCancelCommand}
+        />
+        <TaskQueuePanel
+          tasks={taskQueue.tasks}
+          executionMode={taskQueue.executionMode}
+          isQueueRunning={taskQueue.isQueueRunning}
+          isPaused={taskQueue.isPaused}
+          progress={taskQueue.progress}
+          onSetExecutionMode={taskQueue.setExecutionMode}
+          onStartQueue={taskQueue.startQueue}
+          onPauseQueue={taskQueue.pauseQueue}
+          onResumeQueue={taskQueue.resumeQueue}
+          onRunNextTask={taskQueue.runNextTask}
+          onRemoveTask={taskQueue.removeTask}
+          onSkipTask={taskQueue.skipTask}
+          onRetryTask={taskQueue.retryTask}
+          onReorderTasks={taskQueue.reorderTasks}
+          onClearCompleted={taskQueue.clearCompleted}
+          onClearAll={taskQueue.clearQueue}
+        />
+      </>
     );
   }
 

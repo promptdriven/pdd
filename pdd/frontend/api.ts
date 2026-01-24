@@ -688,6 +688,19 @@ class PDDApiClient {
   }
 
   /**
+   * Get list of prompt files changed on the current branch compared to base.
+   * Uses git diff to find .prompt files that are new or modified.
+   *
+   * @param baseBranch - Base branch to compare against (default: "main")
+   * @returns List of changed prompt file paths
+   */
+  async getChangedPrompts(baseBranch: string = 'main'): Promise<{ changed_prompts: string[]; base_branch: string }> {
+    return this.request<{ changed_prompts: string[]; base_branch: string }>(
+      `/api/v1/files/prompts/changed?base_branch=${encodeURIComponent(baseBranch)}`
+    );
+  }
+
+  /**
    * Analyze a prompt file: get preprocessed content and token metrics.
    * Does not execute any commands - purely for preview and cost estimation.
    */
@@ -851,6 +864,31 @@ class PDDApiClient {
   }
 
   /**
+   * Generate architecture from a GitHub issue URL.
+   * Spawns the agentic architecture workflow in a terminal.
+   *
+   * @param issueUrl - GitHub issue URL (e.g., https://github.com/owner/repo/issues/42)
+   * @param options - Optional verbose/quiet flags
+   * @returns Result with job_id for tracking the spawned process
+   */
+  async generateArchitectureFromIssue(
+    issueUrl: string,
+    options: { verbose?: boolean; quiet?: boolean } = {}
+  ): Promise<{ success: boolean; message: string; job_id?: string }> {
+    return this.request<{ success: boolean; message: string; job_id?: string }>(
+      '/api/v1/architecture/generate-from-issue',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          issue_url: issueUrl,
+          verbose: options.verbose ?? false,
+          quiet: options.quiet ?? false,
+        }),
+      }
+    );
+  }
+
+  /**
    * List markdown files in the project for PRD/tech stack browser.
    * Searches common documentation directories.
    */
@@ -943,6 +981,44 @@ class PDDApiClient {
     return this.runCommand({
       command: 'generate',
       args: {},  // No prompt_file when using template
+      options,
+    });
+  }
+
+  /**
+   * Generate .pddrc configuration file from architecture.json using the generic/generate_pddrc template.
+   * This should be called before generating prompts to ensure correct context detection.
+   */
+  async generatePddrcFromArchitecture(request: {
+    architectureFile?: string;
+    outputPath?: string;
+    globalOptions?: GenerationGlobalOptions;
+  }): Promise<RunResult> {
+    const { architectureFile, outputPath, globalOptions } = request;
+
+    const envArgs: string[] = [
+      `ARCHITECTURE_FILE=${architectureFile || 'architecture.json'}`,
+    ];
+
+    const options: Record<string, any> = {
+      template: 'generic/generate_pddrc',
+      env: envArgs,
+      output: outputPath || '.pddrc',
+    };
+
+    if (globalOptions) {
+      const { strength, temperature, time, verbose, quiet, force } = globalOptions;
+      if (strength !== undefined) options.strength = strength;
+      if (temperature !== undefined) options.temperature = temperature;
+      if (time !== undefined) options.time = time;
+      if (verbose) options.verbose = true;
+      if (quiet) options.quiet = true;
+      if (force) options.force = true;
+    }
+
+    return this.runCommand({
+      command: 'generate',
+      args: {},
       options,
     });
   }

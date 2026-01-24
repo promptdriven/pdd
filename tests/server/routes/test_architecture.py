@@ -32,6 +32,7 @@ Test Plan for pdd/server/routes/architecture.py
 
 import pytest
 import asyncio
+from unittest.mock import patch, MagicMock
 from typing import List, Dict, Any
 from pdd.server.routes.architecture import (
     validate_architecture,
@@ -39,7 +40,9 @@ from pdd.server.routes.architecture import (
     ArchitectureModule,
     ValidationResult,
     ValidationError,
-    ValidationWarning
+    ValidationWarning,
+    generate_from_issue,
+    GenerateFromIssueRequest,
 )
 
 # Helper to create modules quickly
@@ -322,3 +325,66 @@ async def test_z3_generated_cycle_is_invalid():
             break
     
     assert found_cycle, "Validator failed to find the Z3-generated cycle 0->1->2->0"
+
+
+# -----------------------------------------------------------------------------
+# Generate From Issue Endpoint Tests
+# -----------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_generate_from_issue_invalid_url():
+    """Invalid GitHub URL should return failure without spawning."""
+    request = GenerateFromIssueRequest(issue_url="not_a_url")
+    result = await generate_from_issue(request)
+
+    assert result.success is False
+    assert "Invalid GitHub issue URL" in result.message
+    assert result.job_id is None
+
+
+@pytest.mark.asyncio
+async def test_generate_from_issue_invalid_github_path():
+    """A GitHub URL that isn't an issue should return failure."""
+    request = GenerateFromIssueRequest(issue_url="https://github.com/owner/repo/pull/5")
+    result = await generate_from_issue(request)
+
+    assert result.success is False
+    assert "Invalid GitHub issue URL" in result.message
+
+
+@pytest.mark.asyncio
+@patch("pdd.server.terminal_spawner.TerminalSpawner.spawn")
+async def test_generate_from_issue_success(mock_spawn):
+    """Valid GitHub issue URL should spawn a terminal and return a job_id."""
+    mock_spawn.return_value = True
+
+    request = GenerateFromIssueRequest(
+        issue_url="https://github.com/owner/repo/issues/42",
+        verbose=True,
+    )
+    result = await generate_from_issue(request)
+
+    assert result.success is True
+    assert result.job_id is not None
+    assert "started" in result.message
+    mock_spawn.assert_called_once()
+
+    # Verify the spawned command contains the issue URL
+    call_args = mock_spawn.call_args
+    assert "https://github.com/owner/repo/issues/42" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+@patch("pdd.server.terminal_spawner.TerminalSpawner.spawn")
+async def test_generate_from_issue_spawn_failure(mock_spawn):
+    """If terminal spawning fails, return failure with no job_id."""
+    mock_spawn.return_value = False
+
+    request = GenerateFromIssueRequest(
+        issue_url="https://github.com/owner/repo/issues/10",
+    )
+    result = await generate_from_issue(request)
+
+    assert result.success is False
+    assert "Failed to spawn terminal" in result.message
+    assert result.job_id is None

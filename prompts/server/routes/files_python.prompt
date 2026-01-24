@@ -57,12 +57,28 @@
        - `match_context(prompt_path, pddrc) -> tuple[str, dict]`: Return (context_name, defaults) for path
        - `parse_prompt_stem(stem)`: Extract sync_basename and language
 
-  6. **Language detection**:
-     - KNOWN_LANGUAGES: python, typescript, javascript, java, go, rust, cpp, c, csharp, ruby, swift, kotlin
-     - LANGUAGE_EXTENSIONS: map language to file extensions
-     - Parse prompt stem: "calculator_python" -> ("calculator", "python")
+  6. **GET /files/prompts/changed**:
+     - Query param: base_branch (optional, defaults to "main")
+     - Returns: { changed_prompts: list[str], base_branch: str }
+     - Lists .prompt files changed on current branch compared to base branch
+     - Implementation:
+       - Use `git merge-base HEAD <base_branch>` to find common ancestor
+       - Use `git diff --name-only --diff-filter=ACMR <merge_base> HEAD` for committed changes
+       - Use `git status --porcelain` to include uncommitted changes (staged and unstaged)
+       - Filter for files ending in ".prompt"
+       - Handle renamed files (format: "old -> new" in git status)
+     - Error handling:
+       - Return 500 if git is not installed
+       - If merge-base fails, compare directly against base_branch
 
-  7. **Dev-unit file discovery**:
+  7. **Language detection**:
+     - KNOWN_LANGUAGES: comprehensive list covering core languages (python, typescriptreact, javascriptreact, typescript, javascript, java, go, rust, cpp, c, csharp, ruby, swift, kotlin), scripting (php, scala, perl, bash, shell, haskell, dart, elixir, etc.), frontend/templating (svelte, vue, scss, sass, jinja, handlebars, etc.), modern/systems (zig, mojo, solidity), and config/query (sql, graphql, protobuf, terraform, etc.)
+     - IMPORTANT: KNOWN_LANGUAGES must be sorted by length (longest first) so "typescriptreact" matches before "typescript", and "javascript" before "java"
+     - LANGUAGE_EXTENSIONS: map language to file extensions (comprehensive, including e.g. elixir: [".ex", ".exs"], jinja: [".jinja2", ".jinja", ".j2"])
+     - Parse prompt stem: "calculator_python" -> ("calculator", "python"), "ui_components_TypeScriptReact" -> ("ui_components", "typescriptreact")
+     - `parse_prompt_stem` also has a fallback that checks `_is_known_language()` from construct_paths for custom languages not in the hardcoded list
+
+  8. **Dev-unit file discovery**:
      - Extract subdirectory structure from prompt path (e.g., "prompts/server/foo.prompt" -> "server")
      - Code files: check generate_output_path from .pddrc, then src/, then root
        - Try with subdirectory first (e.g., src/server/foo.py), then without (e.g., src/foo.py)
@@ -71,12 +87,12 @@
      - Example files: check example_output_path, then examples/, root with _example suffix
        - Try with subdirectory first, then without
 
-  8. **Error handling**:
+  9. **Error handling**:
      - 403 for path traversal attempts
      - 404 for non-existent files
      - 400 for directories when file expected
 
-  9. **Security**:
+  10. **Security**:
      - All paths validated through PathValidator dependency
      - No access outside project root
      - Blacklisted files return 403
@@ -101,6 +117,7 @@
   - Use hashlib for SHA-256 checksums
   - Recursive directory traversal with depth limit
   - Sort directory listings (directories first, then files)
+  - Use subprocess module for git commands in /files/prompts/changed endpoint
 
 % Deliverables
   - Code: `pdd/server/routes/files.py`

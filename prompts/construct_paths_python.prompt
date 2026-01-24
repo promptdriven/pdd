@@ -52,6 +52,13 @@
 5. Language Determination (priority): explicit command_options > code file extension > prompt filename suffix > command defaults.
    - 'detect' defaults to 'prompt'; 'bug'/'change' default to 'python' if unresolved.
    - Use get_extension with fallback to built-in extension map if PDD_PATH unavailable.
+   - `_is_known_language(name)` validates against a comprehensive set of known languages including:
+     core (python, javascript, typescript, typescriptreact, javascriptreact, java, go, etc.),
+     scripting (haskell, dart, elixir, clojure, julia, etc.),
+     frontend/templating (svelte, vue, scss, sass, jinja, handlebars, etc.),
+     modern/systems (zig, mojo, solidity),
+     config/query/infra (graphql, protobuf, terraform, hcl, nix, dockerfile, etc.),
+     and data formats (json, yaml, toml, ini).
 
 6. Output Path Generation: Call generate_output_paths with resolved parameters.
    - For test/bug commands without --force, create numbered files instead of overwriting.
