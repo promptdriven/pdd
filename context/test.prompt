@@ -203,6 +203,41 @@
                                            # But B's reference still points to original!
         Result:   Tests in B see corrupted state → flaky tests
 
+% 13. PYTEST-XDIST AND MODULE IMPORTS:
+    - When running with pytest-xdist (-n), tests share module state within each worker
+    - Modules imported by earlier tests remain cached in sys.modules
+    - ALWAYS import modules at file/module level, NEVER inside test functions or patch contexts
+    - This ensures consistent import state regardless of test execution order
+
+    - BAD (causes flaky tests with xdist):
+        def test_something():
+            with patch("module.func") as mock:
+                from package import cli  # ❌ Import inside patch context
+                runner.invoke(cli.cli, args)
+                mock.assert_called()  # May fail depending on worker state!
+
+    - GOOD (consistent behavior with xdist):
+        from package import cli  # ✅ Module-level import - always consistent
+
+        def test_something():
+            with patch("module.func") as mock:
+                runner.invoke(cli.cli, args)  # Uses already-imported module
+                mock.assert_called()  # Reliable assertion
+
+    - WHY THIS MATTERS:
+      - In single-process pytest: Imports inside tests work (state is fresh each run)
+      - In xdist workers: Module may already be cached from earlier tests
+      - Import behavior becomes non-deterministic based on test execution order
+      - Tests pass individually but fail when run in parallel with other tests
+
+    - EXCEPTION: If you MUST delay import (e.g., to avoid circular imports):
+        @pytest.fixture
+        def cli_module():
+            import importlib
+            import pdd.cli
+            importlib.reload(pdd.cli)  # Force fresh import
+            yield pdd.cli
+
 <isolation_example>
 <include>context/pytest_isolation_example.py</include>
 </isolation_example>

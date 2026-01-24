@@ -23,6 +23,7 @@
     - CRITICAL: Analyze the EXAMPLE to understand the API (function names, parameters, return values)
     - CRITICAL: Import statements must match the module structure shown in the example
     - CRITICAL: Test the intended function names and behavior based on the prompt
+    - CRITICAL (Python only): Example files may have module-level `sys.modules[...] = MagicMock()` for standalone execution. DO NOT copy this into tests - it pollutes pytest's module cache and breaks other test files. Use @pytest.fixture with types.ModuleType and __path__ = [] instead.
     - The module name for the code under test will have the same name as the function name
     - The unit test should be in {language}. If Python, use pytest.
     - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
