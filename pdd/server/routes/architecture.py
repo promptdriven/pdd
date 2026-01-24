@@ -5,10 +5,12 @@ Provides endpoints for:
 - Validating architecture changes before saving
 - Detecting circular dependencies, missing references, and structural issues
 - Syncing architecture.json from prompt file metadata tags
+- Generating architecture from a GitHub issue URL
 """
 
 from __future__ import annotations
 
+import re
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -448,4 +450,120 @@ async def generate_tags_for_prompt(request: GenerateTagsRequest) -> GenerateTags
             has_existing_tags=False,
             architecture_entry=None,
             error=f"Error generating tags: {str(e)}"
+        )
+
+
+# ============================================================================
+# Generate Architecture from GitHub Issue
+# ============================================================================
+
+_GITHUB_ISSUE_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)"
+)
+
+
+class GenerateFromIssueRequest(BaseModel):
+    """Request body for generating architecture from a GitHub issue URL."""
+
+    issue_url: str = Field(..., description="GitHub issue URL (e.g., https://github.com/owner/repo/issues/42)")
+    verbose: bool = Field(False, description="Enable verbose output")
+    quiet: bool = Field(False, description="Suppress non-error output")
+    timeout_adder: float = Field(0.0, description="Additional seconds to add to each step's timeout")
+
+
+class GenerateFromIssueResult(BaseModel):
+    """Result of triggering architecture generation from a GitHub issue."""
+
+    success: bool
+    message: str
+    job_id: Optional[str] = None
+
+
+@router.post("/generate-from-issue", response_model=GenerateFromIssueResult)
+async def generate_from_issue(request: GenerateFromIssueRequest) -> GenerateFromIssueResult:
+    """
+    Generate architecture from a GitHub issue URL.
+
+    Validates the URL, then spawns `pdd generate <issue_url>` in a terminal
+    window to run the agentic architecture workflow. The frontend can poll
+    the spawned job status via /api/v1/commands/spawned-jobs/{job_id}/status.
+
+    This mirrors how `pdd bug <url>` and `pdd change <url>` trigger their
+    respective agentic workflows from the web interface.
+    """
+    # Validate URL format
+    if not _GITHUB_ISSUE_RE.search(request.issue_url):
+        return GenerateFromIssueResult(
+            success=False,
+            message=f"Invalid GitHub issue URL: {request.issue_url}",
+            job_id=None,
+        )
+
+    try:
+        from .commands import (
+            _build_pdd_command_args,
+            _spawned_jobs,
+            get_project_root,
+            get_server_port,
+        )
+        from ..terminal_spawner import TerminalSpawner
+        import time
+        import uuid
+
+        project_root = get_project_root()
+        server_port = get_server_port()
+
+        # Build options dict
+        options: Dict[str, Any] = {}
+        if request.verbose:
+            options["verbose"] = True
+        if request.quiet:
+            options["quiet"] = True
+
+        # Build command args: pdd generate <issue_url>
+        args = {"prompt_file": request.issue_url}
+        cmd_args = _build_pdd_command_args("generate", args, options)
+        cmd_str = " ".join(cmd_args)
+
+        # Generate job ID
+        job_id = f"spawned-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+
+        # Track the job
+        from datetime import datetime, timezone as tz
+        _spawned_jobs[job_id] = {
+            "job_id": job_id,
+            "command": "generate",
+            "status": "running",
+            "started_at": datetime.now(tz.utc).isoformat(),
+            "completed_at": None,
+            "exit_code": None,
+        }
+
+        # Spawn terminal
+        spawned = TerminalSpawner.spawn(
+            cmd_str,
+            working_dir=str(project_root),
+            job_id=job_id,
+            server_port=server_port,
+        )
+
+        if not spawned:
+            del _spawned_jobs[job_id]
+            return GenerateFromIssueResult(
+                success=False,
+                message="Failed to spawn terminal for architecture generation",
+                job_id=None,
+            )
+
+        return GenerateFromIssueResult(
+            success=True,
+            message=f"Architecture generation started for {request.issue_url}",
+            job_id=job_id,
+        )
+
+    except Exception as e:
+        return GenerateFromIssueResult(
+            success=False,
+            message=f"Error starting architecture generation: {str(e)}",
+            job_id=None,
         )
