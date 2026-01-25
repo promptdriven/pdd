@@ -416,6 +416,7 @@ def run_agentic_change_orchestrator(
     issue_number: int,
     issue_author: str,
     issue_title: str,
+    issue_updated_at: str = "",
     *,
     cwd: Path,
     verbose: bool = False,
@@ -440,6 +441,17 @@ def run_agentic_change_orchestrator(
         cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
     )
 
+    # Check for stale state: if issue was updated since state was saved, start fresh
+    if state is not None and issue_updated_at:
+        stored_updated_at = state.get("issue_updated_at")
+        if stored_updated_at and stored_updated_at != issue_updated_at:
+            # Issue was modified - state is stale
+            if not quiet:
+                console.print("[yellow]Issue was updated since last run - starting fresh[/yellow]")
+            clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
+            state = None
+            loaded_gh_id = None
+
     # Initialize variables from state or defaults
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
@@ -449,8 +461,11 @@ def run_agentic_change_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
+        # Ensure issue_updated_at is in state for future staleness checks
+        if issue_updated_at:
+            state["issue_updated_at"] = issue_updated_at
     else:
-        state = {"step_outputs": {}}
+        state = {"step_outputs": {}, "issue_updated_at": issue_updated_at}
         last_completed_step = 0
         step_outputs = state["step_outputs"]
         total_cost = 0.0
