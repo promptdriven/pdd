@@ -9,9 +9,10 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
-6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files. Also extract `files_created` and `files_modified` separately for Step 10.
+6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2`, `FILES_MODIFIED: path1, path2`, or `DIRECT_EDITS: path1, path2` lines to extract changed files. Direct edits are code files that were modified directly (not via prompts) because no corresponding prompt exists. Also extract `files_created`, `files_modified`, and `direct_edits` separately.
 7. Pass extracted files to subsequent steps via `files_to_stage` context variable
 7b. For Step 10: Parse agent output for `ARCHITECTURE_FILES_MODIFIED: path1, path2` and append to changed_files/files_to_stage
+7c. For Step 6: Parse agent output for "Direct Edit Candidates" table. Extract file paths and store in `context["direct_edit_candidates"]` list. These are frontend/code files with no corresponding prompt that need scoped edits (uncomment, remove placeholder). Pass this list to Step 9.
 8. **State Persistence**: Save step outputs to state file after each step completes
 9. **Step Resumption**: On start, load saved state and skip steps that have already completed
 10. **Review Loop**: Steps 11-12 repeat until step 11 outputs "No Issues Found" (max 5 iterations)
@@ -145,19 +146,32 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 - Step 6 receives: issue_content, step1_output through step5_output
 - Step 7 receives: issue_content, step1_output through step6_output, issue_author
 - Step 8 receives: issue_content, step1_output through step7_output
-- Step 9 receives: issue_content, step7_output, step8_output, worktree_path
-- Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified
+- Step 9 receives: issue_content, step7_output, step8_output, worktree_path, direct_edit_candidates (from Step 6)
+- Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified, direct_edits
 - Step 11 receives: issue_content, step9_output, worktree_path, files_to_stage, review_iteration, previous_fixes
 - Step 12 receives: issue_content, step11_output, worktree_path, review_iteration
 - Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list
 
 % Files to Stage
-After Step 9 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to subsequent steps:
-- `context["files_to_stage"] = ", ".join(changed_files)`
-- Also extract `context["files_created"]` and `context["files_modified"]` separately for Step 10
+After Step 9 parses FILES_CREATED/FILES_MODIFIED/DIRECT_EDITS, pass the extracted file list to subsequent steps:
+- `context["files_to_stage"] = ", ".join(changed_files)` (includes all three types)
+- Also extract `context["files_created"]`, `context["files_modified"]`, and `context["direct_edits"]` separately for Step 10
 - Step 10 updates prompts and may add files via ARCHITECTURE_FILES_MODIFIED - append these to files_to_stage
 - Step 11 uses files_to_stage to know which files to review
 - Step 13 uses files_to_stage to know which files to commit
+
+% Direct Edit Candidates (from Step 6)
+After Step 6 completes, parse the "Direct Edit Candidates" table from the output:
+- Extract file paths from rows in the table
+- Store in `context["direct_edit_candidates"]` as a list
+- Pass to Step 9 so it knows which files can be directly edited
+- Step 9 can only directly edit files that appear in this list
+
+Helper function: `_parse_direct_edit_candidates(step6_output: str) -> List[str]`:
+- Use regex to find the "Direct Edit Candidates" table section
+- Extract file paths from table rows (format: `| file_path | edit_type | markers |`)
+- Return list of file paths (first column of each row)
+- Return empty list if no table found
 
 % Early Exit Conditions (Hard Stops)
 
@@ -173,7 +187,7 @@ The orchestrator must parse step output to detect stop conditions:
 | 6 | No dev units found | Output contains "No Dev Units Found" |
 | 7 | Architectural decision needed | Output contains "Architectural Decision Needed" |
 | 8 | No changes needed | Output contains "No Changes Required" |
-| 9 | Implementation failed | No FILES_CREATED or FILES_MODIFIED line, or output contains "FAIL:" |
+| 9 | Implementation failed | No FILES_CREATED, FILES_MODIFIED, or DIRECT_EDITS line, or output contains "FAIL:" |
 | 10 | Architecture update complete | (no stop condition - continues to step 11) |
 | 11 | Issues found | (not a hard stop - loops to step 12) |
 | 11 | No issues found | Output contains "No Issues Found" (exits loop, continues to step 13) |
@@ -216,6 +230,8 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
    - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
    - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
    - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
+   - `_detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]` - Detect file changes in worktree via `git status --porcelain`. By default only allows `.prompt` and `.md` files. If `direct_edit_candidates` list is provided, also allow those specific files (enables detecting direct edits).
+   - `_parse_direct_edit_candidates(step6_output: str) -> List[str]` - Parse Step 6 output for "Direct Edit Candidates" table and extract file paths from the first column of each row. Return empty list if no table found.
 
 % Console Output
 
