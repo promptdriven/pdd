@@ -61,13 +61,26 @@ Each complete change ideally includes four elements:
    ```
 2. Create and activate a Conda environment (recommended):
    ```bash
-   conda create -n pdd python=3.12
-   conda activate pdd
+   conda create -n pdd-dev python=3.12
+   conda activate pdd-dev
+   ```
+   To use a different environment name, set the `PDD_CONDA_ENV` environment variable before running make commands:
+   ```bash
+   # Option 1: Export for the session
+   export PDD_CONDA_ENV=my-env
+   make <target>
+
+   # Option 2: Set inline for a single command
+   PDD_CONDA_ENV=my-env make build
+
+   # Option 3: Pass as a make argument
+   make test PDD_CONDA_ENV=my-env
    ```
 3. Install dependencies in editable mode with dev extras:
    ```bash
    pip install -e .[dev]
    ```
+   Note: Many Makefile targets (e.g., `make test`, `make coverage`, `make lint`) automatically install dev dependencies into the conda environment before each run.
 4. Optional: Use Docker for reproducible environments, especially for tricky, environment‑dependent bugs.
 
 ## Running Tests
