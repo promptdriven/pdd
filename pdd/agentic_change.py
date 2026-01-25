@@ -16,6 +16,14 @@ from .agentic_change_orchestrator import run_agentic_change_orchestrator
 console = Console()
 
 
+def _escape_format_braces(text: str) -> str:
+    """
+    Escape curly braces in text to prevent Python's .format() from
+    interpreting them as placeholders. { becomes {{ and } becomes }}.
+    """
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 def _check_gh_cli() -> bool:
     """
     Check if the GitHub CLI (gh) is installed and available in the system PATH.
@@ -183,7 +191,6 @@ def run_agentic_change(
     body = issue_data.get("body", "") or ""
     author = issue_data.get("user", {}).get("login", "unknown")
     comments_url = issue_data.get("comments_url", "")
-    issue_updated_at = issue_data.get("updated_at", "")
 
     # 4. Fetch Comments
     comments_data = []
@@ -206,6 +213,9 @@ def run_agentic_change(
                 c_body = comment.get("body", "")
                 issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
 
+    # Escape curly braces to prevent .format() errors when issue contains code
+    issue_content = _escape_format_braces(issue_content)
+
     # 6. Setup Repository (Clone or Use Current)
     try:
         work_dir = _setup_repository(owner, repo, quiet)
@@ -224,7 +234,6 @@ def run_agentic_change(
         issue_number=issue_number,
         issue_author=author,
         issue_title=title,
-        issue_updated_at=issue_updated_at,
         cwd=work_dir,
         verbose=verbose,
         quiet=quiet,
