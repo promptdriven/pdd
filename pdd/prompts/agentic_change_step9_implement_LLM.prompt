@@ -146,7 +146,7 @@ Code generation for prompt-based modules happens separately via `pdd sync` after
    - Find `// TODO: Uncomment ...` lines before commented code and uncomment it
    - Remove `throw new Error("TEMPORARY: ...")` or similar placeholder errors
    - Remove `"coming soon"` or `"not yet implemented"` message assignments
-   - Remove conditional branches that exist only as placeholders (e.g., `else { setError("coming soon") }`)
+   - Remove conditional branches that exist only as placeholders (e.g., `else {{ setError("coming soon") }}`)
 
    **Document each direct edit** with:
    - File path
