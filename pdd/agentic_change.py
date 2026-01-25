@@ -183,6 +183,7 @@ def run_agentic_change(
     body = issue_data.get("body", "") or ""
     author = issue_data.get("user", {}).get("login", "unknown")
     comments_url = issue_data.get("comments_url", "")
+    issue_updated_at = issue_data.get("updated_at", "")
 
     # 4. Fetch Comments
     comments_data = []
@@ -223,6 +224,7 @@ def run_agentic_change(
         issue_number=issue_number,
         issue_author=author,
         issue_title=title,
+        issue_updated_at=issue_updated_at,
         cwd=work_dir,
         verbose=verbose,
         quiet=quiet,
