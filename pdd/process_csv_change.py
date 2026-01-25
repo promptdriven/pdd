@@ -329,6 +329,12 @@ def process_csv_change(
                              console.print(f"[bold yellow]Warning:[/bold yellow] Model name changed from '{model_name}' to '{current_model_name}' in row {row_num}.")
                              # Keep the first model_name
 
+                        # Validate that modified_prompt is not empty
+                        if not modified_prompt or not modified_prompt.strip():
+                            console.print(f"[bold yellow]Warning:[/bold yellow] LLM returned empty content for '{prompt_name_from_csv}' (row {row_num}). Skipping.")
+                            overall_success = False
+                            continue
+
                         list_of_jsons.append({
                             "file_name": prompt_name_from_csv, # Use original prompt name from CSV as key
                             "modified_prompt": modified_prompt

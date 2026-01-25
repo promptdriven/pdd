@@ -1,34 +1,50 @@
+## v0.0.129 (2026-01-25)
+
+### Feat
+
+- introduce and define "Direct Edits" for LLM agents and update orchestration to process them.
+- Implement robust agentic CLI discovery with .pddrc overrides, common path searching, and improved diagnostics.
+
 ## v0.0.128 (2026-01-23)
 
 ### Feat
 
-- frontend and backend improvements
-- add agentic architecture generation from GitHub issue PRD (#367)
-- add agentic architecture generation from GitHub issue PRD (#367)
-- auto-generate .pddrc before prompt generation from architecture.json
-- add generate_pddrc template for generating .pddrc from architecture.json
-- Enhance `generate` command with template registry, environment variable support, lazy code generator loading, and improved test isolation.
-- Add comprehensive tests for `pdd.cli`, integrate `agentic_test_main`, and update `project_dependencies.csv` by removing old context examples.
-- Implement agentic test generation and add comprehensive tests for `generate` command and `AgenticTest` class.
-- Implement agentic testing functionality and add comprehensive tests for the `generate` command's argument parsing and environment variable handling.
-- Implement `agentic_test_orchestrator` to manage multi-step agentic testing workflows with state persistence and new tests.
-- Generalize agentic test generation prompts to use templates for API test plans and code examples, and include API configuration documentation.
-- Generalize agentic test generation workflow to support API tests by updating prompts and adding API-specific instructions.
-- Add agentic test workflow for UI test generation (#332)
+- **agentic architecture**: New 8-step workflow generates `architecture.json` from a GitHub issue PRD. Pass a GitHub issue URL to `pdd generate` and the agent analyzes requirements, researches tech stack docs, designs module breakdown, and produces a validated architecture with Mermaid diagram.
+- **agentic test generation**: New 9-step workflow generates tests from GitHub issues. Supports web UI (Playwright), CLI (pytest + subprocess), and API (pytest + requests) test types. Run with `pdd test <issue-url>`.
+- **auto-generate .pddrc**: New `generate_pddrc_YAML` template auto-generates `.pddrc` configuration from `architecture.json`, streamlining project setup. Thanks Dhruv Garg!
+- **generate command**: Template registry support, environment variable injection with `-e KEY=VALUE`, lazy code generator loading for faster startup, and GitHub issue URL detection.
+- **language support**: Added 25+ new languages (TypeScriptReact, JavaScriptReact, Svelte, Vue, SCSS, Sass, Jinja, Terraform, Zig, Mojo, Solidity, GraphQL, Protobuf, etc.) to language detection, file routing, and `language_format.csv`.
+- **prompts_linter example**: Complete end-to-end example project demonstrating PDD workflow with architecture, prompts, generated code, and tests. Thanks Dhruv Garg!
+- **frontend improvements**: Enhanced architecture view and prompt selector components.
 
 ### Fix
 
-- Update LLM test generation prompts to prevent pytest module cache pollution and refactor E2E test imports.
-- use click.echo for GitHub issue URL output in generate command
-- escape braces in agentic arch prompts and add GitHub issue URL support
-- _get_cached_jwt() crashes with TypeError when cache file has expires_at: null
-- pdd/commands/auth.py writes expires_at: null to cache, causing #358 crashes
-- Prevent `change_main` from writing empty files for empty prompts and ensure `update_main` agentic updates do not modify source files when an output path is specified. all unit tests pass
+- **auth**: `pdd login` now validates `expires_at` field before writing to cache. Missing or invalid values default to 1-hour expiration, preventing `TypeError` crashes when reading cache. Thanks James Levine!
+- **JWT cache**: `_get_cached_jwt()` now catches `TypeError` when cache file contains `expires_at: null`. Thanks James Levine!
+- **generate command**: Use `click.echo` for GitHub issue URL output to ensure proper terminal handling.
+- **agentic prompts**: Escape literal braces in architecture prompts to prevent `str.format()` KeyError exceptions.
+- **change_main**: Prevent writing empty files when prompt content is empty.
+- **update_main**: Agentic updates no longer modify source files when an output path is specified.
+- **sync non-Python**: Delegate crash detection and fix verification to agentic handler for non-Python languages, which uses the correct language-specific run command.
+- **construct_paths**: Extract root directory for auto-deps scan scope. Fixes CSV truncation when using subdirectory paths like `context/commands/`.
+- **test isolation**: Update LLM test generation prompts to prevent pytest module cache pollution across parallel workers.
 
 ### Refactor
 
-- Update template loading to use `template_registry` and enhance test module cleanup. Test polution issues
-- remove "UI" from agentic test generation workflow descriptions in prompts.
+- **template loading**: Migrate to `template_registry` pattern for cleaner prompt template management.
+- **agentic_fix.py**: Simplified by removing unused diagnostic code and inline comments.
+- **test prompts**: Generalize agentic test workflow prompts to support API/CLI tests, not just UI.
+
+### Docs
+
+- **TUTORIALS.md**: Added Method 4 (Generating Tests) and Method 4 (Generating Architecture from PRD) tutorials.
+- **SETUP_WITH_GEMINI.md**: Added section 10 explaining `pdd connect` web interface.
+- **prompting_guide.md**: Documented `context_urls` in architecture entries and automatic `<web>` tag generation.
+
+### Build
+
+- **test fixtures**: Moved `simple_math_python.prompt` and other test prompts to `tests/fixtures/` directory.
+- **removed**: Deleted deprecated `prompts/simple_math_python.prompt` (test artifact with invalid content).
 
 ## v0.0.127 (2026-01-22)
 
