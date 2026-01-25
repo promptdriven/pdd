@@ -1670,3 +1670,331 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
 
     # Assert that the found path is the one in the mock repository root
     assert found_path == str(expected_file_path)
+
+
+# ============================================================================
+# Tests for Issue #375: Malformed JSON in PDD metadata tags
+# https://github.com/gltanaka/pdd/issues/375
+#
+# Bug: double_curly() converts all {} to {{}} without protecting content
+# inside PDD metadata tags (<pdd-interface>, <pdd-reason>, <pdd-dependency>).
+# These tags contain static JSON that should remain valid for architecture_sync.py.
+# ============================================================================
+
+def test_double_curly_preserves_pdd_interface_json() -> None:
+    """
+    Test that JSON in <pdd-interface> tags remains valid after double_curly().
+
+    Issue #375: The double_curly() function was converting single braces {} to
+    double braces {{}} inside <pdd-interface> tags, corrupting the JSON and
+    causing architecture_sync.py's parse_prompt_tags() to fail with JSONDecodeError.
+
+    Expected behavior: JSON in <pdd-interface> should remain valid (single braces).
+    """
+    import json
+
+    prompt = '''<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "fix_architecture", "signature": "(arch: str)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+% This is a template with {variable} placeholder.'''
+
+    # Process through double_curly
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Extract the content inside <pdd-interface> tags
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', processed, re.DOTALL)
+    assert interface_match is not None, "Could not find <pdd-interface> tag after preprocessing"
+
+    interface_content = interface_match.group(1).strip()
+
+    # The JSON inside <pdd-interface> should be valid (parseable)
+    try:
+        parsed = json.loads(interface_content)
+        assert parsed['type'] == 'module'
+        assert len(parsed['module']['functions']) == 1
+    except json.JSONDecodeError as e:
+        pytest.fail(
+            f"Issue #375: JSON in <pdd-interface> was corrupted by double_curly().\n"
+            f"Content: {interface_content}\n"
+            f"Error: {e}"
+        )
+
+    # The {variable} outside the tag SHOULD be doubled to {{variable}}
+    assert "{{variable}}" in processed, "Template variables outside PDD tags should be doubled"
+
+
+def test_double_curly_preserves_pdd_reason_braces() -> None:
+    """
+    Test that braces in <pdd-reason> tags are preserved.
+
+    Issue #375: If <pdd-reason> contains braces (e.g., in inline code or examples),
+    they should not be doubled.
+    """
+    prompt = '''<pdd-reason>Handles JSON objects like {"key": "value"}</pdd-reason>
+Normal text with {placeholder}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Content inside <pdd-reason> should NOT have doubled braces
+    import re
+    reason_match = re.search(r'<pdd-reason>(.*?)</pdd-reason>', processed, re.DOTALL)
+    assert reason_match is not None
+    reason_content = reason_match.group(1)
+
+    # The content should NOT have doubled braces (check for absence of {{)
+    assert '{{' not in reason_content, \
+        f"Issue #375: Braces in <pdd-reason> were incorrectly doubled: {reason_content}"
+    # Should have single braces
+    assert '{"key": "value"}' in reason_content, \
+        f"Issue #375: Single braces in <pdd-reason> were lost: {reason_content}"
+
+    # But {placeholder} outside should be doubled
+    assert "{{placeholder}}" in processed
+
+
+def test_double_curly_preserves_pdd_dependency_content() -> None:
+    """
+    Test that content in <pdd-dependency> tags is preserved.
+
+    While <pdd-dependency> typically contains just filenames, it should still
+    be protected from brace doubling in case it ever contains braces.
+    """
+    prompt = '''<pdd-dependency>some_module.prompt</pdd-dependency>
+Text with {variable}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Dependency tag should be unchanged
+    assert '<pdd-dependency>some_module.prompt</pdd-dependency>' in processed
+
+    # Variable outside should be doubled
+    assert "{{variable}}" in processed
+
+
+def test_double_curly_preserves_multiple_pdd_tags() -> None:
+    """
+    Test that multiple PDD tags in a single prompt are all protected.
+
+    Issue #375: Ensures the fix works for prompts with all three PDD tag types.
+    """
+    prompt = '''<pdd-reason>Provides unified LLM invocation with {options}</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {"functions": [{"name": "invoke", "returns": "str"}]}
+}
+</pdd-interface>
+<pdd-dependency>base_module.prompt</pdd-dependency>
+% Template with {input} and {output} variables.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Check <pdd-reason> preserved (single braces, not doubled)
+    import re
+    reason_match = re.search(r'<pdd-reason>(.*?)</pdd-reason>', processed, re.DOTALL)
+    assert reason_match is not None
+    assert '{{options}}' not in reason_match.group(1), "Braces in <pdd-reason> should NOT be doubled"
+    assert '{options}' in reason_match.group(1), "Single braces in <pdd-reason> should be preserved"
+
+    # Check <pdd-interface> has valid JSON
+    import json
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', processed, re.DOTALL)
+    assert interface_match is not None
+    try:
+        json.loads(interface_match.group(1).strip())
+    except json.JSONDecodeError:
+        pytest.fail("Issue #375: JSON in <pdd-interface> was corrupted")
+
+    # Check template variables outside tags are doubled
+    assert "{{input}}" in processed
+    assert "{{output}}" in processed
+
+
+def test_double_curly_preserves_nested_json_in_pdd_interface() -> None:
+    """
+    Test that deeply nested JSON in <pdd-interface> is preserved.
+
+    Issue #375: The bug manifested particularly with nested JSON structures.
+    """
+    import json
+
+    nested_json = {
+        "type": "module",
+        "module": {
+            "functions": [
+                {
+                    "name": "process",
+                    "signature": "(data: Dict[str, Any])",
+                    "returns": "Dict[str, List[Dict[str, str]]]"
+                }
+            ],
+            "classes": [
+                {
+                    "name": "Handler",
+                    "methods": [{"name": "handle", "args": "{}"}]
+                }
+            ]
+        }
+    }
+
+    prompt = f'''<pdd-interface>
+{json.dumps(nested_json, indent=2)}
+</pdd-interface>
+% Use this with {{already_escaped}} and {{variable}}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Extract and validate JSON
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', processed, re.DOTALL)
+    assert interface_match is not None
+
+    try:
+        parsed = json.loads(interface_match.group(1).strip())
+        assert parsed == nested_json, "Nested JSON structure was altered"
+    except json.JSONDecodeError as e:
+        pytest.fail(f"Issue #375: Nested JSON in <pdd-interface> was corrupted: {e}")
+
+
+def test_double_curly_still_doubles_outside_pdd_tags() -> None:
+    """
+    Regression test: Ensure normal brace doubling still works outside PDD tags.
+
+    The fix for issue #375 must not break the primary purpose of double_curly(),
+    which is to escape braces for LangChain PromptTemplate.
+    """
+    prompt = '''<pdd-interface>{"valid": "json"}</pdd-interface>
+Normal text with {variable1} and {variable2}.
+Code example: const obj = {key: value};
+Template literal ${FOO} should become ${{FOO}}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # PDD tag content should be preserved
+    assert '{"valid": "json"}' in processed or '<pdd-interface>{"valid": "json"}</pdd-interface>' in processed
+
+    # Variables outside should be doubled
+    assert "{{variable1}}" in processed
+    assert "{{variable2}}" in processed
+
+    # Code braces outside PDD tags should be doubled
+    assert "{{key: value}}" in processed
+
+    # Template literals should become ${{...}}
+    assert "${{FOO}}" in processed
+
+
+def test_double_curly_integration_with_parse_prompt_tags() -> None:
+    """
+    Integration test: Verify JSON is valid for architecture_sync.parse_prompt_tags().
+
+    Issue #375: The bug caused architecture_sync.py to fail with JSONDecodeError
+    when parsing <pdd-interface> tags that had been corrupted by double_curly().
+    """
+    from pdd.architecture_sync import parse_prompt_tags
+
+    prompt = '''<pdd-reason>Handles authentication flows</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "authenticate", "signature": "(user: str, pass: str)", "returns": "bool"},
+      {"name": "validate_token", "signature": "(token: str)", "returns": "Dict"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>base_auth.prompt</pdd-dependency>
+% Template with {user_input} placeholder.'''
+
+    # Process the prompt as would happen in the real workflow
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # parse_prompt_tags should be able to parse the processed content
+    result = parse_prompt_tags(processed)
+
+    # Verify reason was extracted
+    assert result.get('reason') == 'Handles authentication flows', \
+        f"Failed to extract reason: {result}"
+
+    # Verify interface JSON was parsed correctly
+    assert 'interface' in result, \
+        f"Issue #375: Failed to parse interface. Got error: {result.get('interface_parse_error', 'No interface found')}"
+
+    interface = result['interface']
+    assert interface['type'] == 'module'
+    assert len(interface['module']['functions']) == 2
+    assert interface['module']['functions'][0]['name'] == 'authenticate'
+
+    # Verify dependencies were extracted
+    assert 'base_auth.prompt' in result.get('dependencies', [])
+
+
+def test_double_curly_real_world_prompt_example() -> None:
+    """
+    Test with a real-world prompt structure similar to agentic_arch_step8_fix_LLM.prompt.
+
+    This reproduces the exact issue reported in #375 where the prompt file
+    was corrupted with double braces.
+    """
+    import json
+
+    # This is what the prompt SHOULD look like (valid JSON)
+    prompt = '''<pdd-reason>Fixes validation errors in architecture.json: resolves circular deps, priority violations, missing fields.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "fix_architecture", "signature": "(current_architecture: str, step7_output: str)", "returns": "str (corrected JSON array)"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step7_validate_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to fix validation errors.
+
+% Inputs
+- Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Current Architecture
+<architecture_json>
+{current_architecture}
+</architecture_json>'''
+
+    # Process through preprocess
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Verify PDD metadata tags are still valid
+    import re
+
+    # Check <pdd-interface> has valid JSON
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', processed, re.DOTALL)
+    assert interface_match is not None, "Lost <pdd-interface> tag"
+
+    try:
+        interface_json = json.loads(interface_match.group(1).strip())
+        assert interface_json['type'] == 'module'
+        assert interface_json['module']['functions'][0]['name'] == 'fix_architecture'
+    except json.JSONDecodeError as e:
+        pytest.fail(
+            f"Issue #375 REPRODUCED: <pdd-interface> JSON was corrupted.\n"
+            f"Content after preprocessing:\n{interface_match.group(1)}\n"
+            f"Error: {e}"
+        )
+
+    # Template variables outside PDD tags SHOULD be doubled
+    assert "{{issue_url}}" in processed
+    assert "{{repo_owner}}" in processed
+    assert "{{current_architecture}}" in processed

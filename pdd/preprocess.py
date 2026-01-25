@@ -132,7 +132,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
             for ln, frag in singles[:5]:
                 _dbg(f"  line {ln}: {frag}")
         if templates:
-            _dbg(f"INFO: Found {len(templates)} template literals ${'{...'} outside code fences (examples):")
+            _dbg(f"INFO: Found {len(templates)} template literals ${{...}} outside code fences (examples):")
             for ln, frag in templates[:5]:
                 _dbg(f"  line {ln}: {frag}")
         # Don't trim whitespace that might be significant for the tests
@@ -415,6 +415,16 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
             "2": {{"id": "2", "name": "Resource Two"}}
         }}"""
     
+    # NEW: Protect PDD metadata tags from doubling
+    # We match <pdd-TAG>...</pdd-TAG> where TAG is interface, reason, or dependency
+    pdd_tags_content = []
+    def protect_pdd_tags(match):
+        pdd_tags_content.append(match.group(0))
+        return f"__PDD_TAG_{len(pdd_tags_content)-1}__"
+    
+    pdd_pattern = r'<(pdd-interface|pdd-reason|pdd-dependency)>.*?</\1>'
+    text = re.sub(pdd_pattern, protect_pdd_tags, text, flags=re.DOTALL)
+
     # Protect ${IDENT} placeholders so we can safely double braces, then restore
     # them as ${{IDENT}} to avoid PromptTemplate interpreting {IDENT}.
     protected_vars: List[str] = []
@@ -440,9 +450,7 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     # Restore already doubled brackets
     text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{\1}}', text)
 
-    # Restore protected ${IDENT} placeholders as ${{IDENT}} so single braces
-    # don't leak into PromptTemplate formatting. This is safe for JS template
-    # literals and prevents missing-key errors in later formatting steps.
+    # Restore protected ${IDENT} placeholders as ${{IDENT}}
     def _restore_var(m):
         idx = int(m.group(1))
         if 0 <= idx < len(protected_vars):
@@ -457,6 +465,13 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
             return original
         return m.group(0)
     text = re.sub(r"__PDD_VAR_(\d+)__", _restore_var, text)
+    
+    # NEW: Restore PDD metadata tags
+    def restore_pdd_tags(match):
+        idx = int(match.group(1))
+        return pdd_tags_content[idx]
+    
+    text = re.sub(r"__PDD_TAG_(\d+)__", restore_pdd_tags, text)
     
     # Special handling for code blocks
     code_block_pattern = r'```([\w\s]*)\n([\s\S]*?)```'
