@@ -14,6 +14,27 @@ from . import EXTRACTION_STRENGTH, DEFAULT_STRENGTH, DEFAULT_TIME
 
 console = Console()
 
+# Delimiters for modified prompt extraction
+MODIFIED_PROMPT_START = "<<<MODIFIED_PROMPT>>>"
+MODIFIED_PROMPT_END = "<<<END_MODIFIED_PROMPT>>>"
+
+
+def extract_between_delimiters(text: str) -> str | None:
+    """
+    Extract content between MODIFIED_PROMPT delimiters if present.
+    Returns None if delimiters are not found.
+    """
+    start_idx = text.find(MODIFIED_PROMPT_START)
+    end_idx = text.find(MODIFIED_PROMPT_END)
+
+    if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+        # Extract content between delimiters
+        content_start = start_idx + len(MODIFIED_PROMPT_START)
+        extracted = text[content_start:end_idx].strip()
+        return extracted
+    return None
+
+
 class ExtractedPrompt(BaseModel):
     """Pydantic model for extracting the modified prompt from LLM output."""
     modified_prompt: str = Field(description="The extracted modified prompt")
@@ -92,27 +113,40 @@ def change(  # pylint: disable=too-many-arguments, too-many-locals
             console.print(Panel("Change prompt result:", style="green"))
             console.print(Markdown(change_response["result"]))
 
-        # Step 5: Run extract prompt
-        if verbose:
-            console.print(Panel("Extracting modified prompt...", style="blue"))
+        # Step 5: Try programmatic extraction first (faster, cheaper, more reliable)
+        modified_prompt = extract_between_delimiters(change_response["result"])
 
-        extract_response = llm_invoke(
-            prompt=extract_prompt_template,
-            input_json={"llm_output": change_response["result"]},
-            strength=EXTRACTION_STRENGTH,
-            temperature=temperature,
-            time=time,
-            verbose=verbose,
-            output_pydantic=ExtractedPrompt
-        )
+        if modified_prompt:
+            if verbose:
+                console.print(Panel(
+                    "Extracted modified prompt using delimiters (no LLM needed)",
+                    style="green"
+                ))
+        else:
+            # Fall back to LLM extraction if no delimiters found
+            if verbose:
+                console.print(Panel(
+                    "No delimiters found, falling back to LLM extraction...",
+                    style="blue"
+                ))
 
-        total_cost += extract_response["cost"]
+            extract_response = llm_invoke(
+                prompt=extract_prompt_template,
+                input_json={"llm_output": change_response["result"]},
+                strength=EXTRACTION_STRENGTH,
+                temperature=temperature,
+                time=time,
+                verbose=verbose,
+                output_pydantic=ExtractedPrompt
+            )
 
-        # Ensure we have a valid result
-        if not isinstance(extract_response["result"], ExtractedPrompt):
-            raise ValueError("Failed to extract modified prompt")
+            total_cost += extract_response["cost"]
 
-        modified_prompt = extract_response["result"].modified_prompt
+            # Ensure we have a valid result
+            if not isinstance(extract_response["result"], ExtractedPrompt):
+                raise ValueError("Failed to extract modified prompt")
+
+            modified_prompt = extract_response["result"].modified_prompt
 
         # Step 6: Print extracted prompt if verbose
         if verbose:
