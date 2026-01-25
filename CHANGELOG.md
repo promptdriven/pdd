@@ -1,3 +1,10 @@
+## v0.0.129 (2026-01-25)
+
+### Feat
+
+- introduce and define "Direct Edits" for LLM agents and update orchestration to process them.
+- Implement robust agentic CLI discovery with .pddrc overrides, common path searching, and improved diagnostics.
+
 ## v0.0.128 (2026-01-23)
 
 ### Feat

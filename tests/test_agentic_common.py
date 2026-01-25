@@ -1294,3 +1294,315 @@ def test_whitespace_only_output_detected_as_false_positive(mock_shutil_which, mo
     assert provider == "google", (
         "Whitespace-only output should be detected as false positive"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #307: CLI Discovery Tests
+# (Tests for robust CLI binary discovery in agentic_common.py)
+# ---------------------------------------------------------------------------
+
+
+def _prepend_cli_path(monkeypatch, cli_name: str, path_to_prepend) -> None:
+    """
+    Helper to prepend a test path to the common CLI paths.
+
+    This pattern is used across multiple tests to simulate CLI binaries
+    installed in non-standard locations. Using monkeypatch.setitem ensures
+    automatic cleanup after each test.
+
+    Args:
+        monkeypatch: pytest monkeypatch fixture
+        cli_name: Name of the CLI (e.g., "claude", "gemini", "codex")
+        path_to_prepend: Path to prepend to the common paths list
+    """
+    from pdd.agentic_common import _COMMON_CLI_PATHS
+    original_paths = _COMMON_CLI_PATHS.get(cli_name, [])
+    monkeypatch.setitem(_COMMON_CLI_PATHS, cli_name, [path_to_prepend] + original_paths)
+
+
+class TestCliDiscoveryBug:
+    """
+    Tests for CLI binary discovery bug.
+
+    Bug Report:
+        Even with Claude present and runnable in the shell environment,
+        pdd fix didn't find claude during agentic fallback.
+
+    Root Cause:
+        shutil.which("claude") searches the PATH of the pdd process, which may
+        differ from the user's interactive shell PATH.
+
+    These tests verify the fix: _find_cli_binary() function that searches:
+    1. .pddrc config override
+    2. shutil.which() (PATH lookup)
+    3. Common installation directories
+    """
+
+    def test_find_cli_binary_detects_claude_in_local_bin_when_not_in_path(self, monkeypatch, tmp_path):
+        """
+        Bug reproduction: Claude installed in ~/.local/bin but not in PATH.
+
+        This simulates a common scenario where:
+        1. User installs Claude via pip/npm with --user flag
+        2. ~/.local/bin is added to PATH in .bashrc/.zshrc
+        3. But pdd process doesn't inherit that PATH modification
+        """
+        from pdd.agentic_common import _find_cli_binary
+
+        # Mock shutil.which to return None (simulates CLI not in PATH)
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Create fake claude binary in ~/.local/bin
+        local_bin = tmp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        fake_claude = local_bin / "claude"
+        fake_claude.write_text("#!/bin/bash\necho claude")
+        fake_claude.chmod(0o755)
+
+        # Mock Path.home() to return our tmp_path
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        # Add our test path to common paths
+        _prepend_cli_path(monkeypatch, "claude", fake_claude)
+
+        # This should return the path because claude exists in ~/.local/bin
+        result = _find_cli_binary("claude")
+
+        assert result is not None, (
+            "Should detect Claude in ~/.local/bin when shutil.which fails. "
+            "The fix uses _find_cli_binary() which searches common paths."
+        )
+        assert result == str(fake_claude)
+
+    def test_find_cli_binary_detects_claude_in_nvm_path(self, monkeypatch, tmp_path):
+        """
+        Bug reproduction: Claude installed via npm under nvm.
+
+        nvm installs packages to ~/.nvm/versions/node/vX.Y.Z/bin/
+        This path is typically added to PATH by nvm's shell integration,
+        but may not be available in non-interactive shells.
+        """
+        from pdd.agentic_common import _find_cli_binary
+
+        # Mock shutil.which to return None
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Create fake nvm structure
+        nvm_bin = tmp_path / ".nvm" / "versions" / "node" / "v20.10.0" / "bin"
+        nvm_bin.mkdir(parents=True)
+        fake_claude = nvm_bin / "claude"
+        fake_claude.write_text("#!/bin/bash\necho claude")
+        fake_claude.chmod(0o755)
+
+        # Mock Path.home()
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        # Add nvm node parent to common paths for glob expansion
+        nvm_node_dir = tmp_path / ".nvm" / "versions" / "node"
+        _prepend_cli_path(monkeypatch, "claude", nvm_node_dir)
+
+        result = _find_cli_binary("claude")
+
+        assert result is not None, (
+            "Should detect Claude in nvm path (~/.nvm/versions/node/*/bin/). "
+            "The fix uses _find_cli_binary() with glob expansion for nvm paths."
+        )
+        assert "v20.10.0" in result
+
+    def test_get_available_agents_finds_claude_in_common_paths(self, monkeypatch, tmp_path):
+        """
+        Bug reproduction: get_available_agents misses Claude in common paths.
+        """
+        # Mock shutil.which to return None for all CLIs
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Clear all API keys
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        # Mock _load_model_data to return None
+        monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda x: None)
+
+        # Create fake claude in ~/.local/bin
+        local_bin = tmp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        fake_claude = local_bin / "claude"
+        fake_claude.write_text("#!/bin/bash\necho claude")
+        fake_claude.chmod(0o755)
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        # Add test path to common paths
+        _prepend_cli_path(monkeypatch, "claude", fake_claude)
+
+        agents = get_available_agents()
+
+        assert "anthropic" in agents, (
+            "Should include 'anthropic' when Claude exists in ~/.local/bin. "
+            "The fix uses _find_cli_binary() instead of shutil.which()."
+        )
+
+
+class TestCliDiscovery:
+    """
+    Tests for the CLI discovery fix implementation.
+
+    Verifies that _find_cli_binary() correctly implements the multi-strategy
+    approach for finding CLI binaries.
+    """
+
+    def test_find_cli_binary_exists_in_agentic_common(self):
+        """Verify _find_cli_binary is exported from agentic_common."""
+        from pdd.agentic_common import _find_cli_binary
+        assert callable(_find_cli_binary)
+
+    def test_find_cli_binary_via_shutil_which(self, monkeypatch):
+        """When shutil.which finds the CLI, _find_cli_binary should return it."""
+        from pdd.agentic_common import _find_cli_binary
+
+        monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/local/bin/{cmd}" if cmd == "claude" else None)
+
+        result = _find_cli_binary("claude")
+        assert result == "/usr/local/bin/claude"
+
+    def test_find_cli_binary_fallback_to_common_paths(self, monkeypatch, tmp_path):
+        """When shutil.which returns None, should search common paths."""
+        from pdd.agentic_common import _find_cli_binary
+
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Create a fake claude binary in a common path
+        local_bin = tmp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        fake_claude = local_bin / "claude"
+        fake_claude.write_text("#!/bin/bash\necho claude")
+        fake_claude.chmod(0o755)
+
+        # Add test path to common paths
+        _prepend_cli_path(monkeypatch, "claude", fake_claude)
+
+        result = _find_cli_binary("claude")
+        assert result == str(fake_claude)
+
+    def test_find_cli_binary_pddrc_override(self, monkeypatch, tmp_path):
+        """.pddrc agentic.claude_path should take precedence."""
+        from pdd.agentic_common import _find_cli_binary
+
+        monkeypatch.setattr("shutil.which", lambda cmd: "/other/path/claude" if cmd == "claude" else None)
+
+        # Create a custom claude binary
+        custom_claude = tmp_path / "custom" / "claude"
+        custom_claude.parent.mkdir(parents=True)
+        custom_claude.write_text("#!/bin/bash\necho custom claude")
+        custom_claude.chmod(0o755)
+
+        # Create .pddrc with custom path
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text(f"""
+version: "1.0"
+agentic:
+  claude_path: {custom_claude}
+contexts:
+  default:
+    defaults:
+      default_language: python
+""")
+
+        monkeypatch.chdir(tmp_path)
+
+        result = _find_cli_binary("claude")
+        assert result == str(custom_claude)
+
+    def test_find_cli_binary_returns_none_when_not_found(self, monkeypatch, tmp_path):
+        """When CLI is not found anywhere, should return None."""
+        from pdd.agentic_common import _find_cli_binary, _COMMON_CLI_PATHS
+
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        # Empty common paths for nonexistent CLI
+        monkeypatch.setitem(_COMMON_CLI_PATHS, "nonexistent_cli", [])
+        monkeypatch.chdir(tmp_path)
+
+        result = _find_cli_binary("nonexistent_cli")
+        assert result is None
+
+    def test_find_cli_binary_nvm_multiple_versions(self, monkeypatch, tmp_path):
+        """
+        Test that nvm glob expansion works with multiple node versions.
+
+        nvm allows multiple node versions to coexist. The glob pattern should
+        find the CLI in any version's bin directory.
+        """
+        from pdd.agentic_common import _find_cli_binary
+
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+        # Create multiple node version directories (only v20 has claude)
+        for version in ["v18.19.0", "v20.10.0", "v21.5.0"]:
+            nvm_bin = tmp_path / ".nvm" / "versions" / "node" / version / "bin"
+            nvm_bin.mkdir(parents=True)
+
+        # Only install claude in v20
+        nvm_claude = tmp_path / ".nvm" / "versions" / "node" / "v20.10.0" / "bin" / "claude"
+        nvm_claude.write_text("#!/bin/bash\necho claude v20")
+        nvm_claude.chmod(0o755)
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        # Add nvm node parent to common paths
+        nvm_node_dir = tmp_path / ".nvm" / "versions" / "node"
+        _prepend_cli_path(monkeypatch, "claude", nvm_node_dir)
+
+        result = _find_cli_binary("claude")
+
+        assert result is not None, "Should find claude in nvm path with multiple versions"
+        assert "v20.10.0" in result, f"Should find claude in v20, got: {result}"
+
+    def test_get_cli_diagnostic_info_provides_helpful_message(self, monkeypatch):
+        """
+        _get_cli_diagnostic_info should provide actionable troubleshooting tips.
+        """
+        from pdd.agentic_common import _get_cli_diagnostic_info
+
+        # Set a known PATH for testing
+        monkeypatch.setenv("PATH", "/usr/bin:/usr/local/bin:/home/user/.local/bin")
+
+        info = _get_cli_diagnostic_info("claude")
+
+        # Should include the CLI name
+        assert "claude" in info
+
+        # Should suggest checking installation
+        assert "which claude" in info or "installation" in info.lower()
+
+        # Should suggest .pddrc configuration
+        assert ".pddrc" in info or "pddrc" in info.lower()
+        assert "claude_path" in info
+
+    def test_find_cli_binary_invalid_pddrc_path_falls_back(self, monkeypatch, tmp_path):
+        """
+        If .pddrc specifies an invalid path, should fall back to other methods.
+        """
+        from pdd.agentic_common import _find_cli_binary
+
+        # Mock shutil.which to return a valid path
+        monkeypatch.setattr("shutil.which", lambda cmd: f"/valid/path/{cmd}" if cmd == "claude" else None)
+
+        # Create .pddrc with invalid (non-existent) path
+        pddrc = tmp_path / ".pddrc"
+        pddrc.write_text("""
+version: "1.0"
+agentic:
+  claude_path: /nonexistent/path/to/claude
+contexts:
+  default:
+    defaults:
+      default_language: python
+""")
+
+        monkeypatch.chdir(tmp_path)
+
+        result = _find_cli_binary("claude")
+        # Should fall back to shutil.which result
+        assert result == "/valid/path/claude", \
+            f"Should fall back to PATH when .pddrc path is invalid, got: {result}"
