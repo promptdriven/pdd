@@ -1,7 +1,13 @@
-% You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM changed a input_prompt into a modified_prompt. 
+% You are an expert Software Engineer. Your goal is to extract the modified prompt from an LLM's output.
 
+% The LLM output contains reasoning followed by a modified prompt between delimiters.
 % Here is the generated llm_output: ```{llm_output}```
 
+% Instructions:
+1. Look for content between <<<MODIFIED_PROMPT>>> and <<<END_MODIFIED_PROMPT>>> delimiters
+2. If delimiters exist, extract the content between them
+3. If no delimiters, look for the final prompt specification (text with % directives, NOT executable code)
+4. The modified_prompt should be a prompt specification, not code. It should contain requirements, descriptions, or instructions - NOT function definitions.
+
 % Output a JSON object with the following keys:
-    - 'modified_prompt': String containing the modified prompt from input_prompt via the change_prompt.
-    
+    - 'modified_prompt': String containing the extracted modified prompt (the specification, not code)

@@ -91,7 +91,7 @@ console = Console()
 
 
 # ---------------------------------------------------------------------------
-# CLI Discovery (addresses GitHub issue: Claude not found during agentic fallback)
+# CLI Discovery (addresses GitHub issue #234: Claude not found during agentic fallback)
 # ---------------------------------------------------------------------------
 
 
@@ -376,8 +376,15 @@ def run_agentic_task(
                 last_output = output
 
                 # False Positive Detection
+                # Issue #249: Empty output should ALWAYS be detected as false positive,
+                # regardless of cost. Claude may consume tokens running tools but produce
+                # no text response, which means the task wasn't actually completed.
                 if success:
-                    is_false_positive = (cost == 0.0 and len(output.strip()) < MIN_VALID_OUTPUT_LENGTH)
+                    output_length = len(output.strip())
+                    is_false_positive = (
+                        output_length == 0 or  # Empty output is always a false positive
+                        (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH)  # Zero cost with short output
+                    )
 
                     if is_false_positive:
                         if not quiet:
@@ -462,14 +469,13 @@ def _run_with_provider(
     # Read prompt content for providers that pipe via stdin
     prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
 
-    # Construct Command
+    # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
         # Remove API key to force subscription auth if configured that way
         env.pop("ANTHROPIC_API_KEY", None)
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
-        # Use cli_path (from _find_cli_binary) for robust CLI discovery (Issue #234)
         cmd = [
             cli_path,
             "-p", "-",

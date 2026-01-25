@@ -56,7 +56,8 @@ def test_run_agentic_fix_success_via_run_agentic_task(monkeypatch, tmp_path, pat
     )
 
     # Pretend CLIs exist so selection proceeds
-    monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda name, config=None: "/usr/bin/shim")
+    # Must mock _find_cli_binary since it's used instead of shutil.which
+    monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda cmd, config=None: "/usr/bin/shim")
 
     # Mock run_agentic_task to return success
     monkeypatch.setattr(
@@ -89,7 +90,8 @@ def test_run_agentic_fix_handles_no_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     # Also hide Claude CLI so subscription auth isn't detected
-    monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda name, config=None: None)
+    # Must mock _find_cli_binary since it checks common paths beyond shutil.which
+    monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda cmd, config=None: None)
 
     ok, msg, cost, model, changed_files = run_agentic_fix(
         prompt_file=str(p_prompt),
@@ -145,9 +147,14 @@ def test_run_agentic_fix_real_call_when_available(provider, env_key, cli, tmp_pa
             monkeypatch.delenv(k, raising=False)
 
     # For non-anthropic providers, hide Claude CLI so subscription auth isn't used
+    # Must mock _find_cli_binary since it checks common paths beyond shutil.which
     if provider != "anthropic":
         from pdd.agentic_common import _find_cli_binary as original_find
-        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda name, config=None: None if name == "claude" else original_find(name, config))
+        def find_without_claude(cmd, config=None):
+            if cmd == "claude":
+                return None
+            return original_find(cmd, config)
+        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", find_without_claude)
 
     # Re-apply the cached key to the env var our CSV expects
     if provider == "google":
@@ -306,7 +313,8 @@ class TestCwdHandling:
             "pdd.agentic_fix.load_prompt_template",
             lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}",
         )
-        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda name, config=None: "/usr/bin/shim")
+        # Mock _find_cli_binary since it's used instead of shutil.which
+        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda cmd, config=None: "/usr/bin/shim")
         monkeypatch.setenv("OPENAI_API_KEY", "test-key")
         monkeypatch.setenv("PDD_AGENTIC_LOGLEVEL", "quiet")
 
@@ -384,7 +392,8 @@ class TestCwdHandling:
             "pdd.agentic_fix.load_prompt_template",
             lambda name: "{code_abs}{test_abs}{prompt_content}{error_content}{verify_cmd}{protect_tests}",
         )
-        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda name, config=None: "/usr/bin/shim")
+        # Mock _find_cli_binary since it's used instead of shutil.which
+        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda cmd, config=None: "/usr/bin/shim")
 
         # Mock run_agentic_task to return success
         monkeypatch.setattr(

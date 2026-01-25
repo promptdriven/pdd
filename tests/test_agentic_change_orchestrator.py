@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -873,6 +873,66 @@ def test_parse_changed_files_strips_markdown_formatting():
         assert not f.startswith("*")
     prompt_files = [f for f in files if f.startswith("prompts/") and f.endswith(".prompt")]
     assert len(prompt_files) == 3
+
+def test_parse_direct_edit_candidates():
+    """
+    Test that _parse_direct_edit_candidates extracts file paths from the Direct Edit Candidates table.
+    """
+    # Test case 1: Standard table format
+    output = """
+## Step 6: Dev Units Identified
+
+### Direct Edit Candidates (No Prompt)
+| File | Edit Type | Markers Found |
+|------|-----------|---------------|
+| `frontend/src/components/billing/AutoBuySettings.tsx` | uncomment | TODO marker at line 203 |
+| `frontend/src/pages/Settings.tsx` | remove placeholder | "coming soon" text |
+
+### Files Explored
+- prompts/
+"""
+    candidates = _parse_direct_edit_candidates(output)
+    assert len(candidates) == 2
+    assert "frontend/src/components/billing/AutoBuySettings.tsx" in candidates
+    assert "frontend/src/pages/Settings.tsx" in candidates
+
+    # Test case 2: No table present
+    output_no_table = """
+## Step 6: Dev Units Identified
+
+### Dev Units to MODIFY
+| Prompt | Code |
+|--------|------|
+| prompts/foo.prompt | src/foo.py |
+"""
+    candidates_empty = _parse_direct_edit_candidates(output_no_table)
+    assert len(candidates_empty) == 0
+
+    # Test case 3: Table with varying formatting
+    output_varied = """
+### Direct Edit Candidates
+| File | Edit Type | Markers Found |
+|------|-----------|---------------|
+| frontend/src/App.tsx | uncomment | TODO |
+"""
+    candidates_varied = _parse_direct_edit_candidates(output_varied)
+    assert len(candidates_varied) == 1
+    assert "frontend/src/App.tsx" in candidates_varied
+
+def test_parse_changed_files_includes_direct_edits():
+    """
+    Test that _parse_changed_files also extracts files from DIRECT_EDITS line.
+    """
+    output = """
+FILES_MODIFIED: prompts/foo_python.prompt
+FILES_CREATED: prompts/bar_python.prompt
+DIRECT_EDITS: frontend/src/components/Settings.tsx, frontend/src/App.tsx
+"""
+    files = _parse_changed_files(output)
+    assert "prompts/foo_python.prompt" in files
+    assert "prompts/bar_python.prompt" in files
+    assert "frontend/src/components/Settings.tsx" in files
+    assert "frontend/src/App.tsx" in files
 
 @pytest.fixture
 def mock_dependencies_dict():
@@ -1740,3 +1800,194 @@ def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
                     found_step9_output = True
                     break
     assert found_step9_output, "Step 9 output should be saved to state on failure"
+
+
+def test_stale_state_detection_clears_and_restarts(mock_dependencies, temp_cwd):
+    """
+    Test that when issue_updated_at differs from stored state, the stale state
+    is cleared and workflow starts fresh from step 1.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_load_state = mocks["load_state"]
+    mock_clear_state = mocks["clear_state"]
+
+    # Simulate existing state with OLD issue_updated_at
+    old_timestamp = "2024-01-01T10:00:00Z"
+    initial_state = {
+        "issue_number": 999,
+        "last_completed_step": 4,
+        "step_outputs": {
+            "1": "out1", "2": "out2", "3": "out3", "4": "out4"
+        },
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "issue_updated_at": old_timestamp
+    }
+    mock_load_state.return_value = (initial_state, 12345)
+
+    # Mock subsequent steps
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/test/repo/pull/123", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Call with NEWER issue_updated_at - should detect staleness
+    new_timestamp = "2024-01-02T12:00:00Z"
+    success, _, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=999,
+        issue_author="me",
+        issue_title="Stale Test",
+        issue_updated_at=new_timestamp,
+        cwd=temp_cwd
+    )
+
+    assert success is True
+
+    # Verify clear_workflow_state was called (stale state was cleared)
+    assert mock_clear_state.called, "clear_workflow_state should be called for stale state"
+
+    # Verify ALL steps 1-10 were called (not resumed from step 5)
+    labels_called = [call.kwargs.get('label') for call in mock_run.call_args_list]
+    assert "step1" in labels_called, "Step 1 should be called after stale state cleared"
+    assert "step2" in labels_called, "Step 2 should be called after stale state cleared"
+    assert "step3" in labels_called, "Step 3 should be called after stale state cleared"
+    assert "step4" in labels_called, "Step 4 should be called after stale state cleared"
+    assert "step5" in labels_called, "Step 5 should be called"
+
+
+def test_valid_resume_when_issue_unchanged(mock_dependencies, temp_cwd):
+    """
+    Test that when issue_updated_at matches stored state, workflow resumes
+    from the cached step (not cleared due to staleness).
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_load_state = mocks["load_state"]
+    mock_clear_state = mocks["clear_state"]
+
+    # Simulate existing state with SAME issue_updated_at
+    timestamp = "2024-01-01T10:00:00Z"
+    initial_state = {
+        "issue_number": 888,
+        "last_completed_step": 4,
+        "step_outputs": {
+            "1": "out1", "2": "out2", "3": "out3", "4": "out4"
+        },
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "issue_updated_at": timestamp
+    }
+    mock_load_state.return_value = (initial_state, 12345)
+
+    # Mock subsequent steps
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/test/repo/pull/456", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Call with SAME issue_updated_at - should resume normally
+    success, _, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=888,
+        issue_author="me",
+        issue_title="Resume Test",
+        issue_updated_at=timestamp,
+        cwd=temp_cwd
+    )
+
+    assert success is True
+
+    # Verify steps 1-4 were NOT called (resumed from step 5, not cleared for staleness)
+    labels_called = [call.kwargs.get('label') for call in mock_run.call_args_list]
+    assert "step1" not in labels_called, "Step 1 should be skipped when resuming"
+    assert "step4" not in labels_called, "Step 4 should be skipped when resuming"
+    assert "step5" in labels_called, "Step 5 should be called when resuming from step 4"
+
+    # clear_workflow_state is called once at the END of successful completion (line 796),
+    # but NOT called for stale state detection at the start.
+    # The key indicator is that steps 1-4 were skipped (workflow resumed, not restarted).
+
+
+def test_backward_compat_state_without_issue_updated_at(mock_dependencies, temp_cwd):
+    """
+    Test that old state without issue_updated_at field still works
+    (backward compatibility) - should resume normally without clearing for staleness.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_load_state = mocks["load_state"]
+
+    # Simulate OLD state without issue_updated_at field
+    initial_state = {
+        "issue_number": 777,
+        "last_completed_step": 4,
+        "step_outputs": {
+            "1": "out1", "2": "out2", "3": "out3", "4": "out4"
+        },
+        "total_cost": 1.0,
+        "model_used": "gpt-4"
+        # Note: no issue_updated_at field
+    }
+    mock_load_state.return_value = (initial_state, 12345)
+
+    # Mock subsequent steps
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/test/repo/pull/789", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Call with a new issue_updated_at - should NOT clear because old state has no field
+    success, _, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=777,
+        issue_author="me",
+        issue_title="Backward Compat Test",
+        issue_updated_at="2024-01-15T09:00:00Z",
+        cwd=temp_cwd
+    )
+
+    assert success is True
+
+    # Verify steps 1-4 were NOT called (resumed from step 5, backward compat works)
+    labels_called = [call.kwargs.get('label') for call in mock_run.call_args_list]
+    assert "step1" not in labels_called, "Step 1 should be skipped (backward compat)"
+    assert "step4" not in labels_called, "Step 4 should be skipped (backward compat)"
+    assert "step5" in labels_called, "Step 5 should be called when resuming"

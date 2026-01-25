@@ -16,6 +16,14 @@ from .agentic_change_orchestrator import run_agentic_change_orchestrator
 console = Console()
 
 
+def _escape_format_braces(text: str) -> str:
+    """
+    Escape curly braces in text to prevent Python's .format() from
+    interpreting them as placeholders. { becomes {{ and } becomes }}.
+    """
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 def _check_gh_cli() -> bool:
     """
     Check if the GitHub CLI (gh) is installed and available in the system PATH.
@@ -204,6 +212,9 @@ def run_agentic_change(
                 c_user = comment.get("user", {}).get("login", "unknown")
                 c_body = comment.get("body", "")
                 issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
+
+    # Escape curly braces to prevent .format() errors when issue contains code
+    issue_content = _escape_format_braces(issue_content)
 
     # 6. Setup Repository (Clone or Use Current)
     try:
