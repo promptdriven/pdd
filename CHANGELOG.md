@@ -2,8 +2,17 @@
 
 ### Feat
 
-- introduce and define "Direct Edits" for LLM agents and update orchestration to process them.
-- Implement robust agentic CLI discovery with .pddrc overrides, common path searching, and improved diagnostics.
+- **direct edits**: Agentic change workflow now supports scoped direct edits to files without prompts (e.g., frontend components). Step 6 discovers "Direct Edit Candidates" and Step 9 can uncomment code, remove placeholders, and remove temporary errors.
+- **agentic CLI discovery**: Robust CLI binary discovery addresses issue #234. Searches `.pddrc` config overrides, standard PATH, and common installation paths (npm-global, homebrew, nvm). Improved diagnostics when CLIs not found. Thanks Jiacheng Yin!
+- **delimiter extraction**: `pdd change` now extracts modified prompts using `<<<MODIFIED_PROMPT>>>` delimiters first (faster, cheaper), falling back to LLM extraction only when needed.
+- **integration point discovery**: Step 6 prompts now guide agents to find files that aggregate/register modules (e.g., `main.py`, routers) and detect cross-layer frontend/backend dependencies.
+
+### Fix
+
+- **empty output detection**: Empty LLM output is now always detected as false positive, regardless of cost (Issue #249).
+- **issue content escaping**: Escape curly braces in GitHub issue content to prevent `.format()` KeyError when issues contain code.
+- **stale state detection**: Workflows check `issue_updated_at` and restart fresh if the GitHub issue was modified since last run.
+- **empty prompt validation**: `process_csv_change` warns and skips when LLM returns empty content instead of writing empty files.
 
 ## v0.0.128 (2026-01-23)
 
