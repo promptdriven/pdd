@@ -59,6 +59,10 @@ Code generation for prompt-based modules happens separately via `pdd sync` after
 {step5_output}
 </step5_output>
 
+<step6_output>
+{step6_output}
+</step6_output>
+
 <step7_output>
 {step7_output}
 </step7_output>

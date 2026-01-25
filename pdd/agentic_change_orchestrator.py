@@ -182,30 +182,60 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
         return None, f"Git worktree creation failed: {e}"
 
 def _parse_changed_files(output: str) -> List[str]:
-    """Extract file paths from FILES_CREATED or FILES_MODIFIED lines."""
+    """Extract file paths from FILES_CREATED, FILES_MODIFIED, or DIRECT_EDITS lines."""
     files = []
     # Look for FILES_CREATED: path, path
     created_match = re.search(r"FILES_CREATED:\s*(.*)", output)
     if created_match:
         files.extend([f.strip().strip("*").strip() for f in created_match.group(1).split(",") if f.strip()])
-    
+
     # Look for FILES_MODIFIED: path, path
     modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", output)
     if modified_match:
         files.extend([f.strip().strip("*").strip() for f in modified_match.group(1).split(",") if f.strip()])
-    
+
     # Look for ARCHITECTURE_FILES_MODIFIED: path, path (Step 10)
     arch_match = re.search(r"ARCHITECTURE_FILES_MODIFIED:\s*(.*)", output)
     if arch_match:
         files.extend([f.strip().strip("*").strip() for f in arch_match.group(1).split(",") if f.strip()])
-        
+
+    # Look for DIRECT_EDITS: path, path (Step 9 - direct code edits for files without prompts)
+    direct_edits_match = re.search(r"DIRECT_EDITS:\s*(.*)", output)
+    if direct_edits_match:
+        files.extend([f.strip().strip("*").strip() for f in direct_edits_match.group(1).split(",") if f.strip()])
+
     return list(set(files)) # Deduplicate
 
-def _detect_worktree_changes(worktree_path: Path) -> List[str]:
+
+def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
+    """
+    Parse Step 6 output for 'Direct Edit Candidates' table.
+    Extract file paths from the first column of each row.
+    Returns empty list if no table found.
+    """
+    candidates = []
+    # Look for the Direct Edit Candidates table section
+    # Format: | file_path | edit_type | markers |
+    table_pattern = r"### Direct Edit Candidates[^\n]*\n\|[^\n]+\n\|[-\s|]+\n((?:\|[^\n]+\n)*)"
+    table_match = re.search(table_pattern, step6_output, re.IGNORECASE)
+    if table_match:
+        rows = table_match.group(1).strip().split("\n")
+        for row in rows:
+            if row.strip().startswith("|"):
+                # Extract first column (file path)
+                cols = [c.strip() for c in row.split("|")]
+                if len(cols) >= 2 and cols[1]:  # cols[0] is empty due to leading |
+                    file_path = cols[1].strip().strip("`")
+                    if file_path and not file_path.startswith("-"):
+                        candidates.append(file_path)
+    return candidates
+
+def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]:
     """
     Detect actual file changes in worktree using git status.
     Fallback for when LLM output lacks FILES_CREATED/FILES_MODIFIED markers.
-    Only returns prompt and documentation files (matching step 9 scope).
+    Only returns prompt and documentation files (matching step 9 scope),
+    plus any files in the direct_edit_candidates list.
     """
     try:
         result = subprocess.run(
@@ -215,6 +245,7 @@ def _detect_worktree_changes(worktree_path: Path) -> List[str]:
         )
         files = []
         allowed_extensions = {".prompt", ".md"}
+        direct_edit_set = set(direct_edit_candidates or [])
         for line in result.stdout.splitlines():
             if not line.strip():
                 continue
@@ -223,8 +254,10 @@ def _detect_worktree_changes(worktree_path: Path) -> List[str]:
             # Skip temp files from run_agentic_task
             if filepath.startswith(".agentic_prompt_"):
                 continue
-            # Only include prompt and doc files (step 9 scope)
+            # Include prompt/doc files (step 9 scope) OR direct edit candidates
             if any(filepath.endswith(ext) for ext in allowed_extensions):
+                files.append(filepath)
+            elif filepath in direct_edit_set or any(filepath.endswith(c) for c in direct_edit_set):
                 files.append(filepath)
         return files
     except Exception:
@@ -587,19 +620,30 @@ def run_agentic_change_orchestrator(
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
 
+        # Step 6: Extract direct edit candidates (files without prompts that need scoped edits)
+        if step_num == 6:
+            direct_edit_candidates = _parse_direct_edit_candidates(step_output)
+            context["direct_edit_candidates"] = direct_edit_candidates
+            if direct_edit_candidates and not quiet:
+                console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
+
         if step_num == 9:
             extracted_files = _parse_changed_files(step_output)
             if not extracted_files and worktree_path:
                 # Fallback: check worktree for actual file changes
-                extracted_files = _detect_worktree_changes(worktree_path)
+                # Pass direct_edit_candidates so those files are also detected
+                dec = context.get("direct_edit_candidates", [])
+                extracted_files = _detect_worktree_changes(worktree_path, dec)
                 if extracted_files and not quiet:
                     console.print(f"[yellow]Note: Detected {len(extracted_files)} changed file(s) in worktree (LLM output lacked markers)[/yellow]")
             changed_files = extracted_files
             context["files_to_stage"] = ", ".join(changed_files)
             created_match = re.search(r"FILES_CREATED:\s*(.*)", step_output)
             modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", step_output)
+            direct_edits_match = re.search(r"DIRECT_EDITS:\s*(.*)", step_output)
             context["files_created"] = created_match.group(1).strip() if created_match else ""
             context["files_modified"] = modified_match.group(1).strip() if modified_match else ""
+            context["direct_edits"] = direct_edits_match.group(1).strip() if direct_edits_match else ""
             if not changed_files:
                 # Save step output for debugging before failing
                 state["step_outputs"][str(step_num)] = step_output
