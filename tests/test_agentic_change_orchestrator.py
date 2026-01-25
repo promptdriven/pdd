@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -873,6 +873,66 @@ def test_parse_changed_files_strips_markdown_formatting():
         assert not f.startswith("*")
     prompt_files = [f for f in files if f.startswith("prompts/") and f.endswith(".prompt")]
     assert len(prompt_files) == 3
+
+def test_parse_direct_edit_candidates():
+    """
+    Test that _parse_direct_edit_candidates extracts file paths from the Direct Edit Candidates table.
+    """
+    # Test case 1: Standard table format
+    output = """
+## Step 6: Dev Units Identified
+
+### Direct Edit Candidates (No Prompt)
+| File | Edit Type | Markers Found |
+|------|-----------|---------------|
+| `frontend/src/components/billing/AutoBuySettings.tsx` | uncomment | TODO marker at line 203 |
+| `frontend/src/pages/Settings.tsx` | remove placeholder | "coming soon" text |
+
+### Files Explored
+- prompts/
+"""
+    candidates = _parse_direct_edit_candidates(output)
+    assert len(candidates) == 2
+    assert "frontend/src/components/billing/AutoBuySettings.tsx" in candidates
+    assert "frontend/src/pages/Settings.tsx" in candidates
+
+    # Test case 2: No table present
+    output_no_table = """
+## Step 6: Dev Units Identified
+
+### Dev Units to MODIFY
+| Prompt | Code |
+|--------|------|
+| prompts/foo.prompt | src/foo.py |
+"""
+    candidates_empty = _parse_direct_edit_candidates(output_no_table)
+    assert len(candidates_empty) == 0
+
+    # Test case 3: Table with varying formatting
+    output_varied = """
+### Direct Edit Candidates
+| File | Edit Type | Markers Found |
+|------|-----------|---------------|
+| frontend/src/App.tsx | uncomment | TODO |
+"""
+    candidates_varied = _parse_direct_edit_candidates(output_varied)
+    assert len(candidates_varied) == 1
+    assert "frontend/src/App.tsx" in candidates_varied
+
+def test_parse_changed_files_includes_direct_edits():
+    """
+    Test that _parse_changed_files also extracts files from DIRECT_EDITS line.
+    """
+    output = """
+FILES_MODIFIED: prompts/foo_python.prompt
+FILES_CREATED: prompts/bar_python.prompt
+DIRECT_EDITS: frontend/src/components/Settings.tsx, frontend/src/App.tsx
+"""
+    files = _parse_changed_files(output)
+    assert "prompts/foo_python.prompt" in files
+    assert "prompts/bar_python.prompt" in files
+    assert "frontend/src/components/Settings.tsx" in files
+    assert "frontend/src/App.tsx" in files
 
 @pytest.fixture
 def mock_dependencies_dict():
