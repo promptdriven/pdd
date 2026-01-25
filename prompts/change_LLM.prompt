@@ -31,6 +31,11 @@
     Step 1. Explain in detail step by step the ramifications of the change_prompt on the input_prompt.
     Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1. This step describes how to modify the input_prompt to generate the modified_prompt.
     Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts, especially including the descriptions of the inputs and outputs.
+
+    IMPORTANT: Output the modified prompt between these exact delimiters:
+    <<<MODIFIED_PROMPT>>>
+    [Your modified prompt here - this should be a prompt specification, NOT code]
+    <<<END_MODIFIED_PROMPT>>>
 </instructions>
 
 <important_notes>
