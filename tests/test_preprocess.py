@@ -1750,7 +1750,7 @@ Normal text with {placeholder}.'''
     reason_content = reason_match.group(1)
 
     # The content should NOT have doubled braces (check for absence of {{)
-    assert '{{"key"' not in reason_content, \
+    assert '{{' not in reason_content, \
         f"Issue #375: Braces in <pdd-reason> were incorrectly doubled: {reason_content}"
     # Should have single braces
     assert '{"key": "value"}' in reason_content, \
