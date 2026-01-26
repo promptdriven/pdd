@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 def hello() -> None:
-    """Prints 'hello' to standard output."""
+    """Prints 'hello' to the console."""
     print("hello")
 
 if __name__ == "__main__":

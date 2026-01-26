@@ -916,7 +916,11 @@ def construct_paths(
                         # e.g., if code goes to "pi.py", prompts should be at "prompts/" (siblings)
                         resolved_config["prompts_dir"] = str(gen_path.parent / "prompts")
                         resolved_config["code_dir"] = str(gen_path.parent)
-            
+
+            # Ensure code_dir is always set (even if prompts_dir was already configured via CLI/env)
+            if "code_dir" not in resolved_config:
+                resolved_config["code_dir"] = str(gen_path.parent)
+
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
 
             # Determine examples_dir for auto-deps scanning

@@ -578,6 +578,27 @@ async def list_prompt_files(
         test_prefixes = ["test_", ""]
         test_suffixes = ["", "_test"]
 
+        # For non-executable languages (schema/config), tests are usually in Python/TS
+        # These languages don't have native test frameworks, so tests are written in
+        # general-purpose languages like Python or TypeScript
+        NON_EXECUTABLE_LANGUAGES = {
+            "prisma", "sql", "graphql", "protobuf", "terraform", "hcl",
+            "html", "css", "makefile", "dockerfile", "nix", "starlark",
+            "glsl", "wgsl", "scss", "sass", "less", "pug", "ejs", "twig",
+            "handlebars", "jinja",
+        }
+
+        # Determine test file extensions to search
+        if language and language.lower() in NON_EXECUTABLE_LANGUAGES:
+            # For config/schema languages, search for Python and TypeScript test files
+            test_extensions = [".py", ".ts", ".tsx", ".js", ".jsx"]
+        else:
+            # For executable languages, use language-specific extensions first,
+            # then add Python/TypeScript as fallbacks
+            test_extensions = list(extensions) + [".py", ".ts"]
+            # Dedupe while preserving order
+            test_extensions = list(dict.fromkeys(test_extensions))
+
         for test_dir in test_dirs:
             found = False
             for prefix in test_prefixes:
@@ -585,7 +606,7 @@ async def list_prompt_files(
                     # Skip invalid combination (no prefix and no suffix with just basename)
                     if not prefix and not suffix:
                         continue
-                    for ext in extensions:
+                    for ext in test_extensions:
                         test_name = f"{prefix}{sync_basename}{suffix}{ext}"
                         # Try with subdirectory first, then without
                         paths_to_try = []

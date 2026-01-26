@@ -1,9 +1,41 @@
+## v0.0.130 (2026-01-25)
+
+### Feat
+
+- Improve live status section in pdd connect UI
+- Improve pdd connect web UI per issue #398
+- Add agentic test generation for non-Python languages
+- Upgrade architecture generation and fix test file detection
+- **config**: resolve prompt_path via env and .pddrc (implements #18)
+- Set `PDD_MODEL_DEFAULT` for regression tests in Makefile and add `error_log.txt`.
+- Introduce new agentic features and critical bug fixes, and add an error log for iterative fix attempts.
+
+### Fix
+
+- Address Copilot review - add aria-label for accessibility
+- **construct_paths**: improve prompts_dir resolution logic to respect CLI and environment variable settings
+- malformed json for the architecture description in prompts
+- Handle double-brace escaped JSON in pdd-interface parsing
+
+### Refactor
+
+- **config**: update prompts_dir resolution to use only PDD_PROMPTS_DIR environment variable, without aliases
+
 ## v0.0.129 (2026-01-25)
 
 ### Feat
 
-- introduce and define "Direct Edits" for LLM agents and update orchestration to process them.
-- Implement robust agentic CLI discovery with .pddrc overrides, common path searching, and improved diagnostics.
+- **direct edits**: Agentic change workflow now supports scoped direct edits to files without prompts (e.g., frontend components). Step 6 discovers "Direct Edit Candidates" and Step 9 can uncomment code, remove placeholders, and remove temporary errors.
+- **agentic CLI discovery**: Robust CLI binary discovery addresses issue #234. Searches `.pddrc` config overrides, standard PATH, and common installation paths (npm-global, homebrew, nvm). Improved diagnostics when CLIs not found. Thanks Jiacheng Yin!
+- **delimiter extraction**: `pdd change` now extracts modified prompts using `<<<MODIFIED_PROMPT>>>` delimiters first (faster, cheaper), falling back to LLM extraction only when needed.
+- **integration point discovery**: Step 6 prompts now guide agents to find files that aggregate/register modules (e.g., `main.py`, routers) and detect cross-layer frontend/backend dependencies.
+
+### Fix
+
+- **empty output detection**: Empty LLM output is now always detected as false positive, regardless of cost (Issue #249).
+- **issue content escaping**: Escape curly braces in GitHub issue content to prevent `.format()` KeyError when issues contain code.
+- **stale state detection**: Workflows check `issue_updated_at` and restart fresh if the GitHub issue was modified since last run.
+- **empty prompt validation**: `process_csv_change` warns and skips when LLM returns empty content instead of writing empty files.
 
 ## v0.0.128 (2026-01-23)
 

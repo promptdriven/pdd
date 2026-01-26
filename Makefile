@@ -478,9 +478,9 @@ regression: ensure-dev-deps
 	@find staging/regression -type f ! -name ".*" -delete
 ifdef TEST_NUM
 	@echo "Running specific test: $(TEST_NUM)"
-	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh $(TEST_NUM)
+	@PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh $(TEST_NUM)
 else
-	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
+	@PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 endif
 
 SYNC_PARALLEL ?= 1

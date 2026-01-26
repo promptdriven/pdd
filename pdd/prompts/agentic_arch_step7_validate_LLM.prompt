@@ -31,6 +31,8 @@ You are working on step 7 of 8 in an agentic architecture workflow. Step 6 gener
 
 Perform ALL of the following checks:
 
+**Architecture JSON Validation (1-11):**
+
 1. **Valid JSON:** Parse the content as JSON; must be a top-level array
 2. **Required fields:** Each entry must have: reason, description, dependencies, priority, filename, filepath
 3. **No circular dependencies:** Follow dependency chains; no entry should depend on itself (directly or transitively)
@@ -43,25 +45,53 @@ Perform ALL of the following checks:
 10. **Interface validity:** If present, interface.type must be one of: component, page, module, api, graphql, cli, job, message, config
 11. **context_urls format:** If present, each entry must have `url` (string) and `purpose` (string)
 
+**Scaffolding Files Validation (12-14):**
+
+12. **Essential scaffolding files exist:** Check that these files were created on disk:
+    - At least one dependency file exists: `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, or `Cargo.toml`
+    - `.gitignore` file exists
+    - `README.md` file exists
+
+13. **Dependency file validity:** Validate the format of dependency files:
+    - `package.json`: Valid JSON with `name`, `version`, and `scripts` fields
+    - `requirements.txt`: Non-empty, one package per line
+    - `pyproject.toml`: Valid TOML with `[project]` or `[tool.poetry]` section
+    - `go.mod`: Has `module` declaration
+    - `Cargo.toml`: Valid TOML with `[package]` section
+
+14. **Dockerfile validity (if exists):** If a Dockerfile was created:
+    - Must have at least one `FROM` instruction
+    - Should have appropriate build stages for the tech stack
+
 % Output
 
-If ALL checks pass, output exactly: "VALID"
+1. **Output validation result marker**
 
-If any checks fail, output the validation errors in this format:
+   If ALL checks pass, output exactly on its own line:
+   ```
+   VALIDATION_RESULT: VALID
+   ```
 
-```markdown
-## Validation Errors
+   If any checks fail, output:
+   ```
+   VALIDATION_RESULT: INVALID
+   ```
 
-1. **[Check Name]:** [Description of the error]
-   - Entry: [filename or priority]
-   - Issue: [specific problem]
-   - Fix: [suggested fix]
+   Followed by the validation errors in this format:
+   ```markdown
+   ## Validation Errors
 
-2. **[Check Name]:** [Description of the error]
-   ...
-```
+   1. **[Check Name]:** [Description of the error]
+      - Entry: [filename or priority]
+      - Issue: [specific problem]
+      - Fix: [suggested fix]
 
-After validation, use `gh issue comment` to post results to issue #{issue_number}:
+   2. **[Check Name]:** [Description of the error]
+      ...
+   ```
+
+2. **Post results to GitHub**
+   Use `gh issue comment` to post results to issue #{issue_number}:
 
 ```
 gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
@@ -73,7 +103,8 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 **Status:** [VALID | Errors Found]
 
 ### Results
-- Checks passed: [N]/11
+- Architecture checks passed: [N]/11
+- Scaffolding checks passed: [N]/3
 - Errors found: [N]
 
 ### Errors (if any)
@@ -87,5 +118,5 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 
 - Be thorough: check every entry against every rule
 - Report ALL errors found, not just the first one
-- If the architecture is valid, output "VALID" clearly
-- Always post your findings as a GitHub comment before completing
+- Always output `VALIDATION_RESULT: VALID` or `VALIDATION_RESULT: INVALID` on its own line
+- Always post your findings as a GitHub comment

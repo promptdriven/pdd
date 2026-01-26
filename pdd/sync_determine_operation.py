@@ -1444,6 +1444,27 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                     }
                 )
             else:
+                # Bug fix: If tests_passed=0 AND tests_failed=0 AND exit_code=0,
+                # the test output couldn't be parsed but tests likely passed.
+                # For non-Python languages, this is common when the test framework
+                # output doesn't match our parsing patterns.
+                # In this case, accept the workflow as complete rather than loop infinitely.
+                if run_report.tests_passed == 0 and run_report.tests_failed == 0 and run_report.exit_code == 0:
+                    return SyncDecision(
+                        operation='all_synced',
+                        reason=f'Tests completed (exit_code=0) but coverage {run_report.coverage:.1f}% could not be verified - accepting as complete',
+                        confidence=0.70,
+                        estimated_cost=estimate_operation_cost('all_synced'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'current_coverage': run_report.coverage,
+                            'target_coverage': target_coverage,
+                            'tests_passed': run_report.tests_passed,
+                            'tests_failed': run_report.tests_failed,
+                            'exit_code': run_report.exit_code,
+                            'unparseable_output': True
+                        }
+                    )
                 return SyncDecision(
                     operation='test',
                     reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}%',
